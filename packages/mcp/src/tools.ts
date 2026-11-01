@@ -1,10 +1,10 @@
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { DEVICE_SETTINGS, TOOL_REGISTRY, TapdanceError, parseTarget, redactObject, toTapdanceError, toolStatus, type ArtifactRef, type DeviceSettingName, type ElementTarget, type IntentSpec, type Tapdance } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, TOOL_REGISTRY, TapdanceError, loadScenario, runScenario, validateScenario, parseTarget, redactObject, toTapdanceError, toolStatus, type ArtifactRef, type DeviceSettingName, type ElementTarget, type IntentSpec, type Tapdance } from "@tapdance/sdk";
 
 /**
  * Tool definitions, kept apart from transport so tests can check every schema and handler without
@@ -407,6 +407,35 @@ export const TOOLS: ToolDefinition[] = [
     input: z.object({ action: z.enum(["start", "status", "stop"]), duration_ms: z.number().int().min(500).max(300_000).optional() }).strict(),
     annotations: { readOnlyHint: true },
     run: async (t, a) => json(await t.device({ kind: "audio", action: a["action"] as "start", ...(a["duration_ms"] ? { durationMs: a["duration_ms"] as number } : {}) })),
+  },
+  {
+    name: "run_scenario",
+    title: "Run a scenario",
+    description:
+      "Replay a saved scenario on this session's device and return a PASS/FAIL report. A scenario is YAML or JSON: name, optional device (leased when the session holds none) and app, and steps named like these tools with the same arguments (launch_app, type_text, tap, swipe, press_key, wait_for, handle_alert, take_screenshot, start_recording, stop_recording) plus sleep, expect_visible, expect_not_visible and expect_app. A failed step gets a screenshot and the UI tree in the evidence folder, and later steps are skipped unless continue_on_failure. Give path (a file inside the project) or scenario (the same shape inline). A device the scenario leased is released at the end unless keep_lease. A FAIL is an answer, not an error: read steps[].error and the evidence paths.",
+    input: z
+      .object({
+        path: z.string().min(1).max(4096).optional().describe("Scenario file (.yaml, .yml or .json) inside the project directory."),
+        scenario: z.record(z.string(), z.unknown()).optional().describe('The scenario inline, in the file\'s shape: { name, device?, app?, steps: [{ tap: { text: "Sign in" } }, ...] }.'),
+        continue_on_failure: z.boolean().optional().describe("Run every step even after one fails."),
+        keep_lease: z.boolean().optional().describe("Keep a device the scenario leased instead of releasing it at the end."),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) => {
+      if ((a["path"] === undefined) === (a["scenario"] === undefined)) throw new TapdanceError("USAGE", "Give exactly one of path, scenario");
+      const file = a["path"] !== undefined ? confinePath(a["path"] as string) : undefined;
+      const scenario = file ? await loadScenario(file) : validateScenario(a["scenario"], "scenario");
+      const baseDir = file ? dirname(file) : process.cwd();
+      const report = await runScenario(t, scenario, {
+        ...(file ? { file } : {}),
+        // App paths in the scenario obey the same project-directory rule as install_app.
+        resolvePath: (p) => confinePath(resolve(baseDir, p)),
+        ...(a["continue_on_failure"] ? { continueOnFailure: true } : {}),
+        ...(a["keep_lease"] ? { keepLease: true } : {}),
+      });
+      return json(report);
+    },
   },
   {
     name: "inspect_screen",

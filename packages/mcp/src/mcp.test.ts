@@ -12,6 +12,7 @@ const REQUIRED = [
   "list_workers", "list_devices", "lease_device", "get_device_status", "release_device", "install_app", "launch_app", "stop_app",
   "inspect_screen", "tap", "swipe", "type_text", "press_key", "take_screenshot", "start_recording", "stop_recording",
   "get_logs", "get_crash_logs", "get_test_artifacts", "wait_for", "handle_alert", "list_tools", "execute_tool", "list_apps",
+  "uninstall_app", "clear_app_data", "set_device_setting", "push_file", "pull_file", "notifications", "measure_performance", "audio_levels", "run_scenario",
 ];
 
 /** Minimal valid arguments per tool, for the strictness check. */
@@ -40,6 +41,15 @@ const VALID_ARGS: Record<string, Record<string, unknown>> = {
   list_tools: {},
   execute_tool: { tool: "asc", args: ["--help"] },
   get_test_artifacts: {},
+  uninstall_app: { app_id: "com.example.app" },
+  clear_app_data: { app_id: "com.example.app" },
+  set_device_setting: { name: "appearance", value: "dark" },
+  push_file: { path: "./seed.json", destination: "downloads" },
+  pull_file: { device_path: "/sdcard/Download/x.txt" },
+  notifications: { action: "list" },
+  measure_performance: { metric: "frames" },
+  audio_levels: { action: "start" },
+  run_scenario: { scenario: { name: "x", steps: [{ press_key: { key: "home" } }] } },
 };
 
 const DEVICE_ACTIONS = ["launch_app", "stop_app", "install_app", "tap", "swipe", "type_text", "press_key", "handle_alert", "start_recording", "stop_recording"];
@@ -94,8 +104,8 @@ describe("MCP tool surface", () => {
     }
   });
 
-  it("only release_device is destructive", () => {
-    expect(TOOLS.filter((t) => t.annotations.destructiveHint === true).map((t) => t.name)).toEqual(["release_device"]);
+  it("only tools that delete device state are destructive", () => {
+    expect(TOOLS.filter((t) => t.annotations.destructiveHint === true).map((t) => t.name).sort()).toEqual(["clear_app_data", "release_device", "uninstall_app"]);
     for (const name of DEVICE_ACTIONS) {
       const t = TOOLS.find((x) => x.name === name)!;
       expect(t.annotations, name).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });

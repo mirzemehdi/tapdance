@@ -102,8 +102,8 @@ call fails with `HUMAN_HELD` while a person holds the device in `tapdance view`.
 `stop_app`, `install_app`, `tap`, `swipe`, `type_text`, `press_key`, `handle_alert`,
 `start_recording`, `stop_recording`) and the tools that write an artifact file (`take_screenshot`,
 `get_logs`, `get_crash_logs`) are marked `readOnlyHint: false`, `destructiveHint: false`. The device
-actions also carry `openWorldHint: false`. `release_device` is the only tool marked
-`destructiveHint: true`: it wipes the device. `execute_tool` leaves `destructiveHint` unset, which MCP
+actions also carry `openWorldHint: false`. `release_device` (it wipes the device), `uninstall_app` and
+`clear_app_data` are marked `destructiveHint: true`. `execute_tool` leaves `destructiveHint` unset, which MCP
 clients read as possibly destructive, because an authorized `asc` mutation can delete things.
 
 ### Discovery and lease
@@ -122,10 +122,13 @@ The `device` object is the same summary in all of these.
 
 | Tool | Inputs | Returns | Viewer |
 | --- | --- | --- | --- |
-| `install_app` | `path` (on the server's machine; inside its working directory or `TAPDANCE_ALLOWED_ROOTS`), `app_id?` | `{installed: {appId?, path}, next}`. `.apk` for Android, simulator `.app` for iOS; `.ipa` and `.aab` refused with `APP_PATH_INVALID`; a path outside the allowed roots fails with `FORBIDDEN`, with a hint to rebuild into the project. Pass `appId` to `launch_app`; when it is missing, call `list_apps`. | blocked |
+| `install_app` | `path` (on the server's machine; inside its working directory or `TAPDANCE_ALLOWED_ROOTS`), `app_id?` | `{installed: {appId?, path}, next}`. `.apk` or `.aab` for Android (an `.aab` becomes a universal APK with [bundletool](https://github.com/google/bundletool) on the server's machine, signed with the Android debug keystore; without bundletool it is refused with an install hint), simulator `.app` for iOS; `.ipa` refused with `APP_PATH_INVALID`; a path outside the allowed roots fails with `FORBIDDEN`, with a hint to rebuild into the project. Pass `appId` to `launch_app`; when it is missing, call `list_apps`. | blocked |
 | `list_apps` | none | `{apps}`: the apps installed on the leased device. Read-only. Use it to find the `app_id` for `launch_app`. | allowed |
-| `launch_app` | `app_id`, `relaunch?`, `url?` (deep link) | `{ok, message, changes?, next}` | blocked |
+| `launch_app` | `app_id`, `relaunch?`, `url?` (deep link), `args?` (launch arguments, implies relaunch; iOS language: `["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]`), `intent?` (Android: `action?`, `data?`, `component?`, `categories?`, `flags?`, `extras?`) | `{ok, message, changes?, next}` | blocked |
 | `stop_app` | `app_id` | `{ok, message}` | blocked |
+| `uninstall_app` | `app_id` | `{ok, message, data: {wasInstalled}}` | blocked |
+| `clear_app_data` | `app_id` | `{ok, message, next}`: the app's data is cleared (first-launch state). On iOS the keychain is shared by every app; add `set_device_setting reset-keychain` for a signed-out start. For a whole clean device, release and lease again: every lease starts wiped. | blocked |
+| `run_scenario` | exactly one of `path` (a .yaml/.yml/.json file inside the project) or `scenario` (inline object); `continue_on_failure?`, `keep_lease?` | The scenario report: `{scenario, status, startedAt, durationMs, device, app?, leased, released, environment, summary, steps: [{index, name, action, status, durationMs, error?, evidence?}], evidenceDir, reportPath, summaryPath}`. A failed step is reported, not raised. Format: [scenarios.md](scenarios.md). Run only against FakeProvider so far. | blocked |
 
 `app_id` is an Android package or iOS bundle id (`^[A-Za-z][A-Za-z0-9_.-]{0,254}$`).
 
@@ -191,6 +194,21 @@ Keep log replies short: pass `app_id` and `contains` (for example the screen nam
 `level: "fault"` keeps fault, fatal and crash lines. When `contains` or `level` is given, Tapdance reads
 at least 1000 lines (more if `lines` is larger, 2000 at most) before filtering, so a match further
 back is still found.
+
+### Device state
+
+These run through Simlock's lease exec or agent-device, so they reach a device on a remote worker
+the same way as a local one. On a worker in device-only mode the owner's policy decides which are
+allowed (`allow.settings`, `allow.files`, `allow.notifications` (off by default), `allow.perf`).
+
+| Tool | Inputs | Returns | Viewer |
+| --- | --- | --- | --- |
+| `set_device_setting` | `name`, `value?` (omit to read where readable), `app_id?`, `permission?`, `latitude?`, `longitude?` | `{ok, message, data?}`. Names: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`; iOS simulator: status bar only for wifi/airplane), `location` (`on`/`off`, or `latitude`+`longitude`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid` (iOS), `fingerprint` (Android), `permission` (`grant`/`deny`/`reset` + `permission` + `app_id`), `reset-keychain` (iOS), `orientation`, `density` (Android dpi or `reset`), `locale` (Android 13+, per app), `time-zone` (Android), `status-bar-time` (iOS `HH:MM` or `clear`). Unsupported combinations answer `NOT_SUPPORTED` with what to do instead. | blocked |
+| `push_file` | `path` (inside the project), `destination` (`downloads`, `pictures`, `documents`, `app_sandbox`), `app_id?`, `name?` | `{ok, message, devicePath}`. Android: shared storage (media-scanned, so the system picker and gallery see it) or a debuggable app's sandbox (`files/…`, `cache/…`, `databases/…`, `shared_prefs/…`), up to 24 MB. iOS, local simulators only: `pictures` → Photos, `documents`/`app_sandbox` → the app's container. | blocked |
+| `pull_file` | `device_path` (Android shared storage) or `app_id` + `relative_path` | `{ok, message, path, artifact}`: the file, saved as a session artifact. | allowed |
+| `notifications` | `action` (`list`, `open`, `close`, `post`), `app_id?`, `title?`, `text?`, `payload?` | `list` (Android): `{data: {notifications: [{package, title?, text?, key?, postedAt?}]}}`. `open`/`close` (Android) pull the shade down or up; then `inspect_screen` (with `all: true`) and `tap`. `post`: an Android shell notification, or with `app_id` + `payload` a push payload delivered to that app (the way to test pushes on the iOS simulator). | blocked (except `list`) |
+| `measure_performance` | `metric` (`frames` or `memory`), `app_id?` | `{data}`: frame health of the foreground app since the last reading (dropped/janky frames, worst windows) or a memory sample. Launch the app with `launch_app` first. Emulator and simulator numbers are not device-representative. | allowed |
+| `audio_levels` | `action` (`start`, `status`, `stop`), `duration_ms?` | `{data}`: loudness buckets (dBFS) of the audio the device renders. Capturing the audio itself and feeding the microphone are not supported. | allowed |
 
 ### External tools
 
