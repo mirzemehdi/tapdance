@@ -17,7 +17,7 @@ import {
  * enforces the contract's rule that only handles it issued are accepted. It is not a device.
  */
 export class FakeProvider implements DeviceProvider {
-  readonly name = "fake";
+  readonly name: string = "fake";
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly active = new Set<string>();
   private next = 1;

@@ -113,7 +113,7 @@ export async function startViewer(
         const record = await t.current();
         if (!record) return send(res, 410, { error: "No device is leased in this session any more." });
         const status = await t.status().catch((e: TapdanceError) => ({ error: e.message }));
-        return send(res, 200, { device: status, takeover, recording: record.recording ?? null, artifacts: (await t.listArtifacts()).slice(-10) });
+        return send(res, 200, { device: status, takeover, recording: record.recording ?? null, artifacts: (await t.listArtifacts()).slice(-10), humanRequest: (await t.pendingHumanRequest()) ?? null });
       }
       if (url.pathname === "/stream") {
         const { endpoints } = await t.viewer();
@@ -138,7 +138,9 @@ export async function startViewer(
       if (req.method === "POST" && url.pathname === "/api/handback") {
         takeover = false;
         await hold(0);
-        return send(res, 200, { takeover });
+        // Handing back also answers the agent's open request for a person, if there is one.
+        const answered = await t.completeHumanRequest("viewer hand back");
+        return send(res, 200, { takeover, answered });
       }
       if (req.method === "POST" && url.pathname === "/api/screenshot") {
         const ref = await t.screenshot(undefined, "from the browser viewer");

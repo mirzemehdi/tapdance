@@ -173,6 +173,7 @@ export const TOOLS: ToolDefinition[] = [
         device: z.string().min(1).max(100).optional().describe("Model, e.g. \"Pixel 8\" or \"iPhone 16\". Omit for any phone."),
         os_version: z.string().min(1).max(40).optional().describe("OS version or range, e.g. \"18.5\" (iOS) or \"34\" (Android API level)."),
         image_tag: z.string().min(1).max(60).optional().describe("Android system image tag, e.g. \"google_apis_playstore\"."),
+        profile: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).optional().describe("A device profile on the machine running this server (list_devices shows profile:<name>): an emulator the owner set up once, e.g. signed in to a Play license-tester account. Booted read-only: nothing this lease changes is kept."),
         ttl_minutes: z.number().int().min(1).max(240).optional().describe("Lease time to live; the server renews it while connected."),
       })
       .strict(),
@@ -184,6 +185,7 @@ export const TOOLS: ToolDefinition[] = [
         ...(a["device"] ? { device: a["device"] as string } : {}),
         ...(a["os_version"] ? { osVersion: a["os_version"] as string } : {}),
         ...(a["image_tag"] ? { imageTag: a["image_tag"] as string } : {}),
+        ...(a["profile"] ? { profile: a["profile"] as string } : {}),
         ...(a["ttl_minutes"] ? { ttlMinutes: a["ttl_minutes"] as number } : {}),
       });
       return json({ device: summary, reused, next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
@@ -407,6 +409,15 @@ export const TOOLS: ToolDefinition[] = [
     input: z.object({ action: z.enum(["start", "status", "stop"]), duration_ms: z.number().int().min(500).max(300_000).optional() }).strict(),
     annotations: { readOnlyHint: true },
     run: async (t, a) => json(await t.device({ kind: "audio", action: a["action"] as "start", ...(a["duration_ms"] ? { durationMs: a["duration_ms"] as number } : {}) })),
+  },
+  {
+    name: "request_human",
+    title: "Ask a person for help",
+    description:
+      "Ask the user to do something on the device you cannot or should not do yourself: sign in to a test account (Google Play license tester, Apple sandbox), approve a purchase sheet that needs a password, solve a CAPTCHA, grant a system dialog. Tell the user the reason in chat too. Waits until they finish (Hand back in `tapdance view`, or `tapdance device done`) or timeout_seconds pass, then returns completed true/false. Never ask for passwords in chat; the person types them on the device. On a device profile, a sign-in done here is lost at release: ask the owner to run `tapdance device profile edit <name>` once instead.",
+    input: z.object({ reason: z.string().min(3).max(500), timeout_seconds: z.number().int().min(10).max(1800).optional().describe("Default 600.") }).strict(),
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    run: async (t, a, extra) => json(await t.requestHuman(a["reason"] as string, ((a["timeout_seconds"] as number | undefined) ?? 600) * 1000, extra?.signal)),
   },
   {
     name: "run_scenario",

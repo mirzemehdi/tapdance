@@ -11,6 +11,8 @@ export interface LeaseRequest {
   /** Android system image tag, e.g. "google_apis_playstore". */
   imageTag?: string;
   physical?: boolean;
+  /** A device profile prepared on this machine (`tapdance device profile create`): booted read-only. */
+  profile?: string;
   ttlMs: number;
   /** How long to wait in the provider's queue before failing. */
   waitTimeoutMs?: number;

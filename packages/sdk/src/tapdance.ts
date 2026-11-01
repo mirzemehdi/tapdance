@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { rm, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   LocalArtifactStore,
@@ -36,6 +36,7 @@ import {
   type DeviceOperationResult,
 } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
+import { PROFILE_PROVIDER, ProfileProvider } from "@tapdance/provider-simlock";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
 import { homedir } from "node:os";
@@ -51,11 +52,21 @@ export interface TapdanceOptions {
   session?: SessionIdentity;
   /** Inject a provider (tests, embedding). Defaults to the one the config names. */
   provider?: DeviceProvider;
+  /** Inject the device-profile provider (tests). */
+  profileProvider?: DeviceProvider;
   onProgress?: ProgressListener;
   /** Who is acting; recorded as the lease owner so a shutdown releases only what it created. */
   owner?: LeaseOwner["kind"];
   /** Load the operator token (fleet views such as `workers list`). Off for agents by default. */
   fleet?: boolean;
+}
+
+export interface HumanRequest {
+  reason: string;
+  requestedAt: string;
+  leaseId: string;
+  doneAt?: string;
+  doneBy?: string;
 }
 
 export interface LeaseOptions {
@@ -64,6 +75,8 @@ export interface LeaseOptions {
   osVersion?: string;
   imageTag?: string;
   physical?: boolean;
+  /** A device profile on this machine (`tapdance device profile create`), booted read-only. */
+  profile?: string;
   ttlMinutes?: number;
   waitSeconds?: number;
   /** Return the session's current lease instead of failing when it already holds one on this platform. */
@@ -115,6 +128,7 @@ export class Tapdance {
   readonly store: SessionStore;
   readonly artifacts: LocalArtifactStore;
   private providerPromise: Promise<DeviceProvider> | undefined;
+  private profileProviderInstance: DeviceProvider | undefined;
 
   private constructor(
     readonly resolved: ResolvedConfig,
@@ -143,6 +157,17 @@ export class Tapdance {
   provider(): Promise<DeviceProvider> {
     this.providerPromise ??= createProvider(this.resolved, this.session.id, this.options.env ?? process.env, { fleet: this.options.fleet ?? false });
     return this.providerPromise;
+  }
+
+  /** Device profiles run on this machine, outside Simlock (see ProfileProvider). */
+  private profileProvider(): DeviceProvider {
+    this.profileProviderInstance ??= this.options.profileProvider ?? new ProfileProvider(this.options.env ?? process.env);
+    return this.profileProviderInstance;
+  }
+
+  /** The provider that issued a handle: profile leases go to the profile provider. */
+  private async providerFor(handle: LeaseHandle): Promise<DeviceProvider> {
+    return handle.provider === PROFILE_PROVIDER ? this.profileProvider() : this.provider();
   }
 
   private progress(message: string): void {
@@ -186,7 +211,12 @@ export class Tapdance {
   }
 
   async devices(platform?: Platform): Promise<DeviceInventory> {
-    return (await this.provider()).inventory(platform ? { platform } : {});
+    const inventory = await (await this.provider()).inventory(platform ? { platform } : {});
+    if (platform === "ios") return inventory;
+    // Device profiles on this machine are leasable too (`profile:<name>`).
+    const profiles = await this.profileProvider().inventory().catch(() => undefined);
+    if (!profiles?.catalog.length) return inventory;
+    return { ...inventory, catalog: [...inventory.catalog, ...profiles.catalog], notes: [...inventory.notes, ...profiles.notes] };
   }
 
   async workers(): Promise<WorkerInfo[]> {
@@ -208,7 +238,7 @@ export class Tapdance {
         details: { sessionId: this.session.id },
       });
     }
-    return { record, provider: await this.provider() };
+    return { record, provider: await this.providerFor(record.handle) };
   }
 
   /** Runs a device action; a lost lease clears the session record so the next call says so plainly. */
@@ -256,13 +286,13 @@ export class Tapdance {
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
     }
-    const provider = await this.provider();
+    const provider = options.profile ? this.profileProvider() : await this.provider();
     // The whole check-then-lease runs under the session lock, so two processes of one session
     // (parallel sub-agents, CLI + MCP) cannot both lease.
     return this.store.withLock(this.session.id, async () => {
       const existing = await this.store.get(this.session.id);
       if (existing !== undefined) {
-        const status = await provider.status(existing.handle).catch(() => undefined);
+        const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch(() => undefined);
         if (status?.state === "active" || status?.state === "unknown" || status === undefined) {
           if (options.reuse && existing.handle.platform === options.platform && (!options.device || options.device === existing.handle.model)) {
             return { record: existing, summary: summarize(existing, status), reused: true };
@@ -284,6 +314,7 @@ export class Tapdance {
           ...(options.osVersion ? { osVersion: options.osVersion } : {}),
           ...(options.imageTag ? { imageTag: options.imageTag } : {}),
           ...(options.physical ? { physical: true } : {}),
+          ...(options.profile ? { profile: options.profile } : {}),
           ttlMs: ttlMinutes * 60_000,
           ...(waitSeconds > 0 ? { waitTimeoutMs: waitSeconds * 1000 } : {}),
         },
@@ -348,7 +379,7 @@ export class Tapdance {
     if (options.onlyOwnedBy && (record.owner?.kind !== options.onlyOwnedBy.kind || record.owner.pid !== options.onlyOwnedBy.pid)) {
       return { released: false, skipped: `lease belongs to ${record.owner?.kind ?? "another process"}` };
     }
-    const provider = await this.provider();
+    const provider = await this.providerFor(record.handle);
     // A recording still running is evidence: stop it and keep the video before the device goes away.
     const artifacts: ArtifactRef[] = [];
     if (record.recording) {
@@ -637,6 +668,65 @@ export class Tapdance {
       if (!provider.viewer) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} has no live viewer`);
       return { endpoints: await provider.viewer(handle), record };
     });
+  }
+
+  private humanRequestPath(): string {
+    return `${this.store.path(this.session.id)}.human-request.json`;
+  }
+
+  /** The agent's open request for a person (sign in, approve, set something up), if any. */
+  async pendingHumanRequest(): Promise<HumanRequest | undefined> {
+    try {
+      const r = JSON.parse(await readFile(this.humanRequestPath(), "utf8")) as HumanRequest;
+      return r.doneAt ? undefined : r;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Marks the open request done: the viewer's "Hand back", or `tapdance device done`. */
+  async completeHumanRequest(by: string): Promise<boolean> {
+    const pending = await this.pendingHumanRequest();
+    if (!pending) return false;
+    await writeFile(this.humanRequestPath(), JSON.stringify({ ...pending, doneAt: new Date().toISOString(), doneBy: by }), { mode: 0o600 });
+    return true;
+  }
+
+  /**
+   * Asks a person to do something on the device the agent cannot (sign in to a test account, approve
+   * a purchase sheet, solve a check) and waits until they say they are done: "Hand back" in the
+   * viewer, or `tapdance device done`. A person merely touching the screen does not end the wait.
+   */
+  async requestHuman(reason: string, timeoutMs = 10 * 60_000, signal?: AbortSignal): Promise<{ completed: boolean; how?: string; waitedMs: number; hint?: string }> {
+    const { record } = await this.active();
+    const started = Date.now();
+    const request: HumanRequest = { reason: reason.slice(0, 500), requestedAt: new Date(started).toISOString(), leaseId: record.handle.leaseId };
+    await writeFile(this.humanRequestPath(), JSON.stringify(request), { mode: 0o600 });
+    const how =
+      record.handle.provider === PROFILE_PROVIDER
+        ? "Use the emulator window on the machine running it, then run `tapdance device done`."
+        : "Open `tapdance view`, press Take over, do it, then press Hand back (or run `tapdance device done`).";
+    this.progress(`Waiting for a person: ${request.reason}. ${how}`);
+    let lastNote = Date.now();
+    try {
+      while (Date.now() - started < timeoutMs && !signal?.aborted) {
+        const current = JSON.parse(await readFile(this.humanRequestPath(), "utf8").catch(() => "{}")) as Partial<HumanRequest>;
+        if (current.doneAt) {
+          await this.touch(record.handle.leaseId);
+          return { completed: true, how: current.doneBy ?? "done", waitedMs: Date.now() - started };
+        }
+        if (Date.now() - lastNote > 15_000) {
+          // Progress keeps MCP clients that reset their timeout on progress from giving up.
+          this.progress(`Still waiting for a person (${Math.round((Date.now() - started) / 1000)} s): ${request.reason}`);
+          lastNote = Date.now();
+          await this.touch(record.handle.leaseId);
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      return { completed: false, waitedMs: Date.now() - started, hint: `Nobody marked it done. Ask the user: "${request.reason}". ${how} Then call request_human again or continue.` };
+    } finally {
+      await rm(this.humanRequestPath(), { force: true });
+    }
   }
 
   /** Called by the viewer while a person touches the screen; 0 clears it. */

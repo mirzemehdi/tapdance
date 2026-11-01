@@ -36,7 +36,7 @@ import {
 import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError } from "./agent-device-errors.js";
 import type { SimlockConnection } from "./connection.js";
-import { SimlockHttp, type SimlockWorker } from "./http.js";
+import { SimlockHttp, type ExecResult, type SimlockWorker } from "./http.js";
 import { AxeBackend } from "./axe.js";
 
 export const PROVIDER_NAME = "simlock";
@@ -70,7 +70,7 @@ const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
  * `/v1/agent-device` proxy; a fixed allowlist of `adb`/`simctl` commands goes through Simlock's exec.
  */
 export class SimlockProvider implements DeviceProvider {
-  readonly name = PROVIDER_NAME;
+  readonly name: string = PROVIDER_NAME;
   readonly http: SimlockHttp;
   private readonly clients = new Map<string, AgentDeviceClient>();
 
@@ -365,12 +365,27 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   /** Lease-scoped request fields every agent-device call carries. */
-  private scope(handle: LeaseHandle): Record<string, unknown> {
+  /** The agent-device client for this lease. A subclass may drive devices without Simlock's proxy. */
+  protected agentClient(handle: LeaseHandle): AgentDeviceClient {
+    return this.client(this.data(handle));
+  }
+
+  /** Runs adb/simctl against the leased device (Simlock's lease exec puts the device in). */
+  protected execOn(handle: LeaseHandle, tool: "adb" | "simctl", args: string[], timeoutMs?: number, stdin?: string): Promise<ExecResult> {
+    return this.http.exec(handle.leaseId, tool, args, timeoutMs, stdin);
+  }
+
+  /** True when the devices run on this machine, so host paths are meaningful. */
+  protected isLocal(): boolean {
+    return this.connection.kind === "local";
+  }
+
+  protected scope(handle: LeaseHandle): Record<string, unknown> {
     const d = this.data(handle);
     return { leaseId: handle.leaseId, deviceKey: d.deviceKey, tenant: d.tenant, runId: d.runId, clientId: d.clientId };
   }
 
-  private selection(handle: LeaseHandle): Record<string, unknown> {
+  protected selection(handle: LeaseHandle): Record<string, unknown> {
     return handle.platform === "ios" ? { platform: "ios", udid: handle.deviceId } : { platform: "android", serial: handle.deviceId };
   }
 
@@ -465,7 +480,7 @@ export class SimlockProvider implements DeviceProvider {
 
   async renew(handle: LeaseHandle, ttlMs = handle.ttlMs): Promise<LeaseStatus> {
     try {
-      const lease = await this.client(this.data(handle)).leases.heartbeat({ ...this.scope(handle), ttlMs } as never);
+      const lease = await this.agentClient(handle).leases.heartbeat({ ...this.scope(handle), ttlMs } as never);
       void lease;
     } catch (error) {
       throw fromAgentDeviceError(error, "renew");
@@ -474,7 +489,7 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   async release(handle: LeaseHandle): Promise<{ released: boolean }> {
-    const client = this.client(this.data(handle));
+    const client = this.agentClient(handle);
     let released = false;
     // `close` ends the agent-device session and, with it, the Simlock lease; `release` covers a
     // session that never opened. Either answering "not active" means it is already gone.
@@ -500,7 +515,7 @@ export class SimlockProvider implements DeviceProvider {
     const path = validateAppPath(appPath, handle.platform, handle.physical);
     options.onProgress?.(`Uploading ${path} to the worker and installing`);
     try {
-      const result = await this.client(this.data(handle)).apps.install({
+      const result = await this.agentClient(handle).apps.install({
         appPath: path,
         ...(options.appId ? { app: options.appId } : {}),
         ...this.scope(handle),
@@ -518,7 +533,7 @@ export class SimlockProvider implements DeviceProvider {
     checkAppId(appId);
     if (options.args?.some((a) => typeof a !== "string" || a.length > 1024 || a.includes("\u0000"))) throw new TapdanceError("USAGE", "Launch arguments must be short plain strings");
     try {
-      await this.client(this.data(handle)).apps.open({
+      await this.agentClient(handle).apps.open({
         app: appId,
         ...(options.url ? { url: options.url } : {}),
         ...(options.relaunch || options.args?.length ? { relaunch: true } : {}),
@@ -536,8 +551,8 @@ export class SimlockProvider implements DeviceProvider {
     checkAppId(appId);
     const result =
       handle.platform === "android"
-        ? await this.http.exec(handle.leaseId, "adb", ["shell", "am", "force-stop", appId])
-        : await this.http.exec(handle.leaseId, "simctl", ["terminate", appId]);
+        ? await this.execOn(handle, "adb", ["shell", "am", "force-stop", appId])
+        : await this.execOn(handle, "simctl", ["terminate", appId]);
     if (result.exitCode !== 0 && !/not running|found nothing to terminate/i.test(result.stderr)) {
       throw new TapdanceError("DEVICE_ERROR", `Stopping ${appId} failed: ${result.stderr.trim() || `exit ${result.exitCode}`}`);
     }
@@ -546,7 +561,7 @@ export class SimlockProvider implements DeviceProvider {
 
   async listApps(handle: LeaseHandle): Promise<string[]> {
     try {
-      return await this.client(this.data(handle)).apps.list({ ...this.scope(handle) } as never);
+      return await this.agentClient(handle).apps.list({ ...this.scope(handle) } as never);
     } catch (error) {
       throw fromAgentDeviceError(error, "list apps");
     }
@@ -558,7 +573,7 @@ export class SimlockProvider implements DeviceProvider {
     const axe = this.axeFor(handle);
     if (axe) return axe.inspect(handle.deviceId, options.interactiveOnly ?? true);
     try {
-      const snap = await this.client(this.data(handle)).capture.snapshot({
+      const snap = await this.agentClient(handle).capture.snapshot({
         interactiveOnly: options.interactiveOnly ?? true,
         ...this.scope(handle),
       } as never);
@@ -590,7 +605,7 @@ export class SimlockProvider implements DeviceProvider {
     const axe = this.axeFor(handle);
     if (axe) return axe.tap(handle.deviceId, target);
     try {
-      const result = (await this.client(this.data(handle)).interactions.press({
+      const result = (await this.agentClient(handle).interactions.press({
         ...toAgentDeviceTarget(target),
         ...(options.settle === false ? {} : { settle: true }),
         ...this.scope(handle),
@@ -609,7 +624,7 @@ export class SimlockProvider implements DeviceProvider {
   ): Promise<ActionResult> {
     const axe = this.axeFor(handle);
     if (axe) return axe.swipe(handle.deviceId, gesture);
-    const client = this.client(this.data(handle));
+    const client = this.agentClient(handle);
     try {
       if (gesture.kind === "points") {
         const result = await client.interactions.swipe({ from: gesture.from, to: gesture.to, ...this.scope(handle) } as never);
@@ -643,7 +658,7 @@ export class SimlockProvider implements DeviceProvider {
         await new Promise((r) => setTimeout(r, 500));
       }
     }
-    const command = this.client(this.data(handle)).command as unknown as { wait: (o: unknown) => Promise<{ waitedMs?: number; hint?: string }> };
+    const command = this.agentClient(handle).command as unknown as { wait: (o: unknown) => Promise<{ waitedMs?: number; hint?: string }> };
     const target =
       condition.kind === "text" ? { text: condition.text } : condition.kind === "absent" ? { absent: textSelector(condition.text) } : { stable: true };
     try {
@@ -662,7 +677,7 @@ export class SimlockProvider implements DeviceProvider {
     if (this.axeFor(handle)) {
       throw new TapdanceError("NOT_SUPPORTED", "The AXe backend has no alert handling", { hint: "Tap the alert's button by its label instead." });
     }
-    const command = this.client(this.data(handle)).command as unknown as { alert: (o: unknown) => Promise<Record<string, unknown>> };
+    const command = this.agentClient(handle).command as unknown as { alert: (o: unknown) => Promise<Record<string, unknown>> };
     try {
       const r = await command.alert({ action, ...this.scope(handle) });
       const alert = (r["alert"] ?? r) as Record<string, unknown>;
@@ -684,7 +699,7 @@ export class SimlockProvider implements DeviceProvider {
   async typeText(handle: LeaseHandle, text: string, target?: ElementTarget): Promise<ActionResult> {
     const axe = this.axeFor(handle);
     if (axe) return axe.type(handle.deviceId, text, target);
-    const client = this.client(this.data(handle));
+    const client = this.agentClient(handle);
     try {
       if (target !== undefined) {
         const result = await client.interactions.fill({ ...toAgentDeviceTarget(target), text, settle: true, ...this.scope(handle) } as never);
@@ -706,7 +721,7 @@ export class SimlockProvider implements DeviceProvider {
   async pressKey(handle: LeaseHandle, key: DeviceKey): Promise<ActionResult> {
     const axe = this.axeFor(handle);
     if (axe && key === "home") return axe.button(handle.deviceId, "home");
-    const command = this.client(this.data(handle)).command as unknown as Record<string, (o: unknown) => Promise<unknown>>;
+    const command = this.agentClient(handle).command as unknown as Record<string, (o: unknown) => Promise<unknown>>;
     const scope = this.scope(handle);
     const call: Record<DeviceKey, () => Promise<unknown>> = {
       back: () => command["back"]!({ ...scope, settle: true }),
@@ -729,7 +744,7 @@ export class SimlockProvider implements DeviceProvider {
     const axe = this.axeFor(handle);
     if (axe) return axe.screenshot(handle.deviceId, resolve(outPath));
     try {
-      const result = await this.client(this.data(handle)).capture.screenshot({ path: resolve(outPath), ...this.scope(handle) } as never);
+      const result = await this.agentClient(handle).capture.screenshot({ path: resolve(outPath), ...this.scope(handle) } as never);
       return { path: result.path, ...(result.width ? { width: result.width } : {}), ...(result.height ? { height: result.height } : {}) };
     } catch (error) {
       throw fromAgentDeviceError(error, "screenshot");
@@ -742,7 +757,7 @@ export class SimlockProvider implements DeviceProvider {
       const { pid } = axe.startRecording(handle.deviceId, resolve(outPath));
       return { path: resolve(outPath), token: { backend: "axe", pid, path: resolve(outPath) } };
     }
-    const client = this.client(this.data(handle));
+    const client = this.agentClient(handle);
     const base = { action: "start", path: resolve(outPath), ...this.scope(handle) };
     try {
       const result = (await client.recording.record(base as never)) as { outPath?: string };
@@ -765,7 +780,7 @@ export class SimlockProvider implements DeviceProvider {
       return { path: stopped.path, extraPaths: [] };
     }
     try {
-      const result = (await this.client(this.data(handle)).recording.record({ action: "stop", ...this.scope(handle) } as never)) as {
+      const result = (await this.agentClient(handle).recording.record({ action: "stop", ...this.scope(handle) } as never)) as {
         outPath: string;
         durationMs?: number;
         chunks?: Array<{ path: string }>;
@@ -785,18 +800,18 @@ export class SimlockProvider implements DeviceProvider {
       const args = ["logcat", "-d", "-v", "threadtime", "-t", String(lines)];
       let unfiltered = false;
       if (options.appId) {
-        const pid = (await this.http.exec(handle.leaseId, "adb", ["shell", "pidof", options.appId])).stdout.trim().split(/\s+/)[0];
+        const pid = (await this.execOn(handle, "adb", ["shell", "pidof", options.appId])).stdout.trim().split(/\s+/)[0];
         if (pid && /^\d+$/.test(pid)) args.push(`--pid=${pid}`);
         else unfiltered = true;
       }
-      const result = await this.http.exec(handle.leaseId, "adb", args);
+      const result = await this.execOn(handle, "adb", args);
       const out = toLogResult(unfiltered ? "logcat (all processes)" : "logcat", result.stdout, lines);
       if (unfiltered) out.lines.push(`Note: ${options.appId} is not running, so these lines are not filtered to it. Launch the app and fetch logs again.`);
       return out;
     }
     const args = ["spawn", "log", "show", "--last", "3m", "--style", "compact"];
     if (options.appId) args.push("--predicate", `subsystem BEGINSWITH "${options.appId}" OR process == "${options.appId.split(".").at(-1)}"`);
-    const result = await this.http.exec(handle.leaseId, "simctl", args, 180_000);
+    const result = await this.execOn(handle, "simctl", args, 180_000);
     return toLogResult("simulator log (last 3 min)", result.stdout, lines);
   }
 
@@ -804,26 +819,25 @@ export class SimlockProvider implements DeviceProvider {
     const lines = clampLines(options.lines);
     if (options.appId !== undefined) checkAppId(options.appId);
     if (handle.platform === "android") {
-      const result = await this.http.exec(handle.leaseId, "adb", ["logcat", "-d", "-b", "crash", "-v", "threadtime", "-t", String(lines)]);
+      const result = await this.execOn(handle, "adb", ["logcat", "-d", "-b", "crash", "-v", "threadtime", "-t", String(lines)]);
       return toLogResult("logcat crash buffer", result.stdout, lines);
     }
     const predicate = options.appId
       ? `(messageType == fault OR eventMessage CONTAINS[c] "crash" OR eventMessage CONTAINS[c] "terminat") AND (subsystem BEGINSWITH "${options.appId}" OR process == "${options.appId.split(".").at(-1)}" OR eventMessage CONTAINS "${options.appId}")`
       : `messageType == fault OR eventMessage CONTAINS[c] "crash"`;
-    const result = await this.http.exec(handle.leaseId, "simctl", ["spawn", "log", "show", "--last", "10m", "--style", "compact", "--predicate", predicate], 180_000);
+    const result = await this.execOn(handle, "simctl", ["spawn", "log", "show", "--last", "10m", "--style", "compact", "--predicate", predicate], 180_000);
     const out = toLogResult("simulator faults and crash messages (last 10 min)", result.stdout, lines);
     out.lines.push("Note: full iOS crash reports (.ips) stay on the worker in ~/Library/Logs/DiagnosticReports.");
     return out;
   }
 
   async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
-    const data = this.data(handle);
     return runDeviceOperation(
       {
-        client: this.client(data),
+        client: this.agentClient(handle),
         scope: { ...this.selection(handle), ...this.scope(handle) },
-        exec: (command, timeoutMs) => this.http.exec(handle.leaseId, command.tool, command.args, timeoutMs, command.stdin),
-        local: this.connection.kind === "local",
+        exec: (command, timeoutMs) => this.execOn(handle, command.tool, command.args, timeoutMs, command.stdin),
+        local: this.isLocal(),
       },
       handle,
       operation,

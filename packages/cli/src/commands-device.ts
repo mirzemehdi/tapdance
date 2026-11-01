@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { DEVICE_SETTINGS, LocalArtifactStore, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, table } from "./output.js";
 
@@ -103,11 +103,12 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--os <version>", "OS version or range (Android: API level)")
     .option("--image-tag <tag>", "Android system image tag, e.g. google_apis_playstore")
     .option("--physical", "lease an enrolled physical device instead")
+    .option("--profile <name>", "boot a device profile from this machine (read-only: the lease's changes are discarded)")
     .option("--ttl <minutes>", "lease time to live in minutes")
     .option("--wait <seconds>", "how long to wait in the queue")
     .option("--no-keepalive", "do not renew in the background (the lease expires after its TTL)")
     .option("--hold", "stay in the foreground, renew, and release on Ctrl-C")
-    .action(async (o: { platform: string; device?: string; os?: string; imageTag?: string; physical?: boolean; ttl?: string; wait?: string; keepalive: boolean; hold?: boolean }) =>
+    .action(async (o: { platform: string; device?: string; os?: string; imageTag?: string; physical?: boolean; profile?: string; ttl?: string; wait?: string; keepalive: boolean; hold?: boolean }) =>
       run(globals(), async (t, out) => {
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
@@ -117,6 +118,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(o.os ? { osVersion: o.os } : {}),
           ...(o.imageTag ? { imageTag: o.imageTag } : {}),
           ...(o.physical ? { physical: true } : {}),
+          ...(o.profile ? { profile: o.profile } : {}),
           ...(ttl !== undefined ? { ttlMinutes: ttl } : {}),
           ...(wait !== undefined ? { waitSeconds: wait } : {}),
         });
@@ -142,6 +144,60 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           const released = await t.release();
           out.progress(released.released ? "Released" : "Lease already ended");
         }
+      }),
+    );
+
+  device
+    .command("done")
+    .description("Tell the agent you finished what it asked for (request_human), e.g. after signing in")
+    .action(async () =>
+      run(globals(), async (t, out) => {
+        const pending = await t.pendingHumanRequest();
+        const answered = await t.completeHumanRequest("tapdance device done");
+        out.result({ answered, ...(pending ? { request: pending } : {}) }, () => (answered ? `Done: ${pending?.reason ?? ""}` : "The agent is not waiting for anything"));
+      }),
+    );
+
+  const profile = device.command("profile").description("Device profiles: an emulator you set up once (signed in, configured) that leases boot from");
+  profile
+    .command("create <name>")
+    .description("Create a profile from an installed system image, then open it to set up (sign in, settings); close the window to save")
+    .option("--image-tag <tag>", "system image tag", "google_apis_playstore")
+    .option("--os <api>", "Android API level (default: the highest installed with that tag)")
+    .option("--device <id>", "avdmanager device id", "pixel_8")
+    .option("--no-edit", "only create it; set it up later with `device profile edit`")
+    .action(async (name: string, o: { imageTag: string; os?: string; device: string; edit: boolean }) =>
+      run(globals(), async (_t, out) => {
+        const record = await createProfile(name, { imageTag: o.imageTag, device: o.device, ...(o.os ? { osVersion: o.os } : {}), onProgress: (m) => out.progress(m) });
+        const final = o.edit ? await editProfile(name, { onProgress: (m) => out.progress(m) }) : record;
+        out.result({ profile: final }, () => `Profile ${name} ready (${final.image}). Lease it: tapdance device lease -p android --profile ${name}`);
+      }),
+    );
+  profile
+    .command("edit <name>")
+    .description("Open the profile writable with a window; what you do is kept when you close it")
+    .action(async (name: string) =>
+      run(globals(), async (_t, out) => {
+        const record = await editProfile(name, { onProgress: (m) => out.progress(m) });
+        out.result({ profile: record }, () => `Saved ${name}`);
+      }),
+    );
+  profile
+    .command("list")
+    .description("List device profiles on this machine")
+    .action(async () =>
+      run(globals(), async (_t, out) => {
+        const profiles = await listProfiles();
+        out.result({ profiles }, () => (profiles.length ? table([["Name", "Image", "Updated"], ...profiles.map((p) => [p.name, p.image, p.updatedAt])]) : "No profiles. Create one: tapdance device profile create <name>"));
+      }),
+    );
+  profile
+    .command("delete <name>")
+    .description("Delete a profile and its emulator data")
+    .action(async (name: string) =>
+      run(globals(), async (_t, out) => {
+        const deleted = await deleteProfile(name);
+        out.result({ deleted }, () => (deleted ? `Deleted ${name}` : `No profile ${name}`));
       }),
     );
 

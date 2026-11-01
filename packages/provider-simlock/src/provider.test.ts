@@ -400,3 +400,24 @@ describe("AXe backend", () => {
     await expect(new AxeBackend("/nonexistent/axe").describe("6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90")).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
   });
 });
+
+describe("Android notifications", () => {
+  it("reads posted notifications from dumpsys", async () => {
+    const { parseNotifications } = await import("./device-operations.js");
+    const dump = [
+      "Current Notification Manager state:",
+      "  NotificationRecord(0x0a1: pkg=com.android.shell user=UserHandle{0} id=2020 tag=tapdance importance=3 key=0|com.android.shell|2020|tapdance|2000: Notification(channel=tapdance))",
+      "    uid=2000 userId=0",
+      "    when=1793580000000",
+      "      android.title=String (Order shipped)",
+      "      android.text=String (Your parcel is on its way)",
+      "  NotificationRecord(0x0b2: pkg=dev.tapdance.demo user=UserHandle{0} id=1 tag=null importance=4 key=0|dev.tapdance.demo|1|null|10190: Notification(channel=reminders))",
+      "      android.title=SpannableString (Practice time)",
+    ].join("\n");
+    const list = parseNotifications(dump);
+    expect(list).toHaveLength(2);
+    expect(list[0]).toMatchObject({ package: "com.android.shell", title: "Order shipped", text: "Your parcel is on its way", key: "0|com.android.shell|2020|tapdance|2000" });
+    expect(list[0]!.postedAt).toBe(new Date(1793580000000).toISOString());
+    expect(list[1]).toMatchObject({ package: "dev.tapdance.demo", title: "Practice time" });
+  });
+});

@@ -182,7 +182,8 @@ async function refresh() {
   document.getElementById("rec").textContent = b.recording ? "Stop recording" : "Start recording";
   // Simlock acts on Home only for iOS simulators; Back and Apps are Android keys.
   for (const name of ["back", "app_switcher"]) { const el = document.querySelector('[data-button="' + name + '"]'); if (el) { el.disabled = d.platform === "ios"; el.title = d.platform === "ios" ? "Android only" : ""; } }
-  if (!banner.classList.contains("human") || b.takeover) setBanner(b.takeover ? "You have control. The agent is paused until you hand back." : "Live. The agent is driving; touch the screen to take control briefly.", b.takeover ? "human" : "");
+  if (b.humanRequest) setBanner("The agent asks you: " + b.humanRequest.reason + " — press Take over, do it, then Hand back.", "human");
+  else if (!banner.classList.contains("human") || b.takeover) setBanner(b.takeover ? "You have control. The agent is paused until you hand back." : "Live. The agent is driving; touch the screen to take control briefly.", b.takeover ? "human" : "");
   document.getElementById("artifacts").innerHTML = (b.artifacts || []).slice().reverse().map((a) => '<li><a target="_blank" href="/api/artifact?id=' + encodeURIComponent(a.id) + '">' + esc(a.kind) + "</a> " + esc(new Date(a.createdAt).toLocaleTimeString()) + "</li>").join("");
 }
 async function start() {

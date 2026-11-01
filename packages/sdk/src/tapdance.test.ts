@@ -2,7 +2,7 @@ import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Tapdance, TapdanceError, createProvider, loadConfig, renewIfDue, runKeepalive, type LeaseHandle } from "./index.js";
+import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, loadConfig, renewIfDue, runKeepalive, type LeaseHandle } from "./index.js";
 import { FakeProvider } from "./testing.js";
 
 async function setup(sessionId = "s1", provider = new FakeProvider()) {
@@ -386,5 +386,46 @@ describe("provider factory", () => {
     const provider = (await createProvider(r, "s")) as unknown as { http: { status: () => Promise<unknown> } };
     await provider.http.status();
     expect(seen).toEqual(["Bearer slk_xxxxxxxxxxxx"]);
+  });
+});
+
+describe("device profiles and requests for a person", () => {
+  class FakeProfiles extends FakeProvider {
+    override readonly name: string = PROFILE_PROVIDER;
+  }
+
+  it("routes a profile lease, and every call on it, to the profile provider", async () => {
+    const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
+    const cwd = await mkdtemp(join(tmpdir(), "td-proj-"));
+    const simlock = new FakeProvider();
+    const profiles = new FakeProfiles();
+    const t = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "p1", source: "test" }, provider: simlock, profileProvider: profiles });
+    await t.lease({ platform: "android", profile: "play-tester" });
+    await t.tap({ kind: "text", text: "Buy" });
+    await t.release();
+    expect(profiles.calls.map((c) => c.method)).toEqual(expect.arrayContaining(["lease", "tap", "release"]));
+    expect((profiles.calls.find((c) => c.method === "lease")!.args[1] as { profile: string }).profile).toBe("play-tester");
+    expect(simlock.calls.filter((c) => ["lease", "tap", "release"].includes(c.method))).toEqual([]);
+  });
+
+  it("request_human waits until the person marks it done, and times out otherwise", async () => {
+    const { t } = await setup("h1");
+    await t.lease({ platform: "android" });
+    const waiting = t.requestHuman("Sign in to the license-tester account", 10_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await t.pendingHumanRequest())?.reason).toBe("Sign in to the license-tester account");
+    expect(await t.completeHumanRequest("viewer hand back")).toBe(true);
+    expect(await waiting).toMatchObject({ completed: true, how: "viewer hand back" });
+    expect(await t.pendingHumanRequest()).toBeUndefined();
+    const timedOut = await t.requestHuman("Approve the purchase", 1_200);
+    expect(timedOut.completed).toBe(false);
+    expect(timedOut.hint).toMatch(/Approve the purchase/);
+    expect(await t.completeHumanRequest("late")).toBe(false);
+  });
+
+  it("device operations need a provider that has them", async () => {
+    const { t } = await setup("d1");
+    await t.lease({ platform: "android" });
+    await expect(t.device({ kind: "uninstall", appId: "com.example" })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
   });
 });

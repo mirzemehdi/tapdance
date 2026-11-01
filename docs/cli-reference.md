@@ -139,7 +139,7 @@ needs an operator token (`tapdance config set-token --operator`), otherwise it f
 
 ```text
 tapdance device lease -p <android|ios> [-d <model>] [--os <version>] [--image-tag <tag>] [--physical]
-                      [--ttl <minutes>] [--wait <seconds>] [--no-keepalive] [--hold]
+                      [--profile <name>] [--ttl <minutes>] [--wait <seconds>] [--no-keepalive] [--hold]
 tapdance device status
 tapdance device renew [--ttl <minutes>]
 tapdance device release
@@ -152,6 +152,7 @@ tapdance device release
 | `--os <version>` | OS version or range; for Android, the API level. |
 | `--image-tag <tag>` | Android system image tag, e.g. `google_apis_playstore`. |
 | `--physical` | Lease an enrolled physical device instead. Untested. |
+| `--profile <name>` | Boot a [device profile](#device-profiles) from this machine instead of a Simlock device. |
 | `--ttl <minutes>` | Lease TTL, 1–240. Default `session.defaultTtlMinutes` (30). |
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
 | `--no-keepalive` | Do not renew in the background. The lease ends after its TTL unless you run `device renew`. |
@@ -171,6 +172,35 @@ from the viewer. If the lease has ended it fails with `LEASE_LOST` and clears th
 
 `device renew` extends the lease now (optionally with a new TTL). `device release` releases this
 session's device; it is wiped. Releasing when nothing is held is not an error.
+
+`device done` tells the agent you finished what it asked for with `request_human` (for example
+signing in); the viewer's **Hand back** does the same.
+
+### Device profiles
+
+```text
+tapdance device profile create <name> [--image-tag <tag>] [--os <api>] [--device <id>] [--no-edit]
+tapdance device profile edit <name>
+tapdance device profile list
+tapdance device profile delete <name>
+```
+
+A profile is an Android emulator you set up once and that leases boot from: for example signed in to a
+Google Play license-tester account for Play Billing tests, with settings and Play Store updates done.
+`create` makes an AVD from an installed system image (`google_apis_playstore` and the highest
+installed API by default; `sdkmanager` installs more) in Tapdance's own AVD home
+(`~/.tapdance/profiles/android/avd`, never next to your own AVDs), then opens it with a window: set it
+up and close the window to save. `edit` opens it again the same way. `device lease -p android
+--profile <name>` boots it **read-only**: everything a lease changes (installs, purchases, data) is
+thrown away at release, so every lease starts from the saved state.
+
+Profiles run on the machine where Tapdance runs, outside Simlock (Simlock enrols only USB phones and
+wipes its own emulators), and are driven by agent-device directly. They have no browser stream: watch
+the emulator's window. They are not yet reachable through a gateway or the worker guard. Your
+credentials never pass through Tapdance: you type them in the emulator. Use a dedicated test account:
+anyone who can lease the profile acts as that account.
+
+`TAPDANCE_PROFILE_HEADLESS=1` boots profiles without a window (scripts, CI).
 
 ### Device state
 
@@ -745,6 +775,11 @@ Options:
 Commands:
   lease [options]                   Lease one emulator or simulator for this
                                     session
+  done                              Tell the agent you finished what it asked
+                                    for (request_human), e.g. after signing in
+  profile                           Device profiles: an emulator you set up once
+                                    (signed in, configured) that leases boot
+                                    from
   status                            Show this session's device and lease
   renew [options]                   Extend this session's lease now
   release                           Release this session's device (it is wiped)
@@ -784,6 +819,8 @@ Options:
   --image-tag <tag>          Android system image tag, e.g.
                              google_apis_playstore
   --physical                 lease an enrolled physical device instead
+  --profile <name>           boot a device profile from this machine (read-only:
+                             the lease's changes are discarded)
   --ttl <minutes>            lease time to live in minutes
   --wait <seconds>           how long to wait in the queue
   --no-keepalive             do not renew in the background (the lease expires
@@ -791,6 +828,90 @@ Options:
   --hold                     stay in the foreground, renew, and release on
                              Ctrl-C
   -h, --help                 display help for command
+```
+
+### `tapdance device done`
+
+```text
+Usage: tapdance device done [options]
+
+Tell the agent you finished what it asked for (request_human), e.g. after
+signing in
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance device profile`
+
+```text
+Usage: tapdance device profile [options] [command]
+
+Device profiles: an emulator you set up once (signed in, configured) that leases
+boot from
+
+Options:
+  -h, --help               display help for command
+
+Commands:
+  create [options] <name>  Create a profile from an installed system image, then
+                           open it to set up (sign in, settings); close the
+                           window to save
+  edit <name>              Open the profile writable with a window; what you do
+                           is kept when you close it
+  list                     List device profiles on this machine
+  delete <name>            Delete a profile and its emulator data
+  help [command]           display help for command
+```
+
+### `tapdance device profile create`
+
+```text
+Usage: tapdance device profile create [options] <name>
+
+Create a profile from an installed system image, then open it to set up (sign
+in, settings); close the window to save
+
+Options:
+  --image-tag <tag>  system image tag (default: "google_apis_playstore")
+  --os <api>         Android API level (default: the highest installed with that
+                     tag)
+  --device <id>      avdmanager device id (default: "pixel_8")
+  --no-edit          only create it; set it up later with `device profile edit`
+  -h, --help         display help for command
+```
+
+### `tapdance device profile edit`
+
+```text
+Usage: tapdance device profile edit [options] <name>
+
+Open the profile writable with a window; what you do is kept when you close it
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance device profile list`
+
+```text
+Usage: tapdance device profile list [options]
+
+List device profiles on this machine
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance device profile delete`
+
+```text
+Usage: tapdance device profile delete [options] <name>
+
+Delete a profile and its emulator data
+
+Options:
+  -h, --help  display help for command
 ```
 
 ### `tapdance device status`
