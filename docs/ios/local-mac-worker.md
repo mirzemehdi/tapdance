@@ -59,8 +59,8 @@ for more.
 
 Install the CLI from source, as in [installation.md](../installation.md): clone the repository, run
 `pnpm install && pnpm build`, and link `packages/cli/dist/main.js` onto your `PATH` as `tapdance`.
-Tapdance is not on npm yet. Do **not** run `npm install -g tapdance`, even though `tapdance gateway
-setup` prints it: that npm name belongs to an unrelated package.
+Tapdance is not on npm yet. Do **not** run `npm install -g tapdance`: that npm name belongs to an
+unrelated package (Tapdance's will be `@tapdance/cli`).
 
 Then check the machine:
 

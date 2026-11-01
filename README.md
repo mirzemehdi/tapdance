@@ -194,11 +194,15 @@ evidence for every "done" claim.
 ## Security in one paragraph
 
 Leasing is not a sandbox. An agent token on a Simlock worker is close to shell access as the user who
-runs the worker daemon. A worker joined to a gateway gives that gateway's operators operator rights on
-the worker, so join only gateways you trust as much as the machine itself. For anything beyond one
-machine, put TLS in front of the gateway or use a private network such as Tailscale; Tapdance refuses
-`ws://` to public hosts. Never commit tokens: Tapdance refuses to load a config file that contains one.
-Read [SECURITY.md](SECURITY.md) for the full threat model.
+runs the worker daemon, and a worker joined to a gateway gives that gateway the same reach — so
+`tapdance worker login` refuses unless you pass `--accept-gateway-exec`, and is meant for dedicated
+machines. **On a personal Mac use device-only mode**: `tapdance worker guard` is the only endpoint the
+remote side reaches; it enforces a local policy, its own revocable tokens approved at the Mac, an
+allowlisted device API, limits and an audit log
+([docs/security/personal-mac.md](docs/security/personal-mac.md)). Use TLS or a private network such as
+Tailscale for anything beyond one machine; Tapdance refuses `ws://` to public hosts. Never commit
+tokens: Tapdance refuses to load a config file that contains one. Full threat model:
+[SECURITY.md](SECURITY.md).
 
 ## Documentation
 

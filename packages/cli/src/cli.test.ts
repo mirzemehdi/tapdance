@@ -47,39 +47,83 @@ describe("tapdance CLI (built)", () => {
     expect(JSON.parse(r.stdout).error.code).toBe("NOT_SUPPORTED");
   });
 
-  it("only names commands that exist in hints and docs", () => {
+  it("only names commands that exist, in code hints and in every doc", () => {
     const help = (args: string[]) => tapdance([...args, "--help"]).stdout;
     const known = new Set<string>();
     const walk = (path: string[]) => {
-      const text = help(path);
-      const section = text.split("Commands:")[1] ?? "";
+      const section = help(path).split("Commands:")[1] ?? "";
       for (const line of section.split("\n")) {
         const name = /^\s{2}([a-z][a-z-]*)/.exec(line)?.[1];
         if (!name || name === "help") continue;
         const full = [...path, name].join(" ");
         if (known.has(full)) continue;
         known.add(full);
-        if (path.length < 1) walk([...path, name]);
+        if (path.length < 2) walk([...path, name]);
       }
     };
     walk([]);
-    const sources = [
-      ...readdirSync(join(root, "packages")).flatMap((p) => {
-        try {
-          return readdirSync(join(root, "packages", p, "src")).filter((f) => f.endsWith(".ts") && !f.includes(".test.")).map((f) => join(root, "packages", p, "src", f));
-        } catch {
-          return [];
-        }
-      }),
-    ];
+    const hasChildren = (prefix: string) => [...known].some((k) => k.startsWith(`${prefix} `));
+    const files = (dir: string, ext: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        if (e.name === "node_modules" || e.name === "dist" || e.name.startsWith(".")) return [];
+        const full = join(dir, e.name);
+        if (e.isDirectory()) return files(full, ext);
+        return e.name.endsWith(ext) && !e.name.includes(".test.") ? [full] : [];
+      });
+    const sources = [...files(join(root, "packages"), ".ts"), ...files(join(root, "docs"), ".md"), ...files(join(root, "infrastructure"), ".md"), ...files(join(root, "infrastructure"), ".sh"), ...files(join(root, "examples"), ".md"),
+      ...["README.md", "CONTRIBUTING.md", "SECURITY.md", "AGENTS.md", "CLAUDE.md"].map((f) => join(root, f))];
     const missing: string[] = [];
     for (const file of sources) {
-      for (const m of readFileSync(file, "utf8").matchAll(/`tapdance ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?/g)) {
-        const [one, two] = [m[1]!, m[2]];
-        if (known.has(`${one} ${two}`) || (known.has(one) && (two === undefined || !known.has(`${one} ${two}`)))) continue;
-        missing.push(`${file.replace(root, "")}: tapdance ${one} ${two ?? ""}`);
+      for (const m of readFileSync(file, "utf8").matchAll(/(?<![\w@/.-])tapdance((?: [a-z][a-z-]*){1,3})/g)) {
+        // Walk the words: wherever the command so far has subcommands, the next word must be one of them.
+        let prefix = "";
+        const words = m[1]!.trim().split(" ");
+        if (["and", "is", "are", "the", "to", "with", "on", "for", "in", "can", "will", "itself"].includes(words[0]!)) continue; // prose
+        for (const word of words) {
+          if (prefix !== "" && !hasChildren(prefix)) break; // the rest are arguments
+          const next = prefix ? `${prefix} ${word}` : word;
+          if (!known.has(next)) {
+            missing.push(`${file.replace(root, "")}: tapdance ${next}`);
+            break;
+          }
+          prefix = next;
+        }
       }
     }
-    expect(missing).toEqual([]);
-  }, 60_000);
+    expect([...new Set(missing)]).toEqual([]);
+  }, 120_000);
+
+  it("documents every command, MCP tool and config key in its reference page", async () => {
+    const help = (args: string[]) => tapdance([...args, "--help"]).stdout;
+    const commands: string[] = [];
+    const walk = (path: string[]) => {
+      const section = help(path).split("Commands:")[1] ?? "";
+      for (const line of section.split("\n")) {
+        const name = /^\s{2}([a-z][a-z-]*)/.exec(line)?.[1];
+        if (!name || name === "help") continue;
+        commands.push([...path, name].join(" "));
+        if (path.length < 2) walk([...path, name]);
+      }
+    };
+    walk([]);
+    const cliRef = readFileSync(join(root, "docs/cli-reference.md"), "utf8");
+    const undocumented = [...new Set(commands)].filter((c) => !cliRef.includes(`tapdance ${c}`));
+    const { TOOLS } = await import("@tapdance/mcp");
+    const mcpRef = readFileSync(join(root, "docs/mcp.md"), "utf8");
+    const missingTools = TOOLS.map((t) => t.name).filter((n) => !mcpRef.includes(`\`${n}\``));
+    const { ConfigSchema } = await import("@tapdance/core");
+    const configRef = readFileSync(join(root, "docs/configuration.md"), "utf8");
+    const keys: string[] = [];
+    const shape = (ConfigSchema as unknown as { shape: Record<string, unknown> }).shape;
+    for (const [k, v] of Object.entries(shape)) {
+      if (k === "$schema") continue;
+      const inner = (v as { _zod?: { def?: { innerType?: { shape?: Record<string, unknown> } } } })._zod?.def?.innerType?.shape;
+      if (inner) for (const sub of Object.keys(inner)) keys.push(`${k}.${sub}`);
+      else keys.push(k);
+    }
+    const missingKeys = keys.filter((k) => !configRef.includes(k));
+    const stale = spawnSync(process.execPath, [join(root, "scripts/gen-cli-index.mjs"), "--check"], { encoding: "utf8" });
+    expect(stale.status, stale.stderr).toBe(0);
+    expect({ undocumented, missingTools, missingKeys }).toEqual({ undocumented: [], missingTools: [], missingKeys: [] });
+  }, 120_000);
 });

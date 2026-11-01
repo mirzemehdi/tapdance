@@ -452,3 +452,980 @@ Consequences:
 
 Session records live in `~/.tapdance/sessions/` (or `$TAPDANCE_HOME/sessions/`), one file per session
 plus a lock file, so parallel processes of one session cannot lease twice.
+
+<!-- BEGIN GENERATED COMMAND INDEX (pnpm docs:cli) -->
+
+## Command index
+
+Every command, with its exact `--help` output. Generated from the CLI; do not edit by hand.
+
+### `tapdance init`
+
+```text
+Usage: tapdance init [options]
+
+Create tapdance.config.json for this project (or ~/.tapdance/config.json with
+--global)
+
+Options:
+  --mode <mode>      device infrastructure: local | self-hosted | cloud
+  --endpoint <url>   self-hosted: Simlock gateway or worker URL, e.g.
+                     https://gateway.example.com
+  --artifacts <dir>  where screenshots, recordings and logs go (default:
+                     "./tapdance-artifacts")
+  --ttl <minutes>    default lease TTL (default: "30")
+  --global           write the per-user config instead of the project one
+  --force            overwrite an existing file
+  -y, --yes          accept defaults, never prompt
+  -h, --help         display help for command
+```
+
+### `tapdance doctor`
+
+```text
+Usage: tapdance doctor [options]
+
+Check configuration, this machine, the worker/gateway, tokens and the current
+lease
+
+Options:
+  --no-host   skip checks of this machine's SDKs and KVM
+  -h, --help  display help for command
+```
+
+### `tapdance config`
+
+```text
+Usage: tapdance config [options] [command]
+
+Show or change configuration and credentials
+
+Options:
+  -h, --help                   display help for command
+
+Commands:
+  show                         Print the merged configuration and where it came
+                               from
+  path                         Print config and credential file locations
+  set [options] <key> <value>  Set a key in the nearest tapdance.config.json (or
+                               --global), e.g. session.defaultTtlMinutes 45
+  set-token [options]          Store the agent token (or --operator token) in
+                               ~/.tapdance/credentials.json, mode 600. Reads
+                               stdin or prompts.
+  help [command]               display help for command
+```
+
+### `tapdance config show`
+
+```text
+Usage: tapdance config show [options]
+
+Print the merged configuration and where it came from
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance config path`
+
+```text
+Usage: tapdance config path [options]
+
+Print config and credential file locations
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance config set`
+
+```text
+Usage: tapdance config set [options] <key> <value>
+
+Set a key in the nearest tapdance.config.json (or --global), e.g.
+session.defaultTtlMinutes 45
+
+Options:
+  --global    edit the per-user config
+  -h, --help  display help for command
+```
+
+### `tapdance config set-token`
+
+```text
+Usage: tapdance config set-token [options]
+
+Store the agent token (or --operator token) in ~/.tapdance/credentials.json,
+mode 600. Reads stdin or prompts.
+
+Options:
+  --operator  store an operator token (only needed for `workers list` on a
+              gateway)
+  -h, --help  display help for command
+```
+
+### `tapdance devices`
+
+```text
+Usage: tapdance devices [options] [command]
+
+List device models you can lease and what is running
+
+Options:
+  -p, --platform <platform>     android or ios
+  -h, --help                    display help for command
+
+Commands:
+  install <platform> <version>  Install an iOS runtime or Android system image
+                                on this worker (several GB; Simlock never
+                                downloads on its own)
+  list [options]                Same as `tapdance devices`
+```
+
+### `tapdance devices install`
+
+```text
+Usage: tapdance devices install [options] <platform> <version>
+
+Install an iOS runtime or Android system image on this worker (several GB;
+Simlock never downloads on its own)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance devices list`
+
+```text
+Usage: tapdance devices list [options]
+
+Same as `tapdance devices`
+
+Options:
+  -p, --platform <platform>  android or ios
+  -h, --help                 display help for command
+```
+
+### `tapdance workers`
+
+```text
+Usage: tapdance workers [options] [command]
+
+Machines that run devices (this machine, laptops, cloud VMs) and whether they
+are online
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  list            List workers
+  help [command]  display help for command
+```
+
+### `tapdance workers list`
+
+```text
+Usage: tapdance workers list [options]
+
+List workers
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance device`
+
+```text
+Usage: tapdance device [options] [command]
+
+Lease, inspect and release this session's device
+
+Options:
+  -h, --help       display help for command
+
+Commands:
+  lease [options]  Lease one emulator or simulator for this session
+  status           Show this session's device and lease
+  renew [options]  Extend this session's lease now
+  release          Release this session's device (it is wiped)
+  help [command]   display help for command
+```
+
+### `tapdance device lease`
+
+```text
+Usage: tapdance device lease [options]
+
+Lease one emulator or simulator for this session
+
+Options:
+  -p, --platform <platform>  android or ios
+  -d, --device <model>       model, e.g. "Pixel 8" or "iPhone 16"
+  --os <version>             OS version or range (Android: API level)
+  --image-tag <tag>          Android system image tag, e.g.
+                             google_apis_playstore
+  --physical                 lease an enrolled physical device instead
+  --ttl <minutes>            lease time to live in minutes
+  --wait <seconds>           how long to wait in the queue
+  --no-keepalive             do not renew in the background (the lease expires
+                             after its TTL)
+  --hold                     stay in the foreground, renew, and release on
+                             Ctrl-C
+  -h, --help                 display help for command
+```
+
+### `tapdance device status`
+
+```text
+Usage: tapdance device status [options]
+
+Show this session's device and lease
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance device renew`
+
+```text
+Usage: tapdance device renew [options]
+
+Extend this session's lease now
+
+Options:
+  --ttl <minutes>  new time to live in minutes
+  -h, --help       display help for command
+```
+
+### `tapdance device release`
+
+```text
+Usage: tapdance device release [options]
+
+Release this session's device (it is wiped)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance app`
+
+```text
+Usage: tapdance app [options] [command]
+
+Install, launch and stop apps on the leased device
+
+Options:
+  -h, --help                display help for command
+
+Commands:
+  install [options] <path>  Upload and install an .apk (Android) or simulator
+                            .app (iOS)
+  launch [options] <appId>  Launch an installed app
+  stop <appId>              Force-stop an app
+  list                      List apps the automation backend sees
+  help [command]            display help for command
+```
+
+### `tapdance app install`
+
+```text
+Usage: tapdance app install [options] <path>
+
+Upload and install an .apk (Android) or simulator .app (iOS)
+
+Options:
+  --app-id <id>  package / bundle id, when the backend needs it
+  -h, --help     display help for command
+```
+
+### `tapdance app launch`
+
+```text
+Usage: tapdance app launch [options] <appId>
+
+Launch an installed app
+
+Options:
+  --relaunch   kill and restart it
+  --url <url>  deep link to open
+  -h, --help   display help for command
+```
+
+### `tapdance app stop`
+
+```text
+Usage: tapdance app stop [options] <appId>
+
+Force-stop an app
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance app list`
+
+```text
+Usage: tapdance app list [options]
+
+List apps the automation backend sees
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance ui`
+
+```text
+Usage: tapdance ui [options] [command]
+
+Inspect and drive the leased device's UI
+
+Options:
+  -h, --help             display help for command
+
+Commands:
+  inspect [options]      List on-screen elements with refs, roles and labels
+  tap [options]          Tap one element
+  swipe [options]        Swipe by finger direction (up scrolls content down) or
+                         between two points
+  type [options] <text>  Type text; with a target, replace that field's content
+  wait [options]         Wait for text to appear (--text), disappear (--absent),
+                         or the UI to settle (--stable)
+  alert <action>         Read (get) or answer (accept, dismiss) a system alert
+  key <key>              Press back, home, enter, dismiss_keyboard or
+                         app_switcher
+  help [command]         display help for command
+```
+
+### `tapdance ui inspect`
+
+```text
+Usage: tapdance ui inspect [options]
+
+List on-screen elements with refs, roles and labels
+
+Options:
+  --all       include non-interactive elements
+  -h, --help  display help for command
+```
+
+### `tapdance ui tap`
+
+```text
+Usage: tapdance ui tap [options]
+
+Tap one element
+
+Options:
+  --text <text>          visible text or accessibility label
+  --id <id>              accessibility identifier / resource id
+  --ref <ref>            ref from `ui inspect`, e.g. @e7
+  --selector <selector>  agent-device selector
+  --x <x>                x coordinate (fallback)
+  --y <y>                y coordinate (fallback)
+  --no-settle            do not wait for the UI to settle
+  -h, --help             display help for command
+```
+
+### `tapdance ui swipe`
+
+```text
+Usage: tapdance ui swipe [options]
+
+Swipe by finger direction (up scrolls content down) or between two points
+
+Options:
+  --direction <dir>    up, down, left or right
+  --amount <fraction>  0.1–0.8 of the screen
+  --until <text>       with --direction: keep scrolling until this text is
+                       visible
+  --from <x,y>         start point
+  --to <x,y>           end point
+  -h, --help           display help for command
+```
+
+### `tapdance ui type`
+
+```text
+Usage: tapdance ui type [options] <text>
+
+Type text; with a target, replace that field's content
+
+Options:
+  --text <text>          visible text or accessibility label
+  --id <id>              accessibility identifier / resource id
+  --ref <ref>            ref from `ui inspect`, e.g. @e7
+  --selector <selector>  agent-device selector
+  --x <x>                x coordinate (fallback)
+  --y <y>                y coordinate (fallback)
+  -h, --help             display help for command
+```
+
+### `tapdance ui wait`
+
+```text
+Usage: tapdance ui wait [options]
+
+Wait for text to appear (--text), disappear (--absent), or the UI to settle
+(--stable)
+
+Options:
+  --text <text>
+  --absent <text>
+  --stable
+  --timeout <ms>   at most 30000 (default: "10000")
+  -h, --help       display help for command
+```
+
+### `tapdance ui alert`
+
+```text
+Usage: tapdance ui alert [options] <action>
+
+Read (get) or answer (accept, dismiss) a system alert
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance ui key`
+
+```text
+Usage: tapdance ui key [options] <key>
+
+Press back, home, enter, dismiss_keyboard or app_switcher
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance screenshot`
+
+```text
+Usage: tapdance screenshot [options]
+
+Save a PNG of the screen (artifacts dir by default)
+
+Options:
+  -o, --output <path>  where to write the PNG
+  --note <text>        what it shows
+  -h, --help           display help for command
+```
+
+### `tapdance record`
+
+```text
+Usage: tapdance record [options] [command]
+
+Record the screen to MP4
+
+Options:
+  -h, --help       display help for command
+
+Commands:
+  start [options]
+  stop [options]
+  help [command]   display help for command
+```
+
+### `tapdance record start`
+
+```text
+Usage: tapdance record start [options]
+
+Options:
+  -o, --output <path>  where to write the MP4
+  -h, --help           display help for command
+```
+
+### `tapdance record stop`
+
+```text
+Usage: tapdance record stop [options]
+
+Options:
+  -o, --output <path>  ignored: the path is chosen at start
+  -h, --help           display help for command
+```
+
+### `tapdance logs`
+
+```text
+Usage: tapdance logs [options]
+
+Recent device logs (logcat / simulator log), saved as an artifact
+
+Options:
+  -n, --lines <n>  how many lines (default: "200")
+  --app <id>       only this app
+  --crash          crash buffer / faults only
+  -h, --help       display help for command
+```
+
+### `tapdance artifacts`
+
+```text
+Usage: tapdance artifacts [options]
+
+Screenshots, recordings and logs from this session
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker`
+
+```text
+Usage: tapdance worker [options] [command]
+
+Run this machine as a device worker (your laptop, a Mac, a KVM server)
+
+Options:
+  -h, --help         display help for command
+
+Commands:
+  guard              Device-only access for remote agents: the only endpoint
+                     they reach on this machine, enforcing a local policy
+  check [options]    Check this machine can run emulators/simulators: SDKs,
+                     images, KVM, Xcode
+  install [options]  Configure the bundled Simlock worker: agent-device, live
+                     streaming and input on; then start it
+  login [options]    Join a gateway: the worker dials out over an authenticated
+                     WebSocket; no inbound port is opened
+  logout             Leave the gateway and serve local agents only
+  start              Start the worker daemon
+  stop               Stop the worker daemon (leases on it end when their TTL
+                     runs out)
+  status             Show the worker's devices, leases and capabilities
+  logs               Print the worker daemon log
+  restart            Restart the worker daemon (ends agent-device sessions on
+                     it)
+  help [command]     display help for command
+```
+
+### `tapdance worker guard`
+
+```text
+Usage: tapdance worker guard [options] [command]
+
+Device-only access for remote agents: the only endpoint they reach on this
+machine, enforcing a local policy
+
+Options:
+  -h, --help       display help for command
+
+Commands:
+  start [options]  Serve the device-only API (loopback by default; expose it
+                   with Tailscale, never publicly)
+  pair [options]   Approve a control machine locally: prints a revocable
+                   device-only token once
+  tokens           List paired control machines
+  revoke <id>      Revoke a paired control machine immediately (or `all`)
+  policy           Show the local policy and its file
+  audit [options]  Show recent remote requests and decisions
+  help [command]   display help for command
+```
+
+### `tapdance worker guard start`
+
+```text
+Usage: tapdance worker guard start [options]
+
+Serve the device-only API (loopback by default; expose it with Tailscale, never
+publicly)
+
+Options:
+  --allow-admin-account  run even though this account is an administrator (not
+                         recommended)
+  -h, --help             display help for command
+```
+
+### `tapdance worker guard pair`
+
+```text
+Usage: tapdance worker guard pair [options]
+
+Approve a control machine locally: prints a revocable device-only token once
+
+Options:
+  --label <name>  who it is for, e.g. hetzner-vps
+  --days <n>      lifetime in days (policy maximum applies)
+  -h, --help      display help for command
+```
+
+### `tapdance worker guard tokens`
+
+```text
+Usage: tapdance worker guard tokens [options]
+
+List paired control machines
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker guard revoke`
+
+```text
+Usage: tapdance worker guard revoke [options] <id>
+
+Revoke a paired control machine immediately (or `all`)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker guard policy`
+
+```text
+Usage: tapdance worker guard policy [options]
+
+Show the local policy and its file
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker guard audit`
+
+```text
+Usage: tapdance worker guard audit [options]
+
+Show recent remote requests and decisions
+
+Options:
+  -n, --lines <n>  how many (default: "50")
+  -h, --help       display help for command
+```
+
+### `tapdance worker check`
+
+```text
+Usage: tapdance worker check [options]
+
+Check this machine can run emulators/simulators: SDKs, images, KVM, Xcode
+
+Options:
+  --android-only  skip iOS checks
+  -h, --help      display help for command
+```
+
+### `tapdance worker install`
+
+```text
+Usage: tapdance worker install [options]
+
+Configure the bundled Simlock worker: agent-device, live streaming and input on;
+then start it
+
+Options:
+  --no-stream              leave screen streaming and input off
+  --ios-backend <backend>  agent-device (default; works through gateways) or axe
+                           (Tapdance on this Mac only) (default: "agent-device")
+  --service                also install it as a login service (launchd / systemd
+                           --user)
+  -h, --help               display help for command
+```
+
+### `tapdance worker login`
+
+```text
+Usage: tapdance worker login [options]
+
+Join a gateway: the worker dials out over an authenticated WebSocket; no inbound
+port is opened
+
+Options:
+  --gateway <url>        gateway address, e.g. wss://gateway.example.com
+  --label <name>         name shown in `tapdance workers list`
+  --token-stdin          read the join token from stdin (default when stdin is
+                         piped)
+  --no-viewer            leave live streaming and remote input off
+  --accept-gateway-exec  acknowledge that a joined gateway (and its agent
+                         tokens) can run programs on this machine
+  -h, --help             display help for command
+```
+
+### `tapdance worker logout`
+
+```text
+Usage: tapdance worker logout [options]
+
+Leave the gateway and serve local agents only
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker start`
+
+```text
+Usage: tapdance worker start [options]
+
+Start the worker daemon
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker stop`
+
+```text
+Usage: tapdance worker stop [options]
+
+Stop the worker daemon (leases on it end when their TTL runs out)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker status`
+
+```text
+Usage: tapdance worker status [options]
+
+Show the worker's devices, leases and capabilities
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker logs`
+
+```text
+Usage: tapdance worker logs [options]
+
+Print the worker daemon log
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker restart`
+
+```text
+Usage: tapdance worker restart [options]
+
+Restart the worker daemon (ends agent-device sessions on it)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance simlock`
+
+```text
+Usage: tapdance simlock [options] [args...]
+
+Run the Simlock CLI bundled with Tapdance (for operators; agents should not need
+it)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance gateway`
+
+```text
+Usage: tapdance gateway [options] [command]
+
+Run a gateway on this machine (an ordinary VPS is fine: it needs no KVM)
+
+Options:
+  -h, --help       display help for command
+
+Commands:
+  setup [options]  Start a Simlock gateway, enable agent-device + streaming,
+                   mint tokens, and point this machine's Tapdance at it
+  token [options]  Mint a token on this machine's gateway (printed once)
+  status           Show the gateway's workers, devices and queue
+  help [command]   display help for command
+```
+
+### `tapdance gateway setup`
+
+```text
+Usage: tapdance gateway setup [options]
+
+Start a Simlock gateway, enable agent-device + streaming, mint tokens, and point
+this machine's Tapdance at it
+
+Options:
+  --worker-label <name>  label for the first worker's join token (default:
+                         "worker-1")
+  --agent-label <name>   label for this machine's agent token (default:
+                         "tapdance-agent")
+  --public-url <url>     the https:// address workers and remote agents will use
+                         (after you add TLS)
+  --no-configure-here    do not write ~/.tapdance config/credentials for this
+                         machine
+  -h, --help             display help for command
+```
+
+### `tapdance gateway token`
+
+```text
+Usage: tapdance gateway token [options]
+
+Mint a token on this machine's gateway (printed once)
+
+Options:
+  --role <role>   worker (to join a worker), agent (one per agent), or operator
+  --label <name>  who it is for
+  -h, --help      display help for command
+```
+
+### `tapdance gateway status`
+
+```text
+Usage: tapdance gateway status [options]
+
+Show the gateway's workers, devices and queue
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance view`
+
+```text
+Usage: tapdance view [options]
+
+Open a live view of this session's device in your browser (watch the agent, take
+over, hand back)
+
+Options:
+  --host <host>  address to listen on (loopback by default; use SSH -L or
+                 Tailscale to reach it)
+  --port <port>  port to listen on
+  -h, --help     display help for command
+```
+
+### `tapdance report`
+
+```text
+Usage: tapdance report [options]
+
+Write a redacted, issue-ready bug report (environment, versions, doctor, lease)
+to stdout or a file
+
+Options:
+  --title <text>       one-line summary
+  --kind <kind>        bug | missing-feature | docs | field-test (default:
+                       "bug")
+  --steps <text>       what you ran, in order
+  --expected <text>    what should have happened
+  --actual <text>      what happened instead (paste the error)
+  --evidence <paths>   comma-separated artifact paths (screenshots, logs) to
+                       list
+  -o, --output <file>  write to this file (for `gh issue create --body-file`)
+  -h, --help           display help for command
+```
+
+### `tapdance tools`
+
+```text
+Usage: tapdance tools [options] [command]
+
+External tools Tapdance can run for you, and whether they are installed here
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  list            Registered tools and install state
+  doctor          Install state, versions, discovery commands and install
+                  guidance
+  versions        Installed versions
+  help [command]  display help for command
+```
+
+### `tapdance tools list`
+
+```text
+Usage: tapdance tools list [options]
+
+Registered tools and install state
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance tools doctor`
+
+```text
+Usage: tapdance tools doctor [options]
+
+Install state, versions, discovery commands and install guidance
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance tools versions`
+
+```text
+Usage: tapdance tools versions [options]
+
+Installed versions
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance tool`
+
+```text
+Usage: tapdance tool [options] <name> [args...]
+
+Run an external tool with arguments unchanged: tapdance tool asc -- apps list
+
+Options:
+  --target <target>    where to run it: control (this machine; default)
+  --timeout <seconds>  stop it after this long (default 600)
+  -h, --help           display help for command
+```
+
+### `tapdance asc`
+
+```text
+Usage: tapdance asc [options] [args...]
+
+Run the installed asc CLI with arguments unchanged (tapdance asc -- --help)
+
+Options:
+  --target <target>    where to run it: control (this machine; default)
+  --timeout <seconds>  stop it after this long (default 600)
+  -h, --help           display help for command
+```
+
+### `tapdance android`
+
+```text
+Usage: tapdance android [options] [args...]
+
+Run the installed android CLI with arguments unchanged (tapdance android --
+--help)
+
+Options:
+  --target <target>    where to run it: control (this machine; default)
+  --timeout <seconds>  stop it after this long (default 600)
+  -h, --help           display help for command
+```
+
+### `tapdance mcp`
+
+```text
+Usage: tapdance mcp [options]
+
+Run the MCP server (stdio by default) so an agent gets Tapdance's device tools
+
+Options:
+  --http         serve Streamable HTTP instead of stdio
+  --host <host>  HTTP: address to listen on (default: "127.0.0.1")
+  --port <port>  HTTP: port (default: "4711")
+  -h, --help     display help for command
+```
+
+<!-- END GENERATED COMMAND INDEX -->

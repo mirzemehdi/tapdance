@@ -13,7 +13,9 @@
     "typecheck": "tsc -b packages/cli packages/mcp",
     "test": "pnpm build && vitest run --project unit",
     "test:integration": "pnpm build && vitest run --project integration",
-    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo"
+    "clean": "rm -rf packages/*/dist packages/*/tsconfig.tsbuildinfo",
+    "docs:cli": "node scripts/gen-cli-index.mjs",
+    "docs:check": "node scripts/gen-cli-index.mjs --check"
   },
   "devDependencies": {
     "@types/node": "26.6.6",
