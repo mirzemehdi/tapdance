@@ -129,8 +129,14 @@ Tools marked "against the leased device" act only on this session's device:
 | `android` | Appends `--device=<leased serial>` to subcommands whose own `--help` lists `--device` (the CLI ignores `ANDROID_SERIAL`) and refuses a caller-supplied `--device`; sets `ANDROID_SERIAL` and `ANDROID_ADB_SERVER_PORT` (Simlock's private adb server); inherited `ANDROID_SERIAL`, `ANDROID_ADB_SERVER_PORT` and `ANDROID_ADB_SERVER_ADDRESS` are removed. Android leases only. | Runs, with `ANDROID_SERIAL` set to an id that matches no device, so device-free commands (docs, project setup) work and device commands fail. |
 
 These tools need direct access to the device, so they work only where the device runs: when the
-session's lease is on a **remote** worker, they fail with `NOT_SUPPORTED`. Tapdance's own device tools
-(`tap`, `inspect_screen`, screenshots, logs) do work through a gateway.
+session's lease is on a **remote** worker, they fail with `NOT_SUPPORTED` and name the tools that do
+reach it. Tapdance's own device tools (`tap`, `inspect_screen`, screenshots, logs, and the device-state
+tools `set_device_setting`, `push_file`/`pull_file`, `notifications`, `uninstall_app`/`clear_app_data`,
+`launch_app` intents, `measure_performance`) work through a gateway and the worker guard: they go
+through Simlock's lease exec with a fixed allowlist (`packages/provider-simlock/src/device-commands.ts`).
+
+`bundletool` is registered too: `install_app` uses it to turn an `.aab` into a universal APK on the
+control machine.
 
 A person holding the device in the viewer blocks agent calls to these tools with `HUMAN_HELD`.
 

@@ -109,17 +109,34 @@ has been installed on a real machine yet.
 - **A device API, not a host API.** Only these routes exist: health, identity, status, catalog, your leases (get, release, stream, input, events, exec), agent-device RPC,
   app upload, artifact download. Anything else is `404`.
 - **Allowlisted agent-device commands**, grouped under policy switches: session (open/close),
-  inspection, install, interaction, screenshots, recording, logs. Commands that run code or touch files
-  — `batch`, `replay`, `test`, `install-from-source`, `metro`, `push`, `perf`, `trace`, `debug`,
-  `settings`, `doctor` and anything unknown — are refused.
-- **Exact `exec` argument lists.** Allowed: `simctl terminate <bundle id>`, `simctl spawn log show`
-  with Tapdance's fixed flags, `adb shell am force-stop <package>`, `adb shell pidof <package>`,
-  `adb logcat` with fixed flags. No `spawn` of anything else, no `pull`/`push`, no stdin, no shell.
+  inspection, install, interaction, screenshots, recording, logs, `settings`, `perf`, `notifications`.
+  `settings` passes only device settings (never the macOS host permissions `accessibility`,
+  `screen-recording`, `input-monitoring`); `perf` only `perf frames` and `perf memory sample` (no
+  xctrace/simpleperf profiles, no output paths); `push` only an app id and an inline JSON payload.
+  Commands that run code, touch files on the Mac or capture the host — `batch`, `replay`, `test`,
+  `install-from-source`, `metro`, `trace`, `debug`, `doctor`, `audio` (it records the Mac's own audio
+  with Screen Recording permission) and anything unknown — are refused.
+- **Exact `exec` argument lists** (one shared list, `device-commands.ts`, checked against the guard by a
+  test). Allowed: `simctl terminate <bundle id>`, `simctl spawn log show` with Tapdance's fixed flags,
+  `simctl status_bar override --time HH:MM` / `clear`; `adb shell am force-stop <package>`,
+  `adb shell pidof <package>`, `adb logcat` with fixed flags, `adb shell am start -W` with validated
+  intent fields, `wm density`, per-app locale, time zone, `dumpsys notification`, the notification
+  shade, a shell test notification, and files: base64 on stdin or stdout to `/sdcard/{Download,
+  Pictures,DCIM,Documents,Movies,Music}/<name>` or a debuggable app's own `files/`, `cache/`,
+  `databases/`, `shared_prefs/`, `no_backup/` (24 MB at most). Values that reach the emulator's own
+  shell are validated and single-quoted. No `adb push`/`pull` of Mac paths, no `simctl addmedia` or
+  `spawn`, no host shell.
 - **Lease ownership per client.** A client can act only on leases it allocated; lease ids repeated in
   `params`, `meta` and `flags` must all match; another client's lease answers `404`/`403`. An allocate
   that Simlock answers with an error never leaves the lease id owned by that client.
 - **Each client sees only its own work.** `/v1/status` shows a client only its own leases, its own
   queued requests and the devices tied to its leases.
+- **Policy switches for the new areas.** `allow.settings`, `allow.files` and `allow.perf` default to
+  `true`; `allow.notifications` defaults to `false`, because notifications can hold private text.
+- **Uploads and artifacts belong to their client.** An upload must name one of the caller's own leases;
+  its upload id is bound to that client, so another client cannot add bytes to it, finalize it or
+  install it. Artifact ids are learned from the replies to a client's own commands; any other id
+  (another client's, or a guess) answers 404.
 - **Simulators and emulators only, by default.** Physical iPhones and Android phones enrolled with
   Simlock cannot be leased through the guard unless the policy sets `allow.physicalDevices: true`
   (default `false`).
@@ -143,8 +160,8 @@ has been installed on a real machine yet.
 - **Per-session staging directories and storage quotas on the Mac.** Uploads and artifacts live in
   agent-device's own directories under the worker account; Tapdance caps upload size but not total
   disk use (H-06, H-07). Recording duration is not capped.
-- **Upload/artifact ownership (known gap).** Upload and artifact ids are random but not yet bound to a
-  client token by the guard.
+- **Ownership after a restart.** Lease, upload and artifact ownership live in the guard's memory; after
+  a guard restart, earlier leases, uploads and artifacts belong to nobody and are refused.
 - **OS or virtualization vulnerabilities.** The tests prove the API boundary only. A bug in the
   Simulator, CoreSimulator, agent-device or macOS is outside it; the dedicated account limits the
   damage.

@@ -22,7 +22,8 @@ those are excellent.
 | Local Android worker | ✅ macOS · 🟡 Linux/KVM | Run on a Linux KVM host (N2) | D-01, D-02 |
 | Local iOS worker | ✅ | — | D-03 |
 | Remote workers through a gateway | 🟡 | One gateway + joined worker proven on one machine; prove VPS → laptop/N2 over a real network | M-02, M-03, Q-06 |
-| Personal-Mac device-only mode | 🟡 | Guard proven on one machine; prove over Tailscale with a dedicated account | H-01–H-12 |
+| Personal-Mac device-only mode | 🟡 | Guard proven on one machine (uploads and artifacts now bound per client); prove over Tailscale with a dedicated account | H-01–H-12 |
+| One-command host setup (`host up`, `connect`) and guard login service | 🧪 | Run `host up` on a fresh Mac and connect from the VPS (issue #13 field test) | W-07, H-03 |
 | Simlock integration | ✅ | — | R-01 |
 | Android CLI integration | ✅ | Targets the leased emulator (`--device`); next: use it as an Android UI backend | U-04, U-05 |
 | AXe integration | ✅ | Local Macs only (AXe must run beside the simulator) | U-02, Q-09 |
@@ -43,9 +44,13 @@ Linux/KVM run.
 | Semantic interactions (`tap`, `type`, `wait_for`, alerts) | ✅ | U-01 |
 | Human takeover and hand-back | ✅ | V-03, Y-11 |
 | Maestro / XCTest integrations | ⬜ (Maestro reachable only as a raw pass-through) | Y-07 |
-| Test evidence bundles | 🟡 per-session artifacts + manifest; per-run evidence folder from `tapdance run` (FakeProvider tests only) | Y-08 |
-| Test replay | 🟡 scenario files with `tapdance run` (FakeProvider tests only; no Maestro export) | Y-09 |
+| Test evidence bundles | 🟡 per-session artifacts + manifest; per-run evidence folder from `tapdance run` (run on a real iOS simulator) | Y-08 |
+| Test replay | 🟡 scenario files with `tapdance run` (passed on a real iOS simulator; no Maestro export) | Y-09 |
 | Visual comparisons | ⬜ | Y-06 |
+| Device state: settings, permissions, files, notifications, reset, intents, perf (local and through the guard) | ✅ Android · ✅ iOS locally | U-07–U-12, Y-10 |
+| Device profiles (a prepared, signed-in emulator per lease) and asking a person (`request_human`) | 🟡 Android, on the machine running Tapdance; ⬜ through the guard, iOS | D-10, U-13, Y-12 |
+| In-app purchase testing (Play Billing on a profile, StoreKit on the simulator) | 🟡 documented ([guide](docs/guides/purchase-testing.md)), not yet run with a real Play account | issue #15 |
+| Audio capture / microphone, virtual MIDI keyboard | ⬜ (must not capture the host or need macOS Screen Recording) | U-12, issues #8, #16 |
 
 ## Phase 3 · Developer productivity (full lifecycle)
 

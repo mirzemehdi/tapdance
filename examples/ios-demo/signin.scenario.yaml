@@ -1,7 +1,7 @@
 # Sign in to the iOS demo app and check the welcome message.
 # Build the app first: examples/ios-demo/build.sh
 # Then, from the repository root: tapdance run examples/ios-demo/signin.scenario.yaml
-# Validated against Tapdance's in-memory test provider only; not yet replayed on a real simulator.
+# Passed on a real iPhone 16 simulator (iOS 26.5) on 2026-11-01.
 name: iOS demo sign-in
 platform: ios
 device:

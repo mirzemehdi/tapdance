@@ -126,6 +126,8 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | D-06 | 🟡 | Via Simlock (create/boot/wipe its own simulators). Physical-device and reset-on-request paths untested. |
 | D-07 | ⛔ | Windows workers: Simlock supports macOS and Linux only. Windows works as a control machine (CLI/MCP). |
 | D-08 | 🟡 | See D-05. |
+| D-09 | 🧪 | `.aab` → universal APK with bundletool before upload; unit-tested with a fake bundletool (`packages/sdk/src/tools.test.ts`). No real bundletool run. |
+| D-10 | 🟡 | Android device profiles created, set up and leased read-only on one Mac; a lease's changes were discarded ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Not yet: a real Google sign-in and Play purchase, profiles through the guard or a gateway, iOS profiles. |
 
 ### Interaction backends
 
@@ -137,6 +139,13 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | U-04 | 🟡 | `tapdance android -- …` / `execute_tool` run Google's Android CLI 1.1.16717390 against the leased emulator ([evidence](docs/testing/evidence/2026-11-01-android.md)). agent-device stays the default Android UI backend; the Android CLI is not yet a backend of its own. |
 | U-05 | ✅ | The Android CLI ignores `ANDROID_SERIAL`, so Tapdance appends `--device=<leased serial>` to subcommands whose `--help` lists `--device` and refuses a caller-chosen `--device`; Simlock's adb port is injected and inherited selectors are stripped. Unit tests in `packages/sdk/src/tools.test.ts`; `layout --flat` ran on the leased emulator ([evidence](docs/testing/evidence/2026-11-01-android.md)). |
 | U-06 | 🟡 | Maestro registered (lease-scoped). XCTest/Espresso orchestration not started. |
+| U-07 | ✅ | One allowlist (`device-commands.ts`) used by the provider and checked by the guard (`guard.test.ts` test 14: every builder's output passes, injection attempts do not). Ran through a real guard ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). External tools on a remote lease fail fast and name these tools. |
+| U-08 | ✅ | uninstall, clear data, keychain reset, launch arguments (iOS), intents (Android) on real devices ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). |
+| U-09 | ✅ | Settings on Android and iOS ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); bluetooth, mobile data, biometrics and location not exercised. |
+| U-10 | ✅ | Android shared storage push/pull locally and through the guard; iOS Photos and app container locally ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Android app-sandbox push/pull not exercised (needs a debuggable app using `run-as`). |
+| U-11 | 🟡 | Android post/list/open/close and an iOS push payload ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Reading iOS Notification Center is by `inspect_screen` only. |
+| U-12 | 🟡 | `perf frames` and `perf memory` on Android ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); iOS perf not exercised. Audio and MIDI not built (the audio probe was removed: it needs macOS Screen Recording). |
+| U-13 | 🧪 | `request_human`, `device done` and the viewer's Hand back (`packages/sdk/src/tapdance.test.ts`). Not yet used in a real sign-in. |
 
 ### Workers and gateway
 
@@ -237,7 +246,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | H-03 | 🟡 | Guard refuses root and admin accounts (override flag); `infrastructure/scripts/macos-create-worker-account.sh` written, **untested**. `tapdance worker guard install` / `uninstall` write an unprivileged LaunchAgent (`dev.tapdance.guard`, RunAtLoad + KeepAlive) or a systemd user unit, with the same refusals as `guard start`; the generated files and the launchctl/systemctl calls are unit-tested against fakes (`packages/cli/src/guard/service.test.ts`), **never installed on a real machine**. |
 | H-04 | 🧪 | `~/.tapdance/worker/policy.json`, refused if group/other-writable; no remote route to it. One profile (`device-only`). |
 | H-05 | 🟡 | Local `guard pair` (TTY required unless TAPDANCE_GUARD_PAIR_NONINTERACTIVE is set), hashed tokens, expiry, immediate revocation, per-client lease ownership. No mutual TLS, replay protection or per-session short-lived tokens (Tailscale provides transport security). |
-| H-06 | 🟡 | Per-client lease isolation and filtered status; per-session staging directories and quotas on the Mac are agent-device's, not enforced by Tapdance; upload/artifact ids not bound to a client. |
+| H-06 | 🟡 | Per-client lease isolation and filtered status; uploads must name the client's own lease, and upload and artifact ids are bound to the client that created them (a full MCP loop passed through a real guard with no denials: [evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Per-session staging directories and quotas on the Mac are agent-device's, not enforced by Tapdance. |
 | H-07 | 🟡 | Session cap, lease TTL cap, upload size cap. No recording-duration or disk quota. |
 | H-08 | 🟡 | Device-only only; builds refused. Approved-build and VM-isolated builds not started. |
 | H-09 | ⬜ | Documentation only; AXe not installed on the test Mac. |
@@ -257,7 +266,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Y-06 | ⬜ | |
 | Y-07 | 🟡 | Maestro/xcodebuild reachable through `execute_tool`; no result envelope for them. Tapdance's own scenario files (`tapdance run`) return a PASS/FAIL report with per-step results; FakeProvider tests only, not run on a device. |
 | Y-08 | 🟡 | Per-session artifact folder + manifest. `tapdance run` writes an evidence folder per scenario run (report.json, report.md, failure screenshot and UI tree, device, OS, app id, repository commit, Tapdance and Node versions); FakeProvider tests only. No app version, logs or native framework results yet. |
-| Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows; not run on a device yet. |
+| Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows. The iOS sign-in example passed on a real simulator ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); the Android one has not passed yet. |
 | Y-10 | 🟡 | Device settings, permissions, locale, time zone, orientation, appearance, location, biometrics, data reset and deep links/intents (U-08, U-09); battery and camera not covered. |
 | Y-11 | 🟡 | Agent vs human hold (take over / hand back); no read-only or paused states. |
 | Y-12 | 🟡 | Android device profiles (D-10): a prepared emulator booted read-only per lease. iOS and remote profiles not built. |

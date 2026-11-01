@@ -133,7 +133,9 @@ Tapdance runs, not on a remote worker (E-04).
 ## Limitations
 
 - Linux/KVM workers and remote Android not yet run (see the status note at the top).
-- No uninstall, clear-data or explicit wipe command; a release wipes the emulator.
+- A release wipes the emulator; within a lease use `uninstall_app` / `clear_app_data` for a fresh-install
+  state. For a prepared state that survives (a signed-in Google account), use a device profile
+  ([purchase testing](../guides/purchase-testing.md)).
 - Physical Android phones: `device lease --physical` exists and Simlock can enroll USB phones, but this
   path is untested with Tapdance.
 - `tapdance doctor` on the agent's machine cannot report a **remote** worker's KVM state; run

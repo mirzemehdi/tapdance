@@ -93,3 +93,27 @@ describe("runTool device option for the Android CLI", () => {
     });
   });
 });
+
+describe("aabToApk (MOCKED bundletool: proves the conversion plumbing, not bundletool itself)", () => {
+  it("builds a universal APK and returns its path", async () => {
+    const { aabToApk } = await import("./bundletool.js");
+    // The fake writes a .apks zip holding universal.apk, as `build-apks --mode=universal` does.
+    const { env, dir } = await fakeTool(
+      "bundletool",
+      'for a in "$@"; do case "$a" in --output=*) out="${a#--output=}";; esac; done\nd=$(mktemp -d); echo APK > "$d/universal.apk"; (cd "$d" && zip -q "$out" universal.apk)',
+    );
+    const aab = join(dir, "app-release.aab");
+    await writeFile(aab, "bundle");
+    const apk = await aabToApk(aab, { env: { ...env, PATH: `${env["PATH"]}:/usr/bin` } });
+    expect(apk).toMatch(/universal\.apk$/);
+    expect(await readFile(apk, "utf8")).toBe("APK\n");
+  });
+
+  it("explains how to get bundletool when it is missing", async () => {
+    const { aabToApk } = await import("./bundletool.js");
+    const dir = await mkdtemp(join(tmpdir(), "td-aab-"));
+    const aab = join(dir, "app.aab");
+    await writeFile(aab, "bundle");
+    await expect(aabToApk(aab, { env: { PATH: "/nonexistent" } })).rejects.toMatchObject({ code: "APP_PATH_INVALID", hint: expect.stringMatching(/bundletool/) });
+  });
+});

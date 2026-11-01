@@ -62,6 +62,22 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
+### Added in the field-test round (issues #1–#19)
+
+- Device-state tools through one allowlisted device-command channel that also works through the worker
+  guard: `set_device_setting`, `push_file`/`pull_file`, `notifications`, `uninstall_app`,
+  `clear_app_data`, `measure_performance`, `launch_app` arguments and Android intents; CLI `device
+  setting|push|pull|notifications|perf`, `app uninstall|clear`.
+- Worker guard: uploads and artifacts bound to the client that created them; policy switches
+  `allow.settings`, `allow.files`, `allow.notifications` (off by default), `allow.perf`.
+- `.aab` installs via bundletool.
+- Android device profiles (`device profile create|edit|list|delete`, `device lease --profile`), booted
+  read-only so every lease starts from the prepared state.
+- `request_human` (MCP), `device done` (CLI) and the viewer's Hand back answering it.
+- Scenario files and `tapdance run` / `run_scenario` with a PASS/FAIL report (exit code 12).
+- `host up|status|down`, `connect`, `worker guard install|uninstall`, `scripts/host-setup.sh`.
+- Docs: Android proven locally; repository URL `github.com/mirzemehdi/tapdance`; purchase-testing guide.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

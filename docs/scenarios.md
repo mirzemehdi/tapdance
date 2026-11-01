@@ -3,9 +3,9 @@
 A scenario file is a saved flow of device steps. `tapdance run <file>` replays it on this session's
 device, one step after another, and writes a PASS/FAIL report with evidence for every failed step.
 
-> **Status:** scenarios have run only against Tapdance's in-memory test provider
-> (`packages/sdk/src/scenario.test.ts`). They have **not been run on a real simulator or emulator
-> yet**. See [STATUS.md](../STATUS.md).
+> **Status:** `examples/ios-demo/signin.scenario.yaml` passed on a real iPhone 16 simulator (8 steps,
+> 45 s; [evidence](testing/evidence/2026-11-01-device-state-and-profiles.md)). The Android example has not passed on a real emulator yet: its one run hit
+> adb timeouts on an overloaded test Mac. Unit tests: `packages/sdk/src/scenario.test.ts`.
 
 Every step goes through the same Tapdance calls as `tapdance ui …` and the MCP tools, so a scenario
 works wherever those work: on a local worker, through a gateway, and through device-only mode. It does
