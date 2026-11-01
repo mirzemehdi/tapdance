@@ -30,8 +30,11 @@ after the command, but put them first for pass-through commands (`asc`, `android
 | Apps | [`app install / launch / stop / list`](#app) |
 | UI | [`ui inspect / tap / swipe / type / wait / alert / key`](#ui) |
 | Evidence | [`screenshot`](#screenshot), [`record start / stop`](#record), [`logs`](#logs), [`artifacts`](#artifacts) |
+| Device state | [`device setting / push / pull / notifications / perf / audio`](#device-state) |
+| Scenarios | [`run`](#run) |
 | Human access | [`view`](#view) |
 | Workers and gateways | [`worker …`](#worker), [`gateway …`](#gateway), [`simlock`](#simlock) |
+| Hosting for a remote agent | [`host up / status / down`](#host), [`connect`](#connect) |
 | External tools | [`tools`](#tools), [`tool`](#tool-asc-android), [`asc`](#tool-asc-android), [`android`](#tool-asc-android) |
 | Agents | [`mcp`](#mcp) |
 | Feedback | [`report`](#report) |
@@ -169,23 +172,65 @@ from the viewer. If the lease has ended it fails with `LEASE_LOST` and clears th
 `device renew` extends the lease now (optionally with a new TTL). `device release` releases this
 session's device; it is wiped. Releasing when nothing is held is not an error.
 
+### Device state
+
+```text
+tapdance device setting <name> [value] [--app <id>] [--permission <p>] [--lat <n> --lon <n>]
+tapdance device push <path> --to <downloads|pictures|documents|app_sandbox> [--app <id>] [--name <n>]
+tapdance device pull [devicePath] [--app <id> --path <relative>] [-o <file>]
+tapdance device notifications <list|open|close|post> [--app <id>] [--title <t>] [--text <t>] [--payload <json>]
+tapdance device perf <frames|memory> [--app <id>]
+tapdance device audio <start|status|stop> [--duration <ms>]
+```
+
+These act on the leased device through Simlock's lease exec or agent-device, so they work for a device
+on a remote worker too; a worker in device-only mode decides with its policy (`allow.settings`,
+`allow.files`, `allow.notifications` (off by default), `allow.perf`). Every change ends with the lease:
+the device is wiped on release.
+
+- `setting`: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`), `location`
+  (`on`/`off`, or `--lat`/`--lon`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid`
+  (iOS), `fingerprint` (Android), `permission <grant|deny|reset> --permission <p> --app <id>`,
+  `reset-keychain` (iOS), `orientation`, `density <dpi|reset>` (Android), `locale <tag> --app <id>`
+  (Android 13+), `time-zone <zone>` (Android), `status-bar-time <HH:MM|clear>` (iOS). Without a value it
+  reads the setting where the platform can. A combination a platform cannot do fails with
+  `NOT_SUPPORTED` and says what to do instead.
+- `push`: Android shared storage (media-scanned) or a debuggable app's sandbox, up to 24 MB; iOS Photos
+  or an app's container, only when the simulator runs on this machine.
+- `pull`: Android shared storage (`/sdcard/Download/…` and the other media folders) or `--app` with
+  `--path`; iOS `--app` with `--path` inside its container, local simulators only. Saved as an artifact.
+- `notifications`: `list` (Android), `open`/`close` the shade (Android), `post` a shell notification
+  (Android) or, with `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator).
+- `perf frames`: frame health of the foreground app since the last reading; `perf memory`: a memory
+  sample. Launch the app with `app launch` first.
+- `audio`: loudness buckets (dBFS) of the audio the device renders.
+
 ## Apps
 
 ### `app`
 
 ```text
 tapdance app install <path> [--app-id <id>]
-tapdance app launch <appId> [--relaunch] [--url <url>]
+tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]...
+                     [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
+tapdance app uninstall <appId>
+tapdance app clear <appId>
 tapdance app list
 ```
 
-`install` uploads and installs an `.apk` (Android) or a simulator `.app` bundle (iOS) from this machine.
-An `.ipa` on a simulator and an `.aab` are refused with `APP_PATH_INVALID`. `--app-id` gives the
+`install` uploads and installs an `.apk` or `.aab` (Android) or a simulator `.app` bundle (iOS) from
+this machine. An `.aab` is first turned into a universal APK with
+[bundletool](https://github.com/google/bundletool) (`tools.paths.bundletool`, `TAPDANCE_BUNDLETOOL`, or
+`bundletool` on `PATH`), signed with the Android debug keystore; without bundletool it is refused with
+`APP_PATH_INVALID` and an install hint. An `.ipa` on a simulator is refused. `--app-id` gives the
 package or bundle id when the backend needs it.
 
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
-opens a deep link. `stop` force-stops it. `list` lists the apps the automation backend sees.
+opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
+explicit Android intent instead. `stop` force-stops it. `uninstall` removes it. `clear` clears its data
+(first-launch state); on iOS the keychain is shared, see `device setting reset-keychain`. `list` lists
+the apps the automation backend sees.
 
 ## UI
 
@@ -257,6 +302,24 @@ tapdance artifacts
 Lists this session's screenshots, recordings and logs with their paths, from the session folder's
 `manifest.json`.
 
+## Scenarios
+
+### `run`
+
+```text
+tapdance run <file> [--keep-lease] [--continue-on-failure]
+```
+
+Replays a scenario file (YAML or JSON; format in [scenarios.md](scenarios.md)) on this session's
+device and prints one line per step (✓/✗, name, milliseconds), then PASS or FAIL and the path of
+`report.md`. If the session holds no device and the scenario has a `device:` block, that device is
+leased for the run and released at the end; `--keep-lease` keeps it and renews it in the background.
+A failed step gets a screenshot and the full UI tree in the run's evidence folder
+(`<artifacts>/<session>/runs/<time>-<name>/`, listed by `tapdance artifacts`) and stops the run;
+`--continue-on-failure` runs every step anyway. With `--json` the full report goes to stdout and the
+step lines to stderr. Exit code 0 on PASS, 12 on FAIL, 2 for an invalid scenario file, and the usual
+codes when the run cannot start (3 when there is no device and nothing to lease).
+
 ## Human access
 
 ### `view`
@@ -290,6 +353,7 @@ machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
 | `worker login --accept-gateway-exec --gateway <url> [--label <name>] [--token-stdin] [--no-viewer]` | Join a gateway. `--accept-gateway-exec` is required: without it the command refuses with `FORBIDDEN`, because a joined gateway, and every agent token it issues, can run programs on this machine (Simlock's exec; `simctl spawn` starts any program). Pass it only on a machine you dedicate to being a worker. The worker dials out over an authenticated WebSocket; no inbound port is opened. The URL must be `wss://`, or `ws://` to a private address (loopback, RFC 1918, Tailscale 100.64/10 or `*.ts.net`); `http(s)://` is converted. The join token comes from `TAPDANCE_WORKER_TOKEN`, else stdin when piped (`--token-stdin` documents that), else a hidden prompt. `--no-viewer` leaves stream and input off. |
 | `worker logout` | Leave the gateway, turn the worker's own HTTP API back on, restart. Revoke the join token on the gateway afterwards. |
 | `worker guard start` / `pair` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator: H-02; dedicated-account script and Tailscale exposure untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
+| `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). Not yet installed on a real machine (H-03). See [security/personal-mac.md](security/personal-mac.md#keep-the-guard-running). |
 | `worker start` / `stop` / `status` / `logs` / `restart` | Start, stop, show, print the log of, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. |
 
 **Security.** Joining gives the gateway operator rights on this machine's devices: whoever controls the
@@ -318,6 +382,34 @@ tapdance simlock -- <simlock arguments>
 
 Runs the Simlock 0.4.0 CLI bundled with Tapdance, for operators. Put `--` before Simlock's own options
 (`tapdance simlock -- --version`), or Tapdance parses them itself. Agents should not need it.
+
+## Hosting for a remote agent
+
+One command per side for device-only mode: `host up` on the Mac or Linux machine that runs the
+devices, `connect` on the machine where the agent runs. **Built and unit-tested only; not yet run end
+to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-host.md](deployment/one-command-host.md).
+
+### `host`
+
+| Command | Meaning |
+| --- | --- |
+| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint, or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
+| `host down [--revoke] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. The Simlock worker keeps running (`tapdance worker stop`). |
+
+### `connect`
+
+```text
+tapdance connect <endpoint> < pairing-<label>.token
+```
+
+On the agent's machine (macOS, Linux or Windows): reads the guard token from stdin (or a hidden
+prompt; never from argv), sets `provider: "self-hosted"` and the endpoint in `~/.tapdance/config.json`
+(other keys kept), saves the token to `~/.tapdance/credentials.json` (mode 600) bound to the endpoint's
+origin, runs `doctor` without host checks, and prints MCP setup for Claude Code, Codex and Cursor
+(`tapdance mcp`, or absolute Node.js and CLI paths when `tapdance` is not on `PATH`). Warns when the
+current directory's `tapdance.config.json` or `TAPDANCE_ENDPOINT` overrides the endpoint. Exit 10 when a
+check fails. Plain `http://` is accepted only for private addresses.
 
 ## External tools
 
@@ -415,6 +507,7 @@ From `packages/core/src/errors.ts`:
 | 9 | `TIMEOUT` | No device granted in time, another Tapdance process busy with the session. |
 | 10 | `HOST_CHECK_FAILED` | `doctor` found a failing check, or `worker check` found a KVM failure. (The code itself is defined; these commands set exit 10 directly.) |
 | 11 | `HUMAN_HELD` | A person is controlling the device in the viewer. Retry after `retryAfterMs`. |
+| 12 | `SCENARIO_FAILED`, `ASSERTION_FAILED` | `run`: the scenario ran and a step failed. (`ASSERTION_FAILED` appears on a failed expectation inside the report, not as a command error.) |
 
 Pass-through commands (`tool`, `asc`, `android`, `simlock`, `devices install`) exit with the wrapped
 program's exit code.
@@ -647,14 +740,34 @@ Usage: tapdance device [options] [command]
 Lease, inspect and release this session's device
 
 Options:
-  -h, --help       display help for command
+  -h, --help                        display help for command
 
 Commands:
-  lease [options]  Lease one emulator or simulator for this session
-  status           Show this session's device and lease
-  renew [options]  Extend this session's lease now
-  release          Release this session's device (it is wiped)
-  help [command]   display help for command
+  lease [options]                   Lease one emulator or simulator for this
+                                    session
+  status                            Show this session's device and lease
+  renew [options]                   Extend this session's lease now
+  release                           Release this session's device (it is wiped)
+  setting [options] <name> [value]  Change (or, without a value, read) a device
+                                    setting: wifi, bluetooth, airplane,
+                                    mobile-data, location, animations,
+                                    appearance, text-size, faceid, touchid,
+                                    fingerprint, permission, reset-keychain,
+                                    orientation, density, locale, time-zone,
+                                    status-bar-time
+  push [options] <path>             Copy a file onto the device (Android shared
+                                    storage or a debuggable app's sandbox; iOS
+                                    Photos or an app container, local simulators
+                                    only)
+  pull [options] [devicePath]       Copy a file from the device into this
+                                    session's artifacts
+  notifications [options] <action>  list | open | close | post notifications on
+                                    the device
+  perf [options] <metric>           Measure frames (frame health since the last
+                                    reading) or memory
+  audio [options] <action>          Audio level probe: start [--duration <ms>],
+                                    status, stop
+  help [command]                    display help for command
 ```
 
 ### `tapdance device lease`
@@ -714,6 +827,95 @@ Options:
   -h, --help  display help for command
 ```
 
+### `tapdance device setting`
+
+```text
+Usage: tapdance device setting [options] <name> [value]
+
+Change (or, without a value, read) a device setting: wifi, bluetooth, airplane,
+mobile-data, location, animations, appearance, text-size, faceid, touchid,
+fingerprint, permission, reset-keychain, orientation, density, locale,
+time-zone, status-bar-time
+
+Options:
+  --app <appId>              the app a permission or locale applies to
+  --permission <permission>  for `setting permission <grant|deny|reset>`:
+                             camera, microphone, photos, notifications,
+                             location…
+  --lat <latitude>           for `setting location`: move the device here
+  --lon <longitude>          for `setting location`
+  -h, --help                 display help for command
+```
+
+### `tapdance device push`
+
+```text
+Usage: tapdance device push [options] <path>
+
+Copy a file onto the device (Android shared storage or a debuggable app's
+sandbox; iOS Photos or an app container, local simulators only)
+
+Options:
+  --to <destination>  downloads, pictures, documents or app_sandbox
+  --app <appId>       app for app_sandbox (and iOS documents)
+  --name <name>       file name on the device
+  -h, --help          display help for command
+```
+
+### `tapdance device pull`
+
+```text
+Usage: tapdance device pull [options] [devicePath]
+
+Copy a file from the device into this session's artifacts
+
+Options:
+  --app <appId>          read from this app's sandbox/container
+  --path <relativePath>  with --app: path inside it, e.g. files/export.json or
+                         Documents/export.json
+  -o, --out <file>       write here instead of the artifacts directory
+  -h, --help             display help for command
+```
+
+### `tapdance device notifications`
+
+```text
+Usage: tapdance device notifications [options] <action>
+
+list | open | close | post notifications on the device
+
+Options:
+  --app <appId>     filter (list) or the app a push payload goes to (post)
+  --title <title>   post: title
+  --text <text>     post: body
+  --payload <json>  post: a push payload (APNs-style JSON) delivered to --app
+  -h, --help        display help for command
+```
+
+### `tapdance device perf`
+
+```text
+Usage: tapdance device perf [options] <metric>
+
+Measure frames (frame health since the last reading) or memory
+
+Options:
+  --app <appId>  app to measure (default: the foreground app)
+  -h, --help     display help for command
+```
+
+### `tapdance device audio`
+
+```text
+Usage: tapdance device audio [options] <action>
+
+Audio level probe: start [--duration <ms>], status, stop
+
+Options:
+  --duration <ms>  how long start measures
+  -h, --help       display help for command
+```
+
 ### `tapdance app`
 
 ```text
@@ -728,6 +930,9 @@ Commands:
   install [options] <path>  Upload and install an .apk (Android) or simulator
                             .app (iOS)
   launch [options] <appId>  Launch an installed app
+  uninstall <appId>         Remove an installed app
+  clear <appId>             Clear an app's data (first-launch state); iOS also:
+                            device setting reset-keychain
   stop <appId>              Force-stop an app
   list                      List apps the automation backend sees
   help [command]            display help for command
@@ -753,9 +958,40 @@ Usage: tapdance app launch [options] <appId>
 Launch an installed app
 
 Options:
-  --relaunch   kill and restart it
-  --url <url>  deep link to open
-  -h, --help   display help for command
+  --relaunch                      kill and restart it
+  --url <url>                     deep link to open
+  --arg <arg>                     launch argument passed to the app (repeatable;
+                                  implies --relaunch)
+  --intent-action <action>        Android: start an explicit intent with this
+                                  action
+  --intent-data <uri>             Android: intent data URI
+  --intent-component <component>  Android: component, e.g.
+                                  com.example/.MainActivity
+  --intent-extra <key=value>      Android: string extra (repeatable)
+  -h, --help                      display help for command
+```
+
+### `tapdance app uninstall`
+
+```text
+Usage: tapdance app uninstall [options] <appId>
+
+Remove an installed app
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance app clear`
+
+```text
+Usage: tapdance app clear [options] <appId>
+
+Clear an app's data (first-launch state); iOS also: device setting
+reset-keychain
+
+Options:
+  -h, --help  display help for command
 ```
 
 ### `tapdance app stop`
@@ -980,6 +1216,21 @@ Options:
   -h, --help  display help for command
 ```
 
+### `tapdance run`
+
+```text
+Usage: tapdance run [options] <file>
+
+Replay a scenario file (.yaml or .json) on this session's device and report
+PASS/FAIL with evidence
+
+Options:
+  --keep-lease           keep a device the scenario leased instead of releasing
+                         it at the end
+  --continue-on-failure  run every step even after one fails
+  -h, --help             display help for command
+```
+
 ### `tapdance worker`
 
 ```text
@@ -1019,18 +1270,22 @@ Device-only access for remote agents: the only endpoint they reach on this
 machine, enforcing a local policy
 
 Options:
-  -h, --help       display help for command
+  -h, --help         display help for command
 
 Commands:
-  start [options]  Serve the device-only API (loopback by default; expose it
-                   with Tailscale, never publicly)
-  pair [options]   Approve a control machine locally: prints a revocable
-                   device-only token once
-  tokens           List paired control machines
-  revoke <id>      Revoke a paired control machine immediately (or `all`)
-  policy           Show the local policy and its file
-  audit [options]  Show recent remote requests and decisions
-  help [command]   display help for command
+  start [options]    Serve the device-only API (loopback by default; expose it
+                     with Tailscale, never publicly)
+  install [options]  Keep the guard running: a LaunchAgent (macOS) or systemd
+                     user unit (Linux) that starts it at login and restarts it
+  uninstall          Stop the guard service and remove its LaunchAgent / systemd
+                     user unit (tokens and policy are kept)
+  pair [options]     Approve a control machine locally: prints a revocable
+                     device-only token once
+  tokens             List paired control machines
+  revoke <id>        Revoke a paired control machine immediately (or `all`)
+  policy             Show the local policy and its file
+  audit [options]    Show recent remote requests and decisions
+  help [command]     display help for command
 ```
 
 ### `tapdance worker guard start`
@@ -1045,6 +1300,34 @@ Options:
   --allow-admin-account  run even though this account is an administrator (not
                          recommended)
   -h, --help             display help for command
+```
+
+### `tapdance worker guard install`
+
+```text
+Usage: tapdance worker guard install [options]
+
+Keep the guard running: a LaunchAgent (macOS) or systemd user unit (Linux) that
+starts it at login and restarts it
+
+Options:
+  --allow-admin-account  run even though this account is an administrator (not
+                         recommended)
+  --keep-awake           macOS: run the guard under `caffeinate -i` so idle
+                         sleep does not take it offline
+  -h, --help             display help for command
+```
+
+### `tapdance worker guard uninstall`
+
+```text
+Usage: tapdance worker guard uninstall [options]
+
+Stop the guard service and remove its LaunchAgent / systemd user unit (tokens
+and policy are kept)
+
+Options:
+  -h, --help  display help for command
 ```
 
 ### `tapdance worker guard pair`
@@ -1288,6 +1571,89 @@ Options:
 Usage: tapdance gateway status [options]
 
 Show the gateway's workers, devices and queue
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host`
+
+```text
+Usage: tapdance host [options] [command]
+
+Set up this Mac or Linux machine as a device host for a remote agent, in one
+command
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  up [options]    Worker, guard service, pairing, Tailscale and a self-test,
+                  step by step; prints a block to paste to the agent's machine
+  status          Show the state of each `host up` step on this machine
+  down [options]  Stop hosting: remove the guard service and `tailscale serve`
+                  for its port (tokens are kept unless --revoke)
+  help [command]  display help for command
+```
+
+### `tapdance host up`
+
+```text
+Usage: tapdance host up [options]
+
+Worker, guard service, pairing, Tailscale and a self-test, step by step; prints
+a block to paste to the agent's machine
+
+Options:
+  --label <name>         name for the control machine's pairing (default: this
+                         machine's hostname)
+  --allow-admin-account  run the guard from an administrator account (not
+                         recommended)
+  --no-tailscale         do not expose the guard with `tailscale serve`; the
+                         endpoint stays on loopback
+  --keep-awake           macOS: run the guard under `caffeinate -i` so idle
+                         sleep does not take it offline
+  --repair               revoke the existing pairing with this label and issue a
+                         new token
+  --skip-self-test       do not lease a device through the guard at the end
+  -y, --yes              approve pairing without a prompt (you are at this
+                         machine)
+  -h, --help             display help for command
+```
+
+### `tapdance host status`
+
+```text
+Usage: tapdance host status [options]
+
+Show the state of each `host up` step on this machine
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host down`
+
+```text
+Usage: tapdance host down [options]
+
+Stop hosting: remove the guard service and `tailscale serve` for its port
+(tokens are kept unless --revoke)
+
+Options:
+  --revoke    also revoke every paired control machine and delete the pairing
+              token files
+  -y, --yes   do not ask for confirmation
+  -h, --help  display help for command
+```
+
+### `tapdance connect`
+
+```text
+Usage: tapdance connect [options] <endpoint>
+
+On the agent's machine: use a host's guard (reads the token from stdin), check
+it, and print MCP setup for Claude Code, Codex and Cursor
 
 Options:
   -h, --help  display help for command
