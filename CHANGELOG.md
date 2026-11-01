@@ -30,7 +30,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   `record start/stop`, `logs`, `artifacts`, `view`, `report`, `gateway setup/token/status`,
   `worker check/install/login/logout/start/stop/status/logs/restart`, `simlock`,
   `tools list/doctor/versions`, `tool`, `asc`, `android`, and `mcp`.
-- `--json` output, results on stdout and progress on stderr, and stable exit codes (2 to 11).
+- `--json` output, results on stdout and progress on stderr, and stable exit codes (2 to 12).
+- Scenario files ([docs/scenarios.md](docs/scenarios.md)): `tapdance run <file>` replays a YAML or JSON
+  flow on the session's device and writes a PASS/FAIL report with an evidence folder; exit code 12
+  (`SCENARIO_FAILED`) on a failed step. SDK: `runScenario`, `loadScenario`, `scenarioFromToolCalls`.
+  Tested against FakeProvider only.
 - Device-only mode for personal Macs (`tapdance worker guard`); `worker login` requires
   `--accept-gateway-exec`.
 - `devices install`, MCP `list_apps`, and `config set-token --endpoint` (a token bound to its endpoint).

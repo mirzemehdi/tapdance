@@ -23,6 +23,13 @@ tapdance screenshot
 tapdance device release
 ```
 
+Or replay the same flow from a scenario file, which builds a PASS/FAIL report with evidence (see
+[docs/scenarios.md](../../docs/scenarios.md); not yet run on a real simulator):
+
+```bash
+tapdance run examples/ios-demo/signin.scenario.yaml
+```
+
 Or ask your agent: *"Lease an iOS simulator, install examples/ios-demo/build/TapdanceDemo.app, sign in
 as ada@example.com with password secret1, and confirm the welcome message with a screenshot."*
 

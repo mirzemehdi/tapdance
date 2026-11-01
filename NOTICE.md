@@ -17,9 +17,10 @@ These are installed with Tapdance. Versions are the exact pins in `packages/*/pa
 | [simlock](https://github.com/callstackincubator/simlock) | 0.4.0 | MIT | Szymon Chmal | Device leasing, queue, workers, gateway, simulator/emulator lifecycle, screen stream and input sockets. Bundled with the CLI and run as its own daemon. |
 | [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | MIT | Callstack | UI snapshots, selectors, gestures, typing, app upload, screenshots, MP4 recordings, app logs. |
 | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) | 1.32.2 | MIT | Anthropic, PBC | The MCP server (stdio and Streamable HTTP). |
-| [zod](https://github.com/colinhacks/zod) | 4.6.7 | MIT | Colin McDonnell | Config and MCP input validation. |
+| [zod](https://github.com/colinhacks/zod) | 4.6.7 | MIT | Colin McDonnell | Config, MCP input and scenario validation. |
 | [commander](https://github.com/tj/commander.js) | 15.0.0 | MIT | TJ Holowaychuk | CLI parsing. |
 | [ws](https://github.com/websockets/ws) | 8.22.1 | MIT | Einar Otto Stangvik and contributors | WebSockets for the browser viewer's input proxy. |
+| [yaml](https://github.com/eemeli/yaml) | 2.9.1 | ISC | Eemeli Aro | Reading scenario files (`tapdance run`). |
 
 Transitive dependencies (for example Simlock's `hono`, `jose` and `@agent-device/proxy`) carry
 their own licenses in their packages. `pnpm licenses list` prints the full set for your install.

@@ -254,9 +254,9 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Y-04 | 🟡 | Interactive-only element lists with refs, ids, labels; no pagination/summary. |
 | Y-05 | 🟡 | Screenshots are artifacts with a session manifest and optional note; inline image by default in MCP (`include_image: false` to skip). No annotations or comparison. |
 | Y-06 | ⬜ | |
-| Y-07 | 🟡 | Maestro/xcodebuild reachable through `execute_tool`; no result envelope. |
-| Y-08 | 🟡 | Per-session artifact folder + manifest; no packaged run with metadata. |
-| Y-09 | ⬜ | |
+| Y-07 | 🟡 | Maestro/xcodebuild reachable through `execute_tool`; no result envelope for them. Tapdance's own scenario files (`tapdance run`) return a PASS/FAIL report with per-step results; FakeProvider tests only, not run on a device. |
+| Y-08 | 🟡 | Per-session artifact folder + manifest. `tapdance run` writes an evidence folder per scenario run (report.json, report.md, failure screenshot and UI tree, device, OS, app id, repository commit, Tapdance and Node versions); FakeProvider tests only. No app version, logs or native framework results yet. |
+| Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows; not run on a device yet. |
 | Y-10 | ⬜ | Only orientation-free basics (keys, alerts). |
 | Y-11 | 🟡 | Agent vs human hold (take over / hand back); no read-only or paused states. |
 | Y-12 | ⬜ | |
@@ -297,6 +297,7 @@ paths below were exercised only by unit tests.
 | Agent token bound to its endpoint origin (`config set-token --endpoint`); security keys (`tools.*`, `ios.axePath`, `simlock.profilePath`) ignored in project config | X-02, E-09 | 🧪 | `packages/core/src/core.test.ts`, SDK tests, `packages/cli/src/cli.test.ts` |
 | More secret shapes redacted (`tdg_`, JWTs, `*_KEY_B64=`, viewer keys) including in saved tool output; agent `asc auth`/`workflow`/`install-skills` refused without authorization | E-09, E-05 | 🧪 | `packages/core/src/core.test.ts`, `packages/sdk/src/tools.test.ts`, `packages/sdk/src/tapdance.test.ts` |
 | Worker guard: physical devices refused unless `allow.physicalDevices`; session limit holds under concurrent allocates; status filtered to the client's own queued requests and devices | H-06, H-07 | 🧪 | `packages/cli/src/guard/guard.test.ts` |
+| Scenario files and `tapdance run`: YAML/JSON schema with MCP step names, replay through the SDK, PASS/FAIL report with failure screenshot and UI tree, `continue_on_failure`, exit code 12 (`SCENARIO_FAILED`), recorder from MCP tool calls. Not yet run on a real device. | Y-07, Y-08, Y-09 | 🧪 | `packages/sdk/src/scenario.test.ts`, `packages/cli/src/cli.test.ts` |
 | MCP: `list_apps`, short log replies (`contains`, `level`), action replies with `screenChanged`/`resolvedBy`/`typed`, stale refs refused, progress notifications | S-02, S-04, Y-04 | 🧪 | `packages/mcp/src/mcp.test.ts`, `packages/provider-simlock/src/provider.test.ts` |
 
 ## Bugs found by running for real (fixed)

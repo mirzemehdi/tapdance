@@ -226,7 +226,7 @@ run (those settings live in `~/.tapdance/config.json`). Full threat model:
 | --- | --- |
 | Requirements and status | [PRODUCT.md](PRODUCT.md), [STATUS.md](STATUS.md) |
 | Getting started | [Installation](docs/installation.md), [quick start](docs/quick-start.md), [troubleshooting](docs/troubleshooting.md) |
-| Reference | [CLI reference](docs/cli-reference.md), [MCP server and tools](docs/mcp.md), [configuration](docs/configuration.md), [external tools](docs/tools.md), [compatibility matrix](docs/compatibility.md) |
+| Reference | [CLI reference](docs/cli-reference.md), [MCP server and tools](docs/mcp.md), [configuration](docs/configuration.md), [external tools](docs/tools.md), [scenarios](docs/scenarios.md), [compatibility matrix](docs/compatibility.md) |
 | Agent setup | [Claude Code](docs/agents/claude-code.md), [Codex](docs/agents/codex.md), [Cursor](docs/agents/cursor.md) |
 | Platforms | [Android](docs/platforms/android.md), [iOS](docs/platforms/ios.md) |
 | Architecture | [Architecture decision record](docs/architecture-decision.md) |

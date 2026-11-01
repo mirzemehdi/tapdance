@@ -23,6 +23,10 @@ export const ERROR_CODES = {
   TIMEOUT: 9,
   HOST_CHECK_FAILED: 10,
   HUMAN_HELD: 11,
+  /** A scenario step's expectation did not hold (wait_for, expect_*); reported inside a scenario report. */
+  ASSERTION_FAILED: 12,
+  /** `tapdance run`: the scenario ran and at least one step failed. */
+  SCENARIO_FAILED: 12,
   INTERNAL: 1,
 } as const;
 

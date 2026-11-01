@@ -20,5 +20,12 @@ tapdance screenshot
 tapdance device release
 ```
 
+Or replay the same flow from a scenario file, which builds a PASS/FAIL report with evidence (see
+[docs/scenarios.md](../../docs/scenarios.md); not yet run on a real emulator):
+
+```bash
+tapdance run examples/android-demo/signin.scenario.yaml
+```
+
 Integration test: `TAPDANCE_IT_PLATFORM=android TAPDANCE_IT_APP=examples/android-demo/build/TapdanceDemo.apk
 TAPDANCE_IT_APP_ID=dev.tapdance.demo pnpm test:integration`.

@@ -1,0 +1,21 @@
+# Sign in to the Android demo app and check the welcome message.
+# Build the app first: examples/android-demo/build.sh
+# Then, from the repository root: tapdance run examples/android-demo/signin.scenario.yaml
+# Validated against Tapdance's in-memory test provider only; not yet replayed on a real emulator.
+name: Android demo sign-in
+platform: android
+device:
+  platform: android
+  device: Pixel 8
+app:
+  path: build/TapdanceDemo.apk # relative to this file
+  id: dev.tapdance.demo
+steps:
+  - launch_app: { app_id: dev.tapdance.demo, relaunch: true }
+  - type_text: { text: ada@example.com, into_text: Email }
+  - type_text: { text: secret1, into_text: Password }
+  - press_key: { key: dismiss_keyboard }
+    continue_on_failure: true
+  - tap: { text: Sign in }
+  - expect_visible: { text: "Welcome, ada@example.com", timeout_ms: 10000 }
+  - take_screenshot: { note: signed in }

@@ -32,6 +32,8 @@
   },
   "dependencies": {
     "@tapdance/core": "workspace:*",
-    "@tapdance/provider-simlock": "workspace:*"
+    "@tapdance/provider-simlock": "workspace:*",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   }
 }
