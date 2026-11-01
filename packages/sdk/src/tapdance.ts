@@ -40,7 +40,7 @@ import { PROFILE_PROVIDER, ProfileProvider } from "@tapdance/provider-simlock";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
 import { homedir } from "node:os";
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createProvider } from "./provider-factory.js";
 
@@ -411,10 +411,15 @@ export class Tapdance {
     // An Android App Bundle becomes a universal APK here, before upload, so gateways and the guard
     // only ever see an APK.
     const converted = extname(appPath).toLowerCase() === ".aab" ? await aabToApk(appPath, { env: this.options.env ?? process.env, onProgress: (m) => this.progress(m), ...(this.resolved.config.tools.paths["bundletool"] ? { bundletool: this.resolved.config.tools.paths["bundletool"] } : {}) }) : undefined;
-    const result = await this.onDevice((handle, provider) =>
-      provider.installApp(handle, converted ?? appPath, { ...(appId ? { appId } : {}), onProgress: (m) => this.progress(m) }),
-    );
-    return converted ? { ...result, convertedFrom: appPath } : result;
+    try {
+      const result = await this.onDevice((handle, provider) =>
+        provider.installApp(handle, converted ?? appPath, { ...(appId ? { appId } : {}), onProgress: (m) => this.progress(m) }),
+      );
+      return converted ? { ...result, path: appPath, convertedFrom: appPath } : result;
+    } finally {
+      // The universal APK lives in its own temporary folder; it is not needed once uploaded.
+      if (converted) await rm(dirname(converted), { recursive: true, force: true });
+    }
   }
 
   /**

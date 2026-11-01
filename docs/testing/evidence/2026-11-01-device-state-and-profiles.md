@@ -88,6 +88,16 @@ leftover Google Play emulator used ~490% CPU on the test Mac; it has not passed 
   template kept the app.
 - `worker restart` fixed: it now waits until the old daemon has released its socket.
 
+## `.aab` install with the real bundletool
+
+bundletool 1.18.3 from Google's GitHub release (`bundletool-all-1.18.3.jar`, SHA-256 matching the
+release's published digest `a099cfa1…8e29`), JetBrains Runtime 17, at `~/.tapdance/tools/bundletool/`.
+`examples/android-demo/build.sh --aab` built `TapdanceDemo.aab` (aapt2 proto manifest + dex, then
+`bundletool build-bundle`). With `TAPDANCE_BUNDLETOOL` pointing at the jar, `app install
+TapdanceDemo.aab` on a Pixel 8 built a universal APK, uploaded and installed it; launch, inspect, typing
+email and password, `Sign in` and `ui wait --text "Welcome, aab@tapdance.dev"` (92 ms) passed. The
+temporary APK folder is now removed after the upload.
+
 ## Changed after this run
 
 The `density`, `locale` and `time-zone` settings shown above were removed in favour of the generic

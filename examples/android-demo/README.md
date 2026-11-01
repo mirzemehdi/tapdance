@@ -29,3 +29,7 @@ tapdance run examples/android-demo/signin.scenario.yaml
 
 Integration test: `TAPDANCE_IT_PLATFORM=android TAPDANCE_IT_APP=examples/android-demo/build/TapdanceDemo.apk
 TAPDANCE_IT_APP_ID=dev.tapdance.demo pnpm test:integration`.
+
+`./build.sh --aab` also builds `build/TapdanceDemo.aab` with bundletool (set `BUNDLETOOL` to its .jar, or
+put it in `~/.tapdance/tools/bundletool/`). `tapdance app install build/TapdanceDemo.aab` turns it back
+into a universal APK before uploading.
