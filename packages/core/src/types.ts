@@ -270,13 +270,12 @@ export type DeviceOperation =
   | { kind: "pull-file"; outPath: string; devicePath?: string; appId?: string; relativePath?: string }
   | { kind: "notifications"; action: "list" | "open" | "close"; appId?: string }
   | { kind: "post-notification"; title?: string; text?: string; appId?: string; payload?: Record<string, unknown> }
-  | { kind: "perf"; metric: "frames" | "memory"; appId?: string }
-  | { kind: "audio"; action: "start" | "status" | "stop"; durationMs?: number };
+  | { kind: "perf"; metric: "frames" | "memory"; appId?: string };
 
 export interface DeviceOperationResult {
   ok: boolean;
   message: string;
-  /** Operation-specific data: the setting read back, notifications, a perf summary, audio buckets… */
+  /** Operation-specific data: the setting read back, notifications, a perf summary… */
   data?: Record<string, unknown>;
   /** A file the operation wrote on this machine (pulled file). */
   path?: string;

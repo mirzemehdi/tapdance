@@ -402,15 +402,6 @@ export const TOOLS: ToolDefinition[] = [
     run: async (t, a) => json(await t.device({ kind: "perf", metric: a["metric"] as "frames", ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) })),
   },
   {
-    name: "audio_levels",
-    title: "Measure audio levels",
-    description:
-      "Measure the audio the device renders as loudness buckets (dBFS): start (optionally for duration_ms), then status or stop for the buckets. Use it to check that a tap makes a sound and when it starts. Capturing the audio itself and feeding audio into the microphone are not supported.",
-    input: z.object({ action: z.enum(["start", "status", "stop"]), duration_ms: z.number().int().min(500).max(300_000).optional() }).strict(),
-    annotations: { readOnlyHint: true },
-    run: async (t, a) => json(await t.device({ kind: "audio", action: a["action"] as "start", ...(a["duration_ms"] ? { durationMs: a["duration_ms"] as number } : {}) })),
-  },
-  {
     name: "request_human",
     title: "Ask a person for help",
     description:

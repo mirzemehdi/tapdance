@@ -210,7 +210,6 @@ tapdance device push <path> --to <downloads|pictures|documents|app_sandbox> [--a
 tapdance device pull [devicePath] [--app <id> --path <relative>] [-o <file>]
 tapdance device notifications <list|open|close|post> [--app <id>] [--title <t>] [--text <t>] [--payload <json>]
 tapdance device perf <frames|memory> [--app <id>]
-tapdance device audio <start|status|stop> [--duration <ms>]
 ```
 
 These act on the leased device through Simlock's lease exec or agent-device, so they work for a device
@@ -233,7 +232,8 @@ the device is wiped on release.
   (Android) or, with `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator).
 - `perf frames`: frame health of the foreground app since the last reading; `perf memory`: a memory
   sample. Launch the app with `app launch` first.
-- `audio`: loudness buckets (dBFS) of the audio the device renders.
+- There is no audio command: agent-device's audio probe records the host's system audio with
+  ScreenCaptureKit (macOS Screen Recording permission), which Tapdance does not use.
 
 ## Apps
 
@@ -800,8 +800,6 @@ Commands:
                                     the device
   perf [options] <metric>           Measure frames (frame health since the last
                                     reading) or memory
-  audio [options] <action>          Audio level probe: start [--duration <ms>],
-                                    status, stop
   help [command]                    display help for command
 ```
 
@@ -1023,18 +1021,6 @@ Measure frames (frame health since the last reading) or memory
 Options:
   --app <appId>  app to measure (default: the foreground app)
   -h, --help     display help for command
-```
-
-### `tapdance device audio`
-
-```text
-Usage: tapdance device audio [options] <action>
-
-Audio level probe: start [--duration <ms>], status, stop
-
-Options:
-  --duration <ms>  how long start measures
-  -h, --help       display help for command
 ```
 
 ### `tapdance app`

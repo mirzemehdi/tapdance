@@ -425,7 +425,6 @@ export class Tapdance {
     const readOnly =
       (operation.kind === "notifications" && operation.action === "list") ||
       operation.kind === "perf" ||
-      operation.kind === "audio" ||
       operation.kind === "pull-file" ||
       (operation.kind === "setting" && operation.change.value === undefined && operation.change.name !== "reset-keychain");
     if (!readOnly) await this.guardHuman();
@@ -620,12 +619,13 @@ export class Tapdance {
         }
         if (record.handle.location.kind !== "local") {
           throw new TapdanceError("NOT_SUPPORTED", `${name} must run where the device is; this session's device is on a remote worker`, {
-            hint: "Remote worker execution is not implemented yet (see STATUS.md). Use Tapdance's own device tools, which work remotely.",
+            hint: "It would run on this machine, not beside the device. Use Tapdance's device tools, which reach remote workers: set_device_setting, push_file/pull_file, notifications, uninstall_app/clear_app_data, launch_app intent, measure_performance (CLI: tapdance device setting|push|pull|notifications|perf, tapdance app uninstall|clear).",
           });
         }
         deviceId = record.handle.deviceId;
         leaseInUse = record.handle.leaseId;
-        if (record.handle.platform === "android") adbServerPort = simlockAdbPort(this.options.env ?? process.env);
+        // Profile emulators sit on the default adb server; Simlock's own devices on its private one.
+        if (record.handle.platform === "android" && record.handle.provider !== PROFILE_PROVIDER) adbServerPort = simlockAdbPort(this.options.env ?? process.env);
       } else if (spec.deviceEnv) {
         // No lease: device-free commands still work, but nothing may reach a device outside a lease.
         deviceId = "tapdance-no-lease";

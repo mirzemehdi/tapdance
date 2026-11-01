@@ -109,6 +109,8 @@ phase by phase (§19).
 | D-06 | iOS worker on a Mac: detect Xcode versions, runtimes, available and booted simulators, UDID, model, runtime, resolution, state; create/boot/wait/health/shutdown/reset (explicit)/delete Tapdance-managed simulators; install `.app`, launch, terminate, bundle ids, crashes. | I3, I5 |
 | D-07 | Worker host OS: macOS (Android + iOS), Linux (Android), Windows (Android initially; validate what the backend supports). | L, D2 |
 | D-08 | Discover existing installed emulators and simulators without recreating the developer's environment. | D2 |
+| D-09 | `install_app` accepts an Android App Bundle (`.aab`) by building a universal APK with bundletool on the control machine before upload; without bundletool, a clear install hint. | C (issue #7) |
+| D-10 | Device profiles: an Android emulator the owner prepares once (signed in to a test account, settings, Play Store updates) that leases boot from read-only, so every lease starts from that state and keeps nothing; not blocked by Simlock, which neither enrols nor keeps such emulators. Credentials never pass through Tapdance. | C (issue #18) |
 
 ## 8. Device interaction backends
 
@@ -120,6 +122,13 @@ phase by phase (§19).
 | U-04 | Google's official Android CLI (`android`) is the preferred Android interaction backend (layout, input, annotated screenshots, emulators, builds, profiling, docs, skills); retain ADB/other backends only for gaps. | N |
 | U-05 | For Simlock-leased Android devices, Android CLI must operate on the assigned device and never allocate a second one. | N |
 | U-06 | Investigate XCTest/XCUITest, DeviceDeck and Maestro/Espresso; orchestrate established frameworks rather than build a new one. | I6, T1 |
+| U-07 | A typed, allowlisted, audited device-command channel (adb/simctl through Simlock's lease exec) that reaches remote leased devices the same way as local ones, scoped to the leased device, never a host shell; external tools that would run on the wrong machine fail fast and name the remote-capable tools. | C (issue #14) |
+| U-08 | App reset and launch control on the leased device: uninstall, clear data, iOS keychain reset, launch arguments, Android explicit intents. | C (issue #4) |
+| U-09 | Device settings: network, permissions, appearance, text size, biometrics, location, orientation, density, locale, time zone, status-bar time; unsupported combinations answer NOT_SUPPORTED with an alternative. | C (issue #6) |
+| U-10 | Files to and from the device: shared storage (media-scanned) and debuggable app sandboxes on Android; Photos and app containers on local iOS simulators; pulled files become artifacts. | C (issue #5) |
+| U-11 | Notifications: list, open/close the shade, post a test notification, deliver a push payload; off by default on personal Macs. | C (issue #9) |
+| U-12 | Measurements: frame health and memory of the foreground app. Audio capture, microphone injection and virtual MIDI devices are requested (issues #8, #16) and not built; any audio path must not capture the host's own audio or need macOS Screen Recording permission. | C (issues #17, #8, #16) |
+| U-13 | Asking a person: the agent requests a human action on the device (sign in, approve a purchase sheet) and waits until the person hands back in the viewer or marks it done; passwords are typed on the device, never in chat. | C (issue #15) |
 
 ## 9. Workers, gateway and networking
 

@@ -319,18 +319,6 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         out.result(r, () => JSON.stringify(r.data, null, 2));
       }),
     );
-  device
-    .command("audio <action>")
-    .description("Audio level probe: start [--duration <ms>], status, stop")
-    .option("--duration <ms>", "how long start measures", Number)
-    .action(async (action: string, o: { duration?: number }) =>
-      run(globals(), async (t, out) => {
-        if (!["start", "status", "stop"].includes(action)) throw new TapdanceError("USAGE", "action must be start, status or stop");
-        const r = await t.device({ kind: "audio", action: action as "start", ...(o.duration ? { durationMs: o.duration } : {}) });
-        out.result(r, () => (action === "start" ? r.message : JSON.stringify(r.data, null, 2)));
-      }),
-    );
-
   // Hidden: the detached renewer `device lease` starts.
   program
     .command("__keepalive", { hidden: true })

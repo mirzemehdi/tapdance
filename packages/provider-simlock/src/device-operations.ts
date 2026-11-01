@@ -124,12 +124,6 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
       const r = await agentDevice(`perf ${op.metric}`, () => ctx.client.observability.perf({ ...options, ...(op.appId ? { app: op.appId } : {}), ...scope } as never));
       return { ok: true, message: `Collected ${op.metric} data`, data: { [op.metric]: r as unknown } };
     }
-    case "audio": {
-      const r = await agentDevice(`audio probe ${op.action}`, () =>
-        ctx.client.observability.audio({ action: "probe", probeAction: op.action, ...(op.durationMs ? { durationMs: op.durationMs } : {}), ...scope } as never),
-      );
-      return { ok: true, message: `Audio probe ${op.action}`, data: { audio: r as unknown } };
-    }
   }
 }
 

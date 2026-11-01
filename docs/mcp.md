@@ -197,6 +197,10 @@ back is still found.
 
 ### Device state
 
+There is no audio tool: agent-device's audio probe samples the host's whole system audio through
+ScreenCaptureKit, which needs macOS Screen Recording permission and would hear every app on the Mac.
+Tapdance does not use it, and the worker guard refuses it.
+
 These run through Simlock's lease exec or agent-device, so they reach a device on a remote worker
 the same way as a local one. On a worker in device-only mode the owner's policy decides which are
 allowed (`allow.settings`, `allow.files`, `allow.notifications` (off by default), `allow.perf`).
@@ -209,7 +213,6 @@ allowed (`allow.settings`, `allow.files`, `allow.notifications` (off by default)
 | `notifications` | `action` (`list`, `open`, `close`, `post`), `app_id?`, `title?`, `text?`, `payload?` | `list` (Android): `{data: {notifications: [{package, title?, text?, key?, postedAt?}]}}`. `open`/`close` (Android) pull the shade down or up; then `inspect_screen` (with `all: true`) and `tap`. `post`: an Android shell notification, or with `app_id` + `payload` a push payload delivered to that app (the way to test pushes on the iOS simulator). | blocked (except `list`) |
 | `measure_performance` | `metric` (`frames` or `memory`), `app_id?` | `{data}`: frame health of the foreground app since the last reading (dropped/janky frames, worst windows) or a memory sample. Launch the app with `launch_app` first. Emulator and simulator numbers are not device-representative. | allowed |
 | `request_human` | `reason` (3–500 chars), `timeout_seconds?` (10–1800, default 600) | `{completed, how?, waitedMs, hint?}`. Asks a person to do what the agent should not (sign in to a test account, approve a purchase sheet, solve a check) and waits until they press **Hand back** in `tapdance view` or run `tapdance device done`. The viewer shows the reason. Sends progress while it waits. Never ask for passwords in chat. | allowed |
-| `audio_levels` | `action` (`start`, `status`, `stop`), `duration_ms?` | `{data}`: loudness buckets (dBFS) of the audio the device renders. Capturing the audio itself and feeding the microphone are not supported. | allowed |
 
 ### External tools
 

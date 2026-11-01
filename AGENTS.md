@@ -59,7 +59,7 @@ generated index is stale, or when any doc or hint names a `tapdance` command tha
 2. **Everything is lease-scoped.** Device methods receive the session's `LeaseHandle`. Providers
    refuse handles they did not issue. Release only ever targets the session's own lease.
 3. **No raw shell tools.** Do not add an MCP tool or CLI command that runs arbitrary shell, `adb` or
-   `simctl`. Internal use of Simlock `exec` stays on its fixed allowlist.
+   `simctl`. Internal use of Simlock `exec` stays on its fixed allowlist (see 14).
 4. **No command catalogues for external tools.** `packages/sdk/src/tools.ts` is the tool registry:
    integration metadata only (executable, where it runs, install guidance, license, discovery, allowed
    environment). Never list a tool's subcommands or flags; arguments are forwarded unchanged and
@@ -87,6 +87,13 @@ generated index is stale, or when any doc or hint names a `tapdance` command tha
     agent-device commands and `exec` argument lists explicitly; anything not listed is refused. Add to
     an allowlist only with a matching malicious-client test in `guard.test.ts`, and never let a
     denied request reach Simlock.
+13. **Never need a macOS privacy permission on the worker host.** Nothing Tapdance runs may require
+    Screen Recording, Accessibility, Input Monitoring, Microphone or similar TCC grants for Node or the
+    worker (for example agent-device's audio probe, which captures host audio with ScreenCaptureKit).
+    Device capture goes through simctl/adb and Simlock. The guard refuses such commands.
+14. **Device-level commands go through `device-commands.ts`.** Each one is a fixed shape built there
+    and accepted by the guard's `execOf`; add both together, with a test that the builder's output
+    passes the guard and injection attempts do not.
 
 ## Tests and evidence
 

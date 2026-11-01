@@ -30,7 +30,7 @@ export const GuardPolicySchema = z
         files: z.boolean().default(true),
         /** Reading and posting notifications; off by default because notifications can hold private text. */
         notifications: z.boolean().default(false),
-        /** Frame, memory and audio-level measurements. */
+        /** Frame and memory measurements. */
         perf: z.boolean().default(true),
         /** Physical phones plugged into the Mac carry the owner's data; off unless the owner turns it on. */
         physicalDevices: z.boolean().default(false),

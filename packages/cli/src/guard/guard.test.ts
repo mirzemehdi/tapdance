@@ -235,7 +235,9 @@ describe("worker guard vs a malicious remote client", () => {
     expect((await rpc("settings", ["appearance", "dark"])).status).toBe(200);
     expect((await rpc("settings", ["permission", "grant", "screen-recording"])).status).toBe(403);
     expect((await rpc("settings", ["shell-hack", "on"])).status).toBe(403);
-    expect((await rpc("audio", ["probe", "start", "5"])).status).toBe(200);
+    // agent-device's audio probe captures the host's system audio with ScreenCaptureKit (macOS Screen
+    // Recording permission): never reachable through the guard.
+    expect((await rpc("audio", ["probe", "start", "5"])).status).toBe(403);
     expect((await rpc("push", ["com.example.app", "/Users/owner/.ssh/id_rsa"])).status).toBe(403);
     expect((await t.exec(t.alice.secret, A, "xcodebuild", ["-scheme", "Evil", "build"])).status).toBe(403);
     expect((await t.call(t.alice.secret, "POST", "/v1/lease-requests", { platform: "ios" })).status).toBe(404);

@@ -258,9 +258,9 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Y-07 | 🟡 | Maestro/xcodebuild reachable through `execute_tool`; no result envelope for them. Tapdance's own scenario files (`tapdance run`) return a PASS/FAIL report with per-step results; FakeProvider tests only, not run on a device. |
 | Y-08 | 🟡 | Per-session artifact folder + manifest. `tapdance run` writes an evidence folder per scenario run (report.json, report.md, failure screenshot and UI tree, device, OS, app id, repository commit, Tapdance and Node versions); FakeProvider tests only. No app version, logs or native framework results yet. |
 | Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows; not run on a device yet. |
-| Y-10 | ⬜ | Only orientation-free basics (keys, alerts). |
+| Y-10 | 🟡 | Device settings, permissions, locale, time zone, orientation, appearance, location, biometrics, data reset and deep links/intents (U-08, U-09); battery and camera not covered. |
 | Y-11 | 🟡 | Agent vs human hold (take over / hand back); no read-only or paused states. |
-| Y-12 | ⬜ | |
+| Y-12 | 🟡 | Android device profiles (D-10): a prepared emulator booted read-only per lease. iOS and remote profiles not built. |
 | Y-13 | 🟡 | Guard audit log and progress messages; no per-operation metadata envelope. |
 | Y-14 | ⬜ | |
 | Y-15 | ⬜ | |

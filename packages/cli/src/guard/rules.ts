@@ -88,7 +88,6 @@ const COMMANDS: Record<string, Exclude<keyof GuardPolicy["allow"], "physicalDevi
   clipboard: "interaction",
   settings: "settings",
   perf: "perf",
-  audio: "perf",
   push: "notifications",
   screenshot: "screenshots",
   record: "recording",
@@ -154,8 +153,6 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
       if (pos[0] === "frames" && pos.length === 1) return undefined;
       if (pos[0] === "memory" && pos[1] === "sample" && pos.length === 2) return undefined;
       return "only `perf frames` and `perf memory sample` are allowed";
-    case "audio":
-      return pos[0] === "probe" && ["start", "status", "stop"].includes(pos[1] ?? "") && pos.slice(2).every((x) => /^[0-9]{1,6}$/.test(x)) ? undefined : "only `audio probe start|status|stop` is allowed";
     case "settings":
       if (!DEVICE_SETTINGS.has(pos[0] ?? "")) return `setting "${pos[0] ?? ""}" is not allowed`;
       if (pos[0] === "permission" && pos.some((x) => HOST_PERMISSIONS.has(x))) return "macOS host permissions cannot be changed remotely";
