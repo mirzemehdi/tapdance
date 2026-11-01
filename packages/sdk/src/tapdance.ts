@@ -428,6 +428,7 @@ export class Tapdance {
       operation.kind === "pull-file" ||
       (operation.kind === "setting" && operation.change.value === undefined && operation.change.name !== "reset-keychain");
     if (!readOnly) await this.guardHuman();
+    if (operation.kind === "shell" && Buffer.byteLength(operation.stdin ?? "") > 16 * 1024 * 1024) throw new TapdanceError("USAGE", "stdin is limited to 16 MB");
     return this.onDevice(async (handle, provider) => {
       if (!provider.device) throw new TapdanceError("NOT_SUPPORTED", `The ${provider.name} provider has no device-level operations`);
       if (operation.kind !== "pull-file") return provider.device(handle, operation);

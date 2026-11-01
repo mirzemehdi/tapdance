@@ -288,8 +288,8 @@ export const TOOLS: ToolDefinition[] = [
       "location: on|off, or latitude+longitude to move the device. appearance: light|dark|toggle. text-size: extra-small … accessibility-extra-extra-extra-large.",
       "permission: value grant|deny|reset, permission camera|microphone|photos|contacts|notifications|location|calendar|…, app_id.",
       "faceid|touchid: match|nonmatch|enroll|unenroll (iOS). fingerprint: match|nonmatch (Android). reset-keychain (iOS, every app).",
-      "orientation: portrait|landscape-left|landscape-right|portrait-upside-down. density: dpi or reset (Android). locale: a tag such as de-DE for app_id (Android 13+; iOS: launch_app args).",
-      "time-zone: e.g. Europe/Berlin (Android). status-bar-time: HH:MM or clear (iOS, for screenshots).",
+      "orientation: portrait|landscape-left|landscape-right|portrait-upside-down. status-bar-time: HH:MM or clear (iOS, for screenshots).",
+      "Anything else on Android (density, locale, time zone, …): device_shell, e.g. `wm density 320`. iOS language: launch_app args [\"-AppleLanguages\", \"(de)\"].",
     ].join(" "),
     input: z
       .object({
@@ -391,6 +391,29 @@ export const TOOLS: ToolDefinition[] = [
       }
       return json(await t.device({ kind: "notifications", action, ...appIdArg }));
     },
+  },
+  {
+    name: "device_shell",
+    title: "Run a shell command on the Android emulator",
+    description:
+      "Android emulators only: run a command with `adb shell` inside the leased emulator (its own Android VM; wiped at release; never the host machine). Use it for anything the other tools do not cover: dumpsys (e.g. `dumpsys media.audio_flinger` to see which app is playing sound), am broadcast to a helper app you installed with install_app (e.g. a virtual MIDI keyboard), pm, settings, cmd, getprop. The command goes to the emulator's shell as one string (pipes and redirects work there). stdin is passed once (use base64 for binary). Returns exitCode, stdout (last 32 000 chars) and stderr. Refused on iOS (a simulator shell would be a Mac shell) and on physical phones; a worker owner can turn it off.",
+    input: z
+      .object({
+        command: z.string().min(1).max(8192),
+        stdin: z.string().max(16 * 1024 * 1024).optional(),
+        timeout_seconds: z.number().int().min(1).max(600).optional().describe("Default 120."),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) =>
+      json(
+        await t.device({
+          kind: "shell",
+          command: a["command"] as string,
+          ...(a["stdin"] !== undefined ? { stdin: a["stdin"] as string } : {}),
+          ...(a["timeout_seconds"] ? { timeoutMs: (a["timeout_seconds"] as number) * 1000 } : {}),
+        }),
+      ),
   },
   {
     name: "measure_performance",

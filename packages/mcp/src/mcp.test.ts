@@ -12,7 +12,7 @@ const REQUIRED = [
   "list_workers", "list_devices", "lease_device", "get_device_status", "release_device", "install_app", "launch_app", "stop_app",
   "inspect_screen", "tap", "swipe", "type_text", "press_key", "take_screenshot", "start_recording", "stop_recording",
   "get_logs", "get_crash_logs", "get_test_artifacts", "wait_for", "handle_alert", "list_tools", "execute_tool", "list_apps",
-  "uninstall_app", "clear_app_data", "set_device_setting", "push_file", "pull_file", "notifications", "measure_performance", "run_scenario", "request_human",
+  "uninstall_app", "clear_app_data", "set_device_setting", "push_file", "pull_file", "notifications", "measure_performance", "device_shell", "run_scenario", "request_human",
 ];
 
 /** Minimal valid arguments per tool, for the strictness check. */
@@ -48,6 +48,7 @@ const VALID_ARGS: Record<string, Record<string, unknown>> = {
   pull_file: { device_path: "/sdcard/Download/x.txt" },
   notifications: { action: "list" },
   measure_performance: { metric: "frames" },
+  device_shell: { command: "getprop ro.build.version.sdk" },
   run_scenario: { scenario: { name: "x", steps: [{ press_key: { key: "home" } }] } },
   request_human: { reason: "Sign in to the test account" },
 };
@@ -82,10 +83,12 @@ async function connect(provider: FakeProvider = new FakeProvider()) {
 }
 
 describe("MCP tool surface", () => {
-  it("exposes every required tool and no raw shell", () => {
+  it("exposes every required tool and no host shell", () => {
     const names = TOOLS.map((t) => t.name);
     for (const n of REQUIRED) expect(names).toContain(n);
-    for (const n of names) expect(n).not.toMatch(/shell|^exec$|adb|simctl|run_on_device/);
+    // device_shell is the one shell, and it runs inside the leased emulator, never on the host.
+    for (const n of names.filter((x) => x !== "device_shell")) expect(n).not.toMatch(/shell|^exec$|adb|simctl|run_on_device/);
+    expect(TOOLS.find((t) => t.name === "device_shell")!.description).toMatch(/inside the leased emulator/);
   });
 
   it("describes every tool and refuses unknown keys", () => {

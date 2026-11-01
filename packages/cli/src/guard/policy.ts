@@ -24,7 +24,7 @@ export const GuardPolicySchema = z
         logs: z.boolean().default(true),
         streaming: z.boolean().default(true),
         input: z.boolean().default(true),
-        /** Device settings (network, permissions, appearance, density, locale, time zone, status bar). */
+        /** Device settings (network, permissions, appearance, text size, orientation, status bar). */
         settings: z.boolean().default(true),
         /** Files pushed to or pulled from the leased device's shared storage or a debuggable app's sandbox. */
         files: z.boolean().default(true),
@@ -32,6 +32,8 @@ export const GuardPolicySchema = z
         notifications: z.boolean().default(false),
         /** Frame and memory measurements. */
         perf: z.boolean().default(true),
+        /** `adb shell` inside a leased emulator (its own VM, wiped at release). Never on physical phones. */
+        deviceShell: z.boolean().default(true),
         /** Physical phones plugged into the Mac carry the owner's data; off unless the owner turns it on. */
         physicalDevices: z.boolean().default(false),
       })
@@ -48,6 +50,7 @@ export const GuardPolicySchema = z
         files: true,
         notifications: false,
         perf: true,
+        deviceShell: true,
         physicalDevices: false,
       }),
     limits: z

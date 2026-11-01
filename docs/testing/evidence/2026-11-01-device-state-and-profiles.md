@@ -69,6 +69,12 @@ expect "Welcome, ada@example.com", screenshot) in 44.8 s, writing `report.json`/
 evidence folder. The Android example failed at its first `type_text` with an adb timeout while a
 leftover Google Play emulator used ~490% CPU on the test Mac; it has not passed yet.
 
+## Changed after this run
+
+The `density`, `locale` and `time-zone` settings shown above were removed in favour of the generic
+`device_shell` (`wm density …`, `cmd locale …`, `service call alarm …` inside the emulator). They ran
+through the same lease exec that `device_shell` uses.
+
 ## Removed after this run
 
 `device audio` / `audio_levels`: agent-device's audio probe records the Mac's own system audio with

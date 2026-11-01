@@ -210,6 +210,7 @@ tapdance device push <path> --to <downloads|pictures|documents|app_sandbox> [--a
 tapdance device pull [devicePath] [--app <id> --path <relative>] [-o <file>]
 tapdance device notifications <list|open|close|post> [--app <id>] [--title <t>] [--text <t>] [--payload <json>]
 tapdance device perf <frames|memory> [--app <id>]
+tapdance device shell [--stdin <file>] [--timeout <seconds>] -- <command…>
 ```
 
 These act on the leased device through Simlock's lease exec or agent-device, so they work for a device
@@ -220,8 +221,8 @@ the device is wiped on release.
 - `setting`: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`), `location`
   (`on`/`off`, or `--lat`/`--lon`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid`
   (iOS), `fingerprint` (Android), `permission <grant|deny|reset> --permission <p> --app <id>`,
-  `reset-keychain` (iOS), `orientation`, `density <dpi|reset>` (Android), `locale <tag> --app <id>`
-  (Android 13+), `time-zone <zone>` (Android), `status-bar-time <HH:MM|clear>` (iOS). Without a value it
+  `reset-keychain` (iOS), `orientation`, `status-bar-time <HH:MM|clear>` (iOS). Other Android settings
+  (density, locale, time zone, …) go through `device shell`. Without a value it
   reads the setting where the platform can. A combination a platform cannot do fails with
   `NOT_SUPPORTED` and says what to do instead.
 - `push`: Android shared storage (media-scanned) or a debuggable app's sandbox, up to 24 MB; iOS Photos
@@ -230,6 +231,10 @@ the device is wiped on release.
   `--path`; iOS `--app` with `--path` inside its container, local simulators only. Saved as an artifact.
 - `notifications`: `list` (Android), `open`/`close` the shade (Android), `post` a shell notification
   (Android) or, with `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator).
+- `shell` (Android emulators only): runs the command with `adb shell` **inside the leased emulator**
+  (its own VM, wiped at release; never this machine), e.g. `tapdance device shell -- dumpsys
+  media.audio_flinger` or `-- wm density 320`. Exit code 1 when the command fails. Refused on iOS and on
+  physical phones.
 - `perf frames`: frame health of the foreground app since the last reading; `perf memory`: a memory
   sample. Launch the app with `app launch` first.
 - There is no audio command: agent-device's audio probe records the host's system audio with
@@ -788,8 +793,7 @@ Commands:
                                     mobile-data, location, animations,
                                     appearance, text-size, faceid, touchid,
                                     fingerprint, permission, reset-keychain,
-                                    orientation, density, locale, time-zone,
-                                    status-bar-time
+                                    orientation, status-bar-time
   push [options] <path>             Copy a file onto the device (Android shared
                                     storage or a debuggable app's sandbox; iOS
                                     Photos or an app container, local simulators
@@ -798,6 +802,9 @@ Commands:
                                     session's artifacts
   notifications [options] <action>  list | open | close | post notifications on
                                     the device
+  shell [options] <command...>      Android emulators: run a command with `adb
+                                    shell` inside the leased emulator (not on
+                                    this machine)
   perf [options] <metric>           Measure frames (frame health since the last
                                     reading) or memory
   help [command]                    display help for command
@@ -953,8 +960,7 @@ Usage: tapdance device setting [options] <name> [value]
 
 Change (or, without a value, read) a device setting: wifi, bluetooth, airplane,
 mobile-data, location, animations, appearance, text-size, faceid, touchid,
-fingerprint, permission, reset-keychain, orientation, density, locale,
-time-zone, status-bar-time
+fingerprint, permission, reset-keychain, orientation, status-bar-time
 
 Options:
   --app <appId>              the app a permission or locale applies to
@@ -1009,6 +1015,20 @@ Options:
   --text <text>     post: body
   --payload <json>  post: a push payload (APNs-style JSON) delivered to --app
   -h, --help        display help for command
+```
+
+### `tapdance device shell`
+
+```text
+Usage: tapdance device shell [options] <command...>
+
+Android emulators: run a command with `adb shell` inside the leased emulator
+(not on this machine)
+
+Options:
+  --stdin <file>       pass this file's contents on stdin
+  --timeout <seconds>  default 120
+  -h, --help           display help for command
 ```
 
 ### `tapdance device perf`

@@ -25,8 +25,6 @@ export const QUOTED = /^'[^'\n\r\0]{0,2048}'$/;
 export const SHARED_DIRS = ["Download", "Pictures", "DCIM", "Documents", "Movies", "Music"] as const;
 export const SHARED_PATH = /^\/sdcard\/(Download|Pictures|DCIM|Documents|Movies|Music)\/(?!\.{1,2}$)[A-Za-z0-9 _.()+-]{1,128}$/;
 export const SANDBOX_PATH = /^(files|cache|databases|shared_prefs|no_backup)\/(?!\.{1,2}$)[A-Za-z0-9 _.()+-]{1,128}$/;
-export const LOCALE = /^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
-export const TIME_ZONE = /^[A-Za-z]+(\/[A-Za-z0-9_+-]+){0,2}$/;
 export const CLOCK = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 export const INTENT_FLAG = /^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$/;
 export const EXTRA_KEY = /^[A-Za-z][A-Za-z0-9_.]{0,127}$/;
@@ -73,22 +71,6 @@ export const android = {
     }
     if (args.length === 4) throw usage("An intent needs at least an action, data or component");
     return { tool: "adb", args };
-  },
-  density(value: number | "reset"): DeviceCommand {
-    if (value !== "reset" && !(Number.isInteger(value) && value >= 72 && value <= 960)) throw usage("density must be 72-960 dpi or reset");
-    return { tool: "adb", args: ["shell", "wm", "density", String(value)] };
-  },
-  appLocale(appId: string, locale: string): DeviceCommand {
-    if (!LOCALE.test(locale)) throw usage(`"${locale}" is not a locale tag such as de-DE`);
-    return { tool: "adb", args: ["shell", "cmd", "locale", "set-app-locales", app(appId), "--locales", locale] };
-  },
-  /** Automatic time zone detection would immediately override a manual zone. */
-  autoTimeZone(on: boolean): DeviceCommand {
-    return { tool: "adb", args: ["shell", "settings", "put", "global", "auto_time_zone", on ? "1" : "0"] };
-  },
-  timeZone(zone: string): DeviceCommand {
-    if (!TIME_ZONE.test(zone)) throw usage(`"${zone}" is not a time zone such as Europe/Berlin`);
-    return { tool: "adb", args: ["shell", "service", "call", "alarm", "3", "s16", zone] };
   },
   notifications(): DeviceCommand {
     return { tool: "adb", args: ["shell", "dumpsys", "notification", "--noredact"] };

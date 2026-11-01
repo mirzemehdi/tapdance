@@ -118,7 +118,9 @@ async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {
 
 describe("worker guard vs a malicious remote client", () => {
   it("1. cannot run arbitrary shell commands (simctl spawn, adb shell)", async () => {
-    const t = await setup();
+    // `adb shell` runs inside the emulator's VM, not on the Mac; the owner can turn it off
+    // (allow.deviceShell), and with it off every shell form below is refused before Simlock.
+    const t = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, deviceShell: false } });
     await t.allocate(t.alice.secret, A);
     for (const [tool, args] of [
       ["simctl", ["spawn", "booted", "/bin/sh", "-c", "id"]],
@@ -133,7 +135,9 @@ describe("worker guard vs a malicious remote client", () => {
   });
 
   it("2. cannot use sudo", async () => {
-    const t = await setup();
+    // `adb shell` runs inside the emulator's VM, not on the Mac; the owner can turn it off
+    // (allow.deviceShell), and with it off every shell form below is refused before Simlock.
+    const t = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, deviceShell: false } });
     await t.allocate(t.alice.secret, A);
     expect((await t.exec(t.alice.secret, A, "simctl", ["spawn", "booted", "sudo", "-n", "true"])).status).toBe(403);
     expect((await t.exec(t.alice.secret, A, "adb", ["shell", "su", "-c", "id"])).status).toBe(403);
@@ -153,7 +157,9 @@ describe("worker guard vs a malicious remote client", () => {
   });
 
   it("4. cannot delete files outside the workspace", async () => {
-    const t = await setup();
+    // `adb shell` runs inside the emulator's VM, not on the Mac; the owner can turn it off
+    // (allow.deviceShell), and with it off every shell form below is refused before Simlock.
+    const t = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, deviceShell: false } });
     await t.allocate(t.alice.secret, A);
     expect((await t.exec(t.alice.secret, A, "simctl", ["spawn", "booted", "rm", "-rf", "/Users/owner"])).status).toBe(403);
     expect((await t.exec(t.alice.secret, A, "simctl", ["delete", "all"])).status).toBe(403);
@@ -427,11 +433,6 @@ describe("worker guard: hardening", () => {
     const all = GuardPolicySchema.parse({ allow: { notifications: true } });
     const built = [
       dc.android.startIntent({ action: "android.intent.action.VIEW", data: "https://example.com/a?b=c&d=e", component: "com.example/.Main", categories: ["android.intent.category.DEFAULT"], flags: "0x10000000", extras: { mode: "first run; rm -rf /", count: 3, fresh: true } }),
-      dc.android.density(420),
-      dc.android.density("reset"),
-      dc.android.appLocale("com.example", "de-DE"),
-      dc.android.timeZone("Europe/Berlin"),
-      dc.android.autoTimeZone(false),
       dc.android.notifications(),
       dc.android.shade(true),
       dc.android.postNotification("Hi there", "Body with $(stuff)"),
@@ -460,13 +461,37 @@ describe("worker guard: hardening", () => {
       { tool: "simctl", args: ["addmedia", "/Users/owner/Pictures/private.jpg"] },
       { tool: "simctl", args: ["status_bar", "override", "--time", "9:41; rm"] },
     ];
-    for (const cmd of refused) expect(execOf(cmd, all).ok, JSON.stringify(cmd.args)).toBe(false);
+    // With the device shell off, only the fixed shapes pass.
+    const fixedOnly = GuardPolicySchema.parse({ allow: { notifications: true, deviceShell: false } });
+    for (const cmd of refused) expect(execOf(cmd, fixedOnly).ok, JSON.stringify(cmd.args)).toBe(false);
+    // With it on (the default), `adb shell` reaches the emulator's own shell; anything that touches the
+    // Mac (push/pull of Mac paths, simctl) is still refused, and phones never get a shell.
+    const hostReach = refused.filter((c) => c.tool !== "adb" || c.args[0] !== "shell");
+    expect(hostReach.length).toBeGreaterThanOrEqual(3);
+    for (const cmd of hostReach) expect(execOf(cmd, all).ok, JSON.stringify(cmd.args)).toBe(false);
+    expect(execOf({ tool: "adb", args: ["shell", "dumpsys media.audio_flinger"] }, all).ok).toBe(true);
+    expect(execOf({ tool: "adb", args: ["shell", "dumpsys media.audio_flinger"] }, all, { physical: true }).ok).toBe(false);
+    for (const args of [["forward", "tcp:1", "tcp:2"], ["reverse", "tcp:1", "tcp:2"], ["emu", "screenrecord", "start", "/Users/owner/x.webm"], ["install", "/Users/owner/x.apk"], ["shell"], ["shell", "  "]]) {
+      expect(execOf({ tool: "adb", args }, all).ok, args.join(" ")).toBe(false);
+    }
     // Notifications stay off unless the owner turns them on; files can be turned off.
-    expect(execOf(dc.android.notifications(), GuardPolicySchema.parse({})).ok).toBe(false);
-    expect(execOf(dc.android.pushShared("/sdcard/Download/a.txt", "YQ=="), GuardPolicySchema.parse({ allow: { files: false } })).ok).toBe(false);
+    expect(execOf(dc.android.notifications(), GuardPolicySchema.parse({ allow: { deviceShell: false } })).ok).toBe(false);
+    expect(execOf(dc.android.pushShared("/sdcard/Download/a.txt", "YQ=="), GuardPolicySchema.parse({ allow: { files: false, deviceShell: false } })).ok).toBe(false);
     // The builders refuse what they cannot quote.
     expect(() => dc.android.startIntent({ data: "it's" })).toThrow(/single quote/);
     expect(() => dc.android.pushShared("/sdcard/Download/../x", "")).toThrow();
+  });
+
+  it("15. the device shell reaches leased emulators only, never phones", async () => {
+    const t = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, physicalDevices: true }, limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 512, tokenDays: 7 } });
+    await t.allocate(t.alice.secret, A);
+    await t.allocate(t.alice.secret, B, { physical: true });
+    expect((await t.exec(t.alice.secret, A, "adb", ["shell", "dumpsys media.audio_flinger | grep -c Track"])).status).toBe(200);
+    expect((await t.exec(t.alice.secret, B, "adb", ["shell", "dumpsys media.audio_flinger"])).status).toBe(403);
+    expect((await t.exec(t.mallory.secret, A, "adb", ["shell", "id"])).status).toBe(404);
+    const off = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, deviceShell: false } });
+    await off.allocate(off.alice.secret, A);
+    expect((await off.exec(off.alice.secret, A, "adb", ["shell", "id"])).status).toBe(403);
   });
 });
 

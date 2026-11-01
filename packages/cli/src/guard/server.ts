@@ -35,6 +35,8 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   const owners = new Map<string, string>();
   /** Lease ids whose allocate is still running: reserved in `owners`, not yet known to Simlock. */
   const allocating = new Set<string>();
+  /** Leases of physical phones (allocated with `physical`): no device shell on these. */
+  const physicalLeases = new Set<string>();
   /** agent-device upload id → guard token id, learned from upload replies. */
   const uploads = new Map<string, string>();
   /** agent-device artifact id → guard token id, learned from the replies to that token's commands. */
@@ -218,7 +220,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             } catch {
               parsed = undefined;
             }
-            const decision = execOf(parsed, policy);
+            const decision = execOf(parsed, policy, { physical: physicalLeases.has(r.leaseId) });
             if (!decision.ok) {
               await decide("deny", { reason: decision.reason, leaseId: r.leaseId, command: "exec" });
               return send(res, 403, "PASSTHROUGH_REFUSED", decision.reason);
@@ -273,6 +275,9 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             owners.set(leaseId, token.id); // reserved while the allocate runs
             allocating.add(leaseId);
+            const ap = (parsed as { params: Record<string, unknown> }).params;
+            const flagsOf = (ap["flags"] && typeof ap["flags"] === "object" ? ap["flags"] : {}) as Record<string, unknown>;
+            if ([ap["physical"], flagsOf["physical"]].some((v) => v === true || v === "true")) physicalLeases.add(leaseId);
             let granted = false;
             try {
               const cap = policy.limits.maxLeaseMinutes * 60_000;
@@ -289,7 +294,10 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               granted = answer.ok && succeeded;
             } finally {
               allocating.delete(leaseId);
-              if (!granted) owners.delete(leaseId);
+              if (!granted) {
+                owners.delete(leaseId);
+                physicalLeases.delete(leaseId);
+              }
             }
             return;
           }

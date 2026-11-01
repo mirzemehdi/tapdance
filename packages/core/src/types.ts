@@ -232,16 +232,13 @@ export const DEVICE_SETTINGS = [
   "permission",
   "reset-keychain",
   "orientation",
-  "density",
-  "locale",
-  "time-zone",
   "status-bar-time",
 ] as const;
 export type DeviceSettingName = (typeof DEVICE_SETTINGS)[number];
 
 export interface DeviceSettingChange {
   name: DeviceSettingName;
-  /** on/off, light/dark, a text size, portrait/landscape-left…, a dpi number, a locale tag, a zone, HH:MM, or grant/deny/reset. */
+  /** on/off, light/dark, a text size, portrait/landscape-left…, HH:MM, or grant/deny/reset. */
   value?: string;
   appId?: string;
   /** For `permission`: camera, microphone, photos, notifications, location… */
@@ -270,7 +267,9 @@ export type DeviceOperation =
   | { kind: "pull-file"; outPath: string; devicePath?: string; appId?: string; relativePath?: string }
   | { kind: "notifications"; action: "list" | "open" | "close"; appId?: string }
   | { kind: "post-notification"; title?: string; text?: string; appId?: string; payload?: Record<string, unknown> }
-  | { kind: "perf"; metric: "frames" | "memory"; appId?: string };
+  | { kind: "perf"; metric: "frames" | "memory"; appId?: string }
+  /** Android: `adb shell` inside the leased emulator (its own VM, wiped at release); never the host. */
+  | { kind: "shell"; command: string; stdin?: string; timeoutMs?: number };
 
 export interface DeviceOperationResult {
   ok: boolean;

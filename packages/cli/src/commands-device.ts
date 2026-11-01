@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Command } from "commander";
 import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
@@ -306,6 +307,20 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         else throw new TapdanceError("USAGE", "action must be list, open, close or post");
         const list = (r.data?.["notifications"] as Array<{ package: string; title?: string; text?: string }> | undefined) ?? undefined;
         out.result(r, () => (list ? (list.map((n) => `${n.package}: ${n.title ?? ""}${n.text ? ` — ${n.text}` : ""}`).join("\n") || "No notifications") : r.message));
+      }),
+    );
+  device
+    .command("shell <command...>")
+    .description("Android emulators: run a command with `adb shell` inside the leased emulator (not on this machine)")
+    .option("--stdin <file>", "pass this file's contents on stdin")
+    .option("--timeout <seconds>", "default 120", Number)
+    .action(async (command: string[], o: { stdin?: string; timeout?: number }) =>
+      run(globals(), async (t, out) => {
+        const stdin = o.stdin ? await readFile(o.stdin, "utf8") : undefined;
+        const r = await t.device({ kind: "shell", command: command.join(" "), ...(stdin !== undefined ? { stdin } : {}), ...(o.timeout ? { timeoutMs: o.timeout * 1000 } : {}) });
+        const d = r.data as { exitCode: number; stdout: string; stderr: string };
+        out.result(r, () => [d.stdout.trimEnd(), d.stderr.trim() ? `stderr: ${d.stderr.trim()}` : ""].filter(Boolean).join("\n"));
+        if (d.exitCode !== 0) process.exitCode = 1;
       }),
     );
   device

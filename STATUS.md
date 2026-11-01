@@ -145,6 +145,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | U-10 | ✅ | Android shared storage push/pull locally and through the guard; iOS Photos and app container locally ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Android app-sandbox push/pull not exercised (needs a debuggable app using `run-as`). |
 | U-11 | 🟡 | Android post/list/open/close and an iOS push payload ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Reading iOS Notification Center is by `inspect_screen` only. |
 | U-12 | 🟡 | `perf frames` and `perf memory` on Android ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); iOS perf not exercised. Audio and MIDI not built (the audio probe was removed: it needs macOS Screen Recording). |
+| U-14 | 🧪 | `device_shell` / `tapdance device shell`; guard allow/deny tests incl. phones and the off switch (`guard.test.ts` 14–15). Not yet run on a device (same lease exec path as the file and settings tools, which ran for real). |
 | U-13 | 🧪 | `request_human`, `device done` and the viewer's Hand back (`packages/sdk/src/tapdance.test.ts`). Not yet used in a real sign-in. |
 
 ### Workers and gateway

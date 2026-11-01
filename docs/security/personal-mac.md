@@ -120,12 +120,19 @@ has been installed on a real machine yet.
   test). Allowed: `simctl terminate <bundle id>`, `simctl spawn log show` with Tapdance's fixed flags,
   `simctl status_bar override --time HH:MM` / `clear`; `adb shell am force-stop <package>`,
   `adb shell pidof <package>`, `adb logcat` with fixed flags, `adb shell am start -W` with validated
-  intent fields, `wm density`, per-app locale, time zone, `dumpsys notification`, the notification
+  intent fields, `dumpsys notification`, the notification
   shade, a shell test notification, and files: base64 on stdin or stdout to `/sdcard/{Download,
   Pictures,DCIM,Documents,Movies,Music}/<name>` or a debuggable app's own `files/`, `cache/`,
   `databases/`, `shared_prefs/`, `no_backup/` (24 MB at most). Values that reach the emulator's own
   shell are validated and single-quoted. No `adb push`/`pull` of Mac paths, no `simctl addmedia` or
   `spawn`, no host shell.
+- **A shell inside leased emulators** (`allow.deviceShell`, default `true`): any `adb shell …` on an
+  emulator the client leased. It runs in the emulator's own Android VM, which is wiped at release, not
+  on the Mac. It is refused on physical phones, and everything that reaches the Mac (`adb push`/`pull`,
+  `install` of Mac paths, `forward`/`reverse`, `emu` console commands, any `simctl spawn`) stays
+  refused. Like any app installed on the emulator, code in it can reach the Mac's loopback services
+  through the emulator's network (10.0.2.2); set `allow.deviceShell: false` (and `allow.install:
+  false`) if that matters on your Mac.
 - **Lease ownership per client.** A client can act only on leases it allocated; lease ids repeated in
   `params`, `meta` and `flags` must all match; another client's lease answers `404`/`403`. An allocate
   that Simlock answers with an error never leaves the lease id owned by that client.

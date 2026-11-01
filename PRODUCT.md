@@ -124,10 +124,11 @@ phase by phase (§19).
 | U-06 | Investigate XCTest/XCUITest, DeviceDeck and Maestro/Espresso; orchestrate established frameworks rather than build a new one. | I6, T1 |
 | U-07 | A typed, allowlisted, audited device-command channel (adb/simctl through Simlock's lease exec) that reaches remote leased devices the same way as local ones, scoped to the leased device, never a host shell; external tools that would run on the wrong machine fail fast and name the remote-capable tools. | C (issue #14) |
 | U-08 | App reset and launch control on the leased device: uninstall, clear data, iOS keychain reset, launch arguments, Android explicit intents. | C (issue #4) |
-| U-09 | Device settings: network, permissions, appearance, text size, biometrics, location, orientation, density, locale, time zone, status-bar time; unsupported combinations answer NOT_SUPPORTED with an alternative. | C (issue #6) |
+| U-09 | Device settings that work across platforms: network, permissions, appearance, text size, biometrics, location, orientation, iOS status-bar time; unsupported combinations answer NOT_SUPPORTED with an alternative. Android-only settings go through the device shell (U-14). | C (issue #6) |
 | U-10 | Files to and from the device: shared storage (media-scanned) and debuggable app sandboxes on Android; Photos and app containers on local iOS simulators; pulled files become artifacts. | C (issue #5) |
 | U-11 | Notifications: list, open/close the shade, post a test notification, deliver a push payload; off by default on personal Macs. | C (issue #9) |
 | U-12 | Measurements: frame health and memory of the foreground app. Audio capture, microphone injection and virtual MIDI devices are requested (issues #8, #16) and not built; any audio path must not capture the host's own audio or need macOS Screen Recording permission. | C (issues #17, #8, #16) |
+| U-14 | A shell inside leased Android emulators (`device_shell`): any `adb shell` command, run in the emulator's own VM and never on the host, so app-specific needs (audio checks, a MIDI helper app, density, locale) are the agent's own work rather than Tapdance features. Refused on iOS and physical phones; the worker owner can turn it off. | C (issues #8, #16) |
 | U-13 | Asking a person: the agent requests a human action on the device (sign in, approve a purchase sheet) and waits until the person hands back in the viewer or marks it done; passwords are typed on the device, never in chat. | C (issue #15) |
 
 ## 9. Workers, gateway and networking

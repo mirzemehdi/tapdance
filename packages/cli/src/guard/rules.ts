@@ -179,7 +179,7 @@ const PREDICATE = /^[A-Za-z0-9_.()" =[\]-]+$/;
 type Area = Exclude<keyof GuardPolicy["allow"], "physicalDevices">;
 type ExecValue = { tool: "adb" | "simctl"; args: string[]; stdin?: string };
 
-const { APP_ID: DEVICE_APP_ID, QUOTED, PLAIN, SHARED_PATH, SANDBOX_PATH, LOCALE, TIME_ZONE, CLOCK, INTENT_FLAG, EXTRA_KEY, MAX_PUSH_BYTES } = deviceCommands;
+const { APP_ID: DEVICE_APP_ID, QUOTED, PLAIN, SHARED_PATH, SANDBOX_PATH, CLOCK, INTENT_FLAG, EXTRA_KEY, MAX_PUSH_BYTES } = deviceCommands;
 const value = (v: string | undefined) => v !== undefined && (PLAIN.test(v) || QUOTED.test(v));
 const unquote = (v: string) => (v.startsWith("'") ? v.slice(1, -1) : v);
 
@@ -213,7 +213,7 @@ function intentArgs(rest: string[]): boolean {
  * Simlock runs adb/simctl with argument arrays and inserts the leased device itself; strings that
  * reach the Android device's own shell are limited to validated, single-quoted values.
  */
-export function execOf(body: unknown, policy: GuardPolicy): Decision<ExecValue> {
+export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: boolean } = {}): Decision<ExecValue> {
   if (body === null || typeof body !== "object") return deny("malformed exec");
   const { tool, args, stdin } = body as { tool?: unknown; args?: unknown; stdin?: unknown };
   if ((tool !== "adb" && tool !== "simctl") || !Array.isArray(args) || !args.every((a) => typeof a === "string")) return deny("exec needs tool adb|simctl and string args");
@@ -246,11 +246,6 @@ export function execOf(body: unknown, policy: GuardPolicy): Decision<ExecValue> 
   const s = a.slice(1);
   // Launch with an explicit intent.
   if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
-  // Settings.
-  if (s.length === 3 && s[0] === "wm" && s[1] === "density" && (s[2] === "reset" || /^[0-9]{2,3}$/.test(s[2]!))) return plain("settings");
-  if (s.length === 6 && s[0] === "cmd" && s[1] === "locale" && s[2] === "set-app-locales" && DEVICE_APP_ID.test(s[3]!) && s[4] === "--locales" && LOCALE.test(s[5]!)) return plain("settings");
-  if (s.length === 5 && s[0] === "settings" && s[1] === "put" && s[2] === "global" && s[3] === "auto_time_zone" && (s[4] === "0" || s[4] === "1")) return plain("settings");
-  if (s.length === 6 && s[0] === "service" && s[1] === "call" && s[2] === "alarm" && s[3] === "3" && s[4] === "s16" && TIME_ZONE.test(s[5]!)) return plain("settings");
   // Notifications.
   if (s.length === 3 && s[0] === "dumpsys" && s[1] === "notification" && s[2] === "--noredact") return plain("notifications");
   if (s.length === 3 && s[0] === "cmd" && s[1] === "statusbar" && (s[2] === "expand-notifications" || s[2] === "collapse")) return plain("interaction");
@@ -267,6 +262,14 @@ export function execOf(body: unknown, policy: GuardPolicy): Decision<ExecValue> 
   if (s.length === 6 && s[0] === "am" && s[1] === "broadcast" && s[2] === "-a" && s[3] === "android.intent.action.MEDIA_SCANNER_SCAN_FILE" && s[4] === "-d") {
     const m = /^'file:\/\/(.+)'$/.exec(s[5]!);
     if (m && SHARED_PATH.test(m[1]!)) return plain("files");
+  }
+  // Anything else in the emulator's own shell: it runs inside the emulator's VM, not on this Mac. Host
+  // reach (push/pull of Mac paths, port forwarding, emulator console) is not `adb shell` and stays refused.
+  if (s.length >= 1 && s.join("").trim() !== "") {
+    if (!policy.allow.deviceShell) return deny("deviceShell is disabled by the local policy");
+    if (lease.physical) return deny("device shell is refused on physical devices");
+    if (stdin !== undefined && stdin.length > Math.min(24, policy.limits.maxUploadMB) * 1024 * 1024 * 1.4) return deny("stdin too large");
+    return { ok: true, value: { tool: "adb", args: a, ...(stdin !== undefined ? { stdin } : {}) } };
   }
   return deny(`adb shell ${String(s[0] ?? "")} is not part of the device API`);
 }

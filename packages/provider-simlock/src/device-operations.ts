@@ -119,6 +119,18 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
       await run(ctx, android.postNotification(op.title ?? "Tapdance", op.text ?? "Test notification"), "post notification");
       return { ok: true, message: "Posted a test notification from the shell (package com.android.shell)" };
     }
+    case "shell": {
+      if (!isAndroid) {
+        throw notSupported("device_shell is Android only", "iOS simulator processes run on the Mac itself, so a simulator shell would be a Mac shell. Use the other device tools.");
+      }
+      if (handle.physical) throw new TapdanceError("FORBIDDEN", "device_shell runs on emulators only", { hint: "A physical phone holds its owner's data." });
+      const command = op.command.trim();
+      if (command === "" || command.includes("\u0000")) throw new TapdanceError("USAGE", "device_shell needs a command");
+      // One argument: adb hands it to the emulator's own shell, which parses it (pipes, redirects).
+      const r = await ctx.exec({ tool: "adb", args: ["shell", command], ...(op.stdin !== undefined ? { stdin: op.stdin } : {}) }, op.timeoutMs ?? 120_000);
+      const cut = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text);
+      return { ok: r.exitCode === 0, message: `exit ${r.exitCode}`, data: { exitCode: r.exitCode, stdout: cut(r.stdout, 32_000), stderr: cut(r.stderr, 8_000), truncated: r.stdout.length > 32_000 || r.stderr.length > 8_000 } };
+    }
     case "perf": {
       const options = op.metric === "frames" ? { area: "frames" } : { area: "memory", subject: "sample" };
       const r = await agentDevice(`perf ${op.metric}`, () => ctx.client.observability.perf({ ...options, ...(op.appId ? { app: op.appId } : {}), ...scope } as never));
@@ -161,19 +173,6 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       });
       return { ok: true, message: `Rotated to ${value}` };
     }
-    case "density":
-      if (!isAndroid) throw notSupported("Display density is Android only", "Lease a different simulator model for another screen size.");
-      await run(ctx, android.density(value === "reset" || value === undefined ? "reset" : Number(value)), "set density");
-      return { ok: true, message: value && value !== "reset" ? `Density ${value} dpi` : "Density reset" };
-    case "locale":
-      if (!isAndroid) throw notSupported("The iOS simulator's language is set per launch", 'Relaunch with launch_app args ["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"].');
-      await run(ctx, android.appLocale(needApp(change.appId, "locale"), value ?? ""), "set app locale");
-      return { ok: true, message: `${change.appId} locale → ${value} (relaunch the app to see it)` };
-    case "time-zone":
-      if (!isAndroid) throw notSupported("The iOS simulator uses the Mac's time zone", "Use status-bar-time to fix the displayed clock for screenshots.");
-      await run(ctx, android.autoTimeZone(false), "turn off automatic time zone");
-      await run(ctx, android.timeZone(value ?? ""), "set time zone");
-      return { ok: true, message: `Time zone → ${value}` };
     case "status-bar-time":
       if (isAndroid) throw notSupported("status-bar-time is iOS only");
       await run(ctx, value === "clear" || value === undefined ? ios.statusBarClear() : ios.statusBarTime(value), "status bar");
