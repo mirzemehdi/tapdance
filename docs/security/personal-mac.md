@@ -50,6 +50,55 @@ tapdance config set-token                     # paste the guard token; it is bou
 tapdance doctor
 ```
 
+`tapdance host up` runs the Mac side of this in one command (worker, guard service, pairing,
+`tailscale serve`, a self-test) and writes the token to a mode-600 file instead of printing it;
+`tapdance connect` does the VPS side. See [one-command host](../deployment/one-command-host.md). Neither
+has been run end to end yet.
+
+### Keep the guard running
+
+`tapdance worker guard start` runs in the foreground and stops when its terminal closes. To keep it
+running, install it as a login service of the worker account:
+
+```bash
+tapdance worker guard install                 # add --allow-admin-account only if you accepted that risk
+tapdance worker guard uninstall               # stop it and remove the service; tokens and policy stay
+```
+
+`install` makes the same refusals as `guard start` (root, a joined gateway, an administrator account
+without `--allow-admin-account`), and refuses while a `worker guard start` in a terminal holds the
+port. Running it again with unchanged settings leaves a running guard alone (a restart would forget
+which client owns which lease). Otherwise it:
+
+- **macOS:** writes the LaunchAgent `~/Library/LaunchAgents/dev.tapdance.guard.plist` (mode 644, label
+  `dev.tapdance.guard`, `RunAtLoad` and `KeepAlive`), loads it with `launchctl bootstrap gui/<uid>`
+  (falling back to `launchctl load -w`), and logs to `~/Library/Logs/tapdance-guard.log`. A
+  LaunchAgent runs while the account is logged in at the screen; with Fast User Switching the worker
+  account can stay logged in in the background. Run `install` from that account's own login session,
+  not over plain SSH or `sudo`.
+- **Linux:** writes `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`), then runs
+  `systemctl --user daemon-reload`, `enable` and `restart`. Logs: `journalctl --user -u tapdance-guard.service`.
+  On a headless machine, or to keep it running after you log out, enable lingering once:
+  `loginctl enable-linger $USER`.
+
+The service runs `worker guard start` with the Node.js binary and the absolute path of the Tapdance
+build that ran `install`, so install it again after moving the checkout or upgrading Node.js. Its
+environment is fixed: a `PATH` with the Android SDK's `platform-tools`, `emulator` and
+`cmdline-tools/latest/bin`, that Node.js, and `/usr/bin:/bin:/usr/sbin:/sbin`, plus `ANDROID_HOME`,
+`TAPDANCE_HOME` and `SIMLOCK_HOME` when set. No token and no `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is
+ever written into it. The guard also needs the Simlock worker running; `tapdance worker install --service`
+installs Simlock's own login service.
+
+**Sleep.** A sleeping Mac takes the guard offline. `tapdance worker guard install --keep-awake` runs the
+guard under `/usr/bin/caffeinate -i`, which prevents idle sleep while the guard runs. It does not stop
+sleep when you close a MacBook's lid (unless it runs in clamshell mode with power and an external
+display), and it keeps the Mac awake for as long as the service runs, so use it on a Mac that stays
+plugged in. On Linux `--keep-awake` changes nothing; use
+`systemd-inhibit --what=idle:sleep --why="tapdance worker guard" sleep infinity` while you need it.
+
+The LaunchAgent and the systemd unit are covered by unit tests of the generated files only; neither
+has been installed on a real machine yet.
+
 ### What the guard enforces, on the Mac
 
 - **Its own credentials.** Tokens are created only by `guard pair` on the Mac; it requires a terminal
@@ -114,7 +163,8 @@ tapdance doctor
 - The full MCP agent loop ran through the guard against a real simulator (custom app upload and
   install, interaction, recording, screenshot, logs, release) with nothing denied but a diagnostics
   fetch ([evidence](../testing/evidence/2026-11-01-worker-guard.md)).
-- The dedicated-account script and Tailscale exposure are **untested**.
+- The dedicated-account script, Tailscale exposure, the guard's LaunchAgent / systemd unit
+  (`worker guard install`) and `tapdance host up` are **untested**.
 
 ## Profiles
 

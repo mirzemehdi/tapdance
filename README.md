@@ -81,6 +81,19 @@ The MCP server has been verified with a scripted MCP client on a real iOS simula
 been run from inside Claude Code, Codex or Cursor, and Android has not run on a device (see
 [STATUS.md](STATUS.md) P-01).
 
+### Agent on a VPS, devices on your Mac
+
+```bash
+tapdance host up                                    # on the Mac: worker, guard, pairing, Tailscale, self-test
+tapdance connect https://<mac>.<tailnet>.ts.net:4720 < pairing-<label>.token   # on the VPS
+```
+
+`host up` sets up device-only mode step by step and prints the `connect` line to paste on the agent's
+machine; the token goes to a mode-600 file, never to the terminal. On a machine without Tapdance,
+`scripts/host-setup.sh` installs it from source first. **Built and unit-tested, not yet run end to
+end** (no fresh machine, no Tailscale, no second machine yet): see
+[one-command host](docs/deployment/one-command-host.md).
+
 ## Deployment modes
 
 | Mode | Agent runs on | Devices run on | Config | Tested today (see [STATUS.md](STATUS.md)) |
@@ -88,7 +101,7 @@ been run from inside Claude Code, Codex or Cursor, and Android has not run on a 
 | Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android emulator: implemented, not run. |
 | Laptop as remote worker | An ordinary VPS (no KVM needed) that also runs the gateway | Your laptop or Mac, which dials out to the gateway | `provider: "self-hosted"` | Gateway + joined worker + CLI, MCP and viewer worked with **both on one Mac** ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)). **Not yet tested across two machines over a real network.** |
 | Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM | `provider: "self-hosted"` | Terraform and scripts written. **Never provisioned; Android not run.** |
-| Personal Mac, device-only | A VPS | Your Mac, reached over Tailscale through `tapdance worker guard` | `provider: "self-hosted"`, endpoint = guard URL | Full MCP loop through the guard on one Mac ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); across Tailscale not tested. |
+| Personal Mac, device-only | A VPS | Your Mac, reached over Tailscale through `tapdance worker guard` (one command: `tapdance host up`) | `provider: "self-hosted"`, endpoint = guard URL | Full MCP loop through the guard on one Mac ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); across Tailscale not tested; `host up` / `connect` not run yet. |
 | Cloud Mac worker (Scaleway, MacStadium, AWS EC2 Mac) | A VPS | A rented Mac | `provider: "self-hosted"` | Documentation only. **Not exercised.** |
 | Managed cloud | Anywhere | Hosted by Tapdance | `provider: "cloud"` | **Not built.** The value is reserved and fails with `NOT_SUPPORTED`. |
 
@@ -229,7 +242,7 @@ run (those settings live in `~/.tapdance/config.json`). Full threat model:
 | Agent setup | [Claude Code](docs/agents/claude-code.md), [Codex](docs/agents/codex.md), [Cursor](docs/agents/cursor.md) |
 | Platforms | [Android](docs/platforms/android.md), [iOS](docs/platforms/ios.md) |
 | Architecture | [Architecture decision record](docs/architecture-decision.md) |
-| Deployment | [Local](docs/deployment/local.md), [self-hosted overview](docs/deployment/self-hosted-overview.md), [laptop as a worker](docs/deployment/laptop-worker.md), [Google Cloud N2](docs/deployment/google-cloud-n2.md), [OVH Public Cloud](docs/deployment/ovh-public-cloud.md), [dedicated Linux server](docs/deployment/dedicated-linux-server.md), [worker security](docs/deployment/worker-security.md), [browser access](docs/deployment/browser-access.md) |
+| Deployment | [Local](docs/deployment/local.md), [one-command host](docs/deployment/one-command-host.md), [self-hosted overview](docs/deployment/self-hosted-overview.md), [laptop as a worker](docs/deployment/laptop-worker.md), [Google Cloud N2](docs/deployment/google-cloud-n2.md), [OVH Public Cloud](docs/deployment/ovh-public-cloud.md), [dedicated Linux server](docs/deployment/dedicated-linux-server.md), [worker security](docs/deployment/worker-security.md), [browser access](docs/deployment/browser-access.md) |
 | iOS and Mac workers | [Overview](docs/ios/overview.md), [local Mac worker](docs/ios/local-mac-worker.md), [simulator management](docs/ios/simulator-management.md), [remote browser access](docs/ios/remote-browser-access.md), [Scaleway Mac mini](docs/ios/scaleway-mac.md), [MacStadium](docs/ios/macstadium.md), [AWS EC2 Mac](docs/ios/aws-ec2-mac.md), [Xcode Cloud](docs/ios/xcode-cloud-integration.md) |
 | Infrastructure as code | [Terraform for a Google Cloud N2 worker](infrastructure/terraform/google-cloud-n2/README.md) (never applied yet) |
 | Testing | [Unit tests](docs/testing/unit-tests.md), [end-to-end procedures](docs/testing/e2e-procedures.md), [field testing](docs/testing/field-testing.md), [evidence](docs/testing/evidence/README.md) |

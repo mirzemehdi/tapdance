@@ -4,11 +4,21 @@ import { readFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
-import { TapdanceError, defaultProfilePath, isPrivateHost, readLocalProfile } from "@tapdance/sdk";
-import { output, type GlobalOptions } from "./context.js";
+import { TapdanceError, defaultProfilePath, findAndroidSdk, isPrivateHost, readLocalProfile } from "@tapdance/sdk";
+import { CLI_ENTRY, output, type GlobalOptions } from "./context.js";
 import { bold, dim, red, table, yellow } from "./output.js";
-import { GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
+import { GuardTokens, guardDir, loadPolicy, type GuardToken } from "./guard/policy.js";
 import { startGuard } from "./guard/server.js";
+import {
+  guardServiceEnvironment,
+  guardServiceState,
+  installGuardService,
+  runCommand,
+  uninstallGuardService,
+  waitForGuard,
+  type ServiceInstall,
+  type ServicePlatform,
+} from "./guard/service.js";
 
 /** True when this macOS account is in the admin group. */
 export function isMacAdmin(user = userInfo().username): boolean {
@@ -20,7 +30,7 @@ export function isMacAdmin(user = userInfo().username): boolean {
   }
 }
 
-function joinedGateway(): string | undefined {
+export function joinedGateway(): string | undefined {
   const file = join(process.env["SIMLOCK_HOME"] ?? join(homedir(), ".simlock"), "config.json");
   if (!existsSync(file)) return undefined;
   try {
@@ -28,6 +38,84 @@ function joinedGateway(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The refusals every way of running the guard shares (`start`, `install`, `host up`): never as root,
+ * not from an administrator account unless the owner says so, and not while the local worker has
+ * joined a gateway (which would reach this machine around the guard).
+ */
+export function assertGuardHostSafe(allowAdminAccount: boolean, adminHint?: string): void {
+  if (process.getuid?.() === 0) throw new TapdanceError("FORBIDDEN", "Refusing to run the worker guard as root");
+  if (isMacAdmin() && !allowAdminAccount) {
+    throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
+      hint: adminHint ?? "Run the worker as a dedicated standard account (infrastructure/scripts/macos-create-worker-account.sh); see docs/security/personal-mac.md.",
+    });
+  }
+  const gateway = joinedGateway();
+  if (gateway) {
+    throw new TapdanceError("FORBIDDEN", `This worker has joined the gateway ${gateway}, which gives that gateway command execution here around the guard`, {
+      hint: "Leave it first: tapdance worker logout. In device-only mode the remote side reaches this machine only through the guard.",
+    });
+  }
+}
+
+/** Issues a guard token for a control machine, capped at the policy's lifetime. */
+export async function issuePairing(label: string, days?: string | number): Promise<{ secret: string; token: GuardToken }> {
+  const { policy } = await loadPolicy();
+  const n = Math.min(Number(days ?? policy.limits.tokenDays), policy.limits.tokenDays);
+  return new GuardTokens().issue(label, n);
+}
+
+/** The service manager on this OS, or NOT_SUPPORTED. */
+export function servicePlatform(platform: NodeJS.Platform = process.platform): ServicePlatform {
+  if (platform === "darwin" || platform === "linux") return platform;
+  throw new TapdanceError("NOT_SUPPORTED", `The worker guard cannot run on ${platform}: Simlock workers run on macOS and Linux only`, {
+    hint: "Use this machine as the control machine instead (`tapdance connect <guard URL>`), or run the worker on a Mac, a Linux box, or a Linux VM with nested virtualization.",
+  });
+}
+
+export interface GuardServiceResult extends ServiceInstall {
+  url: string;
+  answering: boolean;
+  notes: string[];
+}
+
+/** `worker guard install`: the LaunchAgent / systemd user unit that keeps `worker guard start` running. */
+export async function installGuardAsService(o: { allowAdminAccount?: boolean; keepAwake?: boolean }, adminHint?: string): Promise<GuardServiceResult> {
+  const platform = servicePlatform();
+  assertGuardHostSafe(Boolean(o.allowAdminAccount), adminHint);
+  const { policy } = await loadPolicy();
+  if (!isPrivateHost(policy.listen.host)) throw new TapdanceError("CONFIG_INVALID", `policy.listen.host ${policy.listen.host} is not a private address`);
+  const io = { run: runCommand, uid: process.getuid?.() ?? 0 };
+  const url = `http://${policy.listen.host}:${policy.listen.port}`;
+  // A `guard start` still running in a terminal holds the port: the service would restart in a loop
+  // while that other guard answers, and the check below would wrongly succeed.
+  if (policy.listen.port !== 0 && !(await guardServiceState(platform, homedir(), io)).running && (await waitForGuard(url, 0))) {
+    throw new TapdanceError("USAGE", `A worker guard already answers on ${url}, outside the service`, {
+      hint: "Stop it first (Ctrl-C in the terminal running `tapdance worker guard start`), then install again.",
+    });
+  }
+  const installed = await installGuardService(
+    {
+      platform,
+      node: process.execPath,
+      cli: CLI_ENTRY,
+      startFlags: o.allowAdminAccount ? ["--allow-admin-account"] : [],
+      keepAwake: Boolean(o.keepAwake),
+      environment: guardServiceEnvironment(process.env, process.execPath, findAndroidSdk()),
+      home: homedir(),
+    },
+    io,
+  );
+  const notes: string[] = [];
+  if (o.keepAwake && platform === "linux") {
+    notes.push('--keep-awake has no effect on Linux. Keep the machine awake with: systemd-inhibit --what=idle:sleep --why="tapdance worker guard" sleep infinity');
+  }
+  if (platform === "linux") notes.push("To keep it running after you log out (or on a headless server): loginctl enable-linger $USER");
+  notes.push("The service runs this Node.js and this Tapdance build by absolute path: install it again after moving the checkout or upgrading Node.js.");
+  const answering = policy.listen.port === 0 ? false : await waitForGuard(url, 20_000);
+  return { ...installed, url, answering, notes };
 }
 
 export function registerGuardCommands(worker: Command, globals: () => GlobalOptions): void {
@@ -42,18 +130,7 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
     .action(async (o: { allowAdminAccount?: boolean }) => {
       const out = output(globals());
       try {
-        if (process.getuid?.() === 0) throw new TapdanceError("FORBIDDEN", "Refusing to run the worker guard as root");
-        if (isMacAdmin() && !o.allowAdminAccount) {
-          throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
-            hint: "Run the worker as a dedicated standard account (infrastructure/scripts/macos-create-worker-account.sh); see docs/security/personal-mac.md.",
-          });
-        }
-        const gateway = joinedGateway();
-        if (gateway) {
-          throw new TapdanceError("FORBIDDEN", `This worker has joined the gateway ${gateway}, which gives that gateway command execution here around the guard`, {
-            hint: "Leave it first: tapdance worker logout. In device-only mode the remote side reaches this machine only through the guard.",
-          });
-        }
+        assertGuardHostSafe(Boolean(o.allowAdminAccount));
         const { policy, path } = await loadPolicy();
         if (!isPrivateHost(policy.listen.host)) throw new TapdanceError("CONFIG_INVALID", `policy.listen.host ${policy.listen.host} is not a private address`);
         const upstream = await readLocalProfile(defaultProfilePath());
@@ -81,6 +158,43 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
     });
 
   guard
+    .command("install")
+    .description("Keep the guard running: a LaunchAgent (macOS) or systemd user unit (Linux) that starts it at login and restarts it")
+    .option("--allow-admin-account", "run even though this account is an administrator (not recommended)")
+    .option("--keep-awake", "macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline")
+    .action(async (o: { allowAdminAccount?: boolean; keepAwake?: boolean }) => {
+      const out = output(globals());
+      try {
+        const r = await installGuardAsService(o);
+        out.result({ installed: r.file, unchanged: Boolean(r.unchanged), platform: r.platform, log: r.log ?? null, url: r.url, answering: r.answering, commands: r.commands, notes: r.notes }, () =>
+          [
+            bold(r.unchanged ? `The worker guard service is already installed and running: ${r.file}` : `Installed the worker guard service: ${r.file}`),
+            r.answering ? `The guard answers on ${r.url}.` : yellow(`The guard does not answer on ${r.url} yet; read its log.`),
+            r.platform === "darwin" ? `Log: ${r.log}` : "Log: journalctl --user -u tapdance-guard.service",
+            ...r.notes.map((n) => dim(n)),
+            dim("Remove it with: tapdance worker guard uninstall"),
+          ].join("\n"),
+        );
+        if (!r.answering) process.exitCode = 4;
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  guard
+    .command("uninstall")
+    .description("Stop the guard service and remove its LaunchAgent / systemd user unit (tokens and policy are kept)")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const r = await uninstallGuardService(servicePlatform(), homedir(), { run: runCommand, uid: process.getuid?.() ?? 0 });
+        out.result(r, () => (r.removed ? `Stopped the worker guard and removed ${r.file}.` : `No guard service was installed (${r.file}); nothing to remove.`));
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  guard
     .command("pair")
     .description("Approve a control machine locally: prints a revocable device-only token once")
     .requiredOption("--label <name>", "who it is for, e.g. hetzner-vps")
@@ -91,9 +205,7 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
         if (!process.stdin.isTTY && !process.env["TAPDANCE_GUARD_PAIR_NONINTERACTIVE"]) {
           throw new TapdanceError("FORBIDDEN", "Pairing must be approved at this machine's terminal", { hint: "Run it in a local terminal (not over a pipe)." });
         }
-        const { policy } = await loadPolicy();
-        const days = Math.min(Number(o.days ?? policy.limits.tokenDays), policy.limits.tokenDays);
-        const { secret, token } = await new GuardTokens().issue(o.label, days);
+        const { secret, token } = await issuePairing(o.label, o.days);
         out.secretResult({ id: token.id, label: token.label, expiresAt: token.expiresAt, secret }, () =>
           [
             bold(`Paired "${token.label}" (${token.id}), expires ${token.expiresAt}`),

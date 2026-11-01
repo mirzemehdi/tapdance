@@ -10,6 +10,7 @@ import { output, type GlobalOptions } from "./context.js";
 import { registerViewerCommand } from "./viewer.js";
 import { registerReportCommand } from "./commands-report.js";
 import { registerToolCommands } from "./commands-tools.js";
+import { registerHostCommands } from "./commands-host.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
@@ -32,6 +33,7 @@ export function buildProgram(): Command {
   registerSetupCommands(program, globals);
   registerDeviceCommands(program, globals);
   registerWorkerCommands(program, globals);
+  registerHostCommands(program, globals);
   registerViewerCommand(program, globals);
   registerReportCommand(program, globals);
   registerToolCommands(program, globals);

@@ -148,6 +148,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | W-04 | 🟡 | TTL + keepalive + idle release + owner-scoped MCP shutdown; per-session lock. Interrupted-allocation cleanup relies on Simlock cancelling on disconnect. |
 | W-05 | 🟡 | `gateway setup` ✅ on macOS (tokens, capabilities, config); Caddy/Tailscale steps untested. |
 | W-06 | 🟡 | See C-05. |
+| W-07 | 🧪 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` and `scripts/host-setup.ps1` written. Unit tests cover the pure parts only (`packages/cli/src/host/host.test.ts`: Tailscale status parsing, final block, step-failure formatting, Windows refusal, cloud-VM detection, MCP snippets). `connect` was run once against an unreachable endpoint in a scratch home (config, mode-600 credentials, doctor failure, snippets). `host up` has **not** been run on any machine; Tailscale, the self-test lease through the guard, and two machines are unproven. The setup script is checked with `bash -n` only. |
 
 ### Browser viewer
 
@@ -233,7 +234,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | --- | --- | --- |
 | H-01 | 🟡 | Device-only mode treats the control side as untrusted; joining a gateway (which does give it exec) now needs `--accept-gateway-exec`. |
 | H-02 | ✅ | `worker guard`: route allowlist, agent-device command allowlist, exact exec argument lists, no caller paths except the client-side output paths agent-device already refuses to honour; real MCP loop passed through it ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)). |
-| H-03 | 🟡 | Guard refuses root and admin accounts (override flag); `infrastructure/scripts/macos-create-worker-account.sh` written, **untested**; LaunchAgent not provided yet. |
+| H-03 | 🟡 | Guard refuses root and admin accounts (override flag); `infrastructure/scripts/macos-create-worker-account.sh` written, **untested**. `tapdance worker guard install` / `uninstall` write an unprivileged LaunchAgent (`dev.tapdance.guard`, RunAtLoad + KeepAlive) or a systemd user unit, with the same refusals as `guard start`; the generated files and the launchctl/systemctl calls are unit-tested against fakes (`packages/cli/src/guard/service.test.ts`), **never installed on a real machine**. |
 | H-04 | 🧪 | `~/.tapdance/worker/policy.json`, refused if group/other-writable; no remote route to it. One profile (`device-only`). |
 | H-05 | 🟡 | Local `guard pair` (TTY required unless TAPDANCE_GUARD_PAIR_NONINTERACTIVE is set), hashed tokens, expiry, immediate revocation, per-client lease ownership. No mutual TLS, replay protection or per-session short-lived tokens (Tailscale provides transport security). |
 | H-06 | 🟡 | Per-client lease isolation and filtered status; per-session staging directories and quotas on the Mac are agent-device's, not enforced by Tapdance; upload/artifact ids not bound to a client. |
@@ -298,6 +299,8 @@ paths below were exercised only by unit tests.
 | More secret shapes redacted (`tdg_`, JWTs, `*_KEY_B64=`, viewer keys) including in saved tool output; agent `asc auth`/`workflow`/`install-skills` refused without authorization | E-09, E-05 | 🧪 | `packages/core/src/core.test.ts`, `packages/sdk/src/tools.test.ts`, `packages/sdk/src/tapdance.test.ts` |
 | Worker guard: physical devices refused unless `allow.physicalDevices`; session limit holds under concurrent allocates; status filtered to the client's own queued requests and devices | H-06, H-07 | 🧪 | `packages/cli/src/guard/guard.test.ts` |
 | MCP: `list_apps`, short log replies (`contains`, `level`), action replies with `screenChanged`/`resolvedBy`/`typed`, stale refs refused, progress notifications | S-02, S-04, Y-04 | 🧪 | `packages/mcp/src/mcp.test.ts`, `packages/provider-simlock/src/provider.test.ts` |
+| Worker guard as a login service (`worker guard install/uninstall`): plist and systemd unit text, launchctl/systemctl calls against a fake runner, no tokens in the service environment | H-03 | 🧪 | `packages/cli/src/guard/service.test.ts` |
+| One-command host (`host up/status/down`, `connect`): Tailscale parsing, ready block, step-failure formatting, Windows refusal, cloud-VM detection | W-07 | 🧪 | `packages/cli/src/host/host.test.ts` |
 
 ## Bugs found by running for real (fixed)
 

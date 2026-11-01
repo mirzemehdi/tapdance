@@ -56,6 +56,7 @@ Then sign in as ${ACCOUNT} (Fast User Switching keeps your own session open) and
   tapdance worker install                 # local Simlock worker, loopback only
   tapdance worker guard policy            # review the device-only policy
   tapdance worker guard start             # the only endpoint remote agents reach
+                                          # (or: tapdance worker guard install, to run it at login)
   tapdance worker guard pair --label <control-machine>
   tailscale serve --bg --https=4720 http://127.0.0.1:4720   # private, TLS, no public port
 

@@ -213,7 +213,7 @@ What the tokens can do, plainly:
 | `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, `PI_SESSION_ID` | Read, in that order, when `TAPDANCE_SESSION_ID` is unset. Set by the agent tools, not by you. |
 | `TAPDANCE_ALLOWED_ROOTS` | Extra directories (colon-separated; semicolon on Windows) from which the MCP server accepts `install_app` paths and `execute_tool` `cwd`, besides its working directory. |
 | `TAPDANCE_DEBUG` | Any value: print the underlying stack trace with CLI errors. |
-| `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` | Any value: lets `tapdance worker guard pair` run without a terminal on stdin. For scripted setup by the Mac's owner only; never set it in a service environment, because anything that can then run `guard pair` can mint a token. |
+| `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` | Any value: lets `tapdance worker guard pair` (and the pairing step of `tapdance host up`) run without a terminal on stdin. For scripted setup by the Mac's owner only; never set it in a service environment, because anything that can then run `guard pair` can mint a token. |
 | `TAPDANCE_GUARD_DEBUG` | Any value, in the environment of `tapdance worker guard start`: the guard prints, on stderr, each request it forwards to Simlock with its method, path, content type and timings, and for every refused agent-device RPC the request's shape (key names and value types, three levels deep, never the values) so a missing allowlist entry can be found. Off by default. |
 | `NO_COLOR` | Any value: no colours in CLI output. |
 
