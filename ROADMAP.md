@@ -43,8 +43,8 @@ Linux/KVM run.
 | Semantic interactions (`tap`, `type`, `wait_for`, alerts) | ✅ | U-01 |
 | Human takeover and hand-back | ✅ | V-03, Y-11 |
 | Maestro / XCTest integrations | ⬜ (Maestro reachable only as a raw pass-through) | Y-07 |
-| Test evidence bundles | 🟡 per-session artifacts + manifest | Y-08 |
-| Test replay | ⬜ | Y-09 |
+| Test evidence bundles | 🟡 per-session artifacts + manifest; per-run evidence folder from `tapdance run` (FakeProvider tests only) | Y-08 |
+| Test replay | 🟡 scenario files with `tapdance run` (FakeProvider tests only; no Maestro export) | Y-09 |
 | Visual comparisons | ⬜ | Y-06 |
 
 ## Phase 3 · Developer productivity (full lifecycle)

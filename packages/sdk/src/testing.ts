@@ -8,6 +8,8 @@ import {
   type LeaseHandle,
   type LeaseRequest,
   type LeaseStatus,
+  type ScreenInspection,
+  type WaitCondition,
 } from "@tapdance/core";
 
 /**
@@ -21,6 +23,10 @@ export class FakeProvider implements DeviceProvider {
   private next = 1;
   private readonly recordings = new Map<string, string>();
   private readonly failures = new Map<string, Error>();
+  /** What inspect returns; tests may replace it. */
+  screen: ScreenInspection = { app: "com.example.app", elements: [{ ref: "@e1", role: "button", label: "Sign in" }], truncated: false, warnings: [] };
+  /** When set, waitFor answers from this text instead of always finding it. */
+  visibleText: string[] | undefined;
 
   private note(method: string, ...args: unknown[]): void {
     this.calls.push({ method, args });
@@ -110,7 +116,7 @@ export class FakeProvider implements DeviceProvider {
   async inspect(handle: LeaseHandle) {
     this.check(handle);
     this.note("inspect");
-    return { app: "com.example.app", elements: [{ ref: "@e1", role: "button", label: "Sign in" }], truncated: false, warnings: [] };
+    return structuredClone(this.screen);
   }
   async tap(handle: LeaseHandle, target: ElementTarget): Promise<ActionResult> {
     this.failIfArmed("tap");
@@ -123,10 +129,13 @@ export class FakeProvider implements DeviceProvider {
     this.note("swipe", gesture);
     return { ok: true, message: "Swiped" };
   }
-  async waitFor(handle: LeaseHandle, condition: unknown) {
+  async waitFor(handle: LeaseHandle, condition: WaitCondition, timeoutMs = 0) {
     this.check(handle);
     this.note("waitFor", condition);
-    return { found: true, waitedMs: 5 };
+    if (this.visibleText === undefined || condition.kind === "stable") return { found: true, waitedMs: 5 };
+    const seen = this.visibleText.includes(condition.text);
+    const found = condition.kind === "text" ? seen : !seen;
+    return { found, waitedMs: found ? 5 : timeoutMs };
   }
   async alert(handle: LeaseHandle, action: string) {
     this.check(handle);

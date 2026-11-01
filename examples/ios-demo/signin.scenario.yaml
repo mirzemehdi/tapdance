@@ -1,0 +1,20 @@
+# Sign in to the iOS demo app and check the welcome message.
+# Build the app first: examples/ios-demo/build.sh
+# Then, from the repository root: tapdance run examples/ios-demo/signin.scenario.yaml
+# Validated against Tapdance's in-memory test provider only; not yet replayed on a real simulator.
+name: iOS demo sign-in
+platform: ios
+device:
+  platform: ios
+  device: iPhone 16
+app:
+  path: build/TapdanceDemo.app # relative to this file
+  id: dev.tapdance.demo
+steps:
+  - launch_app: { app_id: dev.tapdance.demo, relaunch: true }
+  - expect_visible: { id: email }
+  - type_text: { text: ada@example.com, into_id: email }
+  - type_text: { text: secret1, into_id: password }
+  - tap: { text: Sign in }
+  - expect_visible: { text: "Welcome, ada@example.com", timeout_ms: 10000 }
+  - take_screenshot: { note: signed in }

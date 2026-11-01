@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -70,6 +70,21 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["--json", "device", "lease", "--platform", "windows"]).code).toBe(2);
     expect(tapdance(["ui", "tap"]).code).toBe(2);
     expect(tapdance(["nonsense-command"]).code).toBe(2);
+  });
+
+  it("run: refuses a bad scenario with exit 2 and needs a device (exit 3) before any step", () => {
+    const dir = mkdtempSync(join(tmpdir(), "td-scn-"));
+    const bad = join(dir, "bad.yaml");
+    writeFileSync(bad, "name: bad\nsteps:\n  - tapp: { text: Sign in }\n");
+    const r = tapdance(["--json", "run", bad]);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).error).toMatchObject({ code: "USAGE", message: expect.stringContaining('Unknown step type "tapp"') });
+    expect(tapdance(["--json", "run", join(dir, "missing.yaml")]).code).toBe(2);
+    const ok = join(dir, "ok.json");
+    writeFileSync(ok, JSON.stringify({ name: "ok", steps: [{ press_key: { key: "home" } }] }));
+    const none = tapdance(["--json", "run", ok]);
+    expect(none.code).toBe(3);
+    expect(JSON.parse(none.stdout).error.code).toBe("NO_ACTIVE_LEASE");
   });
 
   it("refuses a token in config", () => {
