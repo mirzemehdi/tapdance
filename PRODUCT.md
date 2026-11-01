@@ -131,6 +131,7 @@ phase by phase (§19).
 | W-04 | Lease expiry and renewal; graceful worker shutdown; device cleanup; recovery from interrupted sessions; never leave devices permanently reserved after an agent disconnects or a worker crashes; never release devices of other active sessions. | D10 |
 | W-05 | `gateway setup` explains deploying a gateway on the existing VPS or configuring an existing Simlock gateway; Tailscale or another private network supported for initial setups. | W7, G |
 | W-06 | The CLI reports gateway reachability, online workers, KVM per worker, available emulators, lease state and viewer availability. | W7 |
+| W-07 | One-command host setup: `host up` on a Mac or Linux machine checks prerequisites (installing no SDKs), installs the worker and the guard as a login service, pairs a control machine with local approval, exposes the guard over Tailscale when available, self-tests a lease through the guard, and prints a paste-back block with the endpoint and the path of a mode-600 token file (never the token); `host status` / `host down` inspect and undo it; `connect` on the agent's machine reads the token from stdin, configures and checks Tapdance, and prints MCP setup. Refused on Windows with NOT_SUPPORTED; a VM without nested virtualization is reported as unable to host Android emulators. | C (issue #19) |
 
 ## 10. Browser viewer (human access)
 

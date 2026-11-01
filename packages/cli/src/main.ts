@@ -11,6 +11,7 @@ import { registerViewerCommand } from "./viewer.js";
 import { registerReportCommand } from "./commands-report.js";
 import { registerToolCommands } from "./commands-tools.js";
 import { registerRunCommand } from "./commands-run.js";
+import { registerHostCommands } from "./commands-host.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
@@ -34,6 +35,7 @@ export function buildProgram(): Command {
   registerDeviceCommands(program, globals);
   registerRunCommand(program, globals);
   registerWorkerCommands(program, globals);
+  registerHostCommands(program, globals);
   registerViewerCommand(program, globals);
   registerReportCommand(program, globals);
   registerToolCommands(program, globals);

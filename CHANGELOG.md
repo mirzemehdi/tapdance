@@ -57,11 +57,16 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - An optional AXe backend for iOS simulators (`ios.uiBackend: "axe"`); not yet run on a real install.
 - `tapdance report` for redacted, issue-ready bug reports, and GitHub issue templates.
 - Reference Terraform and install scripts for a Google Cloud N2 Android worker (not yet provisioned).
+- `worker guard install` / `uninstall`: the worker guard as a LaunchAgent (`dev.tapdance.guard`) or
+  systemd user unit, with `--keep-awake` (`caffeinate -i`) on macOS.
+- One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
+  agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,
-a full device loop over Streamable HTTP MCP, and installing a custom app through a gateway.
+a full device loop over Streamable HTTP MCP, installing a custom app through a gateway, the guard's
+LaunchAgent / systemd unit, and `host up` / `connect`.
 See [STATUS.md](STATUS.md).
 
 [0.1.0]: https://github.com/mirzemehdi/tapdance

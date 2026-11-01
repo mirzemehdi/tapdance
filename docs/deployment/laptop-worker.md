@@ -1,6 +1,9 @@
 # Your laptop as a worker
 
 > **Personal Mac?** Read [../security/personal-mac.md](../security/personal-mac.md) first: joining a gateway gives it command execution on the Mac; device-only mode (`tapdance worker guard`) does not.
+> For device-only mode there is a one-command setup, `tapdance host up` on the Mac and
+> `tapdance connect` on the VPS: see [one-command-host.md](one-command-host.md) (not run end to end
+> yet). This page describes the other way, joining the laptop to a gateway.
 
 Your coding agent runs on an ordinary VPS. Your laptop or Mac, which can already run an Android
 emulator or the iOS Simulator, becomes a **worker**: it dials out to a gateway on the VPS and serves
@@ -197,7 +200,9 @@ the tools are the same as in local mode.
   `-i` prevents idle sleep and `-s` prevents system sleep while on AC power. Closing the lid still
   sleeps most MacBooks unless they run in clamshell mode with power and an external display. On
   Linux, `systemd-inhibit --what=idle:sleep --why="tapdance worker" sleep infinity` does the same
-  job while it runs.
+  job while it runs. In device-only mode, `tapdance worker guard install --keep-awake` runs the guard
+  service under `caffeinate -i` instead (see
+  [Keep the guard running](../security/personal-mac.md#keep-the-guard-running); untested).
 - **A reboot** ends leases whose device was not running afterwards (Simlock releases them with reason
   `device-lost`). Start the worker again, or use `--service`.
 

@@ -234,7 +234,10 @@ been run from inside Claude Code, Codex or Cursor. It has run on Android 34 emul
 
 ## Where next
 
-- Remote devices (an agent on a VPS, devices on your laptop or a KVM server): the guides in
+- Agent on a VPS, emulator on my Mac: run `tapdance host up` on the Mac and the
+  `tapdance connect …` line it prints on the VPS ([one-command host](deployment/one-command-host.md)).
+  Built and unit-tested, not yet run end to end.
+- Other remote setups (a gateway with joined workers, a KVM server): the guides in
   [deployment/](deployment/). These setups are implemented but not yet tested across two machines.
 - Every command and option: [cli-reference.md](cli-reference.md).
 - Something failed: [troubleshooting.md](troubleshooting.md).

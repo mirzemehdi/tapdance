@@ -112,7 +112,7 @@ async function checkDeviceSetSwitch(): Promise<void> {
   });
 }
 
-async function readUserConfig(): Promise<Partial<TapdanceConfig>> {
+export async function readUserConfig(): Promise<Partial<TapdanceConfig>> {
   try {
     return JSON.parse(await readFile(userConfigPath(), "utf8")) as Partial<TapdanceConfig>;
   } catch {
@@ -139,6 +139,59 @@ function checkGatewayUrl(raw: string): string {
     });
   }
   return url.toString().replace(/\/$/, "");
+}
+
+/**
+ * `worker install`: points the bundled Simlock at the bundled agent-device, sets streaming and input,
+ * restarts the worker and (with `service`) installs Simlock's login service. `host up` runs it too.
+ */
+export async function installWorker(
+  o: { stream: boolean; iosBackend: string; service?: boolean; checks?: DoctorCheck[] },
+  out: ReturnType<typeof output>,
+): Promise<{ settings: string[]; checks: DoctorCheck[]; status: unknown }> {
+  if (osPlatform() === "win32") {
+    throw new TapdanceError("NOT_SUPPORTED", "Windows cannot run a Tapdance worker yet: Simlock supports macOS and Linux only", {
+      hint: "Use Windows as a control machine (CLI/MCP), or run the worker on a Mac, a Linux box, or a Linux VM with nested virtualization.",
+    });
+  }
+  let checks = o.checks;
+  if (checks === undefined) {
+    out.progress("Checking this machine");
+    checks = await hostChecks({ platforms: { android: true, ios: osPlatform() === "darwin" } });
+  }
+  const kvmFail = checks.filter((c) => c.id.startsWith("host.kvm") && c.status === "fail");
+  if (kvmFail.length > 0) {
+    out.warn("Hardware acceleration is not available; Android emulators will not be provisioned here (no software fallback).");
+  }
+  if (!["agent-device", "axe"].includes(o.iosBackend)) throw new TapdanceError("USAGE", "--ios-backend must be agent-device or axe");
+  const settings: Array<[string, string]> = [
+    ["capabilities.agent-device.enabled", "true"],
+    ["capabilities.agent-device.command", agentDeviceBin()],
+    ["capabilities.stream.enabled", o.stream ? "true" : "false"],
+    ["capabilities.input.enabled", o.stream ? "true" : "false"],
+  ];
+  if (o.iosBackend === "axe") {
+    // AXe only sees Xcode's default device set (it hardcodes deviceSetPath nil).
+    await checkDeviceSetSwitch();
+    settings.push(["drivers.ios.deviceSet", "default"]);
+    await writeConfigFile(userConfigPath(), { ...(await readUserConfig()), ios: { uiBackend: "axe" } });
+  }
+  for (const [key, value] of settings) {
+    out.progress(`simlock config set ${key} ${key.endsWith("command") ? dim(value) : value}`);
+    await simlock(["--local", "config", "set", key, value]);
+  }
+  await restart(false, out);
+  if (o.service) {
+    out.progress("Installing the login service");
+    await simlock(["--local", "daemon", "install"]);
+  }
+  const status = await simlock(["--local", "status", "--json"]).catch(() => "{}");
+  return { settings: settings.map(([k]) => k), checks, status: safeJson(status) };
+}
+
+/** The local worker daemon's own status, or undefined when it does not answer. */
+export async function localWorkerStatus(): Promise<unknown> {
+  return simlock(["--local", "status", "--json"], 20_000).then(safeJson, () => undefined);
 }
 
 export function registerWorkerCommands(program: Command, globals: () => GlobalOptions): void {
@@ -170,41 +223,8 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
     .action(async (o: { stream: boolean; iosBackend: string; service?: boolean }) => {
       const out = output(globals());
       try {
-        if (osPlatform() === "win32") {
-          throw new TapdanceError("NOT_SUPPORTED", "Windows cannot run a Tapdance worker yet: Simlock supports macOS and Linux only", {
-            hint: "Use Windows as a control machine (CLI/MCP), or run the worker on a Mac, a Linux box, or a Linux VM with nested virtualization.",
-          });
-        }
-        out.progress("Checking this machine");
-        const checks = await hostChecks({ platforms: { android: true, ios: osPlatform() === "darwin" } });
-        const kvmFail = checks.filter((c) => c.id.startsWith("host.kvm") && c.status === "fail");
-        if (kvmFail.length > 0) {
-          out.warn("Hardware acceleration is not available; Android emulators will not be provisioned here (no software fallback).");
-        }
-        if (!["agent-device", "axe"].includes(o.iosBackend)) throw new TapdanceError("USAGE", "--ios-backend must be agent-device or axe");
-        const settings: Array<[string, string]> = [
-          ["capabilities.agent-device.enabled", "true"],
-          ["capabilities.agent-device.command", agentDeviceBin()],
-          ["capabilities.stream.enabled", o.stream ? "true" : "false"],
-          ["capabilities.input.enabled", o.stream ? "true" : "false"],
-        ];
-        if (o.iosBackend === "axe") {
-          // AXe only sees Xcode's default device set (it hardcodes deviceSetPath nil).
-          await checkDeviceSetSwitch();
-          settings.push(["drivers.ios.deviceSet", "default"]);
-          await writeConfigFile(userConfigPath(), { ...(await readUserConfig()), ios: { uiBackend: "axe" } });
-        }
-        for (const [key, value] of settings) {
-          out.progress(`simlock config set ${key} ${key.endsWith("command") ? dim(value) : value}`);
-          await simlock(["--local", "config", "set", key, value]);
-        }
-        await restart(false, out);
-        if (o.service) {
-          out.progress("Installing the login service");
-          await simlock(["--local", "daemon", "install"]);
-        }
-        const status = await simlock(["--local", "status", "--json"]).catch(() => "{}");
-        out.result({ configured: settings.map(([k]) => k), checks, status: safeJson(status) }, () =>
+        const { settings, checks, status } = await installWorker(o, out);
+        out.result({ configured: settings, checks, status }, () =>
           [renderChecks(checks), "", bold("Worker is running."), dim("This machine now serves devices to agents on it (provider: local)."), "To serve a remote agent from a personal Mac, use device-only mode: tapdance worker guard start (see docs/security/personal-mac.md).", "On a dedicated worker machine: tapdance worker login --accept-gateway-exec --gateway wss://<gateway> --label <name>"].join("\n"),
         );
       } catch (error) {
