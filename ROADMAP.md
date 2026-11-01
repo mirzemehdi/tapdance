@@ -48,7 +48,7 @@ Linux/KVM run.
 | Test replay | 🟡 scenario files with `tapdance run` (passed on a real iOS simulator; no Maestro export) | Y-09 |
 | Visual comparisons | ⬜ | Y-06 |
 | Device state: settings, permissions, files, notifications, reset, intents, perf (local and through the guard) | ✅ Android · ✅ iOS locally | U-07–U-12, Y-10 |
-| Device profiles (a prepared, signed-in emulator per lease) and asking a person (`request_human`) | 🟡 Android, on the machine running Tapdance; ⬜ through the guard, iOS | D-10, U-13, Y-12 |
+| Device profiles (a prepared, signed-in emulator per lease) and asking a person (`request_human`) | ✅ Android and iOS, local only by decision (remote agents use `request_human`) | D-10, U-13, Y-12 |
 | In-app purchase testing (Play Billing on a profile, StoreKit on the simulator) | 🟡 documented ([guide](docs/guides/purchase-testing.md)), not yet run with a real Play account | issue #15 |
 | Audio capture / microphone, virtual MIDI keyboard | ⬜ (must not capture the host or need macOS Screen Recording) | U-12, issues #8, #16 |
 

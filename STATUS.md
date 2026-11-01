@@ -127,7 +127,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | D-07 | ⛔ | Windows workers: Simlock supports macOS and Linux only. Windows works as a control machine (CLI/MCP). |
 | D-08 | 🟡 | See D-05. |
 | D-09 | ✅ | `.aab` → universal APK with bundletool 1.18.3 before upload, installed and driven on a real Pixel 8 ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); the missing-bundletool hint is unit-tested. |
-| D-10 | 🟡 | Device profiles on Android (a read-only boot of a prepared AVD) and iOS (a clone of a template simulator per lease) created and leased on one Mac; a lease's changes were discarded on both ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Not yet: a real Google sign-in and Play purchase, and profiles through the guard or a gateway. Simlock enrols only USB phones, and a profile turned into a custom system image does not carry its data: Simlock booted the image (tag found) but the emulator started from an empty data partition (tried 2026-11-02, removed). Remaining route: the guard serving profile leases itself. |
+| D-10 | ✅ | Local only, by decision. Device profiles on Android (a read-only boot of a prepared AVD) and iOS (a clone of a template simulator per lease) created and leased on one Mac; a lease's changes were discarded on both ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Remote leasing is out of scope: Simlock enrols only USB phones, and a profile turned into a custom system image did not carry its data (tried 2026-11-02, removed); remote agents use a fresh device and `request_human`. A real Google sign-in and Play purchase are not yet run. |
 
 ### Interaction backends
 
@@ -270,7 +270,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows. The iOS sign-in example passed on a real simulator ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); the Android one passed too (8/8, 24.6 s) once the overloaded Mac was idle. |
 | Y-10 | 🟡 | Device settings, permissions, locale, time zone, orientation, appearance, location, biometrics, data reset and deep links/intents (U-08, U-09); battery and camera not covered. |
 | Y-11 | 🟡 | Agent vs human hold (take over / hand back); no read-only or paused states. |
-| Y-12 | 🟡 | Android device profiles (D-10): a prepared emulator booted read-only per lease. iOS and remote profiles not built. |
+| Y-12 | 🟡 | Device profiles on Android and iOS, local only (D-10). Snapshots of arbitrary states are not built. |
 | Y-13 | 🟡 | Guard audit log and progress messages; no per-operation metadata envelope. |
 | Y-14 | ⬜ | |
 | Y-15 | ⬜ | |

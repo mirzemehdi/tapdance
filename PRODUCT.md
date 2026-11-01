@@ -110,7 +110,7 @@ phase by phase (§19).
 | D-07 | Worker host OS: macOS (Android + iOS), Linux (Android), Windows (Android initially; validate what the backend supports). | L, D2 |
 | D-08 | Discover existing installed emulators and simulators without recreating the developer's environment. | D2 |
 | D-09 | `install_app` accepts an Android App Bundle (`.aab`) by building a universal APK with bundletool on the control machine before upload; without bundletool, a clear install hint. | C (issue #7) |
-| D-10 | Device profiles: an Android emulator the owner prepares once (signed in to a test account, settings, Play Store updates) that leases boot from read-only, so every lease starts from that state and keeps nothing; not blocked by Simlock, which neither enrols nor keeps such emulators. Credentials never pass through Tapdance. | C (issue #18) |
+| D-10 | Device profiles: an Android emulator or iOS simulator the owner prepares once (signed in to a test account, settings, Play Store updates) that leases boot from read-only, so every lease starts from that state and keeps nothing; not blocked by Simlock, which neither enrols nor keeps such emulators. Credentials never pass through Tapdance. Local only (owner's decision, 2026-11-02): agents on another machine use a fresh device and `request_human`. | C (issue #18) |
 
 ## 8. Device interaction backends
 

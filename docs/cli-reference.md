@@ -201,7 +201,9 @@ release, so nothing a lease does reaches the template.
 
 Profiles run on the machine where Tapdance runs, outside Simlock (Simlock enrols only USB phones and
 wipes its own emulators), and are driven by agent-device directly. They have no browser stream: watch
-the emulator's window. They are not yet reachable through a gateway or the worker guard. Your
+the emulator's window. They are **local only** by design: an agent on another machine (a VPS through a
+gateway or the worker guard) cannot lease them; there it uses a fresh device and `request_human` for a
+sign-in. Your
 credentials never pass through Tapdance: you type them in the emulator. Use a dedicated test account:
 anyone who can lease the profile acts as that account.
 

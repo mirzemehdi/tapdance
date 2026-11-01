@@ -50,9 +50,15 @@ If a sheet asks for the account password, or Google asks to verify the account, 
 
 Testing restore: `clear_app_data`, `launch_app`, tap *Restore purchases*, expect the entitlement.
 
-Limits: profiles run on the machine where Tapdance runs (not yet through a gateway or the worker guard),
-have no browser stream (watch the emulator window), and Google may still ask for re-verification on an
-account that signs in from many emulators.
+Limits: profiles are **local only**: they work when the agent runs on the machine with the emulators,
+not from a VPS through a gateway or the worker guard. They have no browser stream (watch the emulator
+window), and Google may still ask for re-verification on an account that signs in from many emulators.
+
+**Agent on a VPS?** Lease a Play-image device (`image_tag: "google_apis_playstore"`); when the test
+reaches a sign-in, the agent calls `request_human` and you sign in through `tapdance view`, then press
+**Hand back**. The sign-in lasts until the lease ends, so keep one lease for the whole testing session
+(it is renewed in the background, up to `session.maxSessionMinutes`, 240 by default) and run every
+purchase test on it: one sign-in per session, not per test.
 
 ## iOS: StoreKit testing on the simulator
 
