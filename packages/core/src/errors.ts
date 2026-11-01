@@ -1,0 +1,117 @@
+/**
+ * Every failure Tapdance reports carries a stable code, a message a person can act on,
+ * an optional hint with the fix, and the CLI exit code it maps to.
+ */
+export const ERROR_CODES = {
+  USAGE: 2,
+  CONFIG_INVALID: 2,
+  APP_PATH_INVALID: 2,
+  NO_ACTIVE_LEASE: 3,
+  LEASE_ALREADY_HELD: 3,
+  LEASE_LOST: 3,
+  PROVIDER_UNREACHABLE: 4,
+  PROVIDER_UNAVAILABLE: 4,
+  WORKER_OFFLINE: 4,
+  AUTH_FAILED: 5,
+  FORBIDDEN: 5,
+  NO_CAPACITY: 6,
+  DEVICE_UNAVAILABLE: 6,
+  DEVICE_ERROR: 7,
+  ELEMENT_NOT_FOUND: 7,
+  APP_NOT_INSTALLED: 7,
+  NOT_SUPPORTED: 8,
+  TIMEOUT: 9,
+  HOST_CHECK_FAILED: 10,
+  HUMAN_HELD: 11,
+  INTERNAL: 1,
+} as const;
+
+export type ErrorCode = keyof typeof ERROR_CODES;
+
+export interface TapdanceErrorOptions {
+  hint?: string;
+  details?: Record<string, unknown>;
+  cause?: unknown;
+  /** True when the same call may succeed later without any change (worker briefly offline, a person holding the device). */
+  retryable?: boolean;
+  retryAfterMs?: number;
+}
+
+const RETRYABLE_BY_DEFAULT: ReadonlySet<ErrorCode> = new Set(["PROVIDER_UNREACHABLE", "WORKER_OFFLINE", "NO_CAPACITY", "HUMAN_HELD", "TIMEOUT"]);
+
+export class TapdanceError extends Error {
+  readonly code: ErrorCode;
+  readonly hint: string | undefined;
+  readonly details: Record<string, unknown> | undefined;
+  readonly retryable: boolean;
+  readonly retryAfterMs: number | undefined;
+
+  constructor(code: ErrorCode, message: string, options: TapdanceErrorOptions = {}) {
+    super(redactSecrets(message), options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "TapdanceError";
+    this.code = code;
+    this.hint = options.hint === undefined ? undefined : redactSecrets(options.hint);
+    this.details = options.details === undefined ? undefined : redactObject(options.details);
+    this.retryable = options.retryable ?? RETRYABLE_BY_DEFAULT.has(code);
+    this.retryAfterMs = options.retryAfterMs;
+  }
+
+  get exitCode(): number {
+    return ERROR_CODES[this.code];
+  }
+
+  toJSON(): { code: ErrorCode; message: string; retryable: boolean; retryAfterMs?: number; hint?: string; details?: Record<string, unknown> } {
+    return {
+      code: this.code,
+      message: this.message,
+      retryable: this.retryable,
+      ...(this.retryAfterMs === undefined ? {} : { retryAfterMs: this.retryAfterMs }),
+      ...(this.hint === undefined ? {} : { hint: this.hint }),
+      ...(this.details === undefined ? {} : { details: this.details }),
+    };
+  }
+}
+
+export function isTapdanceError(error: unknown): error is TapdanceError {
+  return error instanceof TapdanceError;
+}
+
+/** Wraps anything thrown into a TapdanceError so callers print one shape. */
+export function toTapdanceError(error: unknown): TapdanceError {
+  if (isTapdanceError(error)) return error;
+  const message = error instanceof Error ? error.message : String(error);
+  return new TapdanceError("INTERNAL", message, { cause: error });
+}
+
+// Simlock secrets start with `slk_`; bearer headers and token-ish JSON keys are covered too.
+const SECRET_PATTERNS: RegExp[] = [
+  /slk_[A-Za-z0-9_-]{8,}/g,
+  /(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+  /("?(?:token|secret|daemonAuthToken|authorization|password)"?\s*[:=]\s*"?)(?!Bearer\b|\[REDACTED\])[^"\s,}]{6,}/gi,
+];
+
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const pattern of SECRET_PATTERNS) {
+    out = out.replace(pattern, (match, prefix: unknown) =>
+      typeof prefix === "string" && match.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]",
+    );
+  }
+  return out;
+}
+
+const SECRET_KEYS = /^(token|secret|daemonAuthToken|authorization|password|operatorToken|joinToken)$/i;
+
+export function redactObject<T>(value: T): T {
+  if (typeof value === "string") return redactSecrets(value) as T;
+  if (Array.isArray(value)) return value.map((item) => redactObject(item)) as T;
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = SECRET_KEYS.test(key) && item !== undefined && item !== null ? "[REDACTED]" : redactObject(item);
+    }
+    return out as T;
+  }
+  return value;
+}

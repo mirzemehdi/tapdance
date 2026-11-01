@@ -1,0 +1,37 @@
+{
+  "name": "@tapdance/sdk",
+  "version": "0.1.0",
+  "description": "Programmatic Tapdance API: session-scoped device control for agents and tools.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tapdance-dev/tapdance"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@tapdance/core": "workspace:*",
+    "@tapdance/provider-simlock": "workspace:*"
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "name": "@tapdance/cli",
+  "version": "0.1.0",
+  "description": "Let your agent put your app through its paces. CLI and MCP server for Android emulators and iOS simulators.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/main.js",
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tapdance-dev/tapdance"
+  },
+  "scripts": {
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@tapdance/core": "workspace:*",
+    "@tapdance/provider-simlock": "workspace:*",
+    "@tapdance/sdk": "workspace:*",
+    "@tapdance/mcp": "workspace:*",
+    "commander": "15.0.0",
+    "ws": "8.22.1",
+    "simlock": "0.4.0",
+    "agent-device": "0.21.35",
+    "zod": "4.6.7"
+  },
+  "bin": {
+    "tapdance": "./dist/main.js"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2",
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "keywords": [
+    "mcp",
+    "android",
+    "ios",
+    "emulator",
+    "simulator",
+    "agents",
+    "claude-code",
+    "codex",
+    "testing"
+  ]
+}

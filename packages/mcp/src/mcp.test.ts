@@ -1,0 +1,172 @@
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { describe, expect, it } from "vitest";
+import { Tapdance } from "@tapdance/sdk";
+import { FakeProvider } from "@tapdance/sdk/testing";
+import { TOOLS, createMcpServer } from "./index.js";
+
+const REQUIRED = [
+  "list_workers", "list_devices", "lease_device", "get_device_status", "release_device", "install_app", "launch_app", "stop_app",
+  "inspect_screen", "tap", "swipe", "type_text", "press_key", "take_screenshot", "start_recording", "stop_recording",
+  "get_logs", "get_crash_logs", "get_test_artifacts", "wait_for", "handle_alert", "list_tools", "execute_tool",
+];
+
+async function connect() {
+  const provider = new FakeProvider();
+  const tapdance = await Tapdance.create({
+    cwd: await mkdtemp(join(tmpdir(), "td-mcp-")),
+    env: { TAPDANCE_HOME: await mkdtemp(join(tmpdir(), "td-mcp-home-")) },
+    session: { id: "mcp-test", source: "test" },
+    provider,
+  });
+  const server = createMcpServer(tapdance);
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "test", version: "0" });
+  await Promise.all([server.connect(a), client.connect(b)]);
+  const call = async (name: string, args: Record<string, unknown> = {}) => {
+    const r = (await client.callTool({ name, arguments: args })) as { content: Array<{ type: string; text?: string }>; isError?: boolean };
+    const text = r.content.find((c) => c.type === "text")?.text ?? "{}";
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      parsed = { raw: text };
+    }
+    return { ...r, json: parsed };
+  };
+  return { client, call, provider };
+}
+
+describe("MCP tool surface", () => {
+  it("exposes every required tool and no raw shell", () => {
+    const names = TOOLS.map((t) => t.name);
+    for (const n of REQUIRED) expect(names).toContain(n);
+    for (const n of names) expect(n).not.toMatch(/shell|^exec$|adb|simctl|run_on_device/);
+  });
+
+  it("describes every tool and refuses unknown keys", () => {
+    for (const t of TOOLS) {
+      expect(t.description.length).toBeGreaterThan(30);
+      expect(t.input.safeParse({ nonsense: 1 }).success).toBe(false);
+    }
+  });
+
+  it("lists tools with JSON schemas over the protocol", async () => {
+    const { client } = await connect();
+    const { tools } = await client.listTools();
+    expect(tools.map((t) => t.name).sort()).toEqual(TOOLS.map((t) => t.name).sort());
+    expect(tools.find((t) => t.name === "lease_device")?.inputSchema.required).toContain("platform");
+  });
+});
+
+describe("MCP agent flow", () => {
+  it("runs lease → install → launch → inspect → tap → screenshot → release", async () => {
+    const { call, provider } = await connect();
+    expect((await call("tap", { text: "Sign in" })).json).toMatchObject({ error: { code: "NO_ACTIVE_LEASE" } });
+    const leased = await call("lease_device", { platform: "android", device: "Pixel 8" });
+    expect(leased.json).toMatchObject({ device: { model: "Pixel 8", platform: "android" } });
+    expect((await call("launch_app", { app_id: "com.example.app" })).json).toMatchObject({ ok: true });
+    const screen = await call("inspect_screen");
+    expect(screen.json).toMatchObject({ elements: [{ ref: "@e1", label: "Sign in" }] });
+    const tapped = await call("tap", { ref: "@e1" });
+    expect(tapped.json).toMatchObject({ ok: true, changes: ['+ @e2 [text-field] "Email"'] });
+    expect(provider.calls.find((c) => c.method === "tap")?.args[0]).toEqual({ kind: "ref", ref: "e1" });
+    const shot = await call("take_screenshot", { note: "after tap" });
+    expect(shot.content.some((c) => c.type === "image")).toBe(true);
+    expect((await call("get_test_artifacts")).json).toMatchObject({ artifacts: [{ kind: "screenshot", note: "after tap" }] });
+    expect((await call("wait_for", { text: "Welcome" })).json).toMatchObject({ found: true });
+    expect((await call("handle_alert", { action: "get" })).json).toMatchObject({ present: true, buttons: ["Allow", "Don't Allow"] });
+    expect((await call("lease_device", { platform: "android" })).json).toMatchObject({ reused: true });
+    expect((await call("release_device")).json).toMatchObject({ released: true });
+  });
+
+  it("confines install paths to the project", async () => {
+    const { call } = await connect();
+    await call("lease_device", { platform: "android" });
+    const r = await call("install_app", { path: "/etc/hosts" });
+    expect(r.json).toMatchObject({ error: { code: "FORBIDDEN" } });
+  });
+
+  it("returns structured, actionable errors", async () => {
+    const { call } = await connect();
+    await call("lease_device", { platform: "android" });
+    const both = await call("tap", { text: "a", ref: "@e1" });
+    expect(both.isError).toBe(true);
+    expect(both.json).toMatchObject({ error: { code: "USAGE" } });
+    const swipe = await call("swipe", { direction: "up", from_x: 1 });
+    expect(swipe.json).toMatchObject({ error: { code: "USAGE" } });
+    const bad = await call("launch_app", { app_id: "rm -rf /" });
+    expect(bad.isError).toBe(true);
+    expect(String(bad.json["raw"])).toMatch(/app_id/);
+  });
+
+  it("types into a named field", async () => {
+    const { call, provider } = await connect();
+    await call("lease_device", { platform: "ios" });
+    await call("type_text", { text: "hello@example.com", into_text: "Email" });
+    expect(provider.calls.find((c) => c.method === "typeText")?.args).toEqual(["hello@example.com", { kind: "text", text: "Email" }]);
+  });
+});
+
+describe("execute_tool (MOCKED executable: proves pass-through, not asc itself)", () => {
+  async function withFakeAsc(config: Record<string, unknown> = {}) {
+    const { mkdtemp, writeFile, chmod } = await import("node:fs/promises");
+    const bin = await mkdtemp(join(tmpdir(), "td-fake-bin-"));
+    await writeFile(
+      join(bin, "asc"),
+      '#!/bin/sh\necho "args:$*"\necho "ro:${ASC_READ_ONLY:-unset}"\necho "leak:${SECRET_FROM_PARENT:-none}"\necho "-----BEGIN PRIVATE KEY-----"\necho "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC"\necho "-----END PRIVATE KEY-----"\nexit 3\n',
+    );
+    await chmod(join(bin, "asc"), 0o755);
+    const cwd = await mkdtemp(join(tmpdir(), "td-tool-"));
+    const { writeFile: wf } = await import("node:fs/promises");
+    await wf(join(cwd, "tapdance.config.json"), JSON.stringify(config));
+    const tapdance = await Tapdance.create({
+      cwd,
+      env: { TAPDANCE_HOME: await mkdtemp(join(tmpdir(), "td-tool-home-")), PATH: `${bin}:/usr/bin:/bin`, SECRET_FROM_PARENT: "s3cr3t", ASC_KEY_ID: "KEYID" },
+      session: { id: "tool-test", source: "test" },
+      provider: new FakeProvider(),
+    });
+    const server = createMcpServer(tapdance);
+    const [a, b] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test", version: "0" });
+    await Promise.all([server.connect(a), client.connect(b)]);
+    return async (args: Record<string, unknown>) => {
+      const r = (await client.callTool({ name: "execute_tool", arguments: args })) as { content: Array<{ text?: string }>; isError?: boolean };
+      return { isError: r.isError, json: JSON.parse(r.content[0]!.text!) as Record<string, unknown> };
+    };
+  }
+
+  it("forwards a subcommand Tapdance has never heard of, unchanged", async () => {
+    const exec = await withFakeAsc();
+    const r = await exec({ tool: "asc", args: ["brand-new-2027-command", "--flag", "value with spaces", "$(rm -rf /)"] });
+    expect(r.json["exitCode"]).toBe(3);
+    expect(r.json["stdout"]).toContain("args:brand-new-2027-command --flag value with spaces $(rm -rf /)");
+  });
+
+  it("runs asc read-only for agents and keeps parent secrets and keys out", async () => {
+    const exec = await withFakeAsc();
+    const r = await exec({ tool: "asc", args: ["apps", "list"] });
+    expect(r.json).toMatchObject({ readOnly: true });
+    expect(r.json["stdout"]).toContain("ro:1");
+    expect(r.json["stdout"]).toContain("leak:none");
+    expect(r.json["stdout"]).not.toContain("MIIEvQIBADANBg");
+  });
+
+  it("allows mutation only when the user authorized it in config", async () => {
+    const denied = await (await withFakeAsc())({ tool: "asc", args: ["publish"], allow_mutation: true });
+    expect(denied.json["stdout"]).toContain("ro:1");
+    const allowed = await (await withFakeAsc({ tools: { allowMutation: ["asc"] } }))({ tool: "asc", args: ["publish"], allow_mutation: true });
+    expect(allowed.json["stdout"]).toContain("ro:unset");
+  });
+
+  it("refuses tools the user has not enabled and remote targets", async () => {
+    const exec = await withFakeAsc({ tools: { mcpEnabled: [] } });
+    expect((await exec({ tool: "asc", args: ["--help"] })).json).toMatchObject({ error: { code: "FORBIDDEN" } });
+    const exec2 = await withFakeAsc();
+    expect((await exec2({ tool: "asc", args: ["--help"], target: "mac-worker-1" })).json).toMatchObject({ error: { code: "NOT_SUPPORTED" } });
+    expect((await exec2({ tool: "fastlane", args: ["supply"] })).json).toMatchObject({ error: { code: "FORBIDDEN" } });
+  });
+});

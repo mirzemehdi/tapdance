@@ -1,0 +1,123 @@
+# AGENTS.md
+
+Instructions for coding agents (Codex, Claude Code, Cursor and others) that work **on** this
+repository. If you are an agent that wants to **use** Tapdance to drive a device, run `tapdance mcp`
+instead and read the MCP server's instructions.
+
+## What this repo is
+
+Tapdance is a CLI, MCP server and TypeScript SDK that lets AI agents lease and drive Android
+emulators and iOS simulators, locally or on remote workers. Its principle is:
+**Tapdance orchestrates; existing tools execute.** Simlock owns leasing, workers and the gateway.
+agent-device (and optionally AXe) owns UI automation. `asc`, Google's Android CLI, fastlane, Maestro
+and Xcode are run as external tools. Tapdance owns sessions, routing, safety, artifacts and the
+CLI/MCP/SDK surface.
+
+Read these before changing anything, in this order:
+
+1. `PRODUCT.md`: requirements with stable IDs.
+2. `STATUS.md`: what is proven, what is only unit-tested, what is missing. Never contradict it.
+3. `docs/architecture-decision.md`: what is reused and why.
+
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `packages/core/src` | `DeviceProvider` contract (`provider.ts`), config schema and env overrides (`config.ts`), error codes and exit codes (`errors.ts`), session identity and records, artifacts, element targets. |
+| `packages/provider-simlock/src` | The Simlock + agent-device provider, the optional AXe backend (`axe.ts`), stream framing. |
+| `packages/sdk/src` | `Tapdance` class (`tapdance.ts`), provider factory, keepalive, host checks, external tool registry (`tools.ts`), `FakeProvider` (`testing.ts`). |
+| `packages/mcp/src` | MCP tool definitions (`tools.ts`) and transports (`server.ts`). |
+| `packages/cli/src` | The `tapdance` commands, the browser viewer, `tapdance report`. |
+| `docs/` | User docs, ADR, test procedures, `docs/testing/evidence/`. |
+| `infrastructure/` | Reference Terraform and scripts. Nothing in `packages/` may depend on it. |
+
+## Commands
+
+```bash
+corepack enable                 # pnpm comes from the packageManager field
+pnpm install
+pnpm build                      # tsc -b in every package, in order
+pnpm typecheck
+pnpm test                       # build + unit tests (no devices needed)
+pnpm test:integration           # build + real-device tests; skipped unless TAPDANCE_IT_PLATFORM is set
+node packages/cli/dist/main.js <command> --help
+```
+
+Run `pnpm test` after every change and keep the build green. Never skip or delete a failing test to
+make a run pass; fix it or report it.
+
+## Invariants (do not break these)
+
+1. **Never accept a device id from a caller.** No CLI command, MCP tool or SDK method takes a device,
+   UDID, serial or worker id to act on. Everything resolves the current session's lease.
+2. **Everything is lease-scoped.** Device methods receive the session's `LeaseHandle`. Providers
+   refuse handles they did not issue. Release only ever targets the session's own lease.
+3. **No raw shell tools.** Do not add an MCP tool or CLI command that runs arbitrary shell, `adb` or
+   `simctl`. Internal use of Simlock `exec` stays on its fixed allowlist.
+4. **No command catalogues for external tools.** `packages/sdk/src/tools.ts` holds integration
+   metadata only. Never list a tool's subcommands or flags; arguments are forwarded unchanged and
+   agents discover commands with the tool's own help. Run tools with argument arrays, never a shell.
+5. **Redact secrets.** Tokens never go in config files (loading refuses them), never in logs, errors,
+   MCP responses or reports. Use `redactSecrets` / `redactObject` from `@tapdance/core` on anything
+   that may contain upstream output. Never return worker join tokens or the operator token to an
+   agent; the operator token is loaded only for fleet views.
+6. **Do not couple core logic to a cloud.** No Google Cloud, AWS or Scaleway SDKs in `packages/`.
+7. **No fake implementations.** A missing backend fails with `NOT_SUPPORTED` and a hint, like
+   `provider: "cloud"` does.
+8. **Errors are `TapdanceError`s** with a stable code from `errors.ts`, a message a person can act on,
+   and a `hint` with the fix. Only name `tapdance` commands that exist: `cli.test.ts` checks this.
+9. **CLI output:** results on stdout, progress on stderr, `--json` for machines, exit codes from
+   `ERROR_CODES`.
+10. **Never fall back to software emulation** when KVM is missing. Report it.
+
+## Tests and evidence
+
+- Unit tests live in `packages/*/src/**/*.test.ts`. Integration tests live in
+  `*.integration.test.ts` and touch real devices.
+- **Label mocked tests.** Any test that uses `FakeProvider`, a mocked transport or a fake executable
+  says so in its name or a comment.
+- **Never claim a real-device result from a mocked test.** A STATUS.md row becomes ✅ only with an
+  evidence file in `docs/testing/evidence/YYYY-MM-DD-<topic>.md` (environment, what ran, how to re-run,
+  what is not covered).
+- To run the real integration test on a Mac with Xcode (this boots a simulator; ask the user first):
+
+  ```bash
+  pnpm build
+  node packages/cli/dist/main.js worker install
+  TAPDANCE_IT_PLATFORM=ios TAPDANCE_IT_DEVICE="iPhone 16" TAPDANCE_IT_OS=18.5 pnpm test:integration
+  ```
+
+  Optional: `TAPDANCE_IT_APP` (an `.apk` or simulator `.app`) and `TAPDANCE_IT_APP_ID`;
+  `TAPDANCE_IT_ENDPOINT` and `TAPDANCE_IT_TOKEN` run the same loop through a gateway. Use
+  `TAPDANCE_IT_PLATFORM=android` for Android; that path has not been run yet.
+
+## Keep PRODUCT.md, STATUS.md and docs in sync
+
+Change them **in the same change** as the code:
+
+- New requirement: add it to `PRODUCT.md` with a new ID (never reuse or renumber), then a row in
+  `STATUS.md`.
+- Behaviour change: update the `STATUS.md` row and its "Last updated" date, and every doc that shows
+  the affected command, flag, config key, environment variable or MCP tool.
+- Docs must never claim more than `STATUS.md`. A gateway with a joined worker has run on one Mac
+  only. Two machines over a real network, Android, Google Cloud N2, AXe, the Android CLI and cloud
+  Macs are **not** proven yet; say so wherever you describe them.
+- Credit upstream projects with links when you describe or follow their behaviour, and update
+  `NOTICE.md` when you add a dependency or external tool.
+
+## Ask before you
+
+- start Simlock daemons, boot simulators or emulators, or run the integration test;
+- run `terraform plan/apply` or anything that touches a real cloud account;
+- add a dependency (check its license and maintenance, pin an exact version, and add it to
+  `NOTICE.md`);
+- change the public surface: CLI command names, MCP tool names or inputs, SDK signatures, config keys.
+
+## Style
+
+- TypeScript in strict mode, ESM, Node 22.13+. Zod for config and MCP inputs; MCP inputs are
+  `.strict()` so unknown keys fail.
+- Exact version pins in `package.json`.
+- Keep it small. If an upstream tool can do it, integrate the tool; if upstream should do it, open an
+  upstream issue and note it in `STATUS.md`. Remove Tapdance code when upstream gains the feature.
+- Plain, short English in docs and messages. Commands and flags in docs must match `--help`.

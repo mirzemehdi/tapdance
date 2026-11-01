@@ -1,0 +1,575 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
+import {
+  LocalArtifactStore,
+  SessionStore,
+  TapdanceError,
+  loadConfig,
+  resolveSessionIdentity,
+  type ActionResult,
+  type ArtifactRef,
+  type DeviceInventory,
+  type DeviceKey,
+  type DeviceProvider,
+  type DoctorCheck,
+  type ElementTarget,
+  type LeaseHandle,
+  type LeaseStatus,
+  type LogResult,
+  type Platform,
+  type ProgressListener,
+  type ResolvedConfig,
+  type ScreenInspection,
+  type LeaseOwner,
+  type SessionIdentity,
+  type SessionRecord,
+  type SwipeDirection,
+  type ViewerEndpoints,
+  type WorkerInfo,
+  type WaitCondition,
+  type WaitResult,
+  type AlertAction,
+  type AlertResult,
+} from "@tapdance/core";
+import { hostChecks } from "./host-checks.js";
+import { findTool, runTool, type ToolRun } from "./tools.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { createProvider } from "./provider-factory.js";
+
+export interface TapdanceOptions {
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  configPath?: string;
+  /** Overrides the resolved session identity (the MCP server passes one per process). */
+  session?: SessionIdentity;
+  /** Inject a provider (tests, embedding). Defaults to the one the config names. */
+  provider?: DeviceProvider;
+  onProgress?: ProgressListener;
+  /** Who is acting; recorded as the lease owner so a shutdown releases only what it created. */
+  owner?: LeaseOwner["kind"];
+  /** Load the operator token (fleet views such as `workers list`). Off for agents by default. */
+  fleet?: boolean;
+}
+
+export interface LeaseOptions {
+  platform: Platform;
+  device?: string;
+  osVersion?: string;
+  imageTag?: string;
+  physical?: boolean;
+  ttlMinutes?: number;
+  waitSeconds?: number;
+  /** Return the session's current lease instead of failing when it already holds one on this platform. */
+  reuse?: boolean;
+}
+
+export interface DeviceSummary {
+  sessionId: string;
+  leaseId: string;
+  platform: Platform;
+  model: string;
+  osVersion: string;
+  deviceId: string;
+  provider: string;
+  location: LeaseHandle["location"];
+  expiresAt: string;
+  state: LeaseStatus["state"];
+  recording?: string;
+  humanHoldUntil?: string;
+  owner?: string;
+  note?: string;
+}
+
+export function summarize(record: SessionRecord, status?: LeaseStatus, holdUntil?: string): DeviceSummary {
+  const h = record.handle;
+  return {
+    sessionId: record.sessionId,
+    leaseId: h.leaseId,
+    platform: h.platform,
+    model: h.model,
+    osVersion: h.osVersion,
+    deviceId: h.deviceId,
+    provider: h.provider,
+    location: h.location,
+    expiresAt: status?.expiresAt ?? h.expiresAt,
+    state: status?.state ?? "unknown",
+    ...(record.recording ? { recording: record.recording.path } : {}),
+    ...(holdUntil ? { humanHoldUntil: holdUntil } : {}),
+    ...(record.owner ? { owner: `${record.owner.kind} (pid ${record.owner.pid})` } : {}),
+    ...(status?.endReason && status.state !== "active" ? { note: status.endReason } : {}),
+  };
+}
+
+/**
+ * The programmatic Tapdance API. Every device method acts on the active lease of this instance's
+ * session and nothing else: there is no way to pass a device or lease id in.
+ */
+export class Tapdance {
+  readonly store: SessionStore;
+  readonly artifacts: LocalArtifactStore;
+  private providerPromise: Promise<DeviceProvider> | undefined;
+
+  private constructor(
+    readonly resolved: ResolvedConfig,
+    readonly session: SessionIdentity,
+    private readonly options: TapdanceOptions,
+  ) {
+    this.store = new SessionStore(resolved.home);
+    this.artifacts = new LocalArtifactStore(resolved.artifactsDir);
+    if (options.provider) this.providerPromise = Promise.resolve(options.provider);
+  }
+
+  static async create(options: TapdanceOptions = {}): Promise<Tapdance> {
+    const resolved = await loadConfig({
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(options.env ? { env: options.env } : {}),
+      ...(options.configPath ? { configPath: options.configPath } : {}),
+    });
+    const session = options.session ?? (await resolveSessionIdentity(resolved.home, options.env ?? process.env));
+    return new Tapdance(resolved, session, options);
+  }
+
+  get sessionId(): string {
+    return this.session.id;
+  }
+
+  provider(): Promise<DeviceProvider> {
+    this.providerPromise ??= createProvider(this.resolved, this.session.id, this.options.env ?? process.env, { fleet: this.options.fleet ?? false });
+    return this.providerPromise;
+  }
+
+  private progress(message: string): void {
+    this.options.onProgress?.(message);
+  }
+
+  // ------------------------------------------------------------ setup
+
+  async doctor(options: { host?: boolean } = {}): Promise<DoctorCheck[]> {
+    const { config } = this.resolved;
+    const checks: DoctorCheck[] = [
+      {
+        id: "config",
+        title: "Configuration",
+        status: "pass",
+        detail: `provider ${config.provider}${config.endpoint ? ` → ${config.endpoint}` : ""}; sources: ${this.resolved.sources.join(", ") || "defaults"}`,
+      },
+      { id: "session", title: "Session identity", status: "pass", detail: `${this.session.id} (from ${this.session.source})` },
+    ];
+    const runHost = options.host ?? config.provider === "local";
+    if (runHost) {
+      checks.push(...(await hostChecks({ platforms: { android: config.platforms.android.enabled, ios: config.platforms.ios.enabled }, ...(this.options.env ? { env: this.options.env } : {}) })));
+    }
+    try {
+      const provider = await this.provider();
+      checks.push(...(await provider.doctor()));
+    } catch (error) {
+      const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", String(error));
+      checks.push({ id: "provider", title: "Device provider", status: "fail", detail: e.message, ...(e.hint ? { fix: e.hint } : {}) });
+    }
+    const record = await this.store.get(this.session.id);
+    checks.push({
+      id: "lease",
+      title: "Device lease",
+      status: "pass",
+      detail: record ? `holding ${record.handle.model} (${record.handle.platform}) lease ${record.handle.leaseId}` : "none held by this session",
+    });
+    return checks;
+  }
+
+  async devices(platform?: Platform): Promise<DeviceInventory> {
+    return (await this.provider()).inventory(platform ? { platform } : {});
+  }
+
+  async workers(): Promise<WorkerInfo[]> {
+    return (await this.provider()).workers();
+  }
+
+  // ------------------------------------------------------------ lease lifecycle
+
+  /** The session record if a lease is held; never touches the provider. */
+  async current(): Promise<SessionRecord | undefined> {
+    return this.store.get(this.session.id);
+  }
+
+  private async active(): Promise<{ record: SessionRecord; provider: DeviceProvider }> {
+    const record = await this.store.get(this.session.id);
+    if (record === undefined) {
+      throw new TapdanceError("NO_ACTIVE_LEASE", "This session holds no device", {
+        hint: "Lease one first: `tapdance device lease --platform android` (MCP: lease_device).",
+        details: { sessionId: this.session.id },
+      });
+    }
+    return { record, provider: await this.provider() };
+  }
+
+  /** Runs a device action; a lost lease clears the session record so the next call says so plainly. */
+  private async onDevice<T>(fn: (handle: LeaseHandle, provider: DeviceProvider, record: SessionRecord) => Promise<T>): Promise<T> {
+    const { record, provider } = await this.active();
+    try {
+      const result = await fn(record.handle, provider, record);
+      await this.store
+        .update(this.session.id, (r) => (r.handle.leaseId === record.handle.leaseId ? { ...r, lastUsedAt: new Date().toISOString() } : undefined))
+        .catch(() => undefined);
+      return result;
+    } catch (error) {
+      if (error instanceof TapdanceError && error.code === "LEASE_LOST") await this.store.delete(this.session.id, record.handle.leaseId);
+      throw error;
+    }
+  }
+
+  /** Agent input waits while a person holds the device in the browser viewer (cf. Loupe's humanHeld). */
+  private async guardHuman(): Promise<void> {
+    const hold = await this.store.getHold(this.session.id);
+    const until = hold ? Date.parse(hold.until) : 0;
+    const now = Date.now();
+    if (hold && until > now) {
+      throw new TapdanceError("HUMAN_HELD", `A person is controlling the device in the viewer (${hold.by})`, {
+        hint: `Wait and retry in ${Math.ceil((until - now) / 1000)} s; their control lapses when they stop touching the screen or press "Hand back".`,
+        details: { retryAfterMs: until - now },
+        retryAfterMs: until - now,
+      });
+    }
+  }
+
+  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean }> {
+    const { config } = this.resolved;
+    if (!config.platforms[options.platform].enabled) {
+      throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
+    }
+    const provider = await this.provider();
+    // The whole check-then-lease runs under the session lock, so two processes of one session
+    // (parallel sub-agents, CLI + MCP) cannot both lease.
+    return this.store.withLock(this.session.id, async () => {
+      const existing = await this.store.get(this.session.id);
+      if (existing !== undefined) {
+        const status = await provider.status(existing.handle).catch(() => undefined);
+        if (status?.state === "active" || status?.state === "unknown" || status === undefined) {
+          if (options.reuse && existing.handle.platform === options.platform && (!options.device || options.device === existing.handle.model)) {
+            return { record: existing, summary: summarize(existing, status), reused: true };
+          }
+          throw new TapdanceError("LEASE_ALREADY_HELD", `This session already holds ${existing.handle.model} (${existing.handle.platform})`, {
+            hint: "Use it, or release it first with `tapdance device release` (MCP: release_device).",
+            details: { device: summarize(existing, status) },
+          });
+        }
+        await rm(this.store.path(this.session.id), { force: true });
+      }
+      const ttlMinutes = options.ttlMinutes ?? config.session.defaultTtlMinutes;
+      const waitSeconds = options.waitSeconds ?? config.session.leaseWaitSeconds;
+      const handle = await provider.lease(
+        this.session.id,
+        {
+          platform: options.platform,
+          ...(options.device ? { device: options.device } : {}),
+          ...(options.osVersion ? { osVersion: options.osVersion } : {}),
+          ...(options.imageTag ? { imageTag: options.imageTag } : {}),
+          ...(options.physical ? { physical: true } : {}),
+          ttlMs: ttlMinutes * 60_000,
+          ...(waitSeconds > 0 ? { waitTimeoutMs: waitSeconds * 1000 } : {}),
+        },
+        { onProgress: (m) => this.progress(m) },
+      );
+      const now = new Date().toISOString();
+      const record = await this.store.put({
+        sessionId: this.session.id,
+        handle,
+        owner: { kind: this.options.owner ?? "sdk", pid: process.pid },
+        lastUsedAt: now,
+        updatedAt: now,
+      });
+      return { record, summary: summarize(record, { state: "active", handle, expiresAt: handle.expiresAt }), reused: false };
+    });
+  }
+
+  async status(): Promise<DeviceSummary> {
+    const { record, provider } = await this.active();
+    const status = await provider.status(record.handle);
+    if (status.state === "ended") {
+      await this.store.delete(this.session.id, record.handle.leaseId);
+      throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} has ended`, {
+        hint: "Lease a new device. Anything installed on the old one was wiped.",
+        details: { reason: status.endReason },
+      });
+    }
+    const hold = await this.store.getHold(this.session.id);
+    return summarize(record, status, hold?.until);
+  }
+
+  async renew(ttlMinutes?: number): Promise<DeviceSummary> {
+    const { record, provider } = await this.active();
+    try {
+      const status = await provider.renew(record.handle, ttlMinutes === undefined ? record.handle.ttlMs : ttlMinutes * 60_000);
+      const updated = await this.store.update(this.session.id, (r) =>
+        r.handle.leaseId === record.handle.leaseId
+          ? { ...r, handle: { ...r.handle, ...(status.expiresAt ? { expiresAt: status.expiresAt } : {}) }, renewer: { pid: process.pid, heartbeatAt: new Date().toISOString() } }
+          : undefined,
+      );
+      return summarize(updated ?? record, status);
+    } catch (error) {
+      if (error instanceof TapdanceError && error.code === "LEASE_LOST") await this.store.delete(this.session.id, record.handle.leaseId);
+      throw error;
+    }
+  }
+
+  /**
+   * Releases this session's lease. Only ever this session's: there is no id to pass. With
+   * `onlyOwnedBy`, releases only a lease that process created (the MCP server's shutdown uses it).
+   */
+  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; device?: DeviceSummary; skipped?: string }> {
+    const record = await this.store.get(this.session.id);
+    if (record === undefined) return { released: false };
+    if (options.onlyOwnedBy && (record.owner?.kind !== options.onlyOwnedBy.kind || record.owner.pid !== options.onlyOwnedBy.pid)) {
+      return { released: false, skipped: `lease belongs to ${record.owner?.kind ?? "another process"}` };
+    }
+    const provider = await this.provider();
+    if (record.recording) await provider.stopRecording(record.handle, record.recording.token).catch(() => undefined);
+    const result = await provider.release(record.handle).catch(() => ({ released: false }));
+    await this.store.delete(this.session.id, record.handle.leaseId);
+    if (record.keepalivePid && record.keepalivePid !== process.pid && (await isKeepaliveProcess(record.keepalivePid))) {
+      try {
+        process.kill(record.keepalivePid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
+    return { released: result.released, device: summarize(record, { state: "ended", handle: record.handle }) };
+  }
+
+  // ------------------------------------------------------------ apps
+
+  async installApp(appPath: string, appId?: string): Promise<{ appId?: string; path: string }> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) =>
+      provider.installApp(handle, appPath, { ...(appId ? { appId } : {}), onProgress: (m) => this.progress(m) }),
+    );
+  }
+
+  async launchApp(appId: string, options: { relaunch?: boolean; url?: string } = {}): Promise<ActionResult> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.launchApp(handle, appId, options));
+  }
+
+  async stopApp(appId: string): Promise<ActionResult> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.stopApp(handle, appId));
+  }
+
+  async listApps(): Promise<string[]> {
+    return this.onDevice((handle, provider) => provider.listApps(handle));
+  }
+
+  // ------------------------------------------------------------ UI
+
+  async inspect(options: { interactiveOnly?: boolean } = {}): Promise<ScreenInspection> {
+    return this.onDevice((handle, provider) => provider.inspect(handle, options));
+  }
+
+  async tap(target: ElementTarget, options: { settle?: boolean } = {}): Promise<ActionResult> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.tap(handle, target, options));
+  }
+
+  async swipe(
+    gesture:
+      | { kind: "direction"; direction: SwipeDirection; amount?: number; untilText?: string }
+      | { kind: "points"; from: { x: number; y: number }; to: { x: number; y: number } },
+  ): Promise<ActionResult> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.swipe(handle, gesture));
+  }
+
+  /** Waits for text to appear or go away, or for the UI to settle. A timeout answers found:false. */
+  async waitFor(condition: WaitCondition, timeoutMs = 10_000): Promise<WaitResult> {
+    const clamped = Math.min(Math.max(timeoutMs, 0), 30_000);
+    return this.onDevice((handle, provider) => provider.waitFor(handle, condition, clamped));
+  }
+
+  async alert(action: AlertAction): Promise<AlertResult> {
+    if (action !== "get") await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.alert(handle, action));
+  }
+
+  async typeText(text: string, target?: ElementTarget): Promise<ActionResult> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.typeText(handle, text, target));
+  }
+
+  async pressKey(key: DeviceKey): Promise<ActionResult> {
+    await this.guardHuman();
+    return this.onDevice((handle, provider) => provider.pressKey(handle, key));
+  }
+
+  // ------------------------------------------------------------ evidence
+
+  async screenshot(outPath?: string, note?: string): Promise<ArtifactRef> {
+    return this.onDevice(async (handle, provider) => {
+      const path = await this.artifacts.allocate(this.session.id, "screenshot", "png", outPath);
+      const shot = await provider.screenshot(handle, path);
+      return this.artifacts.record({ kind: "screenshot", path: shot.path, sessionId: this.session.id, leaseId: handle.leaseId, ...(note ? { note } : {}) });
+    });
+  }
+
+  async startRecording(outPath?: string): Promise<{ path: string }> {
+    return this.onDevice(async (handle, provider, record) => {
+      if (record.recording) {
+        throw new TapdanceError("USAGE", `A recording is already running (${record.recording.path})`, { hint: "Stop it with `tapdance record stop` (MCP: stop_recording)." });
+      }
+      const path = await this.artifacts.allocate(this.session.id, "recording", "mp4", outPath);
+      const started = await provider.startRecording(handle, path);
+      await this.store.update(this.session.id, (r) => ({ ...r, recording: { path: started.path, startedAt: new Date().toISOString(), ...(started.token ? { token: started.token } : {}) } }));
+      return started;
+    });
+  }
+
+  async stopRecording(): Promise<ArtifactRef & { extra: ArtifactRef[]; durationMs?: number }> {
+    return this.onDevice(async (handle, provider, record) => {
+      if (!record.recording) {
+        throw new TapdanceError("USAGE", "No recording is running", { hint: "Start one with `tapdance record start` (MCP: start_recording)." });
+      }
+      this.progress("Stopping the recording and downloading the video");
+      const stopped = await provider.stopRecording(handle, record.recording.token);
+      await this.store.update(this.session.id, (r) => {
+        const { recording: _, ...rest } = r;
+        return rest;
+      });
+      const main = await this.artifacts.record({ kind: "recording", path: stopped.path, sessionId: this.session.id, leaseId: handle.leaseId });
+      const extra: ArtifactRef[] = [];
+      for (const p of stopped.extraPaths) {
+        if (existsSync(p)) extra.push(await this.artifacts.record({ kind: "recording", path: p, sessionId: this.session.id, leaseId: handle.leaseId, note: "continuation chunk" }));
+      }
+      return { ...main, extra, ...(stopped.durationMs ? { durationMs: stopped.durationMs } : {}) };
+    });
+  }
+
+  async logs(options: { lines?: number; appId?: string; crash?: boolean } = {}): Promise<LogResult> {
+    return this.onDevice(async (handle, provider) => {
+      const lines = options.lines ?? 200;
+      const result = options.crash
+        ? await provider.crashLogs(handle, { lines, ...(options.appId ? { appId: options.appId } : {}) })
+        : await provider.logs(handle, { lines, ...(options.appId ? { appId: options.appId } : {}) });
+      const path = await this.artifacts.allocate(this.session.id, "log", "txt");
+      await writeFile(path, `# ${result.source}\n${result.lines.join("\n")}\n`);
+      result.artifact = await this.artifacts.record({ kind: "log", path, sessionId: this.session.id, leaseId: handle.leaseId, note: result.source });
+      return result;
+    });
+  }
+
+  async listArtifacts(): Promise<ArtifactRef[]> {
+    return this.artifacts.list(this.session.id);
+  }
+
+  // ------------------------------------------------------------ external tools
+
+  /**
+   * Runs an external tool from the registry (asc, android, axe, maestro, fastlane, xcodebuild) with
+   * the arguments unchanged. Agent calls (`fromAgent`) must be enabled in config, get the tool's own
+   * read-only switch unless the user allowed mutation, and lease-scoped tools only ever see the
+   * session's device.
+   */
+  async tool(
+    name: string,
+    args: string[],
+    options: { target?: string; fromAgent?: boolean; allowMutation?: boolean; timeoutMs?: number; cwd?: string; inherit?: boolean } = {},
+  ): Promise<ToolRun & { artifact?: ArtifactRef }> {
+    const spec = findTool(name);
+    const cfg = this.resolved.config.tools;
+    const target = options.target ?? "control";
+    if (target !== "control") {
+      throw new TapdanceError("NOT_SUPPORTED", `Execution target "${target}" is not available yet: tools run on this machine only`, {
+        hint: "Remote worker targets need a worker-side executor that Simlock does not provide yet (see STATUS.md). Run Tapdance on the Mac/worker itself meanwhile.",
+      });
+    }
+    if (options.fromAgent && !cfg.mcpEnabled.includes(name)) {
+      throw new TapdanceError("FORBIDDEN", `Agents may not run ${name} here`, { hint: `Add "${name}" to tools.mcpEnabled in tapdance.config.json to allow it.` });
+    }
+    const mutationAuthorized = cfg.allowMutation.includes(name);
+    const readOnly = Boolean(options.fromAgent) && !(options.allowMutation && mutationAuthorized);
+    if (readOnly && !spec.readOnlyEnv && spec.location === "control") {
+      throw new TapdanceError("FORBIDDEN", `${name} has no read-only mode, so agents need your authorization to run it`, {
+        hint: `Add "${name}" to tools.allowMutation in tapdance.config.json, then call with allow_mutation: true.`,
+      });
+    }
+    if (options.fromAgent && spec.location === "lease") await this.guardHuman();
+    let deviceId: string | undefined;
+    let adbServerPort: number | undefined;
+    if (spec.location === "lease") {
+      const record = await this.store.get(this.session.id);
+      if (record) {
+        if (spec.platforms && !spec.platforms.includes(record.handle.platform)) {
+          throw new TapdanceError("USAGE", `${name} works on ${spec.platforms.join("/")} devices; this session holds ${record.handle.platform}`);
+        }
+        if (record.handle.location.kind !== "local") {
+          throw new TapdanceError("NOT_SUPPORTED", `${name} must run where the device is; this session's device is on a remote worker`, {
+            hint: "Remote worker execution is not implemented yet (see STATUS.md). Use Tapdance's own device tools, which work remotely.",
+          });
+        }
+        deviceId = record.handle.deviceId;
+        if (record.handle.platform === "android") adbServerPort = simlockAdbPort(this.options.env ?? process.env);
+      } else if (spec.deviceEnv) {
+        // No lease: device-free commands still work, but nothing may reach a device outside a lease.
+        deviceId = "tapdance-no-lease";
+      }
+    }
+    const prefix = options.inherit ? undefined : await this.artifacts.allocate(this.session.id, "log", "run");
+    const run = await runTool(spec, {
+      args,
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      ...(this.options.env ? { env: this.options.env } : {}),
+      ...(options.timeoutMs ? { timeoutMs: options.timeoutMs } : {}),
+      readOnly,
+      ...(deviceId ? { deviceId } : {}),
+      ...(adbServerPort ? { adbServerPort } : {}),
+      ...(prefix ? { outputPrefix: prefix.replace(/\.run$/, "") } : {}),
+      ...(options.inherit ? { inherit: true } : {}),
+      ...(cfg.paths[name] ? { executableOverride: cfg.paths[name] } : {}),
+    });
+    if (run.truncated && run.stdoutPath) {
+      const artifact = await this.artifacts.record({ kind: "log", path: run.stdoutPath, sessionId: this.session.id, note: `${name} ${args.slice(0, 3).join(" ")} (full stdout)` });
+      return { ...run, artifact };
+    }
+    return run;
+  }
+
+  // ------------------------------------------------------------ viewer
+
+  async viewer(): Promise<{ endpoints: ViewerEndpoints; record: SessionRecord }> {
+    return this.onDevice(async (handle, provider, record) => {
+      if (!provider.viewer) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} has no live viewer`);
+      return { endpoints: await provider.viewer(handle), record };
+    });
+  }
+
+  /** Called by the viewer while a person touches the screen; 0 clears it. */
+  async setHumanHold(holdMs: number, by: string): Promise<void> {
+    await this.store.setHold(this.session.id, holdMs > 0 ? { until: new Date(Date.now() + holdMs).toISOString(), by } : undefined);
+  }
+
+  async close(): Promise<void> {
+    if (this.providerPromise) await (await this.providerPromise.catch(() => undefined))?.close();
+  }
+}
+
+/** True only when `pid` is a Tapdance keepalive, so a reused pid is never signalled. */
+async function isKeepaliveProcess(pid: number): Promise<boolean> {
+  try {
+    const { stdout } = await promisify(execFile)("ps", ["-p", String(pid), "-o", "command="]);
+    return stdout.includes("__keepalive");
+  } catch {
+    return false;
+  }
+}
+
+/** The port of Simlock's private adb server on this machine, which sees Simlock's emulators. */
+function simlockAdbPort(env: NodeJS.ProcessEnv): number | undefined {
+  try {
+    const file = join(env["SIMLOCK_HOME"] ?? join(homedir(), ".simlock"), "adb-server.json");
+    const port = (JSON.parse(readFileSync(file, "utf8")) as { port?: unknown }).port;
+    return typeof port === "number" ? port : undefined;
+  } catch {
+    return undefined;
+  }
+}

@@ -1,0 +1,238 @@
+import { TapdanceError, type ErrorCode } from "@tapdance/core";
+
+/** Status → Tapdance code for Simlock's JSON errors (`{"error":{"code","message"}}`). */
+const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
+  UNAUTHENTICATED: "AUTH_FAILED",
+  FORBIDDEN: "FORBIDDEN",
+  NO_CAPACITY: "NO_CAPACITY",
+  QUEUE_TIMEOUT: "TIMEOUT",
+  EXEC_TIMEOUT: "TIMEOUT",
+  UNKNOWN_LEASE: "LEASE_LOST",
+  REQUESTER_ALREADY_LEASED: "LEASE_ALREADY_HELD",
+  UNKNOWN_MODEL: "DEVICE_UNAVAILABLE",
+  RUNTIME_MISSING: "DEVICE_UNAVAILABLE",
+  NO_DRIVER: "DEVICE_UNAVAILABLE",
+  WORKER_UNREACHABLE: "WORKER_OFFLINE",
+  CAPABILITY_MISSING: "PROVIDER_UNAVAILABLE",
+  UNSUPPORTED_IN_GATEWAY_MODE: "NOT_SUPPORTED",
+  PASSTHROUGH_REFUSED: "FORBIDDEN",
+  BAD_REQUEST: "USAGE",
+  STREAM_UNAVAILABLE: "NOT_SUPPORTED",
+  INPUT_UNAVAILABLE: "NOT_SUPPORTED",
+};
+
+export interface SimlockStatus {
+  devices: Array<{
+    id: string;
+    state: string;
+    platform?: string;
+    spec?: { platform?: string; model?: string; osVersion?: string };
+    workerId?: string;
+  }>;
+  leases: Array<{ id: string; deviceId?: string }>;
+  capacity?: Record<string, { running?: number; limit?: number; warm?: number; used?: number } | undefined>;
+  capabilities?: Array<{ name: string; state: string; reason?: string }>;
+  daemon?: { health?: string; mode?: string; version?: string };
+  host?: { os?: string; osVersion?: string; arch?: string; tools?: Array<{ platform: string; name: string; version?: string }> };
+  queueDepth?: number;
+}
+
+export interface SimlockLease {
+  id: string;
+  platform: string;
+  device?: string;
+  os?: string;
+  udid?: string;
+  address?: string;
+  deviceId?: string;
+  createdAt?: string;
+  expiresAt?: string;
+  ttlMs?: number;
+  mode?: string;
+  worker?: { id?: string; label?: string };
+}
+
+export interface SimlockCatalog {
+  platforms: Array<{
+    platform: string;
+    models?: string[];
+    runtimes?: Array<{ version?: string; osVersion?: string; installed?: boolean; imageTag?: string; tag?: string }>;
+    osVersions?: string[];
+    imageTags?: string[];
+  }>;
+}
+
+export interface SimlockWorker {
+  id: string;
+  label?: string;
+  connection?: string;
+  state?: string;
+  capacity?: Record<string, { running?: number; limit?: number } | undefined>;
+  leases?: number;
+  host?: { os?: string; osVersion?: string; arch?: string };
+  capabilities?: Array<{ name: string; state: string }>;
+  lastSeenAt?: string | number;
+}
+
+export interface ExecResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+export class SimlockHttp {
+  constructor(
+    readonly baseUrl: string,
+    private readonly token: string | undefined,
+    private readonly fetchImpl: typeof fetch = fetch,
+  ) {}
+
+  private headers(token = this.token, extra: Record<string, string> = {}): Record<string, string> {
+    return { ...(token === undefined ? {} : { Authorization: `Bearer ${token}` }), ...extra };
+  }
+
+  authHeaders(): Record<string, string> {
+    return this.headers();
+  }
+
+  private async request(path: string, init: RequestInit & { timeoutMs?: number; token?: string } = {}): Promise<Response> {
+    const { timeoutMs = 15_000, token, ...rest } = init;
+    try {
+      return await this.fetchImpl(`${this.baseUrl}${path}`, {
+        ...rest,
+        headers: { ...this.headers(token ?? this.token), ...(rest.headers as Record<string, string> | undefined) },
+        signal: rest.signal ?? AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const reason = error instanceof Error ? (error.cause instanceof Error ? error.cause.message : error.message) : String(error);
+      throw new TapdanceError("PROVIDER_UNREACHABLE", `Cannot reach Simlock at ${this.baseUrl}: ${reason}`, {
+        hint: "Check the endpoint with `tapdance doctor`. For local mode, start the worker with `tapdance worker start`.",
+        cause: error,
+      });
+    }
+  }
+
+  private async json<T>(path: string, init: RequestInit & { timeoutMs?: number; token?: string } = {}): Promise<T> {
+    const response = await this.request(path, init);
+    if (!response.ok) throw await toError(response, path);
+    return (await response.json()) as T;
+  }
+
+  async healthz(): Promise<boolean> {
+    const response = await this.request("/v1/healthz", { timeoutMs: 5_000 });
+    return response.ok;
+  }
+
+  identity(): Promise<{ principal: string; name?: string; role: string; via?: string }> {
+    return this.json("/v1/identity");
+  }
+
+  status(): Promise<SimlockStatus> {
+    return this.json("/v1/status");
+  }
+
+  catalog(platform?: string): Promise<SimlockCatalog> {
+    return this.json(`/v1/catalog${platform === undefined ? "" : `?platform=${encodeURIComponent(platform)}`}`);
+  }
+
+  async workers(operatorToken: string): Promise<SimlockWorker[]> {
+    const body = await this.json<{ workers?: SimlockWorker[] }>("/v1/workers", { token: operatorToken });
+    return body.workers ?? [];
+  }
+
+  /** Undefined when the lease has ended or never existed. */
+  async lease(leaseId: string): Promise<SimlockLease | undefined> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}`);
+    if (response.status === 404) return undefined;
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}");
+    const body = (await response.json()) as { lease?: SimlockLease };
+    return body.lease;
+  }
+
+  /**
+   * Runs one allowlisted adb/simctl command on the lease's device (the worker fills the device in).
+   * Internal only: Tapdance never forwards caller-chosen arguments here.
+   */
+  async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000): Promise<ExecResult> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/exec`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tool, args }),
+      timeoutMs,
+    });
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/exec");
+    return parseExecStream(await response.text());
+  }
+}
+
+/** Parses Simlock's exec Server-Sent Events: `output` chunks, then `exit` or `error`. */
+export function parseExecStream(body: string): ExecResult {
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | undefined;
+  for (const block of body.split(/\r?\n\r?\n/)) {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+    }
+    if (data.length === 0) continue;
+    let payload: Record<string, unknown>;
+    try {
+      payload = JSON.parse(data.join("\n")) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (event === "output") {
+      const chunk = typeof payload["chunk"] === "string" ? payload["chunk"] : "";
+      if (payload["stream"] === "stderr") stderr += chunk;
+      else stdout += chunk;
+    } else if (event === "exit") {
+      exitCode = typeof payload["exitCode"] === "number" ? payload["exitCode"] : -1;
+    } else if (event === "error") {
+      const code = typeof payload["code"] === "string" ? payload["code"] : "EXEC_FAILED";
+      const message = typeof payload["message"] === "string" ? payload["message"] : "exec failed";
+      throw new TapdanceError(SIMLOCK_CODE_MAP[code] ?? "DEVICE_ERROR", `${code}: ${message}`);
+    }
+  }
+  if (exitCode === undefined) {
+    throw new TapdanceError("DEVICE_ERROR", "The worker ended the command without an exit status");
+  }
+  return { exitCode, stdout, stderr };
+}
+
+async function toError(response: Response, path: string): Promise<TapdanceError> {
+  let code = `HTTP_${response.status}`;
+  let message = `${path} answered ${response.status}`;
+  try {
+    const body = (await response.json()) as { error?: { code?: string; message?: string } };
+    if (body.error?.code) code = body.error.code;
+    if (body.error?.message) message = body.error.message;
+  } catch {
+    // Not JSON: keep the status line.
+  }
+  const mapped: ErrorCode =
+    SIMLOCK_CODE_MAP[code] ??
+    (response.status === 401
+      ? "AUTH_FAILED"
+      : response.status === 403
+        ? "FORBIDDEN"
+        : response.status === 404
+          ? "NOT_SUPPORTED"
+          : response.status >= 500
+            ? "PROVIDER_UNAVAILABLE"
+            : "DEVICE_ERROR");
+  const hint =
+    mapped === "AUTH_FAILED"
+      ? "The token is missing, revoked or from another daemon. Run `tapdance config set-token`."
+      : mapped === "LEASE_ALREADY_HELD"
+        ? "Release the current lease with `tapdance device release` first."
+        : mapped === "WORKER_OFFLINE"
+          ? "The machine holding the device is offline (asleep, network down, or its daemon restarting). The lease stays yours until it expires; retry shortly."
+          : mapped === "DEVICE_UNAVAILABLE" && /RUNTIME_MISSING|UNKNOWN_MODEL/.test(code)
+            ? "Install the runtime or system image on a worker: `tapdance devices install <ios|android> <version>`, then check `tapdance devices`."
+            : undefined;
+  const retryAfter = Number(response.headers.get("retry-after"));
+  return new TapdanceError(mapped, message, { ...(hint === undefined ? {} : { hint }), details: { status: response.status, backendCode: code }, ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000 } : {}) });
+}

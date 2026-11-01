@@ -1,0 +1,113 @@
+name: Field-test finding
+description: A result from running Tapdance on real infrastructure (passed or failed).
+title: "[field-test] "
+labels: ["field-test"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Field tests are how Tapdance proves what works. Report passes as well as failures: a pass with
+        evidence can move a STATUS.md row to ✅. Real devices and real machines only; if anything was
+        mocked, say so.
+
+        Start with:
+
+        ```bash
+        tapdance report --kind field-test --title "..." --steps "..." --expected "..." --actual "..." --evidence "path1,path2" -o report.md
+        ```
+
+        Read `report.md` before posting, and never include tokens or join tokens.
+        See docs/testing/field-testing.md for the runbook.
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: 'One line, for example "Laptop worker behind a VPS gateway: lease works, install fails".'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Failed
+        - Partly worked
+        - Passed
+    validations:
+      required: true
+
+  - type: input
+    id: product-ids
+    attributes:
+      label: Requirement or proof IDs exercised
+      description: From PRODUCT.md, for example Q-06, M-02, F-01.
+      placeholder: Q-06, M-02
+
+  - type: textarea
+    id: topology
+    attributes:
+      label: Topology
+      description: Every machine involved and what runs on it. Hide public IPs and hostnames.
+      value: |
+        | Role | Machine and OS | Provider / location | Versions |
+        | --- | --- | --- | --- |
+        | Agent (Claude Code, Codex, ...) | | | tapdance: |
+        | Gateway | | | simlock: |
+        | Worker | | | Xcode / Android SDK: |
+        | Device | | | model, OS: |
+        | Browser viewer (if used) | | | |
+
+        Network between them (TLS proxy, Tailscale, SSH tunnel, plain private network):
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps
+      description: Exact commands and MCP calls, in order, on which machine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened. Paste errors, ideally `--json` output.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Screenshots, recordings and log excerpts. Drag files here, or list artifact paths and timings (lease time, install time).
+
+  - type: textarea
+    id: report
+    attributes:
+      label: tapdance report output
+      description: From the machine that ran the agent. Add the worker's `tapdance worker check` output if relevant.
+      render: markdown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmations
+      options:
+        - label: This ran on real machines and real devices, not mocks.
+          required: true
+        - label: I removed tokens, secrets, public IPs and private hostnames.
+          required: true

@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.tsbuildinfo
+tapdance-artifacts/
+.tapdance/
+tapdance.local.json
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+.DS_Store
+coverage/
+examples/*/build/

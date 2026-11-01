@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Tapdance N2 worker startup script (rendered by Terraform; runs as root at every boot).
+#
+# It prepares the machine only: KVM packages, the kvm udev rule, and the install scripts in
+# /opt/tapdance. It holds no secrets and never joins a gateway. Log: /var/log/tapdance-startup.log
+# and `sudo journalctl -u google-startup-scripts`.
+#
+# Note for editors: Terraform's templatefile() treats dollar-brace sequences as template
+# interpolation, so this file uses plain $VAR shell syntax only.
+
+set -euo pipefail
+exec >>/var/log/tapdance-startup.log 2>&1
+echo "=== tapdance startup $(date -Is)"
+
+install -d -m 0755 /opt/tapdance
+echo '${install_worker_b64}' | base64 -d >/opt/tapdance/install-android-worker.sh
+echo '${check_kvm_b64}' | base64 -d >/opt/tapdance/check-kvm.sh
+chmod 0755 /opt/tapdance/install-android-worker.sh /opt/tapdance/check-kvm.sh
+
+MARKER=/var/lib/tapdance/startup-packages-done
+if [ ! -f "$MARKER" ]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  # Ubuntu 24.04 made qemu-kvm a virtual package; fall back to qemu-system-x86 there.
+  QEMU_PKG=qemu-system-x86
+  if apt-cache policy qemu-kvm 2>/dev/null | awk '/Candidate:/ {print $2}' | grep -qv '(none)'; then
+    QEMU_PKG=qemu-kvm
+  fi
+  apt-get install -y --no-install-recommends "$QEMU_PKG" cpu-checker ca-certificates curl gnupg unzip git
+  install -d -m 0755 /var/lib/tapdance
+  touch "$MARKER"
+fi
+
+getent group kvm >/dev/null || groupadd --system kvm
+echo 'KERNEL=="kvm", GROUP="kvm", MODE="0660", OPTIONS+="static_node=kvm"' >/etc/udev/rules.d/65-tapdance-kvm.rules
+if grep -qw vmx /proc/cpuinfo; then
+  modprobe kvm_intel || true
+else
+  echo "WARNING: no vmx flag in /proc/cpuinfo: nested virtualization is not active on this VM."
+fi
+udevadm control --reload-rules
+udevadm trigger --name-match=kvm || true
+
+if kvm-ok; then
+  echo "KVM acceleration is usable."
+else
+  echo "KVM acceleration is NOT usable. Run /opt/tapdance/check-kvm.sh for details."
+fi
+
+install -d -m 0755 /etc/motd.d
+cat >/etc/motd.d/60-tapdance <<'EOF'
+Tapdance Android worker VM.
+  1. bash /opt/tapdance/install-android-worker.sh --accept-android-licenses
+     (only after reading the Android SDK licences; or omit the flag to be prompted)
+  2. tapdance worker login --accept-gateway-exec --gateway wss://<gateway> --label <name>   (token from a hidden prompt)
+  KVM diagnostics: bash /opt/tapdance/check-kvm.sh
+EOF
+echo "=== tapdance startup done $(date -Is)"

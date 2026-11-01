@@ -1,0 +1,55 @@
+name: Missing feature
+description: Something you need that Tapdance does not do yet.
+title: "[feature] "
+labels: ["missing-feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tapdance orchestrates; existing tools execute. Many features belong in Simlock, agent-device,
+        AXe, asc, Google's Android CLI or another existing tool, and Tapdance should integrate them
+        rather than rebuild them. Check PRODUCT.md and STATUS.md first: your need may already be
+        a requirement that is planned, partial or blocked.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task, not the solution. Who runs it (you, your agent, CI) and where?
+    validations:
+      required: true
+
+  - type: textarea
+    id: today
+    attributes:
+      label: What happens today
+      description: The command or MCP call you tried, and what it did or which error it gave.
+      render: text
+
+  - type: input
+    id: product-id
+    attributes:
+      label: PRODUCT.md requirement ID, if any
+      description: For example M-02, U-02 or E-04. Leave empty if no existing requirement covers it.
+      placeholder: E-04
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like
+      description: The command, MCP tool or behaviour you expect. Keep it platform-neutral where you can.
+
+  - type: textarea
+    id: existing-tools
+    attributes:
+      label: Existing tools that already do this
+      description: Upstream projects, CLIs or MCP servers that cover it, with links and licenses if you know them.
+
+  - type: dropdown
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - I can open a pull request
+        - I can test it on real infrastructure
+        - Not right now

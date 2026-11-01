@@ -1,0 +1,119 @@
+name: Bug report
+description: Something in Tapdance does not work as documented.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The fastest way to fill this in is:
+
+        ```bash
+        tapdance report --kind bug --title "..." --steps "..." --expected "..." --actual "..." -o report.md
+        ```
+
+        and paste `report.md` below. It redacts tokens it recognises, but **read it before posting**.
+        Never paste tokens, join tokens, App Store Connect keys or signing material.
+        Security problems go through private reporting instead (see SECURITY.md).
+
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: One line. What went wrong?
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Tapdance version
+      description: Output of `tapdance --version` (or the commit if you built from source).
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Deployment mode
+      options:
+        - Local (device on the same machine)
+        - Laptop or Mac as a remote worker behind a gateway
+        - Self-hosted Linux KVM worker (Google Cloud N2, OVH, dedicated server)
+        - Cloud Mac worker (Scaleway, MacStadium, AWS EC2 Mac)
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Device platform
+      options:
+        - iOS simulator
+        - Android emulator
+        - Physical device
+        - Not device-specific
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where did it happen?
+      multiple: true
+      options:
+        - CLI
+        - MCP over stdio
+        - MCP over Streamable HTTP
+        - SDK
+        - Browser viewer (tapdance view)
+        - External tool pass-through (tool / asc / android / execute_tool)
+        - Gateway or worker setup
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands or MCP calls, in order.
+      placeholder: |
+        1. tapdance device lease --platform ios --device "iPhone 16"
+        2. tapdance ui tap --text General
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened instead. Paste the error, ideally the `--json` output.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: report
+    attributes:
+      label: tapdance report output
+      description: Output of `tapdance report` (environment, versions, doctor checks, lease). Redacted, but check it.
+      render: markdown
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed tokens, secrets and private hostnames from everything above.
+          required: true
+        - label: I checked STATUS.md, and this is not a feature it lists as missing or untested.
+          required: false
