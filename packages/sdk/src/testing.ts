@@ -19,9 +19,23 @@ export class FakeProvider implements DeviceProvider {
   readonly calls: Array<{ method: string; args: unknown[] }> = [];
   readonly active = new Set<string>();
   private next = 1;
+  private readonly recordings = new Map<string, string>();
+  private readonly failures = new Map<string, Error>();
 
   private note(method: string, ...args: unknown[]): void {
     this.calls.push({ method, args });
+  }
+
+  /** Makes the next call of `method` throw `error` (once). */
+  failNext(method: keyof DeviceProvider, error: Error): void {
+    this.failures.set(method, error);
+  }
+
+  private failIfArmed(method: keyof DeviceProvider): void {
+    const error = this.failures.get(method);
+    if (error === undefined) return;
+    this.failures.delete(method);
+    throw error;
   }
 
   private check(handle: LeaseHandle): void {
@@ -59,15 +73,18 @@ export class FakeProvider implements DeviceProvider {
     };
   }
   async status(handle: LeaseHandle): Promise<LeaseStatus> {
+    this.failIfArmed("status");
     this.note("status", handle.leaseId);
     return this.active.has(handle.leaseId) ? { state: "active", handle, expiresAt: handle.expiresAt } : { state: "ended", handle };
   }
   async renew(handle: LeaseHandle): Promise<LeaseStatus> {
+    this.failIfArmed("renew");
     this.check(handle);
     this.note("renew", handle.leaseId);
     return { state: "active", handle, expiresAt: new Date(Date.now() + handle.ttlMs).toISOString() };
   }
   async release(handle: LeaseHandle) {
+    this.failIfArmed("release");
     this.note("release", handle.leaseId);
     return { released: this.active.delete(handle.leaseId) };
   }
@@ -96,6 +113,7 @@ export class FakeProvider implements DeviceProvider {
     return { app: "com.example.app", elements: [{ ref: "@e1", role: "button", label: "Sign in" }], truncated: false, warnings: [] };
   }
   async tap(handle: LeaseHandle, target: ElementTarget): Promise<ActionResult> {
+    this.failIfArmed("tap");
     this.check(handle);
     this.note("tap", target);
     return { ok: true, message: "Tapped", changes: ["+ @e2 [text-field] \"Email\""] };
@@ -132,13 +150,22 @@ export class FakeProvider implements DeviceProvider {
     return { path: outPath, width: 1, height: 1 };
   }
   async startRecording(handle: LeaseHandle, outPath: string) {
+    this.failIfArmed("startRecording");
     this.check(handle);
+    this.note("startRecording", outPath);
+    // 2 KiB of stand-in video, so callers that size the file see real bytes.
+    await writeFile(outPath, Buffer.alloc(2048, 1));
+    this.recordings.set(handle.leaseId, outPath);
     return { path: outPath };
   }
   async stopRecording(handle: LeaseHandle) {
+    this.failIfArmed("stopRecording");
     this.check(handle);
-    const last = this.calls.filter((c) => c.method === "lease").length;
-    return { path: `/tmp/fake-${last}.mp4`, extraPaths: [] };
+    this.note("stopRecording", handle.leaseId);
+    const path = this.recordings.get(handle.leaseId);
+    this.recordings.delete(handle.leaseId);
+    if (path === undefined) throw new TapdanceError("USAGE", "no recording running");
+    return { path, extraPaths: [] as string[] };
   }
   async logs(handle: LeaseHandle) {
     this.check(handle);

@@ -55,6 +55,7 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
     if (/stopped|not running/i.test(status)) break;
     await new Promise((r) => setTimeout(r, 1000));
   }
+  if (!gateway) await killStaleAdbServer(out);
   for (let attempt = 1; ; attempt++) {
     try {
       await simlock([...flag, "daemon", "start"]);
@@ -64,6 +65,51 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
       await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
   }
+}
+
+/**
+ * Simlock runs its own adb server on a private port and records it in adb-server.json. If that server
+ * outlives the daemon, the next start finds the port "occupied" and Android stays off. Stop it.
+ */
+async function killStaleAdbServer(out: ReturnType<typeof output>): Promise<void> {
+  let port: unknown;
+  try {
+    port = (JSON.parse(await readFile(join(simlockHome(), "adb-server.json"), "utf8")) as { port?: unknown }).port;
+  } catch {
+    return;
+  }
+  if (typeof port !== "number" || !Number.isInteger(port) || port === 5037) return;
+  const sdk = process.env["ANDROID_HOME"] ?? process.env["ANDROID_SDK_ROOT"] ?? join(homedir(), osPlatform() === "darwin" ? "Library/Android/sdk" : "Android/Sdk");
+  const adb = existsSync(join(sdk, "platform-tools", "adb")) ? join(sdk, "platform-tools", "adb") : "adb";
+  await exec(adb, ["-P", String(port), "kill-server"], { timeout: 15_000 }).then(
+    () => out.progress(`Stopped Simlock's leftover adb server on port ${port}`),
+    () => undefined,
+  );
+}
+
+/**
+ * Switching Simlock's iOS device set while its own set still holds simulators leaves iOS disabled
+ * (`device-set-changed`). Refuse up front and give Simlock's documented migration.
+ */
+async function checkDeviceSetSwitch(): Promise<void> {
+  let current = "simlock";
+  try {
+    const config = JSON.parse(await readFile(join(simlockHome(), "config.json"), "utf8")) as { drivers?: { ios?: { deviceSet?: unknown } } };
+    if (typeof config.drivers?.ios?.deviceSet === "string") current = config.drivers.ios.deviceSet;
+  } catch {
+    // No config yet: Simlock's default is its own set.
+  }
+  if (current === "default") return;
+  const own = await readdir(join(simlockHome(), "devices", "ios")).catch(() => [] as string[]);
+  if (own.filter((n) => !n.startsWith(".")).length === 0) return;
+  throw new TapdanceError("USAGE", `Simlock still has ${own.length} simulator(s) in its own device set; switching to AXe now would turn iOS off`, {
+    hint: [
+      "Move them first (this ends every lease on this worker and deletes only Simlock's simulators, never yours):",
+      "  tapdance simlock --local nuke --delete-devices",
+      "  tapdance simlock --local doctor --purge-orphans",
+      "then run `tapdance worker install --ios-backend axe` again. See docs/ios/simulator-management.md.",
+    ].join("\n"),
+  });
 }
 
 async function readUserConfig(): Promise<Partial<TapdanceConfig>> {
@@ -144,6 +190,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         ];
         if (o.iosBackend === "axe") {
           // AXe only sees Xcode's default device set (it hardcodes deviceSetPath nil).
+          await checkDeviceSetSwitch();
           settings.push(["drivers.ios.deviceSet", "default"]);
           await writeConfigFile(userConfigPath(), { ...(await readUserConfig()), ios: { uiBackend: "axe" } });
         }
@@ -158,7 +205,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         }
         const status = await simlock(["--local", "status", "--json"]).catch(() => "{}");
         out.result({ configured: settings.map(([k]) => k), checks, status: safeJson(status) }, () =>
-          [renderChecks(checks), "", bold("Worker is running."), dim("This machine now serves devices to agents on it (provider: local)."), "To serve a remote agent, join a gateway:", "  tapdance worker login --gateway wss://<gateway> --label my-laptop"].join("\n"),
+          [renderChecks(checks), "", bold("Worker is running."), dim("This machine now serves devices to agents on it (provider: local)."), "To serve a remote agent from a personal Mac, use device-only mode: tapdance worker guard start (see docs/security/personal-mac.md).", "On a dedicated worker machine: tapdance worker login --accept-gateway-exec --gateway wss://<gateway> --label <name>"].join("\n"),
         );
       } catch (error) {
         process.exitCode = out.error(error);
@@ -225,7 +272,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
           await writeFile(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
         }
         await restart(false, out);
-        out.result({ left: true }, () => "Left the gateway. Revoke this worker's join token on the gateway: `simlock --gateway token list` then `token revoke <id>`.");
+        out.result({ left: true }, () => "Left the gateway. Revoke this worker's join token on the gateway: `tapdance simlock -- --gateway token list`, then `tapdance simlock -- --gateway token revoke <id>`.");
       } catch (error) {
         process.exitCode = out.error(error);
       }
@@ -351,7 +398,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         const text = await simlock(["--gateway", "token", "create", "--role", o.role, "--label", o.label]);
         const parsed = safeJson(text) as { secret?: string; token?: unknown } | undefined;
         // This one command exists to hand a secret to a person, so it prints it.
-        process.stdout.write(`${globals().json ? JSON.stringify(parsed, null, 2) : `${parsed?.secret}\n${dim("Shown once. Revoke with: simlock --gateway token revoke <id>")}`}\n`);
+        process.stdout.write(`${globals().json ? JSON.stringify(parsed, null, 2) : `${parsed?.secret}\n${dim("Shown once. Revoke with: tapdance simlock -- --gateway token revoke <id>")}`}\n`);
       } catch (error) {
         process.exitCode = out.error(error);
       }

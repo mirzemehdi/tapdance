@@ -85,7 +85,14 @@ export interface Credentials {
   token?: string;
   /** Operator token, only for fleet views such as `tapdance workers list`. */
   operatorToken?: string;
+  /** The URL origin `token` was saved for; Tapdance sends the token nowhere else. Unset for older files and TAPDANCE_TOKEN. */
+  endpoint?: string;
+  /** The URL origin `operatorToken` was saved for. */
+  operatorEndpoint?: string;
 }
+
+/** Where the resolved `endpoint` came from: a repository's file is not trusted with an unbound token. */
+export type EndpointSource = "user" | "project" | "env";
 
 export interface ResolvedConfig {
   config: TapdanceConfig;
@@ -96,6 +103,48 @@ export interface ResolvedConfig {
   credentialSources: string[];
   home: string;
   artifactsDir: string;
+  /** Where `config.endpoint` came from, when it is set. */
+  endpointSource?: EndpointSource;
+  /** Settings Tapdance ignored, for `config show` and doctor. */
+  warnings: string[];
+}
+
+/**
+ * Settings that pick which executables run, which agents may mutate, and where a local token is
+ * read from. A repository's tapdance.config.json could otherwise point them at anything, so they are
+ * read only from the user's ~/.tapdance/config.json and the environment.
+ */
+export const USER_ONLY_CONFIG_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["tools", "paths"],
+  ["tools", "mcpEnabled"],
+  ["tools", "allowMutation"],
+  ["ios", "axePath"],
+  ["simlock", "profilePath"],
+];
+
+/** Removes the user-only keys from a project file's contents, returning what was there. */
+function stripUserOnly(project: Record<string, unknown>): { kept: Record<string, unknown>; removed: Array<{ key: string; path: readonly [string, string]; value: unknown }> } {
+  const kept: Record<string, unknown> = { ...project };
+  const removed: Array<{ key: string; path: readonly [string, string]; value: unknown }> = [];
+  for (const path of USER_ONLY_CONFIG_KEYS) {
+    const [section, key] = path;
+    const value = kept[section];
+    if (value === null || typeof value !== "object" || Array.isArray(value) || !(key in value)) continue;
+    const { [key]: dropped, ...rest } = value as Record<string, unknown>;
+    kept[section] = rest;
+    removed.push({ key: `${section}.${key}`, path, value: dropped });
+  }
+  return { kept, removed };
+}
+
+/** A URL's origin (`https://gw.example.com:8443`), or undefined when it is not a URL. */
+export function urlOrigin(url: string): string | undefined {
+  try {
+    const origin = new URL(url).origin;
+    return origin === "null" ? undefined : origin;
+  } catch {
+    return undefined;
+  }
 }
 
 export const PROJECT_CONFIG_FILE = "tapdance.config.json";
@@ -211,14 +260,21 @@ export async function loadCredentials(
     const data = await readJson(file);
     if (typeof data["token"] === "string") credentials.token = data["token"];
     if (typeof data["operatorToken"] === "string") credentials.operatorToken = data["operatorToken"];
+    const endpoint = typeof data["endpoint"] === "string" ? urlOrigin(data["endpoint"]) : undefined;
+    if (endpoint && credentials.token) credentials.endpoint = endpoint;
+    const operatorEndpoint = typeof data["operatorEndpoint"] === "string" ? urlOrigin(data["operatorEndpoint"]) : undefined;
+    if (operatorEndpoint && credentials.operatorToken) credentials.operatorEndpoint = operatorEndpoint;
     sources.push(file);
   }
+  // A token from the environment is bound to no origin.
   if (env["TAPDANCE_TOKEN"]) {
     credentials.token = env["TAPDANCE_TOKEN"];
+    delete credentials.endpoint;
     sources.push("TAPDANCE_TOKEN");
   }
   if (env["TAPDANCE_OPERATOR_TOKEN"]) {
     credentials.operatorToken = env["TAPDANCE_OPERATOR_TOKEN"];
+    delete credentials.operatorEndpoint;
     sources.push("TAPDANCE_OPERATOR_TOKEN");
   }
   return { credentials, sources };
@@ -233,9 +289,16 @@ export async function loadConfig(
   const sources: string[] = [];
   let merged: Record<string, unknown> = {};
 
+  let endpointSource: EndpointSource | undefined;
+  let ignored: Array<{ key: string; path: readonly [string, string]; value: unknown }> = [];
+  let userEndpoint: string | undefined;
+
   const userPath = userConfigPath(env);
   if (existsSync(userPath)) {
-    merged = deepMerge(merged, await readJson(userPath));
+    const user = await readJson(userPath);
+    merged = deepMerge(merged, user);
+    if (user["endpoint"] !== undefined) endpointSource = "user";
+    userEndpoint = typeof user["endpoint"] === "string" ? user["endpoint"] : undefined;
     sources.push(userPath);
   }
   const projectPath = options.configPath ?? env["TAPDANCE_CONFIG"] ?? findProjectConfig(cwd);
@@ -243,10 +306,18 @@ export async function loadConfig(
     if (!existsSync(projectPath)) {
       throw new TapdanceError("CONFIG_INVALID", `Config file ${projectPath} does not exist`);
     }
-    merged = deepMerge(merged, await readJson(projectPath));
+    const { kept, removed } = stripUserOnly(await readJson(projectPath));
+    ignored = removed;
+    merged = deepMerge(merged, kept);
+    // Repeating the user's own endpoint does not make it the project's.
+    const projectEndpoint = kept["endpoint"];
+    if (projectEndpoint !== undefined && (typeof projectEndpoint !== "string" || userEndpoint === undefined || urlOrigin(projectEndpoint) !== urlOrigin(userEndpoint))) {
+      endpointSource = "project";
+    }
     sources.push(projectPath);
   }
   const overrides = envOverrides(env);
+  if (overrides["endpoint"] !== undefined) endpointSource = "env";
   if (Object.keys(overrides).length > 0) {
     merged = deepMerge(merged, overrides);
     sources.push("environment");
@@ -263,7 +334,23 @@ export async function loadConfig(
   const artifactsDir = isAbsolute(config.artifacts.directory)
     ? config.artifacts.directory
     : resolve(base, config.artifacts.directory);
-  return { config, sources, credentials, credentialSources, home: tapdanceHome(env), artifactsDir };
+  const warnings: string[] = [];
+  for (const { key, path, value } of ignored) {
+    const effective = (config as unknown as Record<string, Record<string, unknown>>)[path[0]]?.[path[1]];
+    if (JSON.stringify(value) !== JSON.stringify(effective)) {
+      warnings.push(`Ignored ${key} from ${projectPath}: security settings are read only from ~/.tapdance/config.json (\`tapdance config set --global\`) or the environment`);
+    }
+  }
+  return {
+    config,
+    sources,
+    credentials,
+    credentialSources,
+    home: tapdanceHome(env),
+    artifactsDir,
+    ...(config.endpoint !== undefined && endpointSource !== undefined ? { endpointSource } : {}),
+    warnings,
+  };
 }
 
 export async function writeJsonFile(path: string, data: unknown, mode?: number): Promise<void> {
@@ -272,10 +359,27 @@ export async function writeJsonFile(path: string, data: unknown, mode?: number):
   if (mode !== undefined) await chmod(path, mode);
 }
 
+/**
+ * Merges `update` into ~/.tapdance/credentials.json (mode 600). Endpoints are stored as URL origins.
+ * A new token saved without its endpoint drops the old binding, so it never inherits another
+ * token's origin.
+ */
 export async function saveCredentials(update: Credentials, env: NodeJS.ProcessEnv = process.env): Promise<string> {
   const file = credentialsPath(env);
   const current: Credentials = existsSync(file) ? ((await readJson(file)) as Credentials) : {};
-  await writeJsonFile(file, { ...current, ...update }, 0o600);
+  const next: Credentials = { ...current, ...update };
+  for (const [tokenKey, endpointKey] of [["token", "endpoint"], ["operatorToken", "operatorEndpoint"]] as const) {
+    if (update[tokenKey] !== undefined && update[endpointKey] === undefined) delete next[endpointKey];
+    const endpoint = next[endpointKey];
+    if (endpoint !== undefined) {
+      const origin = urlOrigin(endpoint);
+      if (origin === undefined || !/^https?:/.test(origin)) {
+        throw new TapdanceError("USAGE", `${endpoint} is not an http(s) URL`, { hint: "Pass the gateway's base URL, e.g. https://gateway.example.com." });
+      }
+      next[endpointKey] = origin;
+    }
+  }
+  await writeJsonFile(file, next, 0o600);
   return file;
 }
 

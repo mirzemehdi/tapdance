@@ -34,7 +34,8 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
         if (host === "0.0.0.0") out.warn("Listening on all interfaces: anyone who can reach this port and has the link can control the device.");
         await t.viewer(); // fails early, with a clear error, when no device is leased
         const { url, close } = await startViewer(t, { host, port, holdMs: cfg.humanHoldMs, log: (m) => out.progress(m) });
-        out.result({ url }, () =>
+        // The link's `#k=` key is the one secret this command exists to hand the person: not redacted.
+        out.secretResult({ url }, () =>
           [
             bold(`Viewer: ${url}`),
             dim("The link carries a one-time key; it stops working when this process exits or the lease ends."),
@@ -119,7 +120,7 @@ export async function startViewer(
         const upstream = await fetch(endpoints.streamUrl, { headers: endpoints.headers });
         if (!upstream.ok || !upstream.body) {
           let message = `stream unavailable (${upstream.status})`;
-          if (upstream.status === 404) message = "Live streaming is off on this worker. Run `tapdance worker install` there (or `simlock config set capabilities.stream.enabled true` and restart), and on the gateway too.";
+          if (upstream.status === 404) message = "Live streaming is off on this worker. Run `tapdance worker install` there (or `tapdance simlock -- config set capabilities.stream.enabled true` and `tapdance worker restart`), and on the gateway too.";
           else message = await upstream.text().catch(() => message);
           return send(res, upstream.status === 404 ? 503 : upstream.status, { error: message });
         }

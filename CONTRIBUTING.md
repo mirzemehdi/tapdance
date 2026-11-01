@@ -37,7 +37,8 @@ node packages/cli/dist/main.js --help
 | `packages/provider-simlock` | The only provider today. Talks to a Simlock worker or gateway and to agent-device through Simlock's proxy. Optional AXe backend. |
 | `packages/sdk` | The `Tapdance` class used by the CLI and MCP server, the provider factory, keepalive, host checks (Xcode, Android SDK, KVM), and the external tool registry. `@tapdance/sdk/testing` exports `FakeProvider`. |
 | `packages/mcp` | MCP tool definitions (`tools.ts`) and the stdio and Streamable HTTP server. |
-| `packages/cli` | The `tapdance` command, the browser viewer, and `tapdance report`. |
+| `packages/cli` | The `tapdance` command, the browser viewer, `tapdance report`, and the worker guard for device-only mode (`src/guard/`). |
+| `scripts/` | `gen-cli-index.mjs`: generates the command index in `docs/cli-reference.md` (`pnpm docs:cli`; `pnpm docs:check` fails when it is stale). |
 | `docs/` | User documentation, the ADR, test procedures and evidence. |
 | `infrastructure/` | Reference Terraform and install scripts. Nothing in `packages/` depends on it. |
 
@@ -56,7 +57,9 @@ Unit tests that stand in for a real device, worker or external tool must say so 
 a comment ("mocked executable", "FakeProvider"). A mocked test never justifies a ✅ in STATUS.md.
 
 `packages/cli/src/cli.test.ts` runs the built CLI. One of its checks walks `tapdance --help` and fails
-if any source file names a `tapdance` command that does not exist, so keep hints and messages honest.
+if any source file or doc names a `tapdance` command that does not exist, so keep hints and messages
+honest. Another fails when a command, MCP tool or config key is undocumented or the generated command
+index is stale: after adding a command or flag, run `pnpm build && pnpm docs:cli`.
 
 ### Running the real integration test
 
@@ -173,6 +176,8 @@ and removes its own code when an upstream tool gains the capability.
 ## Pull requests and issues
 
 - Use the [pull request template](.github/pull_request_template.md). It contains the checklist.
+- Commit messages and PR descriptions carry no AI attribution (no AI `Co-Authored-By` lines or
+  "Generated with" footers), also when a coding agent helped.
 - Report bugs, missing features and field-test findings with the
   [issue templates](.github/ISSUE_TEMPLATE/). `tapdance report` writes a redacted report you can paste.
 - Report security problems privately, as described in [SECURITY.md](SECURITY.md).

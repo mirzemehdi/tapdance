@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { extname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { extname, join, resolve } from "node:path";
+import { promisify } from "node:util";
 import { createAgentDeviceClient, type AgentDeviceClient } from "agent-device";
 import {
   TapdanceError,
@@ -123,7 +126,7 @@ export class SimlockProvider implements DeviceProvider {
         title: "Token accepted",
         status: who.role === "agent" ? "pass" : "warn",
         detail: `role ${who.role}${who.name ? `, label "${who.name}"` : ""}`,
-        ...(who.role === "agent" ? {} : { fix: "Use an agent token for agents: `simlock token create --role agent --label <agent>`." }),
+        ...(who.role === "agent" ? {} : { fix: "Use an agent token for agents: mint one on the gateway with `tapdance gateway token --role agent --label <agent>`." }),
       });
     } catch (error) {
       checks.push({ id: "simlock.auth", title: "Token accepted", status: "fail", detail: (error as Error).message, fix: "Run `tapdance config set-token` with a valid agent token." });
@@ -153,7 +156,9 @@ export class SimlockProvider implements DeviceProvider {
         detail: ad === undefined ? "capability not reported" : `${ad.state}${ad.reason ? `: ${ad.reason}` : ""}`,
         ...(ad?.state === "available"
           ? {}
-          : { fix: "On each worker: `npm i -g agent-device@0.21.35`, `simlock config set capabilities.agent-device.enabled true`, restart the daemon. On a gateway set it there too." }),
+          : {
+              fix: "Run `tapdance worker install` on each worker (it enables the bundled agent-device); on a gateway: `tapdance simlock -- --gateway config set capabilities.agent-device.enabled true`, then restart.",
+            }),
       });
       for (const name of ["stream", "input"] as const) {
         const cap = caps.get(name);
@@ -162,7 +167,9 @@ export class SimlockProvider implements DeviceProvider {
           title: name === "stream" ? "Live screen streaming (browser viewer)" : "Remote input (browser viewer)",
           status: cap?.state === "available" ? "pass" : "warn",
           detail: cap === undefined ? "not reported" : `${cap.state}${cap.reason ? `: ${cap.reason}` : ""}`,
-          ...(cap?.state === "available" ? {} : { fix: `simlock config set capabilities.${name}.enabled true, then restart the daemon (gateway and workers).` }),
+          ...(cap?.state === "available"
+            ? {}
+            : { fix: `\`tapdance worker install\` (or \`tapdance simlock -- --local config set capabilities.${name}.enabled true\`), then \`tapdance worker restart\`.` }),
         });
       }
       for (const platform of ["android", "ios"] as const) {
@@ -188,7 +195,7 @@ export class SimlockProvider implements DeviceProvider {
           title: "Simlock version",
           status: same ? "pass" : "warn",
           detail: `${status.daemon.version} (${status.daemon.mode ?? "?"} mode); Tapdance is tested with ${TESTED_SIMLOCK_VERSION}`,
-          ...(same ? {} : { fix: `Run simlock ${TESTED_SIMLOCK_VERSION} on the gateway and every worker: each release talks only to its own protocol version.` }),
+          ...(same ? {} : { fix: `Run Simlock ${TESTED_SIMLOCK_VERSION} on the gateway and every worker: each release talks only to its own protocol version.` }),
         });
       }
       if (this.axe) {
@@ -225,7 +232,7 @@ export class SimlockProvider implements DeviceProvider {
         title: "Workers online",
         status: "skip",
         detail: "needs an operator token to list workers",
-        fix: "`tapdance config set-token --operator` (operator token from `simlock --gateway token create --role operator`).",
+        fix: "`tapdance config set-token --operator` (operator token from `tapdance gateway token --role operator --label <name>`).",
       });
     }
     return checks;
@@ -241,23 +248,34 @@ export class SimlockProvider implements DeviceProvider {
         const osVersions = new Set<string>(p.osVersions ?? []);
         const imageTags = new Set<string>(p.imageTags ?? []);
         for (const r of p.runtimes ?? []) {
+          if (typeof r === "string") {
+            osVersions.add(r);
+            continue;
+          }
           const v = r.osVersion ?? r.version;
           if (v) osVersions.add(v);
           const tag = r.imageTag ?? r.tag;
           if (tag) imageTags.add(tag);
         }
+        // Models with no installed OS image cannot be leased; listing them only invites failed leases.
+        const runtimesOf = p.modelRuntimes;
+        const models = runtimesOf ? (p.models ?? []).filter((m) => (runtimesOf[m]?.length ?? 1) > 0) : (p.models ?? []);
         return {
           platform: p.platform,
-          models: p.models ?? [],
+          models,
           osVersions: [...osVersions],
+          ...(p.defaultRuntime ? { defaultOsVersion: p.defaultRuntime } : {}),
           ...(imageTags.size > 0 ? { imageTags: [...imageTags] } : {}),
         };
       });
+    // Simlock's capacity `used` counts devices that exist (shut-down ones too), not leases: count leases here.
+    const platformOf = new Map(status.devices.map((d) => [d.id, d.spec?.platform ?? d.platform]));
     const capacity = (["android", "ios"] as const)
       .filter((p) => filter.platform === undefined || p === filter.platform)
       .map((platform) => {
         const c = status.capacity?.[platform];
-        return { platform, running: c?.running ?? 0, limit: c?.limit ?? 0, warm: c?.warm ?? 0, leased: c?.used ?? 0 };
+        const held = status.leases.filter((l) => l.deviceId !== undefined && platformOf.get(l.deviceId) === platform).length;
+        return { platform, running: c?.running ?? 0, limit: c?.limit ?? 0, warm: c?.warm ?? 0, leased: held };
       });
     const devices = status.devices
       .map((d) => {
@@ -298,7 +316,7 @@ export class SimlockProvider implements DeviceProvider {
         ];
       }
       throw new TapdanceError("FORBIDDEN", "Listing workers needs an operator token", {
-        hint: "Run `tapdance config set-token --operator` with a token from `simlock --gateway token create --role operator`.",
+        hint: "Run `tapdance config set-token --operator` with a token from `tapdance gateway token --role operator --label <name>`.",
       });
     }
     const workers = await this.http.workers(this.connection.operatorToken);
@@ -484,7 +502,9 @@ export class SimlockProvider implements DeviceProvider {
         ...(options.appId ? { app: options.appId } : {}),
         ...this.scope(handle),
       } as never);
-      const appId = result.appId ?? result.bundleId ?? result.package ?? (result.app && result.app !== path ? result.app : undefined);
+      let appId = result.appId ?? result.bundleId ?? result.package ?? (result.app && result.app !== path ? result.app : undefined);
+      // Without an id the agent cannot launch what it just installed; an iOS bundle names itself.
+      if (!appId && handle.platform === "ios") appId = await bundleIdOf(path);
       return { path, platform: handle.platform, ...(appId ? { appId } : {}) };
     } catch (error) {
       throw fromAgentDeviceError(error, "install");
@@ -544,11 +564,15 @@ export class SimlockProvider implements DeviceProvider {
         appName?: string;
         viewport?: { width?: number; height?: number };
         warnings?: unknown[];
+        refsGeneration?: unknown;
       };
+      // Refs pinned to this snapshot (`@e7~s4`): agent-device then refuses one the screen has
+      // since replaced instead of acting on whatever element now has that number.
+      const generation = typeof raw.refsGeneration === "number" && Number.isInteger(raw.refsGeneration) ? raw.refsGeneration : undefined;
       return {
         ...(raw.appBundleId ?? raw.appName ? { app: (raw.appBundleId ?? raw.appName) as string } : {}),
         ...(raw.viewport?.width && raw.viewport.height ? { viewport: { width: raw.viewport.width, height: raw.viewport.height } } : {}),
-        elements: (raw.nodes ?? []).map(toUiElement),
+        elements: (raw.nodes ?? []).map((node) => pinRef(toUiElement(node), generation)),
         truncated: raw.truncated ?? false,
         warnings: (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w))),
       };
@@ -754,12 +778,16 @@ export class SimlockProvider implements DeviceProvider {
     if (options.appId !== undefined) checkAppId(options.appId);
     if (handle.platform === "android") {
       const args = ["logcat", "-d", "-v", "threadtime", "-t", String(lines)];
+      let unfiltered = false;
       if (options.appId) {
         const pid = (await this.http.exec(handle.leaseId, "adb", ["shell", "pidof", options.appId])).stdout.trim().split(/\s+/)[0];
         if (pid && /^\d+$/.test(pid)) args.push(`--pid=${pid}`);
+        else unfiltered = true;
       }
       const result = await this.http.exec(handle.leaseId, "adb", args);
-      return toLogResult("logcat", result.stdout, lines);
+      const out = toLogResult(unfiltered ? "logcat (all processes)" : "logcat", result.stdout, lines);
+      if (unfiltered) out.lines.push(`Note: ${options.appId} is not running, so these lines are not filtered to it. Launch the app and fetch logs again.`);
+      return out;
     }
     const args = ["spawn", "log", "show", "--last", "3m", "--style", "compact"];
     if (options.appId) args.push("--predicate", `subsystem BEGINSWITH "${options.appId}" OR process == "${options.appId.split(".").at(-1)}"`);
@@ -838,12 +866,110 @@ function describe(target: ElementTarget): string {
   }
 }
 
-function actionResult(result: { message?: string; x?: number; y?: number; settle?: { diff?: unknown } } | undefined, fallback: string): ActionResult {
-  const out: ActionResult = { ok: true, message: result?.message ?? fallback };
-  if (typeof result?.x === "number" && typeof result.y === "number") out.point = { x: result.x, y: result.y };
-  const diff = result?.settle?.diff;
-  if (diff !== undefined) out.changes = summarizeDiff(diff);
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function asText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+const NEW_SCREEN_HINT = "New screen: call inspect_screen before targeting refs.";
+
+/**
+ * An agent-device interaction reply, reduced to what the next step needs: what changed, whether the
+ * screen was replaced, how the target was resolved, what is still tappable, and whether a fill took.
+ */
+export function actionResult(result: unknown, fallback: string): ActionResult {
+  const r = asRecord(result);
+  const out: ActionResult = { ok: true, message: asText(r["message"]) ?? fallback };
+  if (typeof r["x"] === "number" && typeof r["y"] === "number") out.point = { x: r["x"], y: r["y"] };
+  const settle = asRecord(r["settle"]);
+  if (settle["diff"] !== undefined) out.changes = summarizeDiff(settle["diff"]);
+  const hints: string[] = [];
+  const warnings: string[] = [];
+  const surface = asRecord(settle["surfaceChange"] ?? asRecord(r["evidence"])["surfaceChange"]);
+  if (Object.keys(surface).length > 0) {
+    out.screenChanged = true;
+    hints.push(NEW_SCREEN_HINT);
+    const disclosure = asText(surface["disclosure"]);
+    if (disclosure) warnings.push(disclosure);
+  }
+  const warning = asText(r["warning"]);
+  if (warning) warnings.push(warning);
+  for (const h of [asText(r["hint"]), asText(settle["hint"])]) if (h && !hints.includes(h)) hints.push(h);
+
+  const resolution = asRecord(r["resolution"]);
+  if (resolution["kind"] === "label-fallback" || resolution["kind"] === "disambiguated") {
+    out.resolvedBy = resolution["kind"];
+    const alternatives = (Array.isArray(resolution["alternatives"]) ? resolution["alternatives"] : [])
+      .map((a) => {
+        const entry = asRecord(a);
+        return asText(entry["label"]) ?? asText(entry["role"]) ?? asText(entry["diagnosticRef"]);
+      })
+      .filter((label): label is string => label !== undefined)
+      .slice(0, 5);
+    if (alternatives.length > 0) out.alternatives = alternatives;
+    if (resolution["kind"] === "label-fallback") warnings.push("That ref was stale; agent-device matched it by its label instead. Inspect again before reusing refs.");
+  }
+
+  if (Array.isArray(settle["tail"])) {
+    const still = settle["tail"]
+      .map((t) => {
+        const entry = asRecord(t);
+        const ref = asText(entry["ref"]);
+        if (!ref) return undefined;
+        const label = asText(entry["label"]);
+        return `@${ref.replace(/^@/, "")} [${asText(entry["role"]) ?? "element"}]${label ? ` "${label}"` : ""}`;
+      })
+      .filter((line): line is string => line !== undefined);
+    if (still.length > 0) out.stillOnScreen = still.slice(0, MAX_DIFF_LINES);
+  }
+
+  if (r["verification"] === "unconfirmed") {
+    out.typed = "unconfirmed";
+    const after = typeof r["after"] === "string" ? r["after"] : undefined;
+    if (after !== undefined) out.fieldNow = after;
+    warnings.push(`The field could not be read back with the requested text${after !== undefined ? `; it shows "${after}"` : ""}. Check it before submitting.`);
+  } else if (r["verification"] === "confirmed") {
+    out.typed = "confirmed";
+  }
+  if (warnings.length > 0) out.warning = warnings.join(" ");
+  if (hints.length > 0) out.hint = hints.join(" ");
   return out;
+}
+
+/** Pins a plain agent-device ref to the snapshot generation it came from. */
+function pinRef(element: UiElement, generation: number | undefined): UiElement {
+  if (generation === undefined || !/^@e\d+$/.test(element.ref)) return element;
+  return { ...element, ref: `${element.ref}~s${generation}` };
+}
+
+/**
+ * The bundle id of a simulator .app, read from its Info.plist: XML plists directly, binary ones
+ * through `plutil` when the machine has it. Undefined when it cannot be read.
+ */
+export async function bundleIdOf(appPath: string): Promise<string | undefined> {
+  const plist = join(appPath, "Info.plist");
+  let data: Buffer;
+  try {
+    if (!statSync(appPath).isDirectory()) return undefined;
+    data = await readFile(plist);
+  } catch {
+    return undefined;
+  }
+  let id: string | undefined;
+  if (data.subarray(0, 6).toString("latin1") === "bplist") {
+    try {
+      const { stdout } = await promisify(execFile)("plutil", ["-extract", "CFBundleIdentifier", "raw", "-o", "-", plist], { timeout: 10_000 });
+      id = stdout.trim();
+    } catch {
+      return undefined;
+    }
+  } else {
+    id = /<key>\s*CFBundleIdentifier\s*<\/key>\s*<string>\s*([^<]+?)\s*<\/string>/.exec(data.toString("utf8"))?.[1];
+  }
+  return id !== undefined && APP_ID.test(id) ? id : undefined;
 }
 
 const MAX_DIFF_LINES = 30;

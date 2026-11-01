@@ -55,7 +55,7 @@ export async function readLocalProfile(path: string): Promise<SimlockConnection>
     }
     throw new TapdanceError("PROVIDER_UNAVAILABLE", `No local Simlock worker profile at ${path}`, {
       hint:
-        "Start the local worker with `tapdance worker start` (it runs `simlock daemon start`), " +
+        "Start the local worker with `tapdance worker start` (it starts the Simlock daemon), " +
         "and make sure agent-device is installed so the worker serves it.",
     });
   }
@@ -95,7 +95,7 @@ export function remoteConnection(options: {
   if (!options.token) {
     throw new TapdanceError("AUTH_FAILED", `No agent token for ${options.endpoint}`, {
       hint:
-        "Create one on the gateway (`simlock --gateway token create --role agent --label <agent>`), then " +
+        "Create one on the gateway (`tapdance gateway token --role agent --label <agent>`), then " +
         "store it with `tapdance config set-token` or export TAPDANCE_TOKEN.",
     });
   }

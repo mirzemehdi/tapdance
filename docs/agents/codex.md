@@ -32,15 +32,14 @@ TAPDANCE_SESSION_ID = "my-app-codex"
 
 Notes:
 
-- **Timeouts.** Codex's default tool timeout is 60 s. A first lease can take longer (about 40 s for a
-  new iOS simulator on the test Mac, and up to 330 s of queue wait), so raise `tool_timeout_sec`.
-- **Working directory.** The server looks for `tapdance.config.json` from its working directory and
-  accepts `install_app` paths only inside it or `TAPDANCE_ALLOWED_ROOTS`. Set `cwd`, or pass
-  `args = ["--config", "/path/to/tapdance.config.json", "mcp"]`.
-- **Not on PATH?** Use `command = "node"` and
-  `args = ["/absolute/path/to/tapdance/packages/cli/dist/main.js", "mcp"]`.
-- **Tokens.** Do not put tokens in `config.toml`. For a self-hosted gateway, store the agent token with
-  `tapdance config set-token`, or forward it from your shell with `env_vars = ["TAPDANCE_TOKEN"]`.
+- **Timeouts.** Codex's default tool timeout is 60 s. A first lease can take longer (about 40 s for a new
+iOS simulator on the test Mac, and up to 330 s of queue wait), so raise `tool_timeout_sec`. - **Working
+directory.** The server looks for `tapdance.config.json` from its working directory and accepts
+`install_app` paths only inside it or `TAPDANCE_ALLOWED_ROOTS`. Set `cwd`, or pass `args = ["--config",
+"/path/to/tapdance.config.json", "mcp"]`. - **Not on PATH?** Use `command = "node"` and `args =
+["/absolute/path/to/tapdance/packages/cli/dist/main.js", "mcp"]`. - **Tokens.** Do not put tokens in
+`config.toml`. For a self-hosted gateway, store the agent token with `tapdance config set-token`, or
+forward it from your shell with `env_vars = ["TAPDANCE_TOKEN"]`.
 
 ### Remote server (Streamable HTTP)
 
@@ -97,6 +96,29 @@ tapdance --session my-app-codex view
 
 A touch in the browser takes control; the agent's next action gets `HUMAN_HELD` and should wait and
 retry.
+
+## Practical notes for agent runs
+
+**Build the app inside the project.** `install_app` refuses paths outside the directory the MCP server
+runs in. Build there:
+
+- iOS: `xcodebuild -scheme <App> -sdk iphonesimulator -derivedDataPath ./build build`, then install
+  `./build/Build/Products/Debug-iphonesimulator/<App>.app`.
+- Android: install `app/build/outputs/apk/debug/app-debug.apk`.
+
+If the build must stay elsewhere, add that directory to `TAPDANCE_ALLOWED_ROOTS` in the server's
+environment and restart the server. `install_app` returns the `appId` to launch; if it is missing,
+`list_apps` shows the installed apps.
+
+**Timeouts.** `lease_device` can take minutes: up to about 330 s in the queue, plus the time to create
+and boot a device. Codex's default tool timeout is 60 s, so set `tool_timeout_sec` (600 in the example above). If the call still times out, ask the agent to call `lease_device`
+again: the original request keeps running, and the second call returns the device with
+`reused: true` once it is granted.
+
+**Collecting evidence.** Ask the agent to `start_recording` before the flow and `stop_recording` after
+it, take screenshots at the important steps, then call `get_test_artifacts` and put the artifact paths
+in its report. `release_device` comes last, also after a failure; a recording still running at release
+is stopped and kept.
 
 ## Recommended prompts
 

@@ -71,9 +71,15 @@ claude mcp add tapdance -- tapdance mcp
 If your agent does not inherit your shell's `PATH`, use the absolute path instead:
 `node /absolute/path/to/tapdance/packages/cli/dist/main.js mcp`.
 
-The agent then gets tools such as `lease_device`, `install_app`, `launch_app`, `inspect_screen`,
-`tap`, `type_text`, `swipe`, `wait_for`, `take_screenshot`, `start_recording`, `get_logs` and
-`release_device`. Run `tapdance view` to watch the device in your browser, take over, and hand back.
+The agent then gets tools such as `lease_device`, `install_app`, `list_apps`, `launch_app`,
+`inspect_screen`, `tap`, `type_text`, `swipe`, `wait_for`, `take_screenshot`, `start_recording`,
+`get_logs`, `get_test_artifacts` and `release_device`. Run `tapdance view` to watch the device in your
+browser, take over, and hand back. `install_app` accepts only paths inside the project, so build there
+(iOS: `xcodebuild … -sdk iphonesimulator -derivedDataPath ./build`).
+
+The MCP server has been verified with a scripted MCP client on a real iOS simulator; it has not yet
+been run from inside Claude Code, Codex or Cursor, and Android has not run on a device (see
+[STATUS.md](STATUS.md) P-01).
 
 ## Deployment modes
 
@@ -82,6 +88,7 @@ The agent then gets tools such as `lease_device`, `install_app`, `launch_app`, `
 | Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android emulator: implemented, not run. |
 | Laptop as remote worker | An ordinary VPS (no KVM needed) that also runs the gateway | Your laptop or Mac, which dials out to the gateway | `provider: "self-hosted"` | Gateway + joined worker + CLI, MCP and viewer worked with **both on one Mac** ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)). **Not yet tested across two machines over a real network.** |
 | Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM | `provider: "self-hosted"` | Terraform and scripts written. **Never provisioned; Android not run.** |
+| Personal Mac, device-only | A VPS | Your Mac, reached over Tailscale through `tapdance worker guard` | `provider: "self-hosted"`, endpoint = guard URL | Full MCP loop through the guard on one Mac ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); across Tailscale not tested. |
 | Cloud Mac worker (Scaleway, MacStadium, AWS EC2 Mac) | A VPS | A rented Mac | `provider: "self-hosted"` | Documentation only. **Not exercised.** |
 | Managed cloud | Anywhere | Hosted by Tapdance | `provider: "cloud"` | **Not built.** The value is reserved and fails with `NOT_SUPPORTED`. |
 
@@ -138,7 +145,8 @@ it adds, and why.
   wrap Simlock's commands and add the host checks it lacks, such as KVM diagnostics.
 - **External tools without a command catalogue.** `tapdance tool <name> -- <args>` and the MCP
   `execute_tool` tool forward arguments unchanged to `asc`, `android`, `axe`, `maestro`, `fastlane`
-  or `xcodebuild`. Agents discover commands with the tool's own `--help`.
+  or `xcodebuild` (agents get `fastlane` and `xcodebuild` only when the user lists them in
+  `tools.mcpEnabled` in `~/.tapdance/config.json`). Agents discover commands with the tool's own `--help`.
 - **Field reports.** `tapdance report` writes a redacted, issue-ready bug report.
 
 ## CLI at a glance
@@ -148,13 +156,13 @@ Run `tapdance <command> --help` for every option. Global flags: `--json`, `--con
 
 | Area | Commands |
 | --- | --- |
-| Setup | `init`, `doctor`, `config show / path / set / set-token` |
+| Setup | `init`, `doctor`, `config show / path / set / set-token [--endpoint <url>]` |
 | Devices | `devices [list]`, `devices install <platform> <version>`, `workers list` |
 | Lease | `device lease`, `device status`, `device renew`, `device release` |
 | Apps | `app install <path>`, `app launch <appId>`, `app stop <appId>`, `app list` |
 | UI | `ui inspect`, `ui tap`, `ui swipe`, `ui type`, `ui wait`, `ui alert`, `ui key` |
 | Evidence | `screenshot`, `record start / stop`, `logs`, `artifacts`, `view` |
-| Self-hosting | `gateway setup / token / status`, `worker check / install / login / logout / start / stop / status / logs / restart`, `simlock` |
+| Self-hosting | `gateway setup / token / status`, `worker check / install / login / logout / start / stop / status / logs / restart`, `simlock`, `worker guard start / pair / tokens / revoke / policy / audit` |
 | External tools | `tools list / doctor / versions`, `tool <name> -- <args>`, `asc -- <args>`, `android -- <args>` |
 | Agents | `mcp` (stdio), `mcp --http` (Streamable HTTP) |
 | Reporting | `report` |
@@ -172,7 +180,9 @@ Working for real, on one Mac (macOS 26.5, Xcode 26.5, iPhone 16 simulator on iOS
 - uploading, installing and driving a custom simulator `.app` (the demo in `examples/ios-demo`);
 - the background keepalive;
 - the browser viewer's stream, input and human take-over;
-- `asc` pass-through.
+- `asc` pass-through;
+- device-only mode (`tapdance worker guard`): the full MCP loop through the guard on one Mac, plus
+  malicious-client unit tests ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)).
 
 Also proven on that Mac, through a real Simlock gateway with the worker joined over its outbound
 uplink (both daemons on the same machine): the CLI loop, the MCP integration test, and the viewer in
@@ -185,6 +195,9 @@ Built but **not yet proven** on real infrastructure:
 - the AXe iOS backend and Google's Android CLI;
 - a full device loop over the Streamable HTTP MCP transport (its bearer-token check and basic calls
   have run; a whole lease-to-release loop has not);
+- the MCP server from inside a real agent (Claude Code, Codex or Cursor): only a scripted MCP client
+  has driven it;
+- device-only mode across Tailscale, and the dedicated macOS worker account;
 - installing a custom app through a gateway, and installing any Android APK.
 
 Not built: running external tools on remote workers, Windows workers, cloud-Mac provisioning, and the
@@ -201,7 +214,9 @@ remote side reaches; it enforces a local policy, its own revocable tokens approv
 allowlisted device API, limits and an audit log
 ([docs/security/personal-mac.md](docs/security/personal-mac.md)). Use TLS or a private network such as
 Tailscale for anything beyond one machine; Tapdance refuses `ws://` to public hosts. Never commit
-tokens: Tapdance refuses to load a config file that contains one. Full threat model:
+tokens: Tapdance refuses to load a config file that contains one. A saved token is sent only to the
+endpoint it was saved for, and a project `tapdance.config.json` cannot change which programs agents may
+run (those settings live in `~/.tapdance/config.json`). Full threat model:
 [SECURITY.md](SECURITY.md).
 
 ## Documentation

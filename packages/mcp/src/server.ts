@@ -5,22 +5,53 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { Tapdance, processSessionIdentity, renewIfDue, type TapdanceOptions } from "@tapdance/sdk";
-import { SERVER_INSTRUCTIONS, TOOLS, errorResult } from "./tools.js";
+import { SERVER_INSTRUCTIONS, TOOLS, errorResult, type ToolExtra } from "./tools.js";
 
 export const SERVER_NAME = "tapdance";
 
+/**
+ * Routes Tapdance's progress messages to the MCP call that is running. Create it before the Tapdance
+ * (pass `emit` as its onProgress) and give it to createMcpServer, which points `sink` at the current
+ * call while that call runs.
+ */
+export interface ProgressRouter {
+  sink: ((message: string) => void) | undefined;
+  emit: (message: string) => void;
+}
+
+export function createProgressRouter(): ProgressRouter {
+  const router: ProgressRouter = { sink: undefined, emit: (message) => router.sink?.(message) };
+  return router;
+}
+
+/** A sink that sends `notifications/progress` for one call, or undefined when the client asked for none. */
+function progressSink(extra: ToolExtra | undefined): ((message: string) => void) | undefined {
+  const progressToken = extra?._meta?.progressToken;
+  if (progressToken === undefined || extra === undefined) return undefined;
+  let progress = 0;
+  return (message) => {
+    progress += 1;
+    extra.sendNotification({ method: "notifications/progress", params: { progressToken, progress, message } }).catch(() => undefined);
+  };
+}
+
 /** Builds an MCP server whose tools act for one Tapdance session. */
-export function createMcpServer(tapdance: Tapdance, version = "0.1.0"): McpServer {
+export function createMcpServer(tapdance: Tapdance, version = "0.1.0", progress?: ProgressRouter): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version }, { instructions: SERVER_INSTRUCTIONS });
   for (const tool of TOOLS) {
     server.registerTool(
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.input, annotations: tool.annotations },
-      (async (args: Record<string, unknown>) => {
+      (async (args: Record<string, unknown>, extra: ToolExtra) => {
+        const previous = progress?.sink;
+        const sink = progressSink(extra);
+        if (progress && sink) progress.sink = sink;
         try {
-          return await tool.run(tapdance, args ?? {});
+          return await tool.run(tapdance, args ?? {}, extra);
         } catch (error) {
           return errorResult(error);
+        } finally {
+          if (progress && sink) progress.sink = previous;
         }
       }) as never,
     );
@@ -38,6 +69,9 @@ export function startRenewal(tapdance: Tapdance, log: (m: string) => void): () =
     try {
       const outcome = await renewIfDue(tapdance, { idleMs, log: (m) => log(`tapdance: ${m}`) });
       if (outcome === "lost") log("tapdance: the lease ended; the next device tool call will say so");
+    } catch (error) {
+      // An unhandled rejection would end the process (Node 22), and with it the agent's tools.
+      log(`tapdance: renewal check failed: ${(error as Error).message}`);
     } finally {
       busy = false;
     }
@@ -59,8 +93,17 @@ async function shutdown(tapdance: Tapdance, log: (m: string) => void): Promise<v
 /** stdio transport: one server process per agent session, the lease released when the client goes. */
 export async function runStdio(options: TapdanceOptions = {}): Promise<void> {
   const log = (m: string) => process.stderr.write(`${m}\n`);
-  const tapdance = await Tapdance.create({ ...options, owner: "mcp", session: options.session ?? processSessionIdentity(options.env ?? process.env) });
-  const server = createMcpServer(tapdance);
+  const progress = createProgressRouter();
+  const tapdance = await Tapdance.create({
+    ...options,
+    owner: "mcp",
+    session: options.session ?? processSessionIdentity(options.env ?? process.env),
+    onProgress: (m) => {
+      options.onProgress?.(m);
+      progress.emit(m);
+    },
+  });
+  const server = createMcpServer(tapdance, undefined, progress);
   const stopRenewal = startRenewal(tapdance, log);
   let closing = false;
   const close = async () => {
@@ -142,7 +185,16 @@ export async function runHttp(options: HttpServerOptions): Promise<{ server: Ser
           },
         });
         const mcpId = randomBytes(8).toString("hex");
-        const tapdance = await Tapdance.create({ ...options, owner: "mcp", session: { id: `mcp-http:${mcpId}`, source: "mcp http session" } });
+        const progress = createProgressRouter();
+        const tapdance = await Tapdance.create({
+          ...options,
+          owner: "mcp",
+          session: { id: `mcp-http:${mcpId}`, source: "mcp http session" },
+          onProgress: (m) => {
+            options.onProgress?.(m);
+            progress.emit(m);
+          },
+        });
         const stop = startRenewal(tapdance, log);
         transport.onclose = () => {
           const id = transport.sessionId;
@@ -152,7 +204,7 @@ export async function runHttp(options: HttpServerOptions): Promise<{ server: Ser
             void shutdown(tapdance, log);
           }
         };
-        await createMcpServer(tapdance).connect(transport);
+        await createMcpServer(tapdance, undefined, progress).connect(transport);
         await transport.handleRequest(req, res, body);
         return;
       }

@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createWriteStream } from "node:fs";
-import { delimiter, isAbsolute, join } from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename, delimiter, isAbsolute, join } from "node:path";
 import { TapdanceError, redactSecrets } from "@tapdance/core";
 
 /**
@@ -31,6 +32,11 @@ export interface ToolSpec {
   deviceArgs?: (deviceId: string) => string[];
   /** For `lease` tools that pick the device from the environment (adb-based tools). */
   deviceEnv?: (deviceId: string, ctx: { adbServerPort?: number }) => Record<string, string>;
+  /**
+   * For `lease` tools whose subcommands each decide whether they take a device option (the Android CLI):
+   * the option to append, added only when that subcommand's own `--help` lists it.
+   */
+  deviceOption?: { flag: string; value: (deviceId: string) => string };
   /** Which platforms a `lease` tool can act on. */
   platforms?: Array<"android" | "ios">;
   refusedArgs?: RegExp;
@@ -68,7 +74,10 @@ export const TOOLS: ToolSpec[] = [
     env: ["ANDROID_*", "JAVA_HOME", "GRADLE_*"],
     // Simlock runs its emulators on its own adb server; point adb-based tools at it and at the lease.
     deviceEnv: (serial, ctx) => ({ ANDROID_SERIAL: serial, ...(ctx.adbServerPort ? { ANDROID_ADB_SERVER_PORT: String(ctx.adbServerPort) } : {}) }),
-    notes: "Device targeting uses adb's ANDROID_SERIAL and ANDROID_ADB_SERVER_PORT; not yet verified against a real Android CLI install. Commands that do not touch a device (docs, project setup) also work without a lease.",
+    // The Android CLI ignores ANDROID_SERIAL; device commands take --device=<serial> instead.
+    deviceOption: { flag: "--device", value: (serial) => `--device=${serial}` },
+    refusedArgs: /^--device(=|$)/,
+    notes: "Tapdance appends --device=<leased serial> to subcommands whose --help lists --device, and points adb at Simlock's adb server (ANDROID_ADB_SERVER_PORT). Commands that do not touch a device (docs, project setup) also work without a lease.",
   },
   {
     name: "fastlane",
@@ -135,6 +144,8 @@ export const TOOLS: ToolSpec[] = [
 
 const BASE_ENV = ["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TMPDIR", "TERM", "TZ"];
 const MAX_CAPTURE = 64 * 1024;
+// Raw output kept beyond MAX_CAPTURE so a secret straddling the cut is still whole when redacted.
+const CAPTURE_SLACK = 16 * 1024;
 
 export function findTool(name: string): ToolSpec {
   const spec = TOOLS.find((t) => t.name === name);
@@ -207,6 +218,14 @@ export async function runTool(spec: ToolSpec, options: RunToolOptions): Promise<
       hint: spec.location === "mac" || spec.os.length === 1 ? "Run it on a Mac. Remote Mac execution targets are not implemented yet; see STATUS.md." : undefined,
     });
   }
+  if (options.executableOverride !== undefined) {
+    const name = basename(options.executableOverride).replace(/\.(exe|cmd)$/i, "");
+    if (name !== spec.executable) {
+      throw new TapdanceError("FORBIDDEN", `tools.paths.${spec.name} must point to the ${spec.executable} program`, {
+        hint: `Set it to the full path of ${spec.executable} in ~/.tapdance/config.json, or remove it to use PATH.`,
+      });
+    }
+  }
   const executable = locate(options.executableOverride ?? spec.executable, env);
   if (!executable) {
     throw new TapdanceError("PROVIDER_UNAVAILABLE", `${spec.name} is not installed on this machine`, { hint: `Install: ${spec.install}` });
@@ -222,6 +241,10 @@ export async function runTool(spec: ToolSpec, options: RunToolOptions): Promise<
     throw new TapdanceError("NO_ACTIVE_LEASE", `${spec.name} acts on the session's device; lease one first`);
   }
   const childEnv = toolEnv(spec, env);
+  if (spec.location === "lease" && options.deviceId && spec.deviceOption && (await takesOption(executable, options.args, spec.deviceOption.flag, childEnv))) {
+    const at = args.indexOf("--");
+    args.splice(at === -1 ? args.length : at, 0, spec.deviceOption.value(options.deviceId));
+  }
   if (spec.location === "lease") {
     // Never let an inherited selector point the tool at a device outside the lease.
     for (const key of ["ANDROID_SERIAL", "ANDROID_ADB_SERVER_PORT", "ANDROID_ADB_SERVER_ADDRESS"]) delete childEnv[key];
@@ -247,9 +270,14 @@ export async function runTool(spec: ToolSpec, options: RunToolOptions): Promise<
     const next = current + chunk;
     if (next.length > MAX_CAPTURE) {
       truncated = true;
-      return next.slice(-MAX_CAPTURE);
+      return next.length > MAX_CAPTURE + CAPTURE_SLACK ? next.slice(-(MAX_CAPTURE + CAPTURE_SLACK)) : next;
     }
     return next;
+  };
+  // Redact first, then cut, so the cut cannot split a secret into a part the patterns miss.
+  const tail = (captured: string) => {
+    const clean = redactSecrets(captured);
+    return clean.length > MAX_CAPTURE ? clean.slice(-MAX_CAPTURE) : clean;
   };
   child.stdout?.on("data", (d: Buffer) => {
     stdout = keep(stdout, d.toString("utf8"));
@@ -270,6 +298,15 @@ export async function runTool(spec: ToolSpec, options: RunToolOptions): Promise<
     child.on("close", (code, sig) => resolve([code, sig]));
   }).finally(() => clearTimeout(timer));
   await Promise.all([files?.out, files?.err].map((s) => (s ? new Promise((r) => s.end(r)) : undefined)));
+  if (files) {
+    // The full output becomes an artifact an agent can read: it gets the same redaction as the reply.
+    for (const path of [`${options.outputPrefix}.stdout.txt`, `${options.outputPrefix}.stderr.txt`]) {
+      const raw = await readFile(path, "utf8").catch(() => undefined);
+      if (raw === undefined) continue;
+      const clean = redactSecrets(raw);
+      if (clean !== raw) await writeFile(path, clean, { mode: 0o600 });
+    }
+  }
   return {
     tool: spec.name,
     executable,
@@ -277,13 +314,48 @@ export async function runTool(spec: ToolSpec, options: RunToolOptions): Promise<
     exitCode,
     signal,
     durationMs: Date.now() - started,
-    stdout: redactSecrets(stdout),
-    stderr: redactSecrets(stderr),
+    stdout: tail(stdout),
+    stderr: tail(stderr),
     truncated,
     ...(files ? { stdoutPath: `${options.outputPrefix}.stdout.txt`, stderrPath: `${options.outputPrefix}.stderr.txt` } : {}),
     readOnly,
     timedOut,
   };
+}
+
+const optionCache = new Map<string, boolean>();
+
+/**
+ * Whether the subcommand named by the leading words of `args` lists `flag` in its own `--help`.
+ * Tries the longest run of leading words first, because later words may be the command's own arguments.
+ */
+async function takesOption(executable: string, args: string[], flag: string, env: Record<string, string>): Promise<boolean> {
+  const words: string[] = [];
+  for (const arg of args) {
+    if (arg.startsWith("-")) break;
+    words.push(arg);
+  }
+  for (let n = words.length; n >= 1; n--) {
+    const path = words.slice(0, n);
+    const key = `${executable}\u0000${path.join(" ")}\u0000${flag}`;
+    const cached = optionCache.get(key);
+    if (cached !== undefined) return cached;
+    const help = await helpText(executable, [...path, "--help"], env);
+    if (help === undefined) continue;
+    const listed = new RegExp(`(^|[\\s\\[,])${flag.replace(/[-]/g, "\\-")}([=\\s\\],]|$)`, "m").test(help);
+    optionCache.set(key, listed);
+    return listed;
+  }
+  return false;
+}
+
+function helpText(executable: string, args: string[], env: Record<string, string>): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    execFile(executable, args, { env, timeout: 15_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      const text = `${stdout}\n${stderr}`;
+      resolve(/usage:/i.test(text) ? text : error ? undefined : text);
+    });
+  });
 }
 
 export interface ToolStatus {

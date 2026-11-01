@@ -113,7 +113,7 @@ How Tapdance guards `asc`:
 - MCP calls run with `ASC_READ_ONLY=1`, `asc`'s own read-only switch, so `asc` refuses anything that
   writes to App Store Connect. Listing workflows, runs and artifacts still works.
 - To let an agent trigger a run or change anything, the user must list `asc` in
-  `tools.allowMutation` in `tapdance.config.json`, **and** the agent must pass `allow_mutation: true`
+  `tools.allowMutation` in `~/.tapdance/config.json`, **and** the agent must pass `allow_mutation: true`
   on that call.
 - The read-only default applies to MCP calls. A person, or an agent with shell access, running
   `tapdance asc -- ...` directly is not put in read-only mode.

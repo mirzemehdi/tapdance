@@ -23,11 +23,13 @@ Read these before changing anything, in this order:
 
 | Path | Contents |
 | --- | --- |
-| `packages/core/src` | `DeviceProvider` contract (`provider.ts`), config schema and env overrides (`config.ts`), error codes and exit codes (`errors.ts`), session identity and records, artifacts, element targets. |
-| `packages/provider-simlock/src` | The Simlock + agent-device provider, the optional AXe backend (`axe.ts`), stream framing. |
-| `packages/sdk/src` | `Tapdance` class (`tapdance.ts`), provider factory, keepalive, host checks, external tool registry (`tools.ts`), `FakeProvider` (`testing.ts`). |
-| `packages/mcp/src` | MCP tool definitions (`tools.ts`) and transports (`server.ts`). |
-| `packages/cli/src` | The `tapdance` commands, the browser viewer, `tapdance report`. |
+| `packages/core/src` | `DeviceProvider` contract (`provider.ts`), result types (`types.ts`), config schema, env overrides and credentials (`config.ts`), error codes, exit codes and secret redaction (`errors.ts`), session identity, the session store and its lock (`session-store.ts`), artifacts and their manifest (`artifacts.ts`), element targets. |
+| `packages/provider-simlock/src` | The Simlock + agent-device provider (`provider.ts`), Simlock HTTP client and error mapping (`http.ts`, `agent-device-errors.ts`), the optional AXe backend (`axe.ts`), stream framing. |
+| `packages/sdk/src` | `Tapdance` class (`tapdance.ts`, the session-scoped API), provider factory and token binding (`provider-factory.ts`), keepalive, host checks, the external tool registry and runner (`tools.ts`), `FakeProvider` (`testing.ts`). |
+| `packages/mcp/src` | MCP tool definitions and server instructions (`tools.ts`) and transports (`server.ts`). |
+| `packages/cli/src` | The `tapdance` commands (`commands-*.ts`), the browser viewer, `tapdance report`, and the worker guard for device-only mode (`guard/`: `policy.ts`, `rules.ts`, `server.ts`, `guard.test.ts`). |
+| `scripts/gen-cli-index.mjs` | Generates the command index at the end of `docs/cli-reference.md` from `--help`. |
+| `examples/` | Small demo apps used for real-device runs (`ios-demo`, `android-demo`). |
 | `docs/` | User docs, ADR, test procedures, `docs/testing/evidence/`. |
 | `infrastructure/` | Reference Terraform and scripts. Nothing in `packages/` may depend on it. |
 
@@ -40,11 +42,15 @@ pnpm build                      # tsc -b in every package, in order
 pnpm typecheck
 pnpm test                       # build + unit tests (no devices needed)
 pnpm test:integration           # build + real-device tests; skipped unless TAPDANCE_IT_PLATFORM is set
+pnpm docs:cli                   # regenerate the command index in docs/cli-reference.md (after pnpm build)
+pnpm docs:check                 # fail if that index is stale
 node packages/cli/dist/main.js <command> --help
 ```
 
 Run `pnpm test` after every change and keep the build green. Never skip or delete a failing test to
-make a run pass; fix it or report it.
+make a run pass; fix it or report it. When you add or change a command or flag, run `pnpm build` and
+`pnpm docs:cli`; `cli.test.ts` fails when a command, MCP tool or config key is undocumented, when the
+generated index is stale, or when any doc or hint names a `tapdance` command that does not exist.
 
 ## Invariants (do not break these)
 
@@ -54,9 +60,12 @@ make a run pass; fix it or report it.
    refuse handles they did not issue. Release only ever targets the session's own lease.
 3. **No raw shell tools.** Do not add an MCP tool or CLI command that runs arbitrary shell, `adb` or
    `simctl`. Internal use of Simlock `exec` stays on its fixed allowlist.
-4. **No command catalogues for external tools.** `packages/sdk/src/tools.ts` holds integration
-   metadata only. Never list a tool's subcommands or flags; arguments are forwarded unchanged and
+4. **No command catalogues for external tools.** `packages/sdk/src/tools.ts` is the tool registry:
+   integration metadata only (executable, where it runs, install guidance, license, discovery, allowed
+   environment). Never list a tool's subcommands or flags; arguments are forwarded unchanged and
    agents discover commands with the tool's own help. Run tools with argument arrays, never a shell.
+   The only exceptions are the few `asc` commands refused for agents because they print credentials
+   or run shell steps (`auth` other than `auth status`, `workflow`, `install-skills`).
 5. **Redact secrets.** Tokens never go in config files (loading refuses them), never in logs, errors,
    MCP responses or reports. Use `redactSecrets` / `redactObject` from `@tapdance/core` on anything
    that may contain upstream output. Never return worker join tokens or the operator token to an
@@ -69,6 +78,15 @@ make a run pass; fix it or report it.
 9. **CLI output:** results on stdout, progress on stderr, `--json` for machines, exit codes from
    `ERROR_CODES`.
 10. **Never fall back to software emulation** when KVM is missing. Report it.
+11. **A repository's config is not trusted.** `tools.paths`, `tools.mcpEnabled`,
+    `tools.allowMutation`, `ios.axePath` and `simlock.profilePath` are read only from
+    `~/.tapdance/config.json` or the environment. A saved token is sent only to the endpoint origin it
+    was saved for. Do not add a config key that lets a project file choose an executable or where a
+    token goes.
+12. **The worker guard is the boundary on a personal Mac.** `packages/cli/src/guard/` allows routes,
+    agent-device commands and `exec` argument lists explicitly; anything not listed is refused. Add to
+    an allowlist only with a matching malicious-client test in `guard.test.ts`, and never let a
+    denied request reach Simlock.
 
 ## Tests and evidence
 
@@ -104,6 +122,13 @@ Change them **in the same change** as the code:
   Macs are **not** proven yet; say so wherever you describe them.
 - Credit upstream projects with links when you describe or follow their behaviour, and update
   `NOTICE.md` when you add a dependency or external tool.
+
+## Commits and pull requests
+
+- No AI attribution anywhere: no `Co-Authored-By` lines for an AI, no "Generated with …" footers, no
+  mention of an AI tool or agent in commit messages, PR descriptions, code comments, docs or evidence
+  records. Commits use the repository owner's own git identity.
+- Do not commit, push or rewrite history unless the owner asks.
 
 ## Ask before you
 

@@ -62,6 +62,8 @@ export interface CatalogEntry {
   platform: Platform;
   models: string[];
   osVersions: string[];
+  /** The OS version a lease gets when it names none. */
+  defaultOsVersion?: string;
   imageTags?: string[];
 }
 
@@ -135,6 +137,21 @@ export interface ActionResult {
   /** What changed on screen after the action, when the backend reports it. */
   changes?: string[];
   point?: { x: number; y: number };
+  /** The action moved to a different surface (a new screen or a system sheet): earlier refs are void. */
+  screenChanged?: boolean;
+  warning?: string;
+  /** What to do next, when the backend or Tapdance knows. */
+  hint?: string;
+  /** How the target was found when it was not an exact match: a stale ref matched by label, or one of several matches. */
+  resolvedBy?: "label-fallback" | "disambiguated";
+  /** Labels of the other elements that matched, when the backend picked one of several. */
+  alternatives?: string[];
+  /** Actionable elements still on screen that the change list does not mention, as `@eN [role] "label"`. */
+  stillOnScreen?: string[];
+  /** For a fill: whether the field was read back with the requested text. */
+  typed?: "confirmed" | "unconfirmed";
+  /** For an unconfirmed fill: what the field holds now. */
+  fieldNow?: string;
 }
 
 export type SwipeDirection = "up" | "down" | "left" | "right";

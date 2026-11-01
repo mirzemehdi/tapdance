@@ -15,7 +15,8 @@ import {
   toUiElement,
   validateAppPath,
 } from "./index.js";
-import { summarizeDiff } from "./provider.js";
+import { CODE_MAP } from "./agent-device-errors.js";
+import { actionResult, bundleIdOf, summarizeDiff } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -87,6 +88,95 @@ describe("targets and elements", () => {
   });
 });
 
+describe("action results", () => {
+  it("says when the action replaced the screen", () => {
+    const r = actionResult({ settle: { settled: true, surfaceChange: { from: "com.example.app", to: "com.apple.SafariViewService", disclosure: "A web sheet opened." } } }, "Tapped");
+    expect(r).toMatchObject({ ok: true, message: "Tapped", screenChanged: true, hint: expect.stringMatching(/inspect_screen/) });
+    expect(r.changes).toBeUndefined();
+    expect(r.warning).toContain("A web sheet opened.");
+  });
+
+  it("reports how a target was resolved, with alternatives", () => {
+    expect(actionResult({ resolution: { source: "ref", phase: "pre-action", kind: "label-fallback" } }, "Tapped")).toMatchObject({ resolvedBy: "label-fallback", warning: expect.stringMatching(/stale/) });
+    const r = actionResult(
+      { resolution: { source: "runtime", phase: "pre-action", kind: "disambiguated", matchCount: 3, alternatives: [{ diagnosticRef: "d1", label: "Next" }, { diagnosticRef: "d2", role: "button" }] } },
+      "Tapped",
+    );
+    expect(r).toMatchObject({ resolvedBy: "disambiguated", alternatives: ["Next", "button"] });
+    expect(actionResult({ resolution: { source: "ref", phase: "pre-action", kind: "exact" } }, "Tapped").resolvedBy).toBeUndefined();
+  });
+
+  it("keeps the diff, passes warnings and hints through, and lists what is still on screen", () => {
+    const r = actionResult(
+      {
+        warning: "Keyboard covers the field",
+        hint: "Dismiss the keyboard",
+        settle: { diff: { lines: [{ kind: "removed", text: "@e4 [alert] \"Saved\"" }] }, tail: [{ ref: "e9", role: "button", label: "Done" }, { ref: "e10", role: "cell" }] },
+      },
+      "Tapped",
+    );
+    expect(r.changes).toEqual(['- @e4 [alert] "Saved"']);
+    expect(r.stillOnScreen).toEqual(['@e9 [button] "Done"', "@e10 [cell]"]);
+    expect(r.warning).toContain("Keyboard covers the field");
+    expect(r.hint).toBe("Dismiss the keyboard");
+  });
+
+  it("flags a fill that could not be confirmed", () => {
+    const r = actionResult({ text: "a@b.co", verification: "unconfirmed", requested: "a@b.co", before: "", after: "ab.co", target: {} }, "Filled");
+    expect(r).toMatchObject({ typed: "unconfirmed", fieldNow: "ab.co", warning: expect.stringMatching(/ab\.co/) });
+    expect(actionResult({ text: "x" }, "Filled").typed).toBeUndefined();
+  });
+});
+
+describe("installed app ids", () => {
+  it("reads the bundle id from a simulator app's XML Info.plist", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "td-plist-"));
+    const app = join(dir, "Demo.app");
+    await mkdir(app);
+    await writeFile(
+      join(app, "Info.plist"),
+      '<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n<key>CFBundleName</key><string>Demo</string>\n<key>CFBundleIdentifier</key>\n\t<string>com.example.Demo</string>\n</dict></plist>\n',
+    );
+    expect(await bundleIdOf(app)).toBe("com.example.Demo");
+    expect(await bundleIdOf(join(dir, "Missing.app"))).toBeUndefined();
+  });
+
+  it("falls back to the plist when the backend returns no id (MOCKED agent-device client)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "td-install-"));
+    const app = join(dir, "Demo.app");
+    await mkdir(app);
+    await writeFile(join(app, "Info.plist"), "<plist><dict><key>CFBundleIdentifier</key><string>com.example.Demo</string></dict></plist>");
+    const { SimlockProvider } = await import("./provider.js");
+    const provider = new SimlockProvider({ kind: "local", baseUrl: "http://127.0.0.1:1", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+    // MOCKED: the agent-device client is replaced by a stub whose install answers without any id.
+    (provider as unknown as { clients: Map<string, unknown> }).clients.set("td-x", { apps: { install: async () => ({ app: app, appPath: app, platform: "ios", identifiers: {} }) } });
+    const handle = {
+      provider: "simlock",
+      leaseId: "l1",
+      sessionId: "s",
+      platform: "ios" as const,
+      model: "iPhone 16",
+      osVersion: "18.5",
+      physical: false,
+      deviceId: "6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90",
+      location: { kind: "local" as const, endpoint: "http://127.0.0.1:1" },
+      ttlMs: 60_000,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date().toISOString(),
+      providerData: { baseUrl: "http://127.0.0.1:1", agentDeviceSession: "td-x", deviceKey: "ios:local:x", tenant: "local", runId: "r", clientId: "c" },
+    };
+    expect(await provider.installApp(handle, app)).toMatchObject({ appId: "com.example.Demo", platform: "ios" });
+    // MOCKED: a snapshot with a ref generation; refs come back pinned to it.
+    (provider as unknown as { clients: Map<string, unknown> }).clients.set("td-x", {
+      capture: { snapshot: async () => ({ nodes: [{ ref: "e7", type: "Button", label: "Next" }], refsGeneration: 4, warnings: ["sparse tree"] }) },
+    });
+    const screen = await provider.inspect(handle);
+    expect(screen.elements[0]?.ref).toBe("@e7~s4");
+    expect(screen.warnings).toEqual(["sparse tree"]);
+    expect(toAgentDeviceTarget({ kind: "ref", ref: "e7~s4" })).toEqual({ ref: "@e7~s4" });
+  });
+});
+
 describe("app paths", () => {
   it("accepts an apk for android and refuses the wrong kind", async () => {
     const dir = await mkdtemp(join(tmpdir(), "td-app-"));
@@ -123,6 +213,78 @@ describe("error mapping", () => {
     expect(fromAgentDeviceError({ code: "TEXT_INPUT_NOT_FOCUSED", message: "No focused text input" }, "x").code).toBe("ELEMENT_NOT_FOUND");
     expect(fromAgentDeviceError({ message: "refused: lease abc is not one of yours on this gateway" }, "x").code).toBe("FORBIDDEN");
   });
+
+  it.each(Object.entries(CODE_MAP))("maps backend code %s to %s", (backendCode, expected) => {
+    const mapped = fromAgentDeviceError({ code: backendCode, message: "something went wrong" }, "x");
+    expect(mapped.code).toBe(expected);
+    expect(mapped.details).toMatchObject({ backendCode });
+  });
+
+  it("treats a worker the gateway lost as offline, not as a missing capability", () => {
+    const mapped = fromAgentDeviceError(
+      {
+        code: "COMMAND_FAILED",
+        message: "agent-device is not available on this simlock: the worker holding this device is not connected to the gateway; try again",
+        details: { reason: "WORKER_UNREACHABLE" },
+      },
+      "tap",
+    );
+    expect(mapped.code).toBe("WORKER_OFFLINE");
+    expect(mapped.retryable).toBe(true);
+    expect(mapped.hint).toMatch(/do not release the device/);
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: "x", details: { reason: "WORKER_UNREACHABLE" } }, "x").code).toBe("WORKER_OFFLINE");
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: "agent-device is not available on this simlock: disabled" }, "x").code).toBe("PROVIDER_UNAVAILABLE");
+  });
+
+  it("tells a bad token, a foreign lease and a lost lease apart", () => {
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "Invalid proxy token" }, "x").code).toBe("AUTH_FAILED");
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "lease ended by simlock; run disconnect, then open", details: { reason: "LEASE_ENDED_BY_HOST" } }, "x").code).toBe("LEASE_LOST");
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "nope", details: { reason: "LEASE_ENDED_BY_HOST" } }, "x").code).toBe("LEASE_LOST");
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "nope", details: { reason: "LEASE_NOT_FOUND" } }, "x").code).toBe("LEASE_LOST");
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "nope", details: { reason: "LEASE_SCOPE_MISMATCH" } }, "x").code).toBe("FORBIDDEN");
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "lease is outside this tenant" }, "x").code).toBe("FORBIDDEN");
+    expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "who are you" }, "x").code).toBe("AUTH_FAILED");
+  });
+
+  it("classifies Simlock's allocate refusals", () => {
+    const busy = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: no capacity for android" }, "lease");
+    expect(busy.code).toBe("NO_CAPACITY");
+    expect(busy.retryable).toBe(true);
+    expect(busy.hint).toMatch(/list_devices/);
+    expect(fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: No worker in the fleet can currently serve this request" }, "lease").code).toBe("NO_CAPACITY");
+    const unknown = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: unknown model \"Pixel 99\"" }, "lease");
+    expect(unknown).toMatchObject({ code: "DEVICE_UNAVAILABLE", hint: expect.stringMatching(/list_devices/) });
+    expect(fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: image tags are Android only" }, "lease").code).toBe("USAGE");
+  });
+
+  it("keeps an app that is not installed apart from a missing element", () => {
+    const mapped = fromAgentDeviceError({ code: "APP_NOT_INSTALLED", message: "Application com.x not found" }, "launch com.x");
+    expect(mapped.code).not.toBe("ELEMENT_NOT_FOUND");
+    expect(mapped.code).toBe("APP_NOT_INSTALLED");
+    expect(mapped.hint).toMatch(/install_app/);
+  });
+
+  it("marks a busy device retryable and a stale ref as needing a fresh inspect", () => {
+    expect(fromAgentDeviceError({ code: "DEVICE_IN_USE", message: "busy" }, "x")).toMatchObject({ code: "DEVICE_UNAVAILABLE", retryable: true });
+    const stale = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Ref @e7 was minted from a superseded snapshot generation", details: { reason: "ref_generation_mismatch" } }, "tap @e7~s3");
+    expect(stale).toMatchObject({ code: "ELEMENT_NOT_FOUND", hint: expect.stringMatching(/inspect again/) });
+    expect(fromAgentDeviceError({ code: "ref_generation_mismatch", message: "stale" }, "x").code).toBe("ELEMENT_NOT_FOUND");
+  });
+
+  it("keeps the backend's hint next to Tapdance's own", () => {
+    const mapped = fromAgentDeviceError({ code: "ELEMENT_NOT_FOUND", message: "no element", details: { hint: "Try scrolling first." } }, "tap");
+    expect(mapped.hint).toContain("inspect_screen");
+    expect(mapped.hint).toContain("Try scrolling first.");
+    expect(fromAgentDeviceError({ code: "ELEMENT_NOT_FOUND", message: "no element", details: { hint: "run --help for usage" } }, "tap").hint).not.toMatch(/--help/);
+  });
+
+  it("lists a few candidates for an ambiguous selector", () => {
+    const candidates = Array.from({ length: 8 }, (_, i) => `@e${i} [button] "Next ${i}"`);
+    const mapped = fromAgentDeviceError({ code: "AMBIGUOUS_MATCH", message: "find matched 8 elements", details: { matches: 8, candidates } }, "tap");
+    expect(mapped.details?.["candidates"]).toEqual(candidates.slice(0, 5));
+    const fromObjects = fromAgentDeviceError({ code: "AMBIGUOUS_MATCH", message: "x", details: { matches: [{ ref: "e1", node: { label: "OK" } }, { label: "Cancel" }] } }, "tap");
+    expect(fromObjects.details?.["candidates"]).toEqual(["OK", "Cancel"]);
+  });
 });
 
 describe("Simlock HTTP client", () => {
@@ -144,6 +306,38 @@ describe("Simlock HTTP client", () => {
     await expect(http.workers("t")).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
+  it("gives an offline worker and a refused pass-through actionable hints", async () => {
+    const http = new SimlockHttp("http://x", "t", fake({
+      "/v1/leases/l1": () => new Response(JSON.stringify({ error: { code: "WORKER_UNREACHABLE", message: "worker offline" } }), { status: 503 }),
+      "/v1/status": () => new Response(JSON.stringify({ error: { code: "PASSTHROUGH_REFUSED", message: "no" } }), { status: 422 }),
+      "/v1/catalog": () => new Response(JSON.stringify({ error: { code: "UNKNOWN_PASSTHROUGH_TOOL", message: "xcodebuild" } }), { status: 422 }),
+    }));
+    const offline = await http.lease("l1").catch((e: unknown) => e as TapdanceError);
+    expect(offline).toMatchObject({ code: "WORKER_OFFLINE", retryable: true });
+    expect((offline as TapdanceError).hint).toBe(fromAgentDeviceError({ code: "COMMAND_FAILED", message: "x", details: { reason: "WORKER_UNREACHABLE" } }, "x").hint);
+    await expect(http.status()).rejects.toMatchObject({ code: "FORBIDDEN", hint: expect.stringMatching(/accept-gateway-exec/) });
+    await expect(http.catalog()).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
+  });
+
+  it("reads Simlock 0.4's string runtimes and drops models no image can boot", async () => {
+    const { SimlockProvider } = await import("./provider.js");
+    const catalog = {
+      platforms: [
+        { platform: "android", models: ["Pixel 8", "Pixel 9"], runtimes: ["31", "34"], defaultRuntime: "34", modelRuntimes: { "Pixel 8": ["34"], "Pixel 9": [] } },
+      ],
+    };
+    const provider = new SimlockProvider(
+      { kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" },
+      {},
+      fake({
+        "/v1/catalog": () => new Response(JSON.stringify(catalog)),
+        "/v1/status": () => new Response(JSON.stringify({ leases: [], devices: [], queue: [] })),
+      }),
+    );
+    const inventory = await provider.inventory();
+    expect(inventory.catalog[0]).toMatchObject({ platform: "android", models: ["Pixel 8"], osVersions: ["31", "34"], defaultOsVersion: "34" });
+  });
+
   it("reports an unreachable endpoint with a fix", async () => {
     const http = new SimlockHttp("http://127.0.0.1:1", "t", (async () => {
       throw new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
@@ -160,6 +354,39 @@ describe("AXe backend", () => {
     ]);
     expect(flat).toHaveLength(2);
     expect(flat[1]).toMatchObject({ ref: "@a2", role: "button", label: "Sign in", identifier: "login", center: { x: 195, y: 725 }, depth: 1 });
+  });
+
+  it("finds a SwiftUI text field by its placeholder and prefers interactive elements", async () => {
+    const { flattenAxe, matchText } = await import("./axe.js");
+    const flat = flattenAxe([
+      {
+        type: "Application",
+        AXLabel: "Demo",
+        frame: { x: 0, y: 0, width: 390, height: 844 },
+        children: [
+          { type: "StaticText", AXLabel: "Email", frame: { x: 20, y: 100, width: 100, height: 20 } },
+          { type: "TextField", AXLabel: null, AXPlaceholderValue: "Email", AXUniqueId: "email", frame: { x: 20, y: 130, width: 350, height: 40 } },
+          { type: "Button", AXLabel: "Sign in", frame: { x: 20, y: 700, width: 350, height: 50 } },
+        ],
+      },
+    ]);
+    expect(matchText(flat, "Email")).toMatchObject({ role: "textfield", identifier: "email", center: { x: 195, y: 150 } });
+    expect(matchText(flat, "sign in")).toMatchObject({ role: "button" });
+    expect(matchText(flat, "Nope")).toBeUndefined();
+  });
+
+  it("retries describe-ui while a just-launched app's tree is not ready", async () => {
+    const { mkdtemp, writeFile, chmod } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { AxeBackend } = await import("./axe.js");
+    const dir = await mkdtemp(join(tmpdir(), "td-axe-"));
+    const bin = join(dir, "axe");
+    // Fails twice with AXe's not-ready error, then prints a tree.
+    await writeFile(bin, `#!/bin/sh\nn=$(cat "${dir}/n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "${dir}/n"\nif [ $n -lt 3 ]; then echo "Error: No translation object returned for simulator" >&2; exit 1; fi\necho '[{"type":"Application","AXLabel":"Demo"}]'\n`);
+    await chmod(bin, 0o755);
+    const flat = await new AxeBackend(bin).describe("6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90", 5_000);
+    expect(flat[0]).toMatchObject({ label: "Demo" });
   });
 
   it("refuses anything but a simulator UDID", async () => {

@@ -24,8 +24,10 @@ export const GuardPolicySchema = z
         logs: z.boolean().default(true),
         streaming: z.boolean().default(true),
         input: z.boolean().default(true),
+        /** Physical phones plugged into the Mac carry the owner's data; off unless the owner turns it on. */
+        physicalDevices: z.boolean().default(false),
       })
-      .default({ install: true, interaction: true, inspection: true, screenshots: true, recording: true, logs: true, streaming: true, input: true }),
+      .default({ install: true, interaction: true, inspection: true, screenshots: true, recording: true, logs: true, streaming: true, input: true, physicalDevices: false }),
     limits: z
       .object({
         maxSessions: z.number().int().min(1).max(16).default(1),

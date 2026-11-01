@@ -33,6 +33,8 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   const tokens = new GuardTokens(env);
   /** leaseId → guard token id. Memory only: after a guard restart, old leases are nobody's and expire. */
   const owners = new Map<string, string>();
+  /** Lease ids whose allocate is still running: reserved in `owners`, not yet known to Simlock. */
+  const allocating = new Set<string>();
   const upstreamHeaders = { Authorization: `Bearer ${upstream.token}` };
 
   const send = (res: ServerResponse, status: number, code: string, message: string) => {
@@ -94,12 +96,32 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   };
 
   const activeLeases = async (): Promise<number> => {
-    // Drop leases Simlock no longer knows, so a crashed client does not hold a slot forever.
-    for (const leaseId of [...owners.keys()]) {
-      const r = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}`, { headers: upstreamHeaders }).catch(() => undefined);
-      if (r?.status === 404) owners.delete(leaseId);
-    }
+    // Drop leases that have ended (Simlock no longer knows them, or their deadline has passed), so a
+    // crashed client does not hold a slot forever. Reservations of running allocates are kept.
+    await Promise.all(
+      [...owners.keys()].map(async (leaseId) => {
+        if (allocating.has(leaseId)) return;
+        const r = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}`, { headers: upstreamHeaders }).catch(() => undefined);
+        if (r === undefined) return;
+        let ended = r.status === 404;
+        if (r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { lease?: { expiresAt?: unknown } };
+          const expires = typeof body.lease?.expiresAt === "string" ? Date.parse(body.lease.expiresAt) : Number.NaN;
+          ended = Number.isFinite(expires) && expires <= Date.now();
+        } else await r.body?.cancel().catch(() => undefined);
+        if (ended && !allocating.has(leaseId)) owners.delete(leaseId);
+      }),
+    );
     return owners.size;
+  };
+
+  /** A JSON-RPC reply that reports success: no `error` member and no `result.ok === false`. */
+  const rpcSucceeded = (data: unknown): boolean => {
+    if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
+    const d = data as { error?: unknown; result?: unknown };
+    if (d.error !== undefined && d.error !== null) return false;
+    const result = d.result as { ok?: unknown } | undefined;
+    return !(result && typeof result === "object" && result.ok === false);
   };
 
   const server = createServer(async (req, res) => {
@@ -130,8 +152,18 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           return;
         case "status":
           await forward(req, res, undefined, (data) => {
-            const d = data as { leases?: Array<{ id: string }> };
-            return { ...d, leases: (d.leases ?? []).filter((l) => owners.get(l.id) === token!.id) };
+            // Simlock sees one local principal behind the guard, so it cannot filter per client: the
+            // guard keeps only this token's leases, its own waiting requests and the devices they hold.
+            type Device = { id?: string; udid?: string };
+            const d = data as { leases?: Array<{ id: string; deviceId?: string; udid?: string }>; waiting?: Array<{ requesterId?: string }>; devices?: Device[] };
+            const leases = (d.leases ?? []).filter((l) => owners.get(l.id) === token!.id);
+            const held = new Set(leases.flatMap((l) => [l.deviceId, l.udid].filter((v): v is string => typeof v === "string")));
+            return {
+              ...d,
+              leases,
+              ...(d.waiting !== undefined ? { waiting: d.waiting.filter((w) => typeof w.requesterId === "string" && owners.get(w.requesterId) === token!.id) } : {}),
+              devices: (d.devices ?? []).filter((dev) => (dev.id !== undefined && held.has(dev.id)) || (dev.udid !== undefined && held.has(dev.udid))),
+            };
           });
           return;
         case "catalog":
@@ -201,17 +233,33 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               await decide("deny", { reason: "lease id already in use", leaseId: call.leaseId });
               return send(res, 409, "FORBIDDEN", "Lease id already in use");
             }
-            if ((await activeLeases()) >= policy.limits.maxSessions) {
-              await decide("deny", { reason: "session limit", leaseId: call.leaseId });
+            const leaseId = call.leaseId!;
+            // Count and reserve with no await in between, so parallel allocates cannot all pass the cap.
+            if (owners.size >= policy.limits.maxSessions) await activeLeases();
+            if (owners.size >= policy.limits.maxSessions || owners.has(leaseId)) {
+              await decide("deny", { reason: "session limit", leaseId });
               return send(res, 429, "NO_CAPACITY", `This worker allows ${policy.limits.maxSessions} session(s) at a time`);
             }
-            const cap = policy.limits.maxLeaseMinutes * 60_000;
-            const p = (parsed as { params: Record<string, unknown> }).params;
-            if (typeof p["ttlMs"] !== "number" || p["ttlMs"] > cap) p["ttlMs"] = cap;
-            owners.set(call.leaseId!, token.id); // reserved while the allocate runs
-            await decide("allow", { command: "lease.allocate", leaseId: call.leaseId });
-            const answer = await forward(req, res, Buffer.from(JSON.stringify(parsed)));
-            if (!answer.ok) owners.delete(call.leaseId!);
+            owners.set(leaseId, token.id); // reserved while the allocate runs
+            allocating.add(leaseId);
+            let granted = false;
+            try {
+              const cap = policy.limits.maxLeaseMinutes * 60_000;
+              const p = (parsed as { params: Record<string, unknown> }).params;
+              if (typeof p["ttlMs"] !== "number" || p["ttlMs"] > cap) p["ttlMs"] = cap;
+              await decide("allow", { command: "lease.allocate", leaseId });
+              let succeeded = false;
+              const answer = await forward(req, res, Buffer.from(JSON.stringify(parsed)), (data) => {
+                succeeded = rpcSucceeded(data);
+                return data;
+              });
+              // agent-device reports a refused allocate as HTTP 200 with a JSON-RPC error: ownership
+              // stays only on a 2xx JSON reply that says it succeeded.
+              granted = answer.ok && succeeded;
+            } finally {
+              allocating.delete(leaseId);
+              if (!granted) owners.delete(leaseId);
+            }
             return;
           }
           if (owner !== token.id) {

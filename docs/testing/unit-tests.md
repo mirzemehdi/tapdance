@@ -45,17 +45,45 @@ If you change anything under `packages/cli/src`, run `pnpm build` again before r
 
 ## What the unit tests cover
 
-84 unit tests as of 2026-11-01 (see STATUS.md, Q-01).
+The total is whatever `pnpm test` reports; it grows with each change, so this page does not keep a
+running count. The per-file numbers below are `it(` blocks as of 2026-11-01 and may lag.
 
 | File | Tests | What it checks |
 | --- | --- | --- |
-| `packages/core/src/core.test.ts` | 15 | Error codes map to the documented exit codes; secrets (`slk_…`, bearer headers, token fields, private keys) are redacted from messages; config defaults, strict validation, precedence (user file ← project file ← environment) and the refusal of tokens in config files; credentials file written with mode 600; session identity order (`TAPDANCE_SESSION_ID`, then the agent's session id, then a per-user id); element target validation; the session store and the per-session artifact manifest. |
-| `packages/provider-simlock/src/provider.test.ts` | 19 | Parsing Simlock's `exec` stream; refusing to send a token over plain `http://` to a public host; per-session agent-device client ids; reading Simlock's local agent-device profile; selector escaping and snapshot-to-element mapping; settle-diff summaries; app path checks (`.apk`, `.aab`, `.app`, `.ipa`); H.264 stream framing; agent-device error mapping; the Simlock HTTP client against a fake `fetch`; the AXe backend's tree flattening, UDID checks and "not installed" error. |
-| `packages/sdk/src/tapdance.test.ts` | 18 | Session scoping: no device action without a lease, one lease per session, one session cannot release another's lease, stale records are replaced, `HUMAN_HELD` while a person controls the device, disabled platforms refused, one recording at a time. Keepalive: renews after a third of the TTL, defers to another live renewer, reports a lost lease, releases an idle lease. Ownership rules and concurrent leases. The provider factory has no fake cloud provider and needs an endpoint for `self-hosted`. |
-| `packages/mcp/src/mcp.test.ts` | 11 | Every required MCP tool exists and none is a raw shell (`shell`, `exec`, `adb`, `simctl`, `run_on_device`); every tool has a description and refuses unknown keys; a whole agent flow over an in-memory MCP transport; install paths confined to the project; structured errors; `execute_tool` behaviour (see below). |
-| `packages/cli/src/cli.test.ts` | 6 | The built CLI: version output; `NO_ACTIVE_LEASE` with exit code 3 and JSON on stdout; bad arguments exit 2; tokens refused in config; `provider: "cloud"` refused with `NOT_SUPPORTED` (exit 8); and every `` `tapdance <command>` `` named in a hint in `packages/*/src` exists in `--help`. |
+| `packages/core/src/core.test.ts` | 28 | Error codes map to the documented exit codes; secrets (`slk_…`, bearer headers, token fields, private keys) are redacted from messages; config defaults, strict validation, precedence (user file ← project file ← environment) and the refusal of tokens in config files; credentials file written with mode 600; session identity order (`TAPDANCE_SESSION_ID`, then the agent's session id, then a per-user id); element target validation; the session store and the per-session artifact manifest. |
+| `packages/provider-simlock/src/provider.test.ts` | 33 | Parsing Simlock's `exec` stream; refusing to send a token over plain `http://` to a public host; per-session agent-device client ids; reading Simlock's local agent-device profile; selector escaping and snapshot-to-element mapping; settle-diff summaries; app path checks (`.apk`, `.aab`, `.app`, `.ipa`); H.264 stream framing; agent-device error mapping; the Simlock HTTP client against a fake `fetch`; the AXe backend's tree flattening, UDID checks and "not installed" error. |
+| `packages/sdk/src/tapdance.test.ts` | 35 | Session scoping: no device action without a lease, one lease per session, one session cannot release another's lease, stale records are replaced, `HUMAN_HELD` while a person controls the device, disabled platforms refused, one recording at a time. Keepalive: renews after a third of the TTL, defers to another live renewer, reports a lost lease, releases an idle lease. Ownership rules and concurrent leases. The provider factory has no fake cloud provider and needs an endpoint for `self-hosted`. |
+| `packages/sdk/src/tools.test.ts` | 4 | External tool runs with fake executables on a temporary `PATH`: a private key never reaches the saved stdout/stderr files, a truncated capture never holds half a key, and an `executableOverride` that is not the tool's own program is refused with `FORBIDDEN` before anything is spawned. |
+| `packages/mcp/src/mcp.test.ts` | 19 | Every required MCP tool exists and none is a raw shell (`shell`, `exec`, `adb`, `simctl`, `run_on_device`); every tool has a description and refuses unknown keys; a whole agent flow over an in-memory MCP transport; install paths confined to the project; structured errors; `execute_tool` behaviour (see below). |
+| `packages/cli/src/cli.test.ts` | 10 | The built CLI: version output; `NO_ACTIVE_LEASE` with exit code 3 and JSON on stdout; bad arguments exit 2; tokens refused in config; `provider: "cloud"` refused with `NOT_SUPPORTED` (exit 8); `config set-token` binds the token to its endpoint (mode 600, `--endpoint` or the configured endpoint, plain `http://` to a public host refused); no hint names a bare `simlock` command or a global `npm` install. Two doc-coverage checks: every `tapdance <command>` named in a code hint or in the docs (`docs/`, `infrastructure/`, `examples/`, README, CONTRIBUTING, SECURITY, AGENTS, CLAUDE) exists in `--help`; and every command is in `docs/cli-reference.md`, every MCP tool in `docs/mcp.md`, every config key in `docs/configuration.md`, and the generated command index in `docs/cli-reference.md` is current (`pnpm docs:check`). |
+| `packages/cli/src/guard/guard.test.ts` | 21 | Malicious-client tests against the worker guard (device-only mode), with a recording fake Simlock: no shell, `sudo`, file reads or deletes, Keychain, policy or token routes, other clients' leases or status, bad/expired/revoked tokens, build commands, and the session, upload and TTL limits. Denied requests never reach the fake Simlock. API boundary only; see [personal-mac.md](../security/personal-mac.md). |
 
 Run `pnpm test` to get the current count rather than trusting this table.
+
+Test areas added in the latest round (unit tests only, against fakes; none of this is a real-device
+result):
+
+- **Session lock** (`core.test.ts`): atomic acquisition with an owner token, takeover of a lock left by a
+  dead process or gone stale, a young empty lockfile is not stolen, parallel callers never overlap,
+  release never deletes another caller's lock, and the wait times out.
+- **Redaction** (`core.test.ts`, `sdk/src/tools.test.ts`): worker-guard `tdg_` tokens, JWTs,
+  `ASC_PRIVATE_KEY_B64=` values, viewer `#k=` keys, `slk_` tokens and bearer headers; private keys
+  removed from the saved output files and from truncated output.
+- **Recording on release** (`tapdance.test.ts`): releasing while recording keeps the video as an
+  artifact; a failed stop does not block the next `start_recording`. Parallel artifact records keep
+  every manifest entry (`core.test.ts`).
+- **Renewal failures** (`tapdance.test.ts`, `mcp.test.ts`): idle release never rejects, no idle release
+  during a human hold, renewing an ended lease reports `LEASE_LOST`, `WORKER_OFFLINE` during renewal is
+  retried until the lease would expire, and a failed renewal check never crashes the MCP server.
+- **MCP strict inputs** (`mcp.test.ts`): every tool's input refuses an extra key, and only
+  `release_device` is marked destructive.
+- **Error mapping** (`provider.test.ts`): every agent-device code, the retryable `WORKER_OFFLINE` reply,
+  `AUTH_FAILED`/`FORBIDDEN` for token and tenant problems, `NO_CAPACITY` for refused requests.
+- **Config and tokens** (`core.test.ts`, SDK tests): security keys ignored in a project file, and a
+  token never sent to an endpoint it is not bound to.
+- **Worker guard** (`guard.test.ts`): physical devices refused by default, concurrent allocates against
+  the session limit, status filtered per client, an allocate answered with an error leaves no
+  ownership, and the guard's exec allowlist accepts exactly what the provider sends.
 
 ## Fakes and mocks, and how they are labelled
 
@@ -64,7 +92,7 @@ device. Tests below the provider contract use small, explicit fakes:
 
 | Fake | Where | What it stands in for | What a passing test proves |
 | --- | --- | --- | --- |
-| `FakeProvider` | `packages/sdk/src/testing.ts`, exported as `@tapdance/sdk/testing` | The `DeviceProvider` contract. It keeps leases in memory, records every call in `calls`, refuses handles it did not issue, and writes a real 1×1 PNG for screenshots. Its doc comment says: "It is not a device." | That the SDK, MCP server and CLI layers above the provider behave correctly. Nothing about Simlock or a real device. |
+| `FakeProvider` | `packages/sdk/src/testing.ts`, exported as `@tapdance/sdk/testing` | The `DeviceProvider` contract. It keeps leases in memory, records every call in `calls`, refuses handles it did not issue, writes a real 1×1 PNG for screenshots and a 2 KiB placeholder file for recordings, and can be told to fail its next call of a given method (`failNext`). Its doc comment says: "It is not a device." | That the SDK, MCP server and CLI layers above the provider behave correctly. Nothing about Simlock or a real device. |
 | Fake `fetch` | `provider.test.ts`, "Simlock HTTP client" | Simlock's HTTP API responses for a handful of routes. | That Tapdance maps Simlock's error codes and network failures correctly. |
 | Fake `asc` executable | `mcp.test.ts`, in the block named **"execute_tool (MOCKED executable: proves pass-through, not asc itself)"** | A shell script on a temporary `PATH` that echoes its arguments and environment, prints a fake private key and exits 3. | That arguments reach the tool unchanged (including a never-seen subcommand and shell metacharacters), that `ASC_READ_ONLY=1` is set unless the user allowed mutation in config, that parent environment secrets are not forwarded, that private keys are redacted, and that disabled tools and remote targets are refused. It proves nothing about `asc` itself. |
 | A nonexistent AXe path | `provider.test.ts`, "AXe backend" | A missing AXe install. | The error message for a missing AXe. AXe itself has not been run (STATUS.md, U-02). |

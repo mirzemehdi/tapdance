@@ -774,8 +774,7 @@ rented, the provider, machine type and start/end times (the 24-hour minimum matt
 
 ## 7. AXe on a real Mac (Q-09)
 
-**State:** not run. On the test Mac, `brew install` of AXe was refused by Homebrew's tap-trust policy
-(STATUS.md U-02, Q-09). Proves Q-09 and U-02.
+**State:** run on 2026-11-01 ([evidence](evidence/2026-11-01-axe.md)). Proves Q-09 and U-02.
 
 [AXe](https://github.com/cameroncooke/AXe) (MIT, Cameron Cooke) is a CLI that drives iOS simulators
 through accessibility: describe the UI, tap by label, type, take screenshots and record video. Tapdance
@@ -880,9 +879,10 @@ a manual copy).
 Google's [Android CLI](https://developer.android.com/tools/agents/android-cli) (`android`) is an
 agent-oriented CLI with commands such as `android layout`, `android input tap|text|swipe|key|scroll`,
 `android screen capture` and `android emulator …`. Tapdance runs it unchanged with
-`tapdance android -- <args>` (or MCP `execute_tool` with `tool: "android"`), and sets
-`ANDROID_SERIAL` and `ANDROID_ADB_SERVER_PORT` to the session's leased emulator so the CLI acts on it
-and not on another device. That targeting has **not** been verified against the real CLI.
+`tapdance android -- <args>` (or MCP `execute_tool` with `tool: "android"`), appends
+`--device=<serial>` to subcommands that take it and sets `ANDROID_ADB_SERVER_PORT`, so the CLI acts on
+the session's leased emulator and not on another device. Verified locally with `layout --flat`
+([evidence](evidence/2026-11-01-android.md)); not yet on a Linux/KVM worker.
 
 ### What is blocked
 

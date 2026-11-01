@@ -40,7 +40,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           for (const c of inv.capacity) lines.push(`${bold(c.platform)}: ${c.running}/${c.limit} running, ${c.warm} warm, ${c.leased} leased`);
           for (const c of inv.catalog) {
             lines.push("", `${bold(c.platform === "ios" ? "iOS" : "Android")} models: ${c.models.slice(0, 25).join(", ")}${c.models.length > 25 ? dim(` … +${c.models.length - 25}`) : ""}`);
-            if (c.osVersions.length) lines.push(`  OS versions: ${c.osVersions.join(", ")}`);
+            if (c.osVersions.length) lines.push(`  OS versions: ${c.osVersions.join(", ")}${c.defaultOsVersion ? ` (default ${c.defaultOsVersion})` : ""}`);
             if (c.imageTags?.length) lines.push(`  image tags: ${c.imageTags.join(", ")}`);
           }
           if (inv.devices.length) {

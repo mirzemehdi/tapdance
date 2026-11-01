@@ -46,18 +46,18 @@ tailscale serve --bg --https=4720 http://127.0.0.1:4720
 
 # on the VPS
 tapdance init --mode self-hosted --endpoint https://<mac>.<tailnet>.ts.net:4720 --yes
-tapdance config set-token                     # paste the guard token
+tapdance config set-token                     # paste the guard token; it is bound to the guard URL
 tapdance doctor
 ```
 
 ### What the guard enforces, on the Mac
 
-- **Its own credentials.** Tokens are created only by `guard pair` run in a terminal on the Mac, stored
-  as SHA-256 hashes (mode 600), expire (7 days by default, policy maximum 90), and are checked on every
-  request, so `tapdance worker guard revoke <id>` (or `all`) stops a client on its next request. The
+- **Its own credentials.** Tokens are created only by `guard pair` on the Mac; it requires a terminal
+  unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE=1` is set (for scripted setup by the Mac's owner; never set
+  it in a service environment). Tokens are stored as SHA-256 hashes (mode 600), expire (7 days by
+  default, policy maximum 90), and are checked on every request, so `tapdance worker guard revoke <id>` (or `all`) stops a client on its next request. The
   local Simlock token never leaves the Mac.
-- **A device API, not a host API.** Only these routes exist: health, identity, status (filtered to
-  your own leases), catalog, your leases (get, release, stream, input, events, exec), agent-device RPC,
+- **A device API, not a host API.** Only these routes exist: health, identity, status, catalog, your leases (get, release, stream, input, events, exec), agent-device RPC,
   app upload, artifact download. Anything else is `404`.
 - **Allowlisted agent-device commands**, grouped under policy switches: session (open/close),
   inspection, install, interaction, screenshots, recording, logs. Commands that run code or touch files
@@ -67,9 +67,16 @@ tapdance doctor
   with Tapdance's fixed flags, `adb shell am force-stop <package>`, `adb shell pidof <package>`,
   `adb logcat` with fixed flags. No `spawn` of anything else, no `pull`/`push`, no stdin, no shell.
 - **Lease ownership per client.** A client can act only on leases it allocated; lease ids repeated in
-  `params`, `meta` and `flags` must all match; another client's lease answers `404`/`403`.
-- **Limits.** At most `limits.maxSessions` leases at once (default 1), lease TTL capped at
-  `limits.maxLeaseMinutes` (default 60), uploads capped at `limits.maxUploadMB` (default 512).
+  `params`, `meta` and `flags` must all match; another client's lease answers `404`/`403`. An allocate
+  that Simlock answers with an error never leaves the lease id owned by that client.
+- **Each client sees only its own work.** `/v1/status` shows a client only its own leases, its own
+  queued requests and the devices tied to its leases.
+- **Simulators and emulators only, by default.** Physical iPhones and Android phones enrolled with
+  Simlock cannot be leased through the guard unless the policy sets `allow.physicalDevices: true`
+  (default `false`).
+- **Limits.** At most `limits.maxSessions` leases at once (default 1), enforced even when several
+  allocate requests arrive at the same moment; lease TTL capped at `limits.maxLeaseMinutes` (default
+  60); uploads capped at `limits.maxUploadMB` (default 512).
 - **Refuses unsafe setups.** It will not start as root, from an administrator account (unless you pass
   `--allow-admin-account`), when the local worker has joined a gateway, when Simlock is not on loopback,
   or when the policy/token files are writable by other users.
@@ -87,19 +94,23 @@ tapdance doctor
 - **Per-session staging directories and storage quotas on the Mac.** Uploads and artifacts live in
   agent-device's own directories under the worker account; Tapdance caps upload size but not total
   disk use (H-06, H-07). Recording duration is not capped.
-- **Upload/artifact ownership.** Upload and artifact ids are random and not bound to a client by the
-  guard.
+- **Upload/artifact ownership (known gap).** Upload and artifact ids are random but not yet bound to a
+  client token by the guard.
 - **OS or virtualization vulnerabilities.** The tests prove the API boundary only. A bug in the
   Simulator, CoreSimulator, agent-device or macOS is outside it; the dedicated account limits the
   damage.
 
 ### Evidence
 
-- 15 security tests act as a malicious client against the guard (`packages/cli/src/guard/guard.test.ts`):
+- Security tests act as a malicious client against the guard (`packages/cli/src/guard/guard.test.ts`;
+  15 at the time of the recorded run, more since):
   arbitrary shell, `sudo`, reading personal files, deleting files, Keychain, changing policy or minting
   tokens, using another client's lease, seeing another session's leases/stream/logs, missing/wrong/
   expired tokens, revocation, build commands, session/upload/TTL limits, conflicting lease ids. They
-  run against a recording fake Simlock, so they also prove denied requests never reach Simlock.
+  run against a recording fake Simlock, so they also prove denied requests never reach Simlock. Later
+  tests cover physical-device leases, concurrent allocates against the session limit, the filtered
+  status (other clients' queued requests) and allocates answered with an error; these are unit tests
+  only (🧪 in STATUS.md).
 - The full MCP agent loop ran through the guard against a real simulator (custom app upload and
   install, interaction, recording, screenshot, logs, release) with nothing denied but a diagnostics
   fetch ([evidence](../testing/evidence/2026-11-01-worker-guard.md)).

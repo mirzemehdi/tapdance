@@ -3,7 +3,10 @@ import { mkdtemp, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { LeaseHandle } from "@tapdance/core";
+import { SimlockProvider } from "@tapdance/provider-simlock";
 import { GuardPolicySchema, GuardTokens, type GuardPolicy } from "./policy.js";
+import { execOf } from "./rules.js";
 import { startGuard } from "./server.js";
 
 /**
@@ -23,7 +26,16 @@ interface Upstream {
   seen: Array<{ method: string; path: string; body: string }>;
 }
 
-async function fakeSimlock(): Promise<Upstream> {
+interface FakeOptions {
+  /** Delay before answering GET /v1/leases/<id>, in ms. */
+  leaseDelayMs?: number;
+  /** Replaces the GET /v1/status body. */
+  status?: unknown;
+  /** Answers lease.allocate with HTTP 200 and this JSON-RPC error instead of granting. */
+  allocateError?: { code: number; message: string };
+}
+
+async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
   const seen: Upstream["seen"] = [];
   const live = new Set<string>();
   const server = createServer(async (req, res) => {
@@ -33,13 +45,22 @@ async function fakeSimlock(): Promise<Upstream> {
     const lease = /^\/v1\/leases\/([0-9a-f]{32})/.exec(req.url ?? "");
     if (req.url === "/v1/agent-device/rpc") {
       const call = JSON.parse(body) as { method: string; params: { leaseId: string } };
+      if (call.method.endsWith("lease.allocate") && options.allocateError) {
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: options.allocateError }));
+        return;
+      }
       if (call.method.endsWith("lease.allocate")) live.add(call.params.leaseId);
       if (call.method.endsWith("lease.release")) live.delete(call.params.leaseId);
       res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", result: { ok: true, echo: call } }));
       return;
     }
     if (lease && req.method === "GET" && !req.url!.includes("/stream")) {
+      if (options.leaseDelayMs) await new Promise((r) => setTimeout(r, options.leaseDelayMs));
       res.writeHead(live.has(lease[1]!) ? 200 : 404, { "content-type": "application/json" }).end(JSON.stringify({ lease: { id: lease[1] } }));
+      return;
+    }
+    if (req.url === "/v1/status" && options.status !== undefined) {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(options.status));
       return;
     }
     if (lease && req.url!.endsWith("/exec")) {
@@ -62,10 +83,10 @@ afterEach(async () => {
   for (const c of cleanups.splice(0)) await c();
 });
 
-async function setup(overrides: Partial<GuardPolicy> = {}) {
+async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {}) {
   const home = await mkdtemp(join(tmpdir(), "td-guard-"));
   const env = { TAPDANCE_HOME: home };
-  const upstream = await fakeSimlock();
+  const upstream = await fakeSimlock(fake);
   const policy = GuardPolicySchema.parse({ listen: { host: "127.0.0.1", port: 0 }, ...overrides });
   const guard = await startGuard({
     upstream: { kind: "local", baseUrl: upstream.url, token: "slk_LOCALONLYSECRET", tenant: "local", runId: "r", clientId: "c", source: "test" },
@@ -234,7 +255,7 @@ describe("worker guard vs a malicious remote client", () => {
   });
 
   it("disabling a capability in the local policy refuses it", async () => {
-    const t = await setup({ allow: { install: false, interaction: true, inspection: true, screenshots: true, recording: false, logs: false, streaming: false, input: false } });
+    const t = await setup({ allow: { install: false, interaction: true, inspection: true, screenshots: true, recording: false, logs: false, streaming: false, input: false, physicalDevices: false } });
     await t.allocate(t.alice.secret, A);
     expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "install", leaseId: A })).status).toBe(403);
     expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "record", leaseId: A, positionals: ["start"] })).status).toBe(403);
@@ -255,5 +276,104 @@ describe("worker guard: lease ids in real agent-device requests", () => {
     expect((await t.rpc(t.mallory.secret, "agent_device.command", real({ meta: A, flags: A }))).status).toBe(403);
     const forwarded = t.upstream.seen.filter((s) => s.path === "/v1/agent-device/rpc").map((s) => s.body);
     expect(forwarded.some((b) => b.includes("tdg_client_side"))).toBe(false);
+  });
+});
+
+describe("worker guard: hardening", () => {
+  const two = { limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 1, tokenDays: 7 } };
+
+  it("refuses physical devices unless the local policy allows them", async () => {
+    const t = await setup();
+    expect((await t.allocate(t.alice.secret, A, { physical: true })).status).toBe(403);
+    expect((await t.allocate(t.alice.secret, A, { flags: { physical: true } })).status).toBe(403);
+    expect(t.upstream.seen).toHaveLength(0);
+    const allowed = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, physicalDevices: true } });
+    expect((await allowed.allocate(allowed.alice.secret, A, { physical: true })).status).toBe(200);
+  });
+
+  it("parallel allocates cannot pass the session cap", async () => {
+    const t = await setup(two, { leaseDelayMs: 50 });
+    expect((await t.allocate(t.alice.secret, A)).status).toBe(200);
+    const ids = ["1", "2", "3", "4", "5"].map((d) => d.repeat(32));
+    const statuses = await Promise.all(ids.map((id) => t.allocate(t.mallory.secret, id).then((r) => r.status)));
+    expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+    expect(statuses.filter((s) => s === 429)).toHaveLength(4);
+  });
+
+  it("frees a slot once Simlock no longer knows the lease", async () => {
+    const t = await setup();
+    expect((await t.allocate(t.alice.secret, A)).status).toBe(200);
+    expect((await t.rpc(t.alice.secret, "agent_device.lease.release", { leaseId: A })).status).toBe(200);
+    expect((await t.allocate(t.mallory.secret, B)).status).toBe(200);
+  });
+
+  it("status shows only this token's waiting requests and devices", async () => {
+    const status = {
+      leases: [{ id: A, deviceId: "dev-a" }, { id: B, deviceId: "dev-b" }],
+      waiting: [{ id: "w1", requesterId: A }, { id: "w2", requesterId: B }, { id: "w3", requesterId: "someone-else" }],
+      devices: [{ id: "dev-a", state: "leased" }, { id: "dev-b", state: "leased" }, { id: "dev-c", state: "idle" }],
+    };
+    const t = await setup(two, { status });
+    await t.allocate(t.alice.secret, A);
+    await t.allocate(t.mallory.secret, B);
+    const seen = (await (await t.call(t.mallory.secret, "GET", "/v1/status")).json()) as typeof status;
+    expect(seen.leases.map((l) => l.id)).toEqual([B]);
+    expect(seen.waiting.map((w) => w.requesterId)).toEqual([B]);
+    expect(seen.devices.map((d) => d.id)).toEqual(["dev-b"]);
+  });
+
+  it("an allocate answered with a JSON-RPC error leaves no ownership behind", async () => {
+    const t = await setup({}, { allocateError: { code: -32000, message: "NO_CAPACITY" } });
+    const r = await t.allocate(t.alice.secret, A);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toMatchObject({ error: { message: "NO_CAPACITY" } });
+    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "snapshot", leaseId: A })).status).toBe(403);
+    expect((await t.exec(t.alice.secret, A, "simctl", ["terminate", "com.x"])).status).toBe(404);
+  });
+
+  it("allows exactly the exec argument lists the provider sends (MOCKED Simlock fetch)", async () => {
+    const bodies: unknown[] = [];
+    const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/exec") && init?.method === "POST") {
+        const body = JSON.parse(String(init.body)) as { args: string[] };
+        bodies.push(body);
+        const stdout = body.args.includes("pidof") ? "1234" : "";
+        const events = `${stdout ? `event: output\ndata: ${JSON.stringify({ stream: "stdout", chunk: stdout })}\n\n` : ""}event: exit\ndata: {"exitCode":0}\n\n`;
+        return new Response(events, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response("{}", { status: 404 });
+    }) as typeof fetch;
+    const provider = new SimlockProvider(
+      { kind: "remote", baseUrl: "http://127.0.0.1:1", token: "tdg_test", tenant: "tapdance", runId: "tapdance", clientId: "c", source: "test" },
+      {},
+      fakeFetch,
+    );
+    const handle = (platform: "android" | "ios"): LeaseHandle => ({
+      provider: "simlock",
+      leaseId: A,
+      sessionId: "s",
+      platform,
+      model: "m",
+      osVersion: "1",
+      physical: false,
+      deviceId: "d",
+      location: { kind: "remote", endpoint: "http://127.0.0.1:1" },
+      ttlMs: 60_000,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      providerData: {},
+    });
+    for (const platform of ["android", "ios"] as const) {
+      await provider.stopApp(handle(platform), "com.x");
+      await provider.logs(handle(platform), { lines: 50, appId: "com.x" });
+      await provider.logs(handle(platform), { lines: 50 });
+      await provider.crashLogs(handle(platform), { lines: 50, appId: "com.x" });
+      await provider.crashLogs(handle(platform), { lines: 50 });
+    }
+    expect(bodies.length).toBeGreaterThanOrEqual(11);
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "-t", "50", "--pid=1234"] });
+    const policy = GuardPolicySchema.parse({});
+    for (const body of bodies) expect(execOf(body, policy), JSON.stringify(body)).toMatchObject({ ok: true });
   });
 });

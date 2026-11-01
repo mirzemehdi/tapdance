@@ -87,15 +87,19 @@ KVM state of *remote* workers is not reported: Simlock does not expose it (STATU
 | `tapdance config` / `config show` | Print the merged configuration, the files it came from, the resolved artifacts directory, and which credential sources exist (token values are redacted). |
 | `tapdance config path` | Print the project config, user config and credentials file locations, marking absent ones. |
 | `tapdance config set <key> <value> [--global]` | Set a dotted key in the nearest `tapdance.config.json` (or the user config with `--global`). The value is parsed as JSON when it can be (`45`, `false`, `["asc"]`), otherwise taken as a string. The result is validated before it is written. Keys containing `token` or `secret` are refused. |
-| `tapdance config set-token [--operator]` | Store the agent token (or, with `--operator`, an operator token) in `~/.tapdance/credentials.json`, mode 600. Reads the token from stdin when piped, otherwise prompts with hidden input. Never pass it as an argument. |
+| `tapdance config set-token [--operator] [--endpoint <url>]` | Store the agent token (or, with `--operator`, an operator token) in `~/.tapdance/credentials.json`, mode 600, bound to the origin of `--endpoint` (default: the endpoint currently configured for self-hosted mode). Tapdance sends the token only to that origin; see [token binding](configuration.md#token-binding). Plain `http://` to a public host is refused. Reads the token from stdin when piped, otherwise prompts with hidden input. Never pass it as an argument. |
 
 ```bash
 tapdance config set session.defaultTtlMinutes 45
-tapdance config set tools.allowMutation '["asc"]'
-printf '%s' "$AGENT_TOKEN" | tapdance config set-token
+tapdance config set --global tools.allowMutation '["asc"]'
+printf '%s' "$AGENT_TOKEN" | tapdance config set-token --endpoint https://gateway.example.com
 ```
 
-See [configuration.md](configuration.md) for every key.
+`config set` writes the project file unless you pass `--global`. The security keys `tools.paths`,
+`tools.mcpEnabled`, `tools.allowMutation`, `ios.axePath` and `simlock.profilePath` take effect only in
+the user file (`--global`) or the environment; in a project file they are ignored with a warning
+([why](configuration.md#security-settings-are-user-only)). See [configuration.md](configuration.md) for
+every key.
 
 ## Discovery
 
@@ -285,7 +289,7 @@ machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
 | `worker install [--no-stream] [--ios-backend <agent-device\|axe>] [--service]` | Configure the bundled Simlock worker (agent-device on, pointing at the bundled agent-device; stream and input on unless `--no-stream`), restart it, and print the host checks. `--ios-backend axe` also sets Simlock's `drivers.ios.deviceSet` to `default` and `ios.uiBackend: "axe"` in `~/.tapdance/config.json`. `--service` installs a launchd / systemd `--user` login service. Refused on Windows. |
 | `worker login --accept-gateway-exec --gateway <url> [--label <name>] [--token-stdin] [--no-viewer]` | Join a gateway. `--accept-gateway-exec` is required: without it the command refuses with `FORBIDDEN`, because a joined gateway, and every agent token it issues, can run programs on this machine (Simlock's exec; `simctl spawn` starts any program). Pass it only on a machine you dedicate to being a worker. The worker dials out over an authenticated WebSocket; no inbound port is opened. The URL must be `wss://`, or `ws://` to a private address (loopback, RFC 1918, Tailscale 100.64/10 or `*.ts.net`); `http(s)://` is converted. The join token comes from `TAPDANCE_WORKER_TOKEN`, else stdin when piped (`--token-stdin` documents that), else a hidden prompt. `--no-viewer` leaves stream and input off. |
 | `worker logout` | Leave the gateway, turn the worker's own HTTP API back on, restart. Revoke the join token on the gateway afterwards. |
-| `worker guard start` / `pair` / `tokens` / `revoke` / `policy` / `audit` | **Preview, untested, still being written.** Device-only mode: a local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. See [security/personal-mac.md](security/personal-mac.md). |
+| `worker guard start` / `pair` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator: H-02; dedicated-account script and Tailscale exposure untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
 | `worker start` / `stop` / `status` / `logs` / `restart` | Start, stop, show, print the log of, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. |
 
 **Security.** Joining gives the gateway operator rights on this machine's devices: whoever controls the
@@ -559,9 +563,11 @@ Store the agent token (or --operator token) in ~/.tapdance/credentials.json,
 mode 600. Reads stdin or prompts.
 
 Options:
-  --operator  store an operator token (only needed for `workers list` on a
-              gateway)
-  -h, --help  display help for command
+  --operator        store an operator token (only needed for `workers list` on a
+                    gateway)
+  --endpoint <url>  the gateway or worker the token is for; Tapdance sends it
+                    nowhere else (default: the configured self-hosted endpoint)
+  -h, --help        display help for command
 ```
 
 ### `tapdance devices`

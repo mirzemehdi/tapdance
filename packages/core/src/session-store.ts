@@ -1,5 +1,6 @@
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TapdanceError } from "./errors.js";
 import { sessionKey } from "./identity.js";
@@ -43,10 +44,21 @@ export interface HumanHold {
   by: string;
 }
 
-// A lease call can hold the lock for minutes while a device boots; a lock is stale only when its
-// holder is gone, or after this long.
-const LOCK_STALE_MS = 15 * 60_000;
-const LOCK_WAIT_MS = 20_000;
+export interface SessionStoreOptions {
+  /** How long a caller waits for another holder before giving up with TIMEOUT. */
+  lockWaitMs?: number;
+  /** A live holder's lock is taken over when its file has not been touched for this long. */
+  lockStaleMs?: number;
+  /** How often a holder touches its lock while it works, so a long device boot keeps it fresh. */
+  heartbeatMs?: number;
+}
+
+const DEFAULT_LOCK_WAIT_MS = 20_000;
+const DEFAULT_LOCK_STALE_MS = 5 * 60_000;
+const DEFAULT_HEARTBEAT_MS = 60_000;
+// A lockfile whose content does not parse may be mid-write by an older Tapdance (which created the
+// file, then wrote its pid); it is left alone this long.
+const UNPARSED_LOCK_GRACE_MS = 2_000;
 
 function alive(pid: number): boolean {
   try {
@@ -57,11 +69,29 @@ function alive(pid: number): boolean {
   }
 }
 
+/** The holder pid of a lock's content: `pid:nonce`, or a bare pid from older versions. */
+function lockHolder(content: string): number | undefined {
+  const match = /^(\d+)(?::[0-9a-f]+)?$/.exec(content.trim());
+  if (!match) return undefined;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+function errno(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | undefined)?.code;
+}
+
 export class SessionStore {
   readonly dir: string;
+  private readonly lockWaitMs: number;
+  private readonly lockStaleMs: number;
+  private readonly heartbeatMs: number;
 
-  constructor(home: string) {
+  constructor(home: string, options: SessionStoreOptions = {}) {
     this.dir = join(home, "sessions");
+    this.lockWaitMs = options.lockWaitMs ?? DEFAULT_LOCK_WAIT_MS;
+    this.lockStaleMs = options.lockStaleMs ?? DEFAULT_LOCK_STALE_MS;
+    this.heartbeatMs = options.heartbeatMs ?? DEFAULT_HEARTBEAT_MS;
   }
 
   path(sessionId: string): string {
@@ -77,43 +107,101 @@ export class SessionStore {
   }
 
   /**
-   * Runs `fn` holding the session's lock (an exclusive lockfile naming its pid). A lock left by a
-   * dead process, or older than 30 s, is taken over. Not reentrant: do not nest calls.
+   * Runs `fn` holding the session's lock: a lockfile naming `pid:nonce`, created whole with a hard
+   * link so it is never seen empty, and touched every `heartbeatMs` while `fn` runs. A lock whose
+   * holder process is dead, or that nobody touched for `lockStaleMs`, is taken over. Not reentrant:
+   * do not nest calls.
    */
   async withLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
     await mkdir(this.dir, { recursive: true, mode: 0o700 });
     const lock = this.lockPath(sessionId);
-    const deadline = Date.now() + LOCK_WAIT_MS;
+    const nonce = randomBytes(8).toString("hex");
+    const token = `${process.pid}:${nonce}`;
+    const deadline = Date.now() + this.lockWaitMs;
     for (;;) {
+      if (await this.tryAcquire(lock, token, nonce)) break;
+      let content: string;
+      let mtimeMs: number;
       try {
-        const handle = await open(lock, "wx", 0o600);
-        await handle.writeFile(String(process.pid));
-        await handle.close();
-        break;
+        [content, { mtimeMs }] = await Promise.all([readFile(lock, "utf8"), stat(lock)]);
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        let stale = false;
-        try {
-          const [holder, info] = await Promise.all([readFile(lock, "utf8"), stat(lock)]);
-          const pid = Number(holder);
-          stale = !Number.isInteger(pid) || pid <= 0 || !alive(pid) || Date.now() - info.mtimeMs > LOCK_STALE_MS;
-        } catch {
-          stale = true;
-        }
-        if (stale) {
-          await rm(lock, { force: true });
-          continue;
-        }
-        if (Date.now() > deadline) {
-          throw new TapdanceError("TIMEOUT", "Another Tapdance process is busy with this session", { hint: "Retry in a moment." });
-        }
-        await new Promise((r) => setTimeout(r, 50));
+        if (errno(error) === "ENOENT") continue;
+        throw error;
       }
+      const holder = lockHolder(content);
+      const age = Date.now() - mtimeMs;
+      const stale = holder === undefined ? age > UNPARSED_LOCK_GRACE_MS : !alive(holder) || age > this.lockStaleMs;
+      if (stale) {
+        await this.takeOver(lock, content);
+        continue;
+      }
+      if (Date.now() > deadline) {
+        if (holder === process.pid) {
+          throw new TapdanceError("TIMEOUT", "An earlier call in this process is still working on this session (for example a lease being granted)", {
+            hint: "Call again in 30 s; a lease request keeps running and returns the device once granted.",
+          });
+        }
+        throw new TapdanceError("TIMEOUT", "Another Tapdance process is busy with this session", { hint: "Retry in a moment." });
+      }
+      await new Promise((r) => setTimeout(r, 50));
     }
+    const heartbeat = setInterval(() => {
+      void (async () => {
+        if ((await readFile(lock, "utf8")) !== token) return;
+        const now = new Date();
+        await utimes(lock, now, now);
+      })().catch(() => undefined);
+    }, this.heartbeatMs);
+    heartbeat.unref();
     try {
       return await fn();
     } finally {
-      await rm(lock, { force: true });
+      clearInterval(heartbeat);
+      try {
+        // Only our own lock: if it was taken over meanwhile, it belongs to someone else now.
+        if ((await readFile(lock, "utf8")) === token) await rm(lock, { force: true });
+      } catch {
+        // Already gone.
+      }
+    }
+  }
+
+  /** Creates the lockfile with its content in one step: write a private temp file, hard-link it. */
+  private async tryAcquire(lock: string, token: string, nonce: string): Promise<boolean> {
+    const tmp = `${lock}.${process.pid}.${nonce}.tmp`;
+    await writeFile(tmp, token, { mode: 0o600 });
+    try {
+      await link(tmp, lock);
+      return true;
+    } catch (error) {
+      if (errno(error) === "EEXIST") return false;
+      throw error;
+    } finally {
+      await rm(tmp, { force: true });
+    }
+  }
+
+  /**
+   * Moves a stale lock aside. Rename is atomic, so of several waiters only one moves it; if what it
+   * moved is no longer the lock it judged stale (someone replaced it in between), it puts it back.
+   */
+  private async takeOver(lock: string, judged: string): Promise<void> {
+    const tombstone = `${lock}.stale.${randomBytes(8).toString("hex")}`;
+    try {
+      await rename(lock, tombstone);
+    } catch (error) {
+      if (errno(error) === "ENOENT") return;
+      throw error;
+    }
+    try {
+      const moved = await readFile(tombstone, "utf8").catch(() => undefined);
+      if (moved !== undefined && moved !== judged) {
+        await link(tombstone, lock).catch((error: unknown) => {
+          if (errno(error) !== "EEXIST") throw error;
+        });
+      }
+    } finally {
+      await rm(tombstone, { force: true });
     }
   }
 

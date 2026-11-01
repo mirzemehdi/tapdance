@@ -168,13 +168,17 @@ A subcommand added upstream works the day the user updates the tool. Agents reac
 tool, `execute_tool`, whose schema never changes.
 
 Safety comes from policy, not allowlists of subcommands:
-- agents may run only tools listed in `tools.mcpEnabled`;
+- agents may run only tools listed in `tools.mcpEnabled`; that key, `tools.allowMutation` and
+  `tools.paths` are read only from the user's own config, never from a repository's
+  `tapdance.config.json`;
 - `asc` runs under its own `ASC_READ_ONLY=1` for agents unless the user lists it in
   `tools.allowMutation` *and* the call asks (`allow_mutation`); fastlane has no read-only mode, so
-  agents need that authorization to run it at all;
+  agents need that authorization to run it at all; without it, the few `asc` commands that print
+  credentials or run shell steps (`auth` other than `auth status`, `workflow`, `install-skills`) are
+  refused;
 - tools that act on a device (AXe, Maestro, Android CLI) are **lease-scoped**: Tapdance appends or sets
-  the leased device (`--udid`, `--device`, or adb's `ANDROID_SERIAL` + Simlock's private
-  `ANDROID_ADB_SERVER_PORT`), strips inherited selectors and refuses caller-supplied ones;
+  the leased device (`--udid`, `--device`; for the Android CLI `--device=<serial>` on subcommands
+  that list it, plus Simlock's private `ANDROID_ADB_SERVER_PORT`), strips inherited selectors and refuses caller-supplied ones;
 - the parent environment is not forwarded except a base set and the tool's own prefix (`ASC_*`);
   output is capped, saved in full as an artifact, and redacted (tokens, PEM private keys).
 
@@ -222,7 +226,7 @@ Simlock has them, so Tapdance builds the missing piece:
 - Network: the control machine reaches it over a private network (Tailscale). That trades the gateway's
   fleet features (one queue across workers) for a boundary the Mac enforces; for dedicated hardware the
   gateway path remains, behind an explicit `--accept-gateway-exec`.
-- Proven by 15 malicious-client tests and a real MCP loop through it; untested: the dedicated account,
+- Proven by malicious-client unit tests (`guard.test.ts`) and a real MCP loop through it; untested: the dedicated account,
   Tailscale exposure, Android through it.
 
 ### Landscape: mobile-mcp and others

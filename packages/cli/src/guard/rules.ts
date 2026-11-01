@@ -51,7 +51,7 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
 }
 
 /** agent-device commands by the policy switch that governs them. Anything else is refused. */
-const COMMANDS: Record<string, keyof GuardPolicy["allow"] | "session"> = {
+const COMMANDS: Record<string, Exclude<keyof GuardPolicy["allow"], "physicalDevices"> | "session"> = {
   open: "session",
   close: "session",
   devices: "inspection",
@@ -109,6 +109,10 @@ export function rpcOf(body: unknown, policy: GuardPolicy): Decision<RpcCall> {
   const leaseId = ids[0];
   if (method === "lease.allocate" || method === "lease.heartbeat" || method === "lease.release") {
     if (!leaseId || !LEASE.test(leaseId)) return deny("lease calls need a 32-hex lease id");
+    const physical = (v: unknown) => v === true || v === "true";
+    if (method === "lease.allocate" && (physical(params["physical"]) || physical(sub("flags")["physical"])) && !policy.allow.physicalDevices) {
+      return deny("physical devices are disabled by the local policy");
+    }
     const ttl = typeof params["ttlMs"] === "number" ? params["ttlMs"] : typeof sub("flags")["ttlMs"] === "number" ? (sub("flags")["ttlMs"] as number) : undefined;
     return { ok: true, value: { method, leaseId, ...(ttl !== undefined ? { ttlMs: ttl } : {}) } };
   }

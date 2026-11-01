@@ -23,9 +23,9 @@ Tapdance release.
 
 Status ([STATUS.md](../STATUS.md), E-01 to E-08): `asc` 5.17.1 was run for real through Tapdance
 (`--version` and `apps list`); `xcodebuild` (Xcode 26.5) was detected by `tapdance tools` but not run
-through it. AXe, Google's Android CLI, Maestro and fastlane are registered but **not tested**
-with Tapdance: they were not installed on the test machine. The Android CLI's device targeting
-(`ANDROID_SERIAL`) is unverified against a real install.
+through it. AXe 1.8.0 and Google's Android CLI 1.1.16717390 ran through Tapdance on leased devices
+([AXe](testing/evidence/2026-11-01-axe.md), [Android CLI](testing/evidence/2026-11-01-android.md)).
+Maestro and fastlane are registered but **not tested** with Tapdance.
 
 Check what is installed here:
 
@@ -51,13 +51,16 @@ tapdance --json tool fastlane -- action supply
   (`exitCode`, `stdout`, `stderr`, `durationMs`, `timedOut`, …), and the full output is also written to
   files in the session's artifact folder.
 - `--timeout <seconds>` stops the tool after that long (default 600 s): SIGTERM, then SIGKILL 5 s later.
-- `tools.paths` in the config gives an absolute executable path when a tool is not on `PATH`.
+- `tools.paths` in the user config (`~/.tapdance/config.json`) gives an absolute executable path when a
+  tool is not on `PATH`. The file name must match the tool (`…/asc` for `asc`); a project
+  `tapdance.config.json` cannot set it ([why](configuration.md#security-settings-are-user-only)).
 - The tool gets a reduced environment: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TMPDIR`,
   `TERM`, `TZ`, plus its own variables (`ASC_*` for asc; `ANDROID_*`, `JAVA_HOME`, `GRADLE_*` for the
   Android CLI; `MAESTRO_*`, `JAVA_HOME`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` for Maestro; `FASTLANE_*`,
   `SUPPLY_*`, `LC_ALL`, `GEM_*`, `BUNDLE_*` for fastlane; `DEVELOPER_DIR` for xcodebuild). Anything else,
   including your other tokens, is not passed on. Known secret shapes (Simlock tokens, bearer headers,
-  PEM private keys, `token=`/`password=` values) are redacted in captured output.
+  PEM private keys, `token=`/`password=` values) are redacted in captured output and in the output
+  files saved as artifacts.
 
 Agents use the same mechanism through the MCP tools `list_tools` and `execute_tool`; see
 [mcp.md](mcp.md#execute_tool-policy).
@@ -82,7 +85,8 @@ Through MCP an agent calls, for example, `execute_tool` with `{"tool": "asc", "a
 
 From the CLI, you are in charge: Tapdance does not force read-only mode.
 
-For agents (MCP `execute_tool`):
+For agents (MCP `execute_tool`). These keys are read only from `~/.tapdance/config.json` or the
+environment, never from a project `tapdance.config.json`:
 
 1. The tool must be in `tools.mcpEnabled` (default `asc`, `android`, `axe`, `maestro`). Otherwise
    `FORBIDDEN`.
@@ -91,12 +95,16 @@ For agents (MCP `execute_tool`):
    - Without that authorization, `asc` runs with `ASC_READ_ONLY=1`. That is asc's own guard: it refuses every mutating App
      Store Connect request (POST, PATCH, PUT, DELETE) before sending it. asc's other safety flags
      (`--read-only`, `--confirm`, `--strict-auth`) are passed through untouched if the agent uses them.
+   - Without that authorization, `asc auth …` (except `asc auth status`), `asc workflow …` and
+     `asc install-skills` are refused with `FORBIDDEN`, because they print credentials or run shell
+     steps, which `ASC_READ_ONLY` does not stop. `--help` is always allowed.
    - `fastlane` and `xcodebuild` have no read-only mode, so agents cannot run them at all until the user
      lists them in `tools.allowMutation` (and enables them in `tools.mcpEnabled`).
    - Device tools (`android`, `axe`, `maestro`) are not read-only; they are confined to the leased
      device instead.
 
-Example: let agents upload TestFlight builds with asc, and run fastlane for Play uploads:
+Example `~/.tapdance/config.json`: let agents upload TestFlight builds with asc, and run fastlane for
+Play uploads:
 
 ```json
 {
@@ -118,7 +126,7 @@ Tools marked "against the leased device" act only on this session's device:
 | --- | --- | --- |
 | `axe` | Appends `--udid <leased simulator>`; a `--udid` you pass is refused with `FORBIDDEN`. iOS leases only. | `NO_ACTIVE_LEASE` |
 | `maestro` | Appends `--device <leased device>`; `--device` or `--udid` you pass is refused. | `NO_ACTIVE_LEASE` |
-| `android` | Sets `ANDROID_SERIAL` to the leased emulator and `ANDROID_ADB_SERVER_PORT` to Simlock's private adb server; inherited `ANDROID_SERIAL`, `ANDROID_ADB_SERVER_PORT` and `ANDROID_ADB_SERVER_ADDRESS` are removed. Android leases only. | Runs, with `ANDROID_SERIAL` set to an id that matches no device, so device-free commands (docs, project setup) work and device commands fail. |
+| `android` | Appends `--device=<leased serial>` to subcommands whose own `--help` lists `--device` (the CLI ignores `ANDROID_SERIAL`) and refuses a caller-supplied `--device`; sets `ANDROID_SERIAL` and `ANDROID_ADB_SERVER_PORT` (Simlock's private adb server); inherited `ANDROID_SERIAL`, `ANDROID_ADB_SERVER_PORT` and `ANDROID_ADB_SERVER_ADDRESS` are removed. Android leases only. | Runs, with `ANDROID_SERIAL` set to an id that matches no device, so device-free commands (docs, project setup) work and device commands fail. |
 
 These tools need direct access to the device, so they work only where the device runs: when the
 session's lease is on a **remote** worker, they fail with `NOT_SUPPORTED`. Tapdance's own device tools
@@ -159,5 +167,5 @@ pinning a tool is up to you. Supported versions are in [compatibility.md](compat
 Separately from pass-through, AXe can replace agent-device as the backend behind Tapdance's own iOS tools
 (`ios.uiBackend: "axe"`, set by `tapdance worker install --ios-backend axe`). It works only when Tapdance
 runs on the Mac hosting the simulator, needs Simlock's `drivers.ios.deviceSet` set to `default` (AXe sees
-only Xcode's default device set), and has no alert handling or selector support. It is unit-tested only;
-installing AXe on the test Mac was blocked by Homebrew's tap-trust policy (STATUS U-02, Q-09).
+only Xcode's default device set), and has no alert handling or selector support. It ran a custom app's sign-in flow on a real simulator
+([evidence](testing/evidence/2026-11-01-axe.md)).

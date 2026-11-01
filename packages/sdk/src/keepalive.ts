@@ -13,11 +13,21 @@ export async function renewIfDue(tapdance: Tapdance, options: { idleMs: number; 
   if (record === undefined) return "none";
   const now = Date.now();
   const ttl = record.handle.ttlMs;
-  const lastUsed = Date.parse(record.lastUsedAt ?? record.handle.createdAt);
-  if (options.idleMs > 0 && now - lastUsed > options.idleMs) {
-    options.log?.(`Releasing ${record.handle.model}: unused for ${Math.round((now - lastUsed) / 60_000)} min`);
-    await tapdance.release();
-    return "released-idle";
+  try {
+    // A person holding the device in the viewer is using it, however long ago the agent last did.
+    const hold = await tapdance.store.getHold(record.sessionId);
+    const holdUntil = hold ? Date.parse(hold.until) : Number.NaN;
+    const lastUsed = Math.max(Date.parse(record.lastUsedAt ?? record.handle.createdAt), Number.isFinite(holdUntil) ? holdUntil : 0);
+    const held = Number.isFinite(holdUntil) && holdUntil > now;
+    if (options.idleMs > 0 && !held && now - lastUsed > options.idleMs) {
+      options.log?.(`Releasing ${record.handle.model}: unused for ${Math.round((now - lastUsed) / 60_000)} min`);
+      await tapdance.release();
+      return "released-idle";
+    }
+  } catch (error) {
+    // The session lock may be busy (a long call holds it); try again on the next round.
+    options.log?.(`Idle release failed: ${(error as Error).message}`);
+    return "error";
   }
   const remaining = Date.parse(record.handle.expiresAt) - now;
   if (remaining > (ttl * 2) / 3) return "not-due";

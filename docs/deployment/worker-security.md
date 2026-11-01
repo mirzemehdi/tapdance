@@ -25,6 +25,13 @@ gateway; Tapdance adds guard rails on top but does not change Simlock's trust mo
    reverse proxy) in front of the gateway, or use Tailscale, WireGuard or an SSH tunnel. Tapdance
    refuses to send a token over plain `http://` or `ws://` to a public address.
 
+**On a personal Mac, use device-only mode.** Run `tapdance worker guard` and let the control machine
+reach the guard over a private network, rather than joining a gateway with
+`tapdance worker login --accept-gateway-exec`, which gives the gateway command execution on the Mac.
+The guard enforces a local policy, its own revocable tokens approved at the Mac, an allowlisted device
+API, limits and an audit log. It was verified on one Mac with a real simulator; the dedicated-account
+script and Tailscale exposure are untested. See [personal-mac.md](../security/personal-mac.md).
+
 ## Tokens and where they live
 
 | Token | Who has it | Stored at | If it leaks |
@@ -35,6 +42,7 @@ gateway; Tapdance adds guard rails on top but does not change Simlock's trust mo
 | Gateway's copies | The gateway | Hashes only, in `~/.simlock/gateway` | — |
 | Viewer key | One browser | URL fragment, then an HttpOnly cookie; dies with `tapdance view` | Control of that one leased device until the viewer stops. |
 | MCP HTTP bearer | Remote MCP clients | `TAPDANCE_MCP_TOKEN` or printed at start | Acts as an agent through that MCP server. |
+| Worker-guard token (`tdg_…`) | One control machine paired with a Mac in device-only mode | `~/.tapdance/credentials.json` on the control machine, bound to the guard URL; only a hash on the Mac | The guard's device API on that Mac, within its policy. `tapdance worker guard revoke <id>` on the Mac. |
 
 Rules Tapdance enforces:
 

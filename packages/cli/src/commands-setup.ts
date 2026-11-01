@@ -8,9 +8,11 @@ import {
   PROVIDER_KINDS,
   TapdanceError,
   credentialsPath,
+  isPrivateHost,
   loadConfig,
   redactObject,
   saveCredentials,
+  urlOrigin,
   userConfigPath,
   writeConfigFile,
   type ProviderKind,
@@ -65,6 +67,29 @@ export async function readSecret(prompt: string): Promise<string> {
   });
 }
 
+/**
+ * The origin a token is bound to. Refuses what is not http(s), and plain http to a public host, by
+ * the same rule as the self-hosted connection: a token sent there would cross the internet in clear.
+ */
+export function tokenOrigin(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new TapdanceError("USAGE", `${url} is not a URL`, { hint: "Pass the gateway's base URL, e.g. https://gateway.example.com." });
+  }
+  const origin = urlOrigin(url);
+  if (origin === undefined || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
+    throw new TapdanceError("USAGE", `${url} is not an http(s) URL`, { hint: "Pass the gateway's base URL, e.g. https://gateway.example.com." });
+  }
+  if (parsed.protocol === "http:" && !isPrivateHost(parsed.hostname)) {
+    throw new TapdanceError("USAGE", `Refusing to bind a token to plain HTTP on ${parsed.host}`, {
+      hint: "Put TLS in front of the gateway (Caddy), use https://, or reach it over a private network (Tailscale, WireGuard, SSH tunnel).",
+    });
+  }
+  return origin;
+}
+
 export function registerSetupCommands(program: Command, globals: () => GlobalOptions): void {
   program
     .command("init")
@@ -113,7 +138,8 @@ export function registerSetupCommands(program: Command, globals: () => GlobalOpt
         if (mode === "self-hosted" && interactive) {
           const token = await readSecret("Agent token for this gateway (input hidden, Enter to skip):");
           if (token) {
-            await saveCredentials({ token });
+            // Bound to this endpoint: the token is never sent to an endpoint a project file names later.
+            await saveCredentials({ token, ...(endpoint ? { endpoint: tokenOrigin(endpoint) } : {}) });
             tokenNote = `Token saved to ${credentialsPath()} (mode 600).`;
           }
         }
@@ -156,7 +182,15 @@ export function registerSetupCommands(program: Command, globals: () => GlobalOpt
       const out = output(globals());
       try {
         const r = await loadConfig(globals().config ? { configPath: globals().config! } : {});
-        const data = { config: r.config, sources: r.sources, artifactsDir: r.artifactsDir, credentials: redactObject(r.credentials), credentialSources: r.credentialSources };
+        const data = {
+          config: r.config,
+          sources: r.sources,
+          ...(r.endpointSource ? { endpointSource: r.endpointSource } : {}),
+          artifactsDir: r.artifactsDir,
+          credentials: redactObject(r.credentials),
+          credentialSources: r.credentialSources,
+          warnings: r.warnings,
+        };
         out.result(data, () => JSON.stringify(data, null, 2));
       } catch (error) {
         process.exitCode = out.error(error);
@@ -205,13 +239,31 @@ export function registerSetupCommands(program: Command, globals: () => GlobalOpt
     .command("set-token")
     .description("Store the agent token (or --operator token) in ~/.tapdance/credentials.json, mode 600. Reads stdin or prompts.")
     .option("--operator", "store an operator token (only needed for `workers list` on a gateway)")
-    .action(async (o: { operator?: boolean }) => {
+    .option("--endpoint <url>", "the gateway or worker the token is for; Tapdance sends it nowhere else (default: the configured self-hosted endpoint)")
+    .action(async (o: { operator?: boolean; endpoint?: string }) => {
       const out = output(globals());
       try {
-        const token = await readSecret(o.operator ? "Operator token:" : "Agent token:");
+        const kind = o.operator ? "operator" : "agent";
+        let endpoint = o.endpoint;
+        let from = "--endpoint";
+        if (endpoint === undefined) {
+          const r = await loadConfig(globals().config ? { configPath: globals().config! } : {});
+          if (r.config.provider === "self-hosted" && r.config.endpoint) {
+            endpoint = r.config.endpoint;
+            from = r.endpointSource === "project" ? "this project's tapdance.config.json" : r.endpointSource === "env" ? "TAPDANCE_ENDPOINT" : "~/.tapdance/config.json";
+          }
+        }
+        const origin = endpoint === undefined ? undefined : tokenOrigin(endpoint);
+        const token = await readSecret(`${o.operator ? "Operator" : "Agent"} token${origin ? ` for ${origin} (from ${from})` : ""}:`);
         if (!token) throw new TapdanceError("USAGE", "No token given");
-        const file = await saveCredentials(o.operator ? { operatorToken: token } : { token });
-        out.result({ saved: file, kind: o.operator ? "operator" : "agent" }, () => `Saved ${o.operator ? "operator" : "agent"} token to ${file}`);
+        const file = await saveCredentials(
+          o.operator ? { operatorToken: token, ...(origin ? { operatorEndpoint: origin } : {}) } : { token, ...(origin ? { endpoint: origin } : {}) },
+        );
+        out.result({ saved: file, kind, endpoint: origin ?? null }, () =>
+          origin
+            ? `Saved ${kind} token for ${origin} to ${file}`
+            : `Saved ${kind} token to ${file}. No endpoint is known, so it works only with an endpoint from ~/.tapdance/config.json or TAPDANCE_ENDPOINT (pass --endpoint to bind it).`,
+        );
       } catch (error) {
         process.exitCode = out.error(error);
       }

@@ -13,6 +13,14 @@ computers, how data flows between them, and what has been tested. Pick a concret
 
 Read [worker security](worker-security.md) before you join any machine to a gateway.
 
+**A personal Mac should not join a gateway.** `tapdance worker login --accept-gateway-exec` gives the
+gateway, and every agent token it issues, command execution on the Mac. On a Mac you also use for
+yourself, use device-only mode instead: `tapdance worker guard` in front of the local worker, reached
+from the control machine over a private network such as Tailscale, with `provider: "self-hosted"` and
+the guard's URL as `endpoint`. It gives up the fleet features (one gateway, many workers, one queue).
+See [personal-mac.md](../security/personal-mac.md); it was verified on one Mac, and Tailscale
+exposure is untested.
+
 ## The roles
 
 | Role | What it is | Runs | Needs KVM? |
@@ -140,6 +148,7 @@ From [STATUS.md](../../STATUS.md), as of 2026-11-01:
 | Google Cloud N2 worker | Terraform and scripts written, **nothing provisioned**. |
 | Browser viewer | Stream, input and take-over verified **on one Mac** (scripted, and in a real browser through a gateway on that Mac); not yet used from another computer. |
 | Streamable HTTP MCP (`tapdance mcp --http`) | **Partly verified**: 401 without the token, tools listed, `list_devices` and `get_device_status` worked; a full device loop over HTTP not run. |
+| Device-only mode (`tapdance worker guard`) | **Verified on one Mac**: the full MCP loop through the guard against a real simulator ([evidence](../testing/evidence/2026-11-01-worker-guard.md)). The dedicated worker account script and exposure over Tailscale are **not tested**. |
 | Windows as a worker | Not supported (Simlock runs on macOS and Linux only). |
 
 If you try any of these, please file what happened with `tapdance report`.

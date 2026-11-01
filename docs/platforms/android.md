@@ -123,7 +123,7 @@ through Simlock's command endpoint as a fixed internal allowlist; there is no ra
 
 | Tool | How Tapdance uses it | Status |
 | --- | --- | --- |
-| Google's [Android CLI](https://developer.android.com/cli) (`android`) | External tool: `tapdance android -- <args>` and the MCP `execute_tool`. During a lease, Tapdance points it at the leased emulator (`ANDROID_SERIAL` and Simlock's adb port) and strips inherited device selectors. | Registered; **never run against the real CLI**. Not installed by Tapdance (E-07). agent-device stays the default backend. |
+| Google's [Android CLI](https://developer.android.com/cli) (`android`) | External tool: `tapdance android -- <args>` and the MCP `execute_tool`. During a lease, Tapdance appends `--device=<serial>` where the subcommand takes it, points adb at Simlock's port and strips inherited device selectors. | `layout --flat` ran on a leased emulator ([evidence](../testing/evidence/2026-11-01-android.md)). Not installed by Tapdance (E-07). agent-device stays the default backend. |
 | [Maestro](https://github.com/mobile-dev-inc/maestro) (Apache-2.0) | External tool, scoped to the lease. | Registered; not run. |
 | [fastlane](https://github.com/fastlane/fastlane) `supply` (MIT) | External tool for Google Play publishing. Agents need explicit permission (`tools.allowMutation`). | Registered; not run. |
 

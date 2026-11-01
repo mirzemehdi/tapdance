@@ -100,12 +100,16 @@ tapdance app launch com.apple.Preferences
 ```
 
 For your own app, build a simulator `.app` (not an `.ipa`) and install it. The path is on the machine
-running `tapdance`; the app is uploaded to the worker. This step has not yet been exercised with a real
-app build.
+running `tapdance`; the app is uploaded to the worker. This was run locally with examples/ios-demo; not
+yet through a gateway. (That demo is built with `swiftc`; the `xcodebuild` line below is the usual
+command for an Xcode project.)
+
+Build into `./build` inside the project, so the `.app` lands inside it. The MCP tool `install_app`
+accepts only paths inside the project directory the server runs in.
 
 ```bash
-xcodebuild -scheme MyApp -sdk iphonesimulator -configuration Debug -derivedDataPath build
-tapdance app install build/Build/Products/Debug-iphonesimulator/MyApp.app
+xcodebuild -scheme MyApp -sdk iphonesimulator -configuration Debug -derivedDataPath ./build build
+tapdance app install ./build/Build/Products/Debug-iphonesimulator/MyApp.app
 tapdance app launch com.example.myapp
 tapdance app launch com.example.myapp --relaunch        # kill and start again
 tapdance app launch com.example.myapp --url myapp://settings   # open a deep link
@@ -222,6 +226,10 @@ claude mcp add tapdance -- tapdance mcp
 
 See [mcp.md](mcp.md) for the tools and the recommended workflow, and the setup pages for
 [Claude Code](agents/claude-code.md), [Codex](agents/codex.md) and [Cursor](agents/cursor.md).
+
+The MCP server has been verified with a scripted MCP client on a real iOS simulator; it has not yet
+been run from inside Claude Code, Codex or Cursor, and Android has not run on a device (see
+[STATUS.md](../STATUS.md) P-01).
 
 ## Where next
 

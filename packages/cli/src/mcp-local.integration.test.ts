@@ -27,7 +27,7 @@ describe.skipIf(!platform)(`MCP over stdio on a real ${platform ?? "(unset)"} de
   });
 
   const call = async (name: string, args: Record<string, unknown> = {}) => {
-    const r = (await client!.callTool({ name, arguments: args })) as { content: Array<{ type: string; text?: string; data?: string }>; isError?: boolean };
+    const r = (await client!.callTool({ name, arguments: args }, undefined, { timeout: 330_000 })) as { content: Array<{ type: string; text?: string; data?: string }>; isError?: boolean };
     const text = r.content.find((c) => c.type === "text")?.text ?? "{}";
     const json = (() => {
       try {

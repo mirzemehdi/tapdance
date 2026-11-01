@@ -21,8 +21,8 @@ on iOS 18.5, created by Simlock.
 | [asc](https://github.com/rorkai/App-Store-Connect-CLI) | 5.17.1 (Homebrew) | Tested | `--version` and `apps list` through the CLI and `execute_tool`. |
 | MCP TypeScript SDK | 1.32.2 | Tested (stdio) | Streamable HTTP partly verified: 401 without the token, tools listed, `list_devices` and `get_device_status` worked; a full device loop over HTTP not run. |
 | pnpm | 10.20.0 | Used to build | Needed only to build from source. |
-| [AXe](https://github.com/cameroncooke/AXe) | 1.8.0 | **Untested** | AXe's README says it supports Xcode 26 and Xcode 27, validated by its authors with Xcode 26.5 (17F42). Not installed on the test Mac (Homebrew tap-trust policy), so Tapdance's AXe backend and pass-through have only unit tests. |
-| [Google's Android CLI](https://developer.android.com/tools/agents/android-cli) | any | **Untested** | Registered for pass-through; device targeting via `ANDROID_SERIAL` unverified. |
+| [AXe](https://github.com/cameroncooke/AXe) | 1.8.0 | Tested | Release tarball, Xcode 26.5, iOS 26.5 simulator: install, launch, inspect, type, tap, wait, screenshot, MP4 ([evidence](testing/evidence/2026-11-01-axe.md)). |
+| [Google's Android CLI](https://developer.android.com/tools/agents/android-cli) | 1.1.16717390 | Tested | `--version`, `layout --flat` on a leased emulator via `--device` ([evidence](testing/evidence/2026-11-01-android.md)). |
 | Android SDK, emulator, system images | any | **Untested** | Android end to end has not run: the test Mac lacks the SDK command-line tools Simlock needs. |
 | Linux worker with KVM (e.g. Google Cloud N2) | Ubuntu 24.04 planned | **Untested** | Terraform and scripts exist under `infrastructure/`; nothing provisioned. |
 | [Maestro](https://github.com/mobile-dev-inc/maestro) | any | **Untested** | Registered for pass-through. |

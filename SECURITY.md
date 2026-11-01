@@ -56,10 +56,16 @@ to a public host, because the join token would travel in plain text.
 
 **Never commit tokens.** Tapdance refuses to load a config file that contains `token` or
 `operatorToken`. Store tokens with `tapdance config set-token` (written to
-`~/.tapdance/credentials.json` with mode 600) or pass them in `TAPDANCE_TOKEN` and
-`TAPDANCE_OPERATOR_TOKEN`. `tapdance gateway setup` and `tapdance gateway token` print newly minted
+`~/.tapdance/credentials.json` with mode 600, bound to the endpoint origin given with `--endpoint`)
+or pass them in `TAPDANCE_TOKEN` and `TAPDANCE_OPERATOR_TOKEN`. `tapdance gateway setup` and `tapdance gateway token` print newly minted
 tokens once, unredacted, on purpose: copy them to where they belong and do not leave them in shell
 logs, CI output or issue reports.
+
+**The repository is untrusted input too.** A `tapdance.config.json` in a repository you open cannot
+set `tools.paths`, `tools.mcpEnabled`, `tools.allowMutation`, `ios.axePath` or `simlock.profilePath`
+(they are read only from `~/.tapdance/config.json` or the environment), and cannot redirect a saved
+token: a token bound to one endpoint is never sent to another
+([docs/configuration.md](docs/configuration.md#token-binding)).
 
 **The app under test is untrusted input.** Text on screen and in logs can try to instruct the agent.
 The MCP server tells agents to treat it as data, but Tapdance cannot stop an agent from following it.
@@ -71,8 +77,8 @@ The MCP server tells agents to treat it as data, but Tapdance cannot stop an age
 | Device scope | No command or MCP tool takes a device id. Every action resolves the current session's lease. Release only targets that lease. Simlock and agent-device enforce token ownership underneath. |
 | Tool surface | No raw shell, `adb` or `simctl` MCP tool. Tapdance uses Simlock `exec` internally for a fixed allowlist only (stop app, logcat dump, crash buffer, simulator log query). |
 | App uploads | MCP `install_app` paths must be inside the working directory or a root listed in `TAPDANCE_ALLOWED_ROOTS`. `.ipa` and `.aab` files are refused for simulators and emulators. |
-| External tools | Run with an argument array, never a shell. Only allowed environment variables are passed. Timeouts and output caps apply. Device tools act only on the leased device and refuse caller-supplied device flags. Agents may run only tools in `tools.mcpEnabled`. `asc` runs with `ASC_READ_ONLY=1` for agents unless the user lists it in `tools.allowMutation`; fastlane, which has no read-only mode, needs that listing too. |
-| Secrets | Tokens are redacted from errors, logs, tool output, MCP responses and `tapdance report` (Simlock `slk_` secrets, bearer headers, PEM private keys, token-like JSON keys). The operator token is never loaded for agent sessions. |
+| External tools | Run with an argument array, never a shell. Only allowed environment variables are passed. Timeouts and output caps apply. Device tools act only on the leased device and refuse caller-supplied device flags. Agents may run only tools in `tools.mcpEnabled`. `asc` runs with `ASC_READ_ONLY=1` for agents unless the user lists it in `tools.allowMutation`; without that, agents are also refused `asc auth` (except `auth status`), `asc workflow` and `asc install-skills`, which print credentials or run shell steps. fastlane, which has no read-only mode, needs that listing too. These keys are read only from the user config. |
+| Secrets | Tokens are redacted from errors, logs, tool output (including the saved output files), MCP responses and `tapdance report` (Simlock `slk_` and worker-guard `tdg_` secrets, bearer headers, JWTs, PEM private keys, `*_KEY_B64=` values, viewer keys, token-like JSON keys). The operator token is never loaded for agent sessions. Agent tokens are sent only to the endpoint origin they were saved for. |
 | Worker join | `tapdance worker login` reads the join token from `TAPDANCE_WORKER_TOKEN`, stdin or a hidden prompt; there is no flag for it, so it does not land in shell history. (It is passed briefly as a process argument to the bundled `simlock config set gateway …`, so another process of the same user, or root, could see it in `ps` while that runs.) `worker login` also refuses unless you pass `--accept-gateway-exec`, acknowledging that the gateway and its agent tokens can run programs on the worker. `ws://` to public hosts is refused. |
 | Browser viewer | Loopback by default; public addresses are refused. One-time key in the URL fragment, then an HttpOnly cookie. Host and Origin checks against DNS rebinding. The Simlock token stays on the server side. |
 | MCP over HTTP | `tapdance mcp --http` listens on 127.0.0.1 by default and requires a bearer token (`TAPDANCE_MCP_TOKEN`, or one generated and printed once). Each MCP session gets its own Tapdance session and lease. |

@@ -83,13 +83,44 @@ export function toTapdanceError(error: unknown): TapdanceError {
   return new TapdanceError("INTERNAL", message, { cause: error });
 }
 
-// Simlock secrets start with `slk_`; bearer headers and token-ish JSON keys are covered too.
+// Simlock secrets start with `slk_` and worker-guard tokens with `tdg_`; bearer headers, JWTs, the
+// viewer's `#k=` key, private keys and token-ish `key=value` pairs are covered too.
 const SECRET_PATTERNS: RegExp[] = [
   /slk_[A-Za-z0-9_-]{8,}/g,
+  /tdg_[A-Za-z0-9_-]{16,}/g,
   /(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
+  /(#k=)[A-Za-z0-9_-]{16,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /("?(?:token|secret|daemonAuthToken|authorization|password)"?\s*[:=]\s*"?)(?!Bearer\b|\[REDACTED\])[^"\s,}]{6,}/gi,
+  /("?(?:token|secret|daemonAuthToken|authorization|password|api[_-]?key|private[_-]?key)"?\s*[:=]\s*"?)(?!Bearer\b|\[REDACTED\])[^"\s,}]{6,}/gi,
+  // Environment-style names such as ASC_PRIVATE_KEY_B64=…; case-sensitive so a bare `key=` is left alone.
+  /(\b[A-Z][A-Z0-9_]*KEY(?:_B64)?"?\s*[:=]\s*"?)(?!\[REDACTED\])[^"\s,}]{6,}/g,
 ];
+
+const PEM_END = /-----END [A-Z ]*PRIVATE KEY-----/g;
+const PEM_BODY_CHAR = /[A-Za-z0-9+/=\s]/;
+
+/**
+ * The tail of a private key whose BEGIN line was cut off (output truncated mid-key): at least 40
+ * base64 characters right before an END line. Equivalent to
+ * /[A-Za-z0-9+/=\s]{40,}-----END [A-Z ]*PRIVATE KEY-----/g, but scanned backwards from each END line so
+ * long base64-looking output cannot make it quadratic.
+ */
+function redactOrphanPemTails(text: string): string {
+  if (!text.includes("PRIVATE KEY-----")) return text;
+  let out = "";
+  let from = 0;
+  for (const match of text.matchAll(PEM_END)) {
+    const end = match.index;
+    let start = end;
+    while (start > from && PEM_BODY_CHAR.test(text[start - 1]!)) start--;
+    if (end - start >= 40) {
+      out += `${text.slice(from, start)}[REDACTED]`;
+      from = end + match[0].length;
+    }
+  }
+  return out + text.slice(from);
+}
 
 export function redactSecrets(text: string): string {
   let out = text;
@@ -98,10 +129,10 @@ export function redactSecrets(text: string): string {
       typeof prefix === "string" && match.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]",
     );
   }
-  return out;
+  return redactOrphanPemTails(out);
 }
 
-const SECRET_KEYS = /^(token|secret|daemonAuthToken|authorization|password|operatorToken|joinToken)$/i;
+const SECRET_KEYS = /^(token|secret|daemonAuthToken|authorization|password|operatorToken|joinToken|apiKey|privateKey|joinUrl)$/i;
 
 export function redactObject<T>(value: T): T {
   if (typeof value === "string") return redactSecrets(value) as T;

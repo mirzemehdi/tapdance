@@ -20,6 +20,8 @@ export interface AxeNode {
   AXLabel?: string | null;
   AXValue?: string | null;
   AXUniqueId?: string | null;
+  /** A text field's placeholder; SwiftUI fields often have no label, only this. */
+  AXPlaceholderValue?: string | null;
   frame?: { x: number; y: number; width: number; height: number };
   enabled?: boolean;
   children?: AxeNode[];
@@ -27,6 +29,7 @@ export interface AxeNode {
 
 export interface FlatAxeElement extends UiElement {
   center?: { x: number; y: number };
+  placeholder?: string;
 }
 
 const UDID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
@@ -39,6 +42,7 @@ export function flattenAxe(nodes: AxeNode[]): FlatAxeElement[] {
     if (node.AXLabel) el.label = node.AXLabel;
     if (node.AXValue && node.AXValue !== node.AXLabel) el.value = node.AXValue;
     if (node.AXUniqueId) el.identifier = node.AXUniqueId;
+    if (node.AXPlaceholderValue && node.AXPlaceholderValue !== node.AXLabel) el.placeholder = node.AXPlaceholderValue;
     if (node.enabled === false) el.enabled = false;
     if (node.frame) {
       const f = node.frame;
@@ -51,6 +55,25 @@ export function flattenAxe(nodes: AxeNode[]): FlatAxeElement[] {
   for (const node of nodes) walk(node, 0);
   return out;
 }
+
+const INTERACTIVE = /button|cell|field|switch|link|slider|tab|search|textview|picker|segmented|stepper|toggle/;
+
+/**
+ * Finds the element a text target means: exact label, id, placeholder or value first, then the same
+ * ignoring case. Interactive elements win over static text that happens to say the same thing.
+ */
+export function matchText(elements: FlatAxeElement[], text: string): FlatAxeElement | undefined {
+  const fields = (e: FlatAxeElement) => [e.label, e.identifier, e.placeholder, e.value];
+  const pick = (same: (a: string) => boolean) => {
+    const hits = elements.filter((e) => e.center && fields(e).some((f) => typeof f === "string" && same(f)));
+    return hits.find((e) => INTERACTIVE.test(e.role)) ?? hits[0];
+  };
+  const lower = text.toLowerCase();
+  return pick((f) => f === text) ?? pick((f) => f.toLowerCase() === lower);
+}
+
+/** AXe answers this while a just-launched app's accessibility tree is not ready yet. */
+const TREE_NOT_READY = /no translation object|accessibility.*(not|un)available|timed out.*accessibility/i;
 
 export class AxeBackend {
   constructor(readonly bin = "axe") {}
@@ -92,9 +115,19 @@ export class AxeBackend {
     }
   }
 
-  async describe(udid: string): Promise<FlatAxeElement[]> {
+  async describe(udid: string, readyTimeoutMs = 8_000): Promise<FlatAxeElement[]> {
     this.check(udid);
-    const text = await this.axe(["describe-ui", "--udid", udid]);
+    const deadline = Date.now() + readyTimeoutMs;
+    let text: string;
+    for (;;) {
+      try {
+        text = await this.axe(["describe-ui", "--udid", udid]);
+        break;
+      } catch (error) {
+        if (!(error instanceof TapdanceError) || !TREE_NOT_READY.test(error.message) || Date.now() >= deadline) throw error;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
@@ -106,8 +139,9 @@ export class AxeBackend {
 
   async inspect(udid: string, interactiveOnly: boolean): Promise<ScreenInspection> {
     const all = await this.describe(udid);
-    const interactive = /button|cell|field|switch|link|slider|tab|search|textview|picker|segmented|stepper|toggle/;
-    const elements = (interactiveOnly ? all.filter((e) => interactive.test(e.role) || e.identifier) : all).map(({ center: _c, ...rest }) => rest);
+    const elements = (interactiveOnly ? all.filter((e) => INTERACTIVE.test(e.role) || e.identifier) : all).map(({ center: _c, placeholder, ...rest }) =>
+      placeholder && !rest.label ? { ...rest, label: placeholder } : rest,
+    );
     const root = all[0]?.rect;
     return {
       ...(root ? { viewport: { width: root.width, height: root.height } } : {}),
@@ -121,9 +155,13 @@ export class AxeBackend {
     this.check(udid);
     let args: string[];
     switch (target.kind) {
-      case "text":
-        args = ["tap", "--label", target.text];
-        break;
+      case "text": {
+        // AXe's own --label misses SwiftUI text fields (no label, only a placeholder), so resolve here.
+        const el = await this.findText(udid, target.text);
+        args = ["tap", "-x", String(el.center!.x), "-y", String(el.center!.y)];
+        await this.axe([...args, "--udid", udid]);
+        return { ok: true, message: `Tapped "${target.text}"` };
+      }
       case "id":
         args = ["tap", "--id", target.id];
         break;
@@ -141,6 +179,23 @@ export class AxeBackend {
     }
     await this.axe([...args, "--wait-timeout", "5", "--udid", udid]);
     return { ok: true, message: `Tapped ${args.slice(1, 3).join(" ")}` };
+  }
+
+  /** Waits up to `timeoutMs` for an element the text names. */
+  async findText(udid: string, text: string, timeoutMs = 5_000): Promise<FlatAxeElement> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const all = await this.describe(udid);
+      const hit = matchText(all, text);
+      if (hit) return hit;
+      if (Date.now() >= deadline) {
+        const seen = all.filter((e) => INTERACTIVE.test(e.role)).map((e) => e.label ?? e.placeholder ?? e.identifier).filter(Boolean).slice(0, 8);
+        throw new TapdanceError("ELEMENT_NOT_FOUND", `No element "${text}" on the current screen`, {
+          hint: `Inspect the screen and target an element by its exact label or id.${seen.length ? ` Interactive elements: ${seen.join(", ")}` : ""}`,
+        });
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
   }
 
   async swipe(

@@ -84,6 +84,29 @@ tapdance --session <sessionId> view
 Use the `sessionId` from `get_device_status`. A touch in the browser takes control; the agent's next
 action gets `HUMAN_HELD` and should wait and retry.
 
+## Practical notes for agent runs
+
+**Build the app inside the project.** `install_app` refuses paths outside the directory the MCP server
+runs in. Build there:
+
+- iOS: `xcodebuild -scheme <App> -sdk iphonesimulator -derivedDataPath ./build build`, then install
+  `./build/Build/Products/Debug-iphonesimulator/<App>.app`.
+- Android: install `app/build/outputs/apk/debug/app-debug.apk`.
+
+If the build must stay elsewhere, add that directory to `TAPDANCE_ALLOWED_ROOTS` in the server's
+environment and restart the server. `install_app` returns the `appId` to launch; if it is missing,
+`list_apps` shows the installed apps.
+
+**Timeouts.** `lease_device` can take minutes: up to about 330 s in the queue, plus the time to create
+and boot a device. A long first lease can outlast the client's tool timeout. If the call still times
+out, ask the agent to call `lease_device` again: the original request keeps running, and the second
+call returns the device with `reused: true` once it is granted.
+
+**Collecting evidence.** Ask the agent to `start_recording` before the flow and `stop_recording` after
+it, take screenshots at the important steps, then call `get_test_artifacts` and put the artifact paths
+in its report. `release_device` comes last, also after a failure; a recording still running at release
+is stopped and kept.
+
 ## Recommended prompts
 
 Testing an app end to end (requirement P-01):

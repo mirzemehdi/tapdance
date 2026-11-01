@@ -150,12 +150,14 @@ export class Tapdance {
 
   async doctor(options: { host?: boolean } = {}): Promise<DoctorCheck[]> {
     const { config } = this.resolved;
+    const warnings = this.resolved.warnings ?? [];
     const checks: DoctorCheck[] = [
       {
         id: "config",
         title: "Configuration",
-        status: "pass",
-        detail: `provider ${config.provider}${config.endpoint ? ` → ${config.endpoint}` : ""}; sources: ${this.resolved.sources.join(", ") || "defaults"}`,
+        status: warnings.length > 0 ? "warn" : "pass",
+        detail: `provider ${config.provider}${config.endpoint ? ` → ${config.endpoint}` : ""}; sources: ${this.resolved.sources.join(", ") || "defaults"}${warnings.length > 0 ? `. ${warnings.join(". ")}` : ""}`,
+        ...(warnings.length > 0 ? { fix: "Set those keys with `tapdance config set --global`, or remove them from tapdance.config.json." } : {}),
       },
       { id: "session", title: "Session identity", status: "pass", detail: `${this.session.id} (from ${this.session.source})` },
     ];
@@ -216,9 +218,20 @@ export class Tapdance {
         .catch(() => undefined);
       return result;
     } catch (error) {
-      if (error instanceof TapdanceError && error.code === "LEASE_LOST") await this.store.delete(this.session.id, record.handle.leaseId);
+      if (error instanceof TapdanceError && error.code === "LEASE_LOST") {
+        // End it on the provider too: a lease misjudged as lost must not stay booked until its TTL.
+        await provider.release(record.handle).catch(() => undefined);
+        await this.store.delete(this.session.id, record.handle.leaseId);
+      }
       throw error;
     }
+  }
+
+  /** Marks the session's lease as used now, so the keepalive's idle release leaves it alone. */
+  private async touch(leaseId: string): Promise<void> {
+    await this.store
+      .update(this.session.id, (r) => (r.handle.leaseId === leaseId ? { ...r, lastUsedAt: new Date().toISOString() } : undefined))
+      .catch(() => undefined);
   }
 
   /** Agent input waits while a person holds the device in the browser viewer (cf. Loupe's humanHeld). */
@@ -303,6 +316,13 @@ export class Tapdance {
     const { record, provider } = await this.active();
     try {
       const status = await provider.renew(record.handle, ttlMinutes === undefined ? record.handle.ttlMs : ttlMinutes * 60_000);
+      if (status.state === "ended") {
+        await this.store.delete(this.session.id, record.handle.leaseId);
+        throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} has ended`, {
+          hint: "Lease a new device. Anything installed on the old one was wiped.",
+          details: { reason: status.endReason },
+        });
+      }
       const updated = await this.store.update(this.session.id, (r) =>
         r.handle.leaseId === record.handle.leaseId
           ? { ...r, handle: { ...r.handle, ...(status.expiresAt ? { expiresAt: status.expiresAt } : {}) }, renewer: { pid: process.pid, heartbeatAt: new Date().toISOString() } }
@@ -319,14 +339,25 @@ export class Tapdance {
    * Releases this session's lease. Only ever this session's: there is no id to pass. With
    * `onlyOwnedBy`, releases only a lease that process created (the MCP server's shutdown uses it).
    */
-  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; device?: DeviceSummary; skipped?: string }> {
+  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
     const record = await this.store.get(this.session.id);
     if (record === undefined) return { released: false };
     if (options.onlyOwnedBy && (record.owner?.kind !== options.onlyOwnedBy.kind || record.owner.pid !== options.onlyOwnedBy.pid)) {
       return { released: false, skipped: `lease belongs to ${record.owner?.kind ?? "another process"}` };
     }
     const provider = await this.provider();
-    if (record.recording) await provider.stopRecording(record.handle, record.recording.token).catch(() => undefined);
+    // A recording still running is evidence: stop it and keep the video before the device goes away.
+    const artifacts: ArtifactRef[] = [];
+    if (record.recording) {
+      try {
+        const stopped = await provider.stopRecording(record.handle, record.recording.token);
+        const base = { kind: "recording" as const, sessionId: this.session.id, leaseId: record.handle.leaseId, note: "stopped at release" };
+        artifacts.push(await this.artifacts.record({ ...base, path: stopped.path }));
+        for (const p of stopped.extraPaths) if (existsSync(p)) artifacts.push(await this.artifacts.record({ ...base, path: p }));
+      } catch (error) {
+        this.progress(`Could not stop the recording before release: ${(error as Error).message}`);
+      }
+    }
     const result = await provider.release(record.handle).catch(() => ({ released: false }));
     await this.store.delete(this.session.id, record.handle.leaseId);
     if (record.keepalivePid && record.keepalivePid !== process.pid && (await isKeepaliveProcess(record.keepalivePid))) {
@@ -336,7 +367,7 @@ export class Tapdance {
         // Already gone.
       }
     }
-    return { released: result.released, device: summarize(record, { state: "ended", handle: record.handle }) };
+    return { released: result.released, device: summarize(record, { state: "ended", handle: record.handle }), ...(artifacts.length > 0 ? { artifacts } : {}) };
   }
 
   // ------------------------------------------------------------ apps
@@ -431,7 +462,29 @@ export class Tapdance {
         throw new TapdanceError("USAGE", "No recording is running", { hint: "Start one with `tapdance record start` (MCP: start_recording)." });
       }
       this.progress("Stopping the recording and downloading the video");
-      const stopped = await provider.stopRecording(handle, record.recording.token);
+      let stopped: Awaited<ReturnType<DeviceProvider["stopRecording"]>>;
+      try {
+        stopped = await provider.stopRecording(handle, record.recording.token);
+      } catch (error) {
+        if (error instanceof TapdanceError && error.code === "LEASE_LOST") throw error;
+        // Forget the recording, or start_recording would be refused for the rest of the lease.
+        await this.store
+          .update(this.session.id, (r) => {
+            if (r.handle.leaseId !== handle.leaseId) return undefined;
+            const { recording: _, ...rest } = r;
+            return rest;
+          })
+          .catch(() => undefined);
+        const e = error instanceof TapdanceError ? error : new TapdanceError("DEVICE_ERROR", `Stopping the recording failed: ${(error as Error).message}`, { cause: error });
+        const hint = "The recording could not be stopped cleanly; start a new one with start_recording.";
+        throw new TapdanceError(e.code, e.message, {
+          hint: e.hint ? `${hint} ${e.hint}` : hint,
+          ...(e.details ? { details: e.details } : {}),
+          retryable: e.retryable,
+          ...(e.retryAfterMs === undefined ? {} : { retryAfterMs: e.retryAfterMs }),
+          cause: error,
+        });
+      }
       await this.store.update(this.session.id, (r) => {
         const { recording: _, ...rest } = r;
         return rest;
@@ -484,18 +537,20 @@ export class Tapdance {
       });
     }
     if (options.fromAgent && !cfg.mcpEnabled.includes(name)) {
-      throw new TapdanceError("FORBIDDEN", `Agents may not run ${name} here`, { hint: `Add "${name}" to tools.mcpEnabled in tapdance.config.json to allow it.` });
+      throw new TapdanceError("FORBIDDEN", `Agents may not run ${name} here`, { hint: `Add "${name}" to tools.mcpEnabled in ~/.tapdance/config.json (\`tapdance config set --global\`) to allow it.` });
     }
     const mutationAuthorized = cfg.allowMutation.includes(name);
     const readOnly = Boolean(options.fromAgent) && !(options.allowMutation && mutationAuthorized);
+    if (readOnly && name === "asc") refuseAscEscapes(args);
     if (readOnly && !spec.readOnlyEnv && spec.location === "control") {
       throw new TapdanceError("FORBIDDEN", `${name} has no read-only mode, so agents need your authorization to run it`, {
-        hint: `Add "${name}" to tools.allowMutation in tapdance.config.json, then call with allow_mutation: true.`,
+        hint: `Add "${name}" to tools.allowMutation in ~/.tapdance/config.json (\`tapdance config set --global\`), then call with allow_mutation: true.`,
       });
     }
     if (options.fromAgent && spec.location === "lease") await this.guardHuman();
     let deviceId: string | undefined;
     let adbServerPort: number | undefined;
+    let leaseInUse: string | undefined;
     if (spec.location === "lease") {
       const record = await this.store.get(this.session.id);
       if (record) {
@@ -508,6 +563,7 @@ export class Tapdance {
           });
         }
         deviceId = record.handle.deviceId;
+        leaseInUse = record.handle.leaseId;
         if (record.handle.platform === "android") adbServerPort = simlockAdbPort(this.options.env ?? process.env);
       } else if (spec.deviceEnv) {
         // No lease: device-free commands still work, but nothing may reach a device outside a lease.
@@ -515,6 +571,13 @@ export class Tapdance {
       }
     }
     const prefix = options.inherit ? undefined : await this.artifacts.allocate(this.session.id, "log", "run");
+    // A tool driving the leased device is use: keep the idle release away while it runs.
+    let toucher: NodeJS.Timeout | undefined;
+    if (leaseInUse !== undefined) {
+      await this.touch(leaseInUse);
+      toucher = setInterval(() => void this.touch(leaseInUse), 5 * 60_000);
+      toucher.unref();
+    }
     const run = await runTool(spec, {
       args,
       ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -526,7 +589,10 @@ export class Tapdance {
       ...(prefix ? { outputPrefix: prefix.replace(/\.run$/, "") } : {}),
       ...(options.inherit ? { inherit: true } : {}),
       ...(cfg.paths[name] ? { executableOverride: cfg.paths[name] } : {}),
+    }).finally(() => {
+      if (toucher) clearInterval(toucher);
     });
+    if (leaseInUse !== undefined) await this.touch(leaseInUse);
     if (run.truncated && run.stdoutPath) {
       const artifact = await this.artifacts.record({ kind: "log", path: run.stdoutPath, sessionId: this.session.id, note: `${name} ${args.slice(0, 3).join(" ")} (full stdout)` });
       return { ...run, artifact };
@@ -546,10 +612,31 @@ export class Tapdance {
   /** Called by the viewer while a person touches the screen; 0 clears it. */
   async setHumanHold(holdMs: number, by: string): Promise<void> {
     await this.store.setHold(this.session.id, holdMs > 0 ? { until: new Date(Date.now() + holdMs).toISOString(), by } : undefined);
+    if (holdMs <= 0) return;
+    // A person driving the device is use. Stamp at most every 30 s (the viewer calls this on every
+    // touch), and never wait on the session lock: a lease call may hold it for minutes.
+    const record = await this.store.get(this.session.id);
+    if (record && Date.now() - Date.parse(record.lastUsedAt ?? record.handle.createdAt) > 30_000) void this.touch(record.handle.leaseId);
   }
 
   async close(): Promise<void> {
     if (this.providerPromise) await (await this.providerPromise.catch(() => undefined))?.close();
+  }
+}
+
+/**
+ * asc commands an agent may not run even read-only: `auth` (other than `auth status`) can print or
+ * change credentials, `workflow` runs shell steps, `install-skills` writes into the user's setup.
+ * Help (`--help`, `-h`) is always allowed.
+ */
+function refuseAscEscapes(args: string[]): void {
+  if (args.some((a) => a === "--help" || a === "-h")) return;
+  const words = args.filter((a) => !a.startsWith("-"));
+  const [first, second] = words;
+  if (first === "workflow" || first === "install-skills" || (first === "auth" && second !== "status")) {
+    throw new TapdanceError("FORBIDDEN", `Agents may not run \`asc ${[first, second].filter(Boolean).join(" ")}\``, {
+      hint: "This asc command emits credentials or runs shell steps; run it yourself in a terminal.",
+    });
   }
 }
 

@@ -16,10 +16,17 @@ const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
   CAPABILITY_MISSING: "PROVIDER_UNAVAILABLE",
   UNSUPPORTED_IN_GATEWAY_MODE: "NOT_SUPPORTED",
   PASSTHROUGH_REFUSED: "FORBIDDEN",
+  UNKNOWN_PASSTHROUGH_TOOL: "NOT_SUPPORTED",
   BAD_REQUEST: "USAGE",
   STREAM_UNAVAILABLE: "NOT_SUPPORTED",
   INPUT_UNAVAILABLE: "NOT_SUPPORTED",
 };
+
+/** Shared with the agent-device error path so both say the same thing about an offline worker. */
+export const WORKER_OFFLINE_HINT = "The machine holding your device is offline; the lease stays yours. Retry this call in 30-60 s; do not release the device.";
+
+export const PASSTHROUGH_REFUSED_HINT =
+  "The worker does not allow this command; a gateway worker must be joined with `tapdance worker login --accept-gateway-exec` (dedicated machines only), and the worker guard allows only its device API.";
 
 export interface SimlockStatus {
   devices: Array<{
@@ -56,7 +63,11 @@ export interface SimlockCatalog {
   platforms: Array<{
     platform: string;
     models?: string[];
-    runtimes?: Array<{ version?: string; osVersion?: string; installed?: boolean; imageTag?: string; tag?: string }>;
+    /** Simlock 0.4 sends plain version strings; older shapes sent objects. */
+    runtimes?: Array<string | { version?: string; osVersion?: string; installed?: boolean; imageTag?: string; tag?: string }>;
+    defaultRuntime?: string;
+    /** OS versions each model can boot; an empty list means no installed image fits it. */
+    modelRuntimes?: Record<string, string[]>;
     osVersions?: string[];
     imageTags?: string[];
   }>;
@@ -193,7 +204,8 @@ export function parseExecStream(body: string): ExecResult {
     } else if (event === "error") {
       const code = typeof payload["code"] === "string" ? payload["code"] : "EXEC_FAILED";
       const message = typeof payload["message"] === "string" ? payload["message"] : "exec failed";
-      throw new TapdanceError(SIMLOCK_CODE_MAP[code] ?? "DEVICE_ERROR", `${code}: ${message}`);
+      const hint = code === "PASSTHROUGH_REFUSED" ? PASSTHROUGH_REFUSED_HINT : code === "WORKER_UNREACHABLE" ? WORKER_OFFLINE_HINT : undefined;
+      throw new TapdanceError(SIMLOCK_CODE_MAP[code] ?? "DEVICE_ERROR", `${code}: ${message}`, hint === undefined ? {} : { hint });
     }
   }
   if (exitCode === undefined) {
@@ -229,10 +241,12 @@ async function toError(response: Response, path: string): Promise<TapdanceError>
       : mapped === "LEASE_ALREADY_HELD"
         ? "Release the current lease with `tapdance device release` first."
         : mapped === "WORKER_OFFLINE"
-          ? "The machine holding the device is offline (asleep, network down, or its daemon restarting). The lease stays yours until it expires; retry shortly."
-          : mapped === "DEVICE_UNAVAILABLE" && /RUNTIME_MISSING|UNKNOWN_MODEL/.test(code)
-            ? "Install the runtime or system image on a worker: `tapdance devices install <ios|android> <version>`, then check `tapdance devices`."
-            : undefined;
+          ? WORKER_OFFLINE_HINT
+          : code === "PASSTHROUGH_REFUSED"
+            ? PASSTHROUGH_REFUSED_HINT
+            : mapped === "DEVICE_UNAVAILABLE" && /RUNTIME_MISSING|UNKNOWN_MODEL/.test(code)
+              ? "Install the runtime or system image on a worker: `tapdance devices install <ios|android> <version>`, then check `tapdance devices`."
+              : undefined;
   const retryAfter = Number(response.headers.get("retry-after"));
   return new TapdanceError(mapped, message, { ...(hint === undefined ? {} : { hint }), details: { status: response.status, backendCode: code }, ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000 } : {}) });
 }

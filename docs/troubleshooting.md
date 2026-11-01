@@ -63,7 +63,11 @@ The messages below are quoted from the code (with paths and names shortened).
 | `CONFIG_INVALID` "provider is self-hosted but no endpoint is set" | | `tapdance init --mode self-hosted --endpoint https://gateway.example.com`, or `TAPDANCE_ENDPOINT`. |
 | `CONFIG_INVALID` "Refusing to send a token over plain HTTP to …" | `http://` to a public host. | Put TLS in front of the gateway and use `https://`, or reach it over a private network (Tailscale, WireGuard, SSH tunnel). |
 | `AUTH_FAILED` "No agent token for …" | Self-hosted mode without a token. | Mint one on the gateway (`tapdance gateway token --role agent --label <agent>`), then `tapdance config set-token` or `TAPDANCE_TOKEN`. |
-| `AUTH_FAILED` (from the gateway) | Token missing, revoked, or minted by another daemon (Simlock tokens work only on the daemon that created them). | Store a valid agent token for this endpoint. |
+| `AUTH_FAILED` (from the gateway) | Token missing, revoked, or minted by another daemon (Simlock tokens work only on the daemon that created them). Reported as `AUTH_FAILED`, not `LEASE_LOST`. | Store a valid agent token for this endpoint. |
+| `AUTH_FAILED` "Your saved token belongs to <origin>, but the configuration points at <other> (from tapdance.config.json)" | The token is bound to the endpoint it was saved for, and a config (often a project `tapdance.config.json`) points somewhere else. No token was sent. | Run `tapdance config set-token --endpoint <other>` only if you trust that endpoint; otherwise remove `endpoint` from the project file. See [token binding](configuration.md#token-binding). |
+| `CONFIG_INVALID` "This project's tapdance.config.json points at <origin>, and your token is not bound to any endpoint" | An older credentials file (no bound endpoint), or `TAPDANCE_TOKEN`, with an endpoint from a project file. | Re-run `tapdance config set-token` in the project to bind the token to that endpoint, or set `TAPDANCE_ENDPOINT`. |
+| `FORBIDDEN` (lease outside this tenant) | The token is scoped to another tenant or lease (Simlock `LEASE_SCOPE_MISMATCH`). | Use a token for this gateway's tenant. |
+| A `tools.*`, `ios.axePath` or `simlock.profilePath` value in `tapdance.config.json` has no effect ("Ignored … security settings are read only from ~/.tapdance/config.json") | These keys are user-only. | Set it with `tapdance config set --global <key> <value>`. See [configuration.md](configuration.md#security-settings-are-user-only). |
 | `doctor`: "Token accepted … role operator" (warning) | An operator token is stored as the agent token. | Agents should use an agent token. |
 | `NOT_SUPPORTED` "Tapdance Cloud is not available yet" | `provider: "cloud"` is reserved. | Use `local` or `self-hosted`. |
 
@@ -77,11 +81,12 @@ The messages below are quoted from the code (with paths and names shortened).
 | The agent's CLI and MCP tools hold two different devices | Codex, pi and Cursor do not pass their session id to MCP servers. | Use one interface per session, or set the same `TAPDANCE_SESSION_ID` in the shell and the MCP config. See [session identity](cli-reference.md#session-identity). |
 | Two terminals fight over one device | Without an agent session, all your terminals are one per-user session. | `export TAPDANCE_SESSION_ID=<name>` per terminal, or `--session <name>`. |
 | `tapdance view` says no device is leased while the agent has one | The viewer runs in a different session. | `tapdance --session <sessionId> view`, with the `sessionId` from `get_device_status`. |
-| `TIMEOUT` "Another Tapdance process is busy with this session" | Another process holds the session lock (often a lease that is still booting). | Retry in a moment. |
+| `TIMEOUT` "Another Tapdance process is busy with this session" | Another process holds the session lock (often a lease that is still booting). | Retry in a moment. A lock left by a process that died is taken over automatically. |
+| `TIMEOUT` "An earlier call in this process is still working on this session" | The same MCP server is still running an earlier call, usually a lease being granted after the client timed out. | Call again in about 30 s; the lease request keeps running and returns the device once granted. |
 | `TIMEOUT` "No device was granted within N s; nothing was leased" | The queue did not hand out a device in time. | Retry, raise `--wait` (the Simlock provider caps it at 330 s), or free capacity. |
-| `NO_CAPACITY` | No free device. Retryable. | Release unused leases, wait, or add a worker. |
-| `DEVICE_UNAVAILABLE` (Simlock `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`) | The model is unknown, its runtime/image is not installed, or the platform's tools are missing on every worker. | `tapdance devices` for valid models; `tapdance devices install <ios\|android> <version>` on the worker; `tapdance doctor`. |
-| `WORKER_OFFLINE` | The worker holding the device is asleep, offline or restarting (Simlock `WORKER_UNREACHABLE`). Retryable; the lease stays yours until it expires. | Retry shortly. On a Mac laptop worker, `caffeinate -is` keeps it awake. |
+| `NO_CAPACITY` | No free device, or Simlock refused the request because no worker can run that platform right now. Retryable. | Release unused leases, wait, check `tapdance devices`, or start a worker. |
+| `DEVICE_UNAVAILABLE` (Simlock `UNKNOWN_MODEL`, `RUNTIME_MISSING`, `NO_DRIVER`) | The model is unknown, its runtime/image is not installed, or the platform's tools are missing on every worker. When the backend says the device is in use (`DEVICE_IN_USE`), it is retryable. | `tapdance devices` for valid models; `tapdance devices install <ios\|android> <version>` on the worker; `tapdance doctor`. |
+| `WORKER_OFFLINE` (hint: "The machine holding your device is offline; the lease stays yours …") | The worker holding the device dropped off the gateway: asleep, offline or restarting (Simlock `WORKER_UNREACHABLE`, including agent-device's "not connected to the gateway" reply). Retryable; the lease is kept. | Retry the same call in 30–60 s; do not release the device. On a Mac laptop worker, `caffeinate -is` keeps it awake. |
 | `HUMAN_HELD` "A person is controlling the device in the viewer" | Someone touched the screen in `tapdance view`. Retryable. | Wait `retryAfterMs` (default hold 15 s after the last touch) and retry, or press "Hand back" in the viewer. |
 
 ## Apps and UI
@@ -95,6 +100,8 @@ The messages below are quoted from the code (with paths and names shortened).
 | `FORBIDDEN` "… is outside the project directory" (MCP) | `install_app` and `execute_tool` `cwd` are confined to the server's working directory. | Build inside the project, or add the folder to `TAPDANCE_ALLOWED_ROOTS` in the MCP server's environment. |
 | `USAGE` "… is not a valid app id" | Package or bundle id has invalid characters. | Use e.g. `com.example.app`. |
 | `ELEMENT_NOT_FOUND` | No element matches the target, or the ref is stale. | `tapdance ui inspect` (MCP: `inspect_screen`) and target by ref or exact label. |
+| `ELEMENT_NOT_FOUND` "The screen changed since that inspect_screen" | The ref (`@e7~s3`) came from an older snapshot. | Inspect again and use the new ref. |
+| `APP_NOT_INSTALLED` | The app id is not installed on this device. | Install it first (`tapdance app install`, MCP `install_app`); `tapdance app list` (MCP `list_apps`) shows what is installed. |
 | `ELEMENT_NOT_FOUND` "No text field has focus" | `type` without a target and nothing focused. | Pass a field (`--ref`, `--text`, `--id`; MCP `into_ref` …). |
 | `USAGE` "Name one target, not 2 …" / "Name a target: …" | `tap`/`type` need exactly one of text, id, ref, selector, or x and y. | Give exactly one. |
 | `ui wait` exits 1 / `wait_for` returns `found: false` | The condition did not happen within the timeout (max 30 s). | Not an error by itself: inspect the screen, take a screenshot, check logs. |
@@ -116,23 +123,30 @@ The messages below are quoted from the code (with paths and names shortened).
 | --- | --- | --- |
 | `PROVIDER_UNAVAILABLE` "<tool> is not installed on this machine" | Not on `PATH`. | Install it (`tapdance tools doctor` prints how) or set `tools.paths.<tool>`. |
 | `NOT_SUPPORTED` "<tool> does not run on <os>" | e.g. `axe` or `xcodebuild` off macOS. | Run it on a Mac. |
-| `FORBIDDEN` "Agents may not run <tool> here" | Not in `tools.mcpEnabled`. | Add it to `tools.mcpEnabled` if you want agents to run it. |
-| `FORBIDDEN` "<tool> has no read-only mode, so agents need your authorization to run it" | `fastlane` or `xcodebuild` from an agent. | Add it to `tools.allowMutation`; the agent then passes `allow_mutation: true`. |
-| asc refuses a write from an agent | Agents run asc with `ASC_READ_ONLY=1`. | Intended. To allow it, add `asc` to `tools.allowMutation`. |
+| `FORBIDDEN` "Agents may not run <tool> here" | Not in `tools.mcpEnabled`. | Add it to `tools.mcpEnabled` in `~/.tapdance/config.json` if you want agents to run it (a project file cannot). |
+| `FORBIDDEN` "<tool> has no read-only mode, so agents need your authorization to run it" | `fastlane` or `xcodebuild` from an agent. | Add it to `tools.allowMutation` in `~/.tapdance/config.json`; the agent then passes `allow_mutation: true`. |
+| asc refuses a write from an agent | Agents run asc with `ASC_READ_ONLY=1`. | Intended. To allow it, add `asc` to `tools.allowMutation` in `~/.tapdance/config.json`. |
 | `FORBIDDEN` "<tool> acts on the leased device; do not pass --udid" | Tapdance adds the device itself. | Remove `--udid` / `--device`. |
+| `FORBIDDEN` "This asc command emits credentials or runs shell steps; run it yourself in a terminal" | An agent called `asc auth …` (other than `auth status`), `asc workflow …` or `asc install-skills` without mutation authorized. | Run it yourself with `tapdance asc -- …` in a terminal, or authorize mutation (`tools.allowMutation` in `~/.tapdance/config.json` plus `allow_mutation: true`). |
+| `FORBIDDEN` "tools.paths.<name> must point to the <name> program" | `tools.paths` names a program with another file name. | Point it at the real tool, in `~/.tapdance/config.json`. |
 | `NO_ACTIVE_LEASE` "<tool> acts on the session's device; lease one first" | `axe`/`maestro` without a lease. | Lease a device first. |
 | `NOT_SUPPORTED` "<tool> must run where the device is; this session's device is on a remote worker" | Lease-scoped tools need the device locally. | Use Tapdance's own device tools, which work through a gateway. |
 | `NOT_SUPPORTED` "Execution target "…" is not available yet" | Only `control` exists today. | Run Tapdance on the machine that has the toolchain. |
 | `USAGE` "<tool> works on android devices; this session holds ios" | Platform mismatch. | Lease the right platform. |
 
-## Gateways, workers and the viewer (untested across machines)
+## Gateways, workers, the guard and the viewer (untested across machines)
 
 | Error | Cause | Fix |
 | --- | --- | --- |
 | `FORBIDDEN` "Joining a gateway gives it, and every agent token it issues, command execution on this machine …" (`worker login`) | `worker login` was run without `--accept-gateway-exec`. | Pass `--accept-gateway-exec` only on a machine dedicated to being a worker; read [worker-security.md](deployment/worker-security.md) first. |
 | `USAGE` "Refusing ws:// to public host …" (`worker login`) | The join token would travel in plain text. | Use `wss://` behind TLS, or a private address (Tailscale). |
 | `FORBIDDEN` "Listing workers needs an operator token" | `workers list` (or MCP `list_workers`) through a gateway. | `tapdance config set-token --operator` for the CLI. The MCP server never loads the operator token, so `list_workers` stays unavailable through a gateway. |
-| `doctor`: "Workers online" fails | No worker connected to the gateway. | Start a worker and join it. Note: the fix text mentions `--token …`, but `worker login` has no such option; pipe the token instead: `echo '<join token>' \| tapdance worker login --accept-gateway-exec --gateway wss://… --label …` or set `TAPDANCE_WORKER_TOKEN`. |
+| `doctor`: "Workers online" fails | No worker connected to the gateway. | Start a worker and join it: `echo '<join token>' \| tapdance worker login --accept-gateway-exec --gateway wss://… --label …` (or set `TAPDANCE_WORKER_TOKEN`). On a personal Mac use device-only mode instead ([personal-mac.md](security/personal-mac.md)). |
+| `FORBIDDEN` (Simlock `PASSTHROUGH_REFUSED`) or `NOT_SUPPORTED` (`UNKNOWN_PASSTHROUGH_TOOL`) | The worker does not allow that command. | A gateway worker must be joined with `tapdance worker login --accept-gateway-exec` (dedicated machines only). The worker guard allows only its device API, by design. |
+| `FORBIDDEN` "Pairing must be approved at this machine's terminal" (`worker guard pair`) | `guard pair` was run without a terminal on stdin (from a script, pipe or service). | Run it in a terminal on the Mac. For scripted setup by the Mac's owner only, set `TAPDANCE_GUARD_PAIR_NONINTERACTIVE=1` for that one command. |
+| Through the guard: `NO_CAPACITY` "This worker allows N session(s) at a time" | The guard's `limits.maxSessions` is reached (enforced even for concurrent requests). | Release a lease, or raise the limit in `~/.tapdance/worker/policy.json` on the Mac. |
+| Through the guard: a physical iPhone or Android phone cannot be leased ("physical devices are disabled by the local policy") | Physical devices are off by default in device-only mode. | On the Mac, set `allow.physicalDevices` to `true` in the policy, if you want remote clients to use them. |
+| Through the guard: `AUTH_FAILED` (guard `UNAUTHENTICATED` "Missing, expired or revoked worker-guard token") | The guard token expired or was revoked. | Pair again at the Mac (`tapdance worker guard pair`) and store the new token with `tapdance config set-token`. |
 | A worker shows `incompatible` | Gateway and worker run Simlock versions that cannot talk. | Run Simlock 0.4.0 everywhere ([compatibility.md](compatibility.md)). |
 | `USAGE` "Refusing to serve the viewer on public address …" | `tapdance view --host` with a public IP. | Keep `127.0.0.1` and use `ssh -L 4710:127.0.0.1:4710 <host>`, or a private network. |
 | Viewer: `NOT_SUPPORTED` (Simlock `STREAM_UNAVAILABLE` / `INPUT_UNAVAILABLE`) | Streaming or input capability off. | `tapdance worker install` (and `gateway setup` on a gateway). |

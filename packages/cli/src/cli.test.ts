@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,14 +8,51 @@ import { describe, expect, it } from "vitest";
 const cli = fileURLToPath(new URL("../dist/main.js", import.meta.url));
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 
-function tapdance(args: string[], env: Record<string, string> = {}) {
-  const home = mkdtempSync(join(tmpdir(), "td-cli-"));
+function tapdance(args: string[], env: Record<string, string> = {}, input?: string) {
+  const home = env["TAPDANCE_HOME"] ?? mkdtempSync(join(tmpdir(), "td-cli-"));
   const r = spawnSync(process.execPath, [cli, ...args], {
     cwd: mkdtempSync(join(tmpdir(), "td-cwd-")),
     env: { PATH: process.env["PATH"] ?? "", TAPDANCE_HOME: home, TAPDANCE_SESSION_ID: "cli-test", ...env },
     encoding: "utf8",
+    ...(input !== undefined ? { input } : {}),
   });
   return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+}
+
+/** Non-test TypeScript files under a directory. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+    if (e.name === "node_modules" || e.name === "dist" || e.name.startsWith(".")) return [];
+    const full = join(dir, e.name);
+    if (e.isDirectory()) return sourceFiles(full);
+    return e.name.endsWith(".ts") && !e.name.includes(".test.") ? [full] : [];
+  });
+}
+
+/**
+ * The string literals in every `hint:` and `fix:` value of a source file: the text after the colon
+ * up to the comma, brace or parenthesis that ends the value, with nested brackets and strings skipped.
+ */
+function hintStrings(source: string): string[] {
+  const found: string[] = [];
+  for (const m of source.matchAll(/\b(?:hint|fix)\s*:/g)) {
+    let i = m.index + m[0].length;
+    let depth = 0;
+    for (; i < source.length; i++) {
+      const ch = source[i]!;
+      if (ch === '"' || ch === "'" || ch === "`") {
+        let j = i + 1;
+        while (j < source.length && source[j] !== ch) j += source[j] === "\\" ? 2 : 1;
+        found.push(source.slice(i + 1, j));
+        i = j;
+      } else if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ")" || ch === "]" || ch === "}" || ch === ",") {
+        if (depth === 0) break;
+        if (ch !== ",") depth--;
+      }
+    }
+  }
+  return found;
 }
 
 describe("tapdance CLI (built)", () => {
@@ -45,6 +82,42 @@ describe("tapdance CLI (built)", () => {
     const r = tapdance(["--json", "devices"], { TAPDANCE_PROVIDER: "cloud" });
     expect(r.code).toBe(8);
     expect(JSON.parse(r.stdout).error.code).toBe("NOT_SUPPORTED");
+  });
+
+  it("binds a stored token to the endpoint it was given", () => {
+    const home = mkdtempSync(join(tmpdir(), "td-cli-"));
+    const r = tapdance(["--json", "config", "set-token", "--endpoint", "https://gw.example"], { TAPDANCE_HOME: home }, "slk_testtoken\n");
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ kind: "agent", endpoint: "https://gw.example" });
+    const file = join(home, "credentials.json");
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(file, "utf8"))).toEqual({ token: "slk_testtoken", endpoint: "https://gw.example" });
+  });
+
+  it("binds a token to the configured endpoint by default and refuses plain http to a public host", () => {
+    const home = mkdtempSync(join(tmpdir(), "td-cli-"));
+    const env = { TAPDANCE_HOME: home, TAPDANCE_PROVIDER: "self-hosted", TAPDANCE_ENDPOINT: "https://gateway.example.com/v1/agent-device" };
+    const r = tapdance(["--json", "config", "set-token", "--operator"], env, "slk_operator\n");
+    expect(r.code, r.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(join(home, "credentials.json"), "utf8"))).toEqual({ operatorToken: "slk_operator", operatorEndpoint: "https://gateway.example.com" });
+    const plain = tapdance(["--json", "config", "set-token", "--endpoint", "http://gateway.example.com"], {}, "slk_x\n");
+    expect(plain.code).toBe(2);
+    expect(JSON.parse(plain.stdout)).toMatchObject({ error: { code: "USAGE" } });
+    expect(tapdance(["--json", "config", "set-token", "--endpoint", "http://100.101.102.103:4720"], {}, "slk_x\n").code).toBe(0);
+  });
+
+  it("hints never name a bare simlock command or a global npm install", () => {
+    const bad: string[] = [];
+    for (const dir of ["cli", "provider-simlock", "sdk", "core", "mcp"]) {
+      for (const file of sourceFiles(join(root, "packages", dir, "src"))) {
+        for (const text of hintStrings(readFileSync(file, "utf8"))) {
+          if (/(?<!tapdance )\bsimlock /.test(text) || /npm (i|install) -g/.test(text)) bad.push(`${file.replace(root, "")}: ${text}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+    // The extractor itself must see the hints, or the check above proves nothing.
+    expect(hintStrings('x({ hint: "a" + `b ${c}`, fix: d ? "e" : "f", other: "g" })')).toEqual(["a", "b ${c}", "e", "f"]);
   });
 
   it("only names commands that exist, in code hints and in every doc", () => {

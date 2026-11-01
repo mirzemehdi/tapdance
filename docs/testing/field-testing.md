@@ -154,7 +154,7 @@ Follow each procedure in [e2e-procedures.md](e2e-procedures.md) step by step. Wh
 
 To check the MCP side as a real agent would, register the server (`claude mcp add tapdance --
 tapdance mcp` for Claude Code), restart your session, and use the tools yourself:
-`lease_device`, `install_app`, `launch_app`, `inspect_screen`, `tap`, `type_text`, `swipe`,
+`lease_device`, `install_app`, `list_apps`, `launch_app`, `inspect_screen`, `tap`, `type_text`, `swipe`,
 `take_screenshot`, `start_recording`, `stop_recording`, `get_logs`, `get_crash_logs`,
 `get_test_artifacts`, `release_device`. Note anything about the tool descriptions or results that
 confused you: that is useful feedback too (file it as `docs` or `missing-feature`).

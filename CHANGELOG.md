@@ -10,9 +10,12 @@ file means the code exists, not that it has been tested on every platform.
 
 ## [0.1.0] - Unreleased
 
-First slice. Tested end to end only on one Mac with an iOS simulator: against the local worker
-([evidence](docs/testing/evidence/2026-11-01-local-ios.md)), and through a gateway with a joined
-worker on the same Mac ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)).
+First slice. Tested end to end on one Mac: iOS simulators against the local worker
+([evidence](docs/testing/evidence/2026-11-01-local-ios.md)), through a gateway with a joined worker
+([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)) and through device-only mode
+([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); Android emulators
+([evidence](docs/testing/evidence/2026-11-01-android.md)); AXe as the iOS UI backend
+([evidence](docs/testing/evidence/2026-11-01-axe.md)). Not yet run across two machines or on Linux.
 
 ### Added
 
@@ -28,6 +31,11 @@ worker on the same Mac ([evidence](docs/testing/evidence/2026-11-01-gateway-sing
   `worker check/install/login/logout/start/stop/status/logs/restart`, `simlock`,
   `tools list/doctor/versions`, `tool`, `asc`, `android`, and `mcp`.
 - `--json` output, results on stdout and progress on stderr, and stable exit codes (2 to 11).
+- Device-only mode for personal Macs (`tapdance worker guard`); `worker login` requires
+  `--accept-gateway-exec`.
+- `devices install`, MCP `list_apps`, and `config set-token --endpoint` (a token bound to its endpoint).
+- Google's Android CLI targets the leased emulator with `--device=<serial>`; AXe finds SwiftUI text
+  fields by placeholder and waits for a just-launched app's accessibility tree.
 - An MCP server over stdio and Streamable HTTP (bearer token) with the tools `list_workers`,
   `list_devices`, `lease_device`, `get_device_status`, `release_device`, `install_app`, `launch_app`,
   `stop_app`, `inspect_screen`, `tap`, `swipe`, `wait_for`, `handle_alert`, `type_text`, `press_key`,
