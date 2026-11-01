@@ -212,11 +212,11 @@ export class Tapdance {
 
   async devices(platform?: Platform): Promise<DeviceInventory> {
     const inventory = await (await this.provider()).inventory(platform ? { platform } : {});
-    if (platform === "ios") return inventory;
     // Device profiles on this machine are leasable too (`profile:<name>`).
     const profiles = await this.profileProvider().inventory().catch(() => undefined);
-    if (!profiles?.catalog.length) return inventory;
-    return { ...inventory, catalog: [...inventory.catalog, ...profiles.catalog], notes: [...inventory.notes, ...profiles.notes] };
+    const catalog = (profiles?.catalog ?? []).filter((c) => !platform || c.platform === platform);
+    if (!catalog.length) return inventory;
+    return { ...inventory, catalog: [...inventory.catalog, ...catalog], notes: [...inventory.notes, ...(profiles?.notes ?? [])] };
   }
 
   async workers(): Promise<WorkerInfo[]> {

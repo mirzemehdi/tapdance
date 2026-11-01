@@ -36,9 +36,11 @@ export const PROFILE_PROVIDER = "tapdance-profile";
 
 export interface ProfileRecord {
   name: string;
-  platform: "android";
-  /** sdkmanager package of the system image, e.g. system-images;android-34;google_apis_playstore;arm64-v8a */
+  platform: "android" | "ios";
+  /** Android: sdkmanager package of the system image, e.g. system-images;android-34;google_apis_playstore;arm64-v8a. iOS: the runtime id. */
   image: string;
+  /** iOS: the template simulator every lease clones. */
+  templateUdid?: string;
   osVersion: string;
   device: string;
   createdAt: string;
@@ -78,10 +80,22 @@ export function androidSdk(env: NodeJS.ProcessEnv = process.env): string {
 
 interface ProfileLeaseData {
   profile: string;
-  port: number;
-  pid: number;
+  platform: "android" | "ios";
+  /** Android: the emulator's console port and process. */
+  port?: number;
+  pid?: number;
+  /** iOS: the clone of the profile's template made for this lease. */
+  udid?: string;
   session: string;
 }
+
+const xcrun = (args: string[], timeoutMs = 120_000) =>
+  new Promise<ExecResult>((resolve) => {
+    execFile("xcrun", args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const code = error && typeof (error as { code?: unknown }).code === "number" ? (error as { code: number }).code : error ? 1 : 0;
+      resolve({ exitCode: code, stdout, stderr });
+    });
+  });
 
 const portFree = (port: number) =>
   new Promise<boolean>((resolve) => {
@@ -119,7 +133,8 @@ export class ProfileProvider extends SimlockProvider {
 
   private profileData(handle: LeaseHandle): ProfileLeaseData {
     if (handle.provider !== PROFILE_PROVIDER) throw new TapdanceError("FORBIDDEN", `Lease ${handle.leaseId} is not a profile lease`);
-    return handle.providerData as unknown as ProfileLeaseData;
+    const data = handle.providerData as unknown as ProfileLeaseData;
+    return { ...data, platform: data.platform ?? "android" };
   }
 
   protected override agentClient(handle: LeaseHandle): AgentDeviceClient {
@@ -133,7 +148,13 @@ export class ProfileProvider extends SimlockProvider {
   }
 
   protected override execOn(handle: LeaseHandle, tool: "adb" | "simctl", args: string[], timeoutMs?: number, stdin?: string): Promise<ExecResult> {
-    if (tool !== "adb") throw new TapdanceError("NOT_SUPPORTED", "Profiles are Android emulators");
+    if (tool === "simctl") {
+      if (handle.platform !== "ios") throw new TapdanceError("USAGE", "simctl needs an iOS lease");
+      // Simlock puts the leased simulator after the subcommand; do the same.
+      const [sub = "", ...rest] = args;
+      return xcrun(["simctl", sub, handle.deviceId, ...rest], timeoutMs);
+    }
+    if (handle.platform !== "android") throw new TapdanceError("USAGE", "adb needs an Android lease");
     return this.run(this.adb(), ["-s", handle.deviceId, ...args], { ...(timeoutMs ? { timeoutMs } : {}), ...(stdin !== undefined ? { stdin } : {}) });
   }
 
@@ -153,7 +174,10 @@ export class ProfileProvider extends SimlockProvider {
   override async inventory(): Promise<DeviceInventory> {
     const profiles = await readProfiles(this.env);
     return {
-      catalog: profiles.length ? [{ platform: "android", models: profiles.map((p) => `profile:${p.name}`), osVersions: [...new Set(profiles.map((p) => p.osVersion))] }] : [],
+      catalog: (["android", "ios"] as const)
+        .map((platform) => ({ platform, list: profiles.filter((p) => (p.platform ?? "android") === platform) }))
+        .filter((c) => c.list.length > 0)
+        .map((c) => ({ platform: c.platform, models: c.list.map((p) => `profile:${p.name}`), osVersions: [...new Set(c.list.map((p) => p.osVersion))] })),
       capacity: [],
       devices: [],
       queueDepth: 0,
@@ -169,7 +193,8 @@ export class ProfileProvider extends SimlockProvider {
     const name = request.profile ?? "";
     const profile = (await readProfiles(this.env)).find((p) => p.name === name);
     if (!profile) throw new TapdanceError("DEVICE_UNAVAILABLE", `No device profile "${name}"`, { hint: "List them with `tapdance device profile list`; create one with `tapdance device profile create <name>`." });
-    if (request.platform !== "android") throw new TapdanceError("USAGE", "Device profiles are Android emulators");
+    if (request.platform !== profile.platform) throw new TapdanceError("USAGE", `Profile "${name}" is an ${profile.platform} profile`);
+    if (profile.platform === "ios") return this.leaseIos(sessionId, request, profile, options);
     const emulator = join(androidSdk(this.env), "emulator", "emulator");
     if (!existsSync(emulator)) throw new TapdanceError("PROVIDER_UNAVAILABLE", "The Android emulator is not installed", { hint: "sdkmanager emulator" });
     let port = 0;
@@ -206,7 +231,7 @@ export class ProfileProvider extends SimlockProvider {
     const leaseId = randomBytes(16).toString("hex");
     // agent-device remembers which session owns a serial; one session name per emulator port means a
     // later lease on the same port is never refused because an earlier process did not close it.
-    const data: ProfileLeaseData = { profile: name, port, pid: child.pid, session: `td-profile-${serial}` };
+    const data: ProfileLeaseData = { profile: name, platform: "android", port, pid: child.pid, session: `td-profile-${serial}` };
     return {
       provider: PROFILE_PROVIDER,
       leaseId,
@@ -224,8 +249,47 @@ export class ProfileProvider extends SimlockProvider {
     };
   }
 
+  /** iOS: clone the profile's template simulator, boot the clone, and lease it; release deletes it. */
+  private async leaseIos(sessionId: string, request: LeaseRequest, profile: ProfileRecord, options: CallOptions): Promise<LeaseHandle> {
+    if (!profile.templateUdid) throw new TapdanceError("DEVICE_UNAVAILABLE", `Profile "${profile.name}" has no template simulator`, { hint: "Recreate it with `tapdance device profile create`." });
+    const leaseId = randomBytes(16).toString("hex");
+    options.onProgress?.(`Cloning profile "${profile.name}" for this lease (the clone is deleted at release)`);
+    // A template still booted from an edit cannot be cloned.
+    await xcrun(["simctl", "shutdown", profile.templateUdid]);
+    const clone = await xcrun(["simctl", "clone", profile.templateUdid, `tapdance-lease-${profile.name}-${leaseId.slice(0, 8)}`], 300_000);
+    const udid = clone.stdout.trim().split("\n").pop() ?? "";
+    if (clone.exitCode !== 0 || !/^[0-9A-F-]{36}$/i.test(udid)) throw new TapdanceError("DEVICE_ERROR", `Could not clone the profile: ${(clone.stderr || clone.stdout).trim().slice(0, 300)}`);
+    await xcrun(["simctl", "boot", udid]);
+    const booted = await xcrun(["simctl", "bootstatus", udid, "-b"], Math.min(request.waitTimeoutMs ?? 300_000, 300_000));
+    if (booted.exitCode !== 0) {
+      await xcrun(["simctl", "delete", udid]);
+      throw new TapdanceError("TIMEOUT", `The clone of profile "${profile.name}" did not boot`);
+    }
+    const data: ProfileLeaseData = { profile: profile.name, platform: "ios", udid, session: `td-profile-${udid}` };
+    return {
+      provider: PROFILE_PROVIDER,
+      leaseId,
+      sessionId,
+      platform: "ios",
+      deviceId: udid,
+      model: `profile:${profile.name}`,
+      osVersion: profile.osVersion,
+      physical: false,
+      ttlMs: request.ttlMs,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + request.ttlMs).toISOString(),
+      location: { kind: "local", workerLabel: "this machine (device profile)", endpoint: "local" },
+      providerData: data as unknown as Record<string, unknown>,
+    };
+  }
+
   override async status(handle: LeaseHandle): Promise<LeaseStatus> {
-    const { pid } = this.profileData(handle);
+    const data = this.profileData(handle);
+    if (data.platform === "ios") {
+      const list = await xcrun(["simctl", "list", "devices", "booted"]);
+      return list.stdout.includes(handle.deviceId) ? { state: "active", handle } : { state: "ended", handle, endReason: "The profile's simulator is no longer booted" };
+    }
+    const pid = data.pid ?? 0;
     let alive = true;
     try {
       process.kill(pid, 0);
@@ -241,9 +305,17 @@ export class ProfileProvider extends SimlockProvider {
   }
 
   override async release(handle: LeaseHandle): Promise<{ released: boolean }> {
-    const { pid, session } = this.profileData(handle);
+    const data = this.profileData(handle);
+    const { session } = data;
     await this.agentClient(handle).sessions.close({ ...this.selection(handle) } as never).catch(() => undefined);
     this.agentClients.delete(session);
+    if (data.platform === "ios") {
+      // Only ever the lease's own clone: it was created for this lease and is named after it.
+      await xcrun(["simctl", "shutdown", handle.deviceId]);
+      const deleted = await xcrun(["simctl", "delete", handle.deviceId]);
+      return { released: deleted.exitCode === 0 };
+    }
+    const pid = data.pid ?? 0;
     await this.run(this.adb(), ["-s", handle.deviceId, "emu", "kill"], { timeoutMs: 15_000 }).catch(() => undefined);
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {

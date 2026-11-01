@@ -179,7 +179,7 @@ signing in); the viewer's **Hand back** does the same.
 ### Device profiles
 
 ```text
-tapdance device profile create <name> [--image-tag <tag>] [--os <api>] [--device <id>] [--no-edit]
+tapdance device profile create <name> [-p <android|ios>] [--image-tag <tag>] [--os <version>] [--device <model>] [--no-edit]
 tapdance device profile edit <name>
 tapdance device profile list
 tapdance device profile delete <name>
@@ -193,6 +193,11 @@ installed API by default; `sdkmanager` installs more) in Tapdance's own AVD home
 up and close the window to save. `edit` opens it again the same way. `device lease -p android
 --profile <name>` boots it **read-only**: everything a lease changes (installs, purchases, data) is
 thrown away at release, so every lease starts from the saved state.
+
+**iOS profiles** (`-p ios`) are a template simulator `tapdance-profile-<name>` (Xcode's default device
+set, `iPhone 16` and the newest runtime by default). `create` then `edit` boots it in Simulator; set it
+up and press Enter in the terminal. Each lease clones the template, boots the clone and deletes it at
+release, so nothing a lease does reaches the template.
 
 Profiles run on the machine where Tapdance runs, outside Simlock (Simlock enrols only USB phones and
 wipes its own emulators), and are driven by agent-device directly. They have no browser stream: watch
@@ -859,9 +864,8 @@ Options:
   -h, --help               display help for command
 
 Commands:
-  create [options] <name>  Create a profile from an installed system image, then
-                           open it to set up (sign in, settings); close the
-                           window to save
+  create [options] <name>  Create a profile (Android emulator or iOS simulator),
+                           then open it to set up (sign in, settings) and save
   edit <name>              Open the profile writable with a window; what you do
                            is kept when you close it
   list                     List device profiles on this machine
@@ -874,16 +878,20 @@ Commands:
 ```text
 Usage: tapdance device profile create [options] <name>
 
-Create a profile from an installed system image, then open it to set up (sign
-in, settings); close the window to save
+Create a profile (Android emulator or iOS simulator), then open it to set up
+(sign in, settings) and save
 
 Options:
-  --image-tag <tag>  system image tag (default: "google_apis_playstore")
-  --os <api>         Android API level (default: the highest installed with that
-                     tag)
-  --device <id>      avdmanager device id (default: "pixel_8")
-  --no-edit          only create it; set it up later with `device profile edit`
-  -h, --help         display help for command
+  -p, --platform <platform>  android or ios (default: "android")
+  --image-tag <tag>          Android system image tag (default:
+                             "google_apis_playstore")
+  --os <version>             Android API level or iOS version (default: the
+                             newest installed)
+  --device <model>           avdmanager device id (Android, default pixel_8) or
+                             simulator model (iOS, default "iPhone 16")
+  --no-edit                  only create it; set it up later with `device
+                             profile edit`
+  -h, --help                 display help for command
 ```
 
 ### `tapdance device profile edit`

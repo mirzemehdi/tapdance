@@ -55,6 +55,11 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
     if (/stopped|not running/i.test(status)) break;
     await new Promise((r) => setTimeout(r, 1000));
   }
+  // "stopped" comes as soon as the HTTP side closes; the old daemon can need another minute to finish
+  // (shutting emulators down) before it releases its socket. A start before that loses its connection.
+  while (Date.now() < deadline && existsSync(join(gateway ? join(simlockHome(), "gateway") : simlockHome(), "daemon.sock"))) {
+    await new Promise((r) => setTimeout(r, 1000));
+  }
   if (!gateway) await killStaleAdbServer(out);
   for (let attempt = 1; ; attempt++) {
     try {

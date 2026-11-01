@@ -69,6 +69,25 @@ expect "Welcome, ada@example.com", screenshot) in 44.8 s, writing `report.json`/
 evidence folder. The Android example failed at its first `type_text` with an adb timeout while a
 leftover Google Play emulator used ~490% CPU on the test Mac; it has not passed yet.
 
+## Second round (after the device shell change)
+
+- Android scenario: `tapdance run examples/android-demo/signin.scenario.yaml` passed, 8/8 steps in
+  24.6 s, on a fresh Pixel 8 once the Mac was idle. (The earlier run's adb timeouts came from load.
+  A rerun first failed with "No Android device with serial emulator-5586" because emulators had been
+  killed outside Simlock; `simlock nuke --yes` without `--delete-devices` reset its state.)
+- `device shell` on a Pixel 8: `getprop ro.build.version.sdk` → 34; `wm density 320 && wm density`;
+  `dumpsys media.audio_flinger | grep -c -i track` (the pipe ran inside the emulator); `cat` with
+  `--stdin`. On an iPhone 16 it is refused with `NOT_SUPPORTED`.
+- iOS perf: `perf memory` returned a sample; `perf frames` answers that frame health is available only
+  on connected iOS devices (agent-device).
+- `request_human`: a Node process using the SDK waited on a leased iPhone 16; `tapdance device done`
+  from another process completed it after 5 s (`completed: true`).
+- iOS profiles: `device profile create qa-ios -p ios --no-edit` made `tapdance-profile-qa-ios`
+  (iPhone 16, iOS 26.5); the demo app was installed into the template as its setup. Twice: lease with
+  `--profile qa-ios` → the clone had the app → `app uninstall` → release (the clone was deleted). The
+  template kept the app.
+- `worker restart` fixed: it now waits until the old daemon has released its socket.
+
 ## Changed after this run
 
 The `density`, `locale` and `time-zone` settings shown above were removed in favour of the generic

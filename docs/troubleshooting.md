@@ -34,6 +34,8 @@ The messages below are quoted from the code (with paths and names shortened).
 | `doctor`: streaming / remote input warns | `capabilities.stream` / `capabilities.input` off. | `tapdance worker install` (without `--no-stream`). On a gateway, `tapdance gateway setup` enables them. |
 | `doctor`: "Simlock version" warns | The endpoint runs a Simlock other than 0.4.0. | Run Simlock 0.4.0 on the gateway and every worker. See [compatibility.md](compatibility.md). |
 | `PROVIDER_UNAVAILABLE` "simlock … failed: …" | A bundled Simlock command failed during `worker`/`gateway` setup. | Read the quoted Simlock message; `tapdance worker logs` shows the daemon log. |
+| `DEVICE_UNAVAILABLE` "No Android device with serial emulator-…" on lease | Emulators or simulators were stopped outside Simlock (killed, `adb emu kill`, `simctl shutdown`), and Simlock still believes they run. | `tapdance simlock -- --local nuke --yes` (ends Simlock's leases and resets its device state; without `--delete-devices` it deletes nothing), then lease again. Stop devices with `tapdance worker stop` rather than by hand. |
+| `worker start` / `restart` fails with `DAEMON_CONNECTION_LOST` | An earlier Tapdance started Simlock before the old daemon had released its socket (it can take a minute while emulators shut down). | Fixed: Tapdance now waits for the socket. With an older build, wait a minute and run `tapdance worker start` again. |
 | `NOT_SUPPORTED` "Windows cannot run a Tapdance worker yet" | Simlock supports macOS and Linux only. | Use Windows as a control machine only; run the worker on a Mac or a Linux machine. |
 
 ## Platform tools
@@ -108,7 +110,7 @@ The messages below are quoted from the code (with paths and names shortened).
 | `USAGE` "A recording is already running" / "No recording is running" | | `tapdance record stop` / `record start`. |
 | `DEVICE_ERROR` "… failed: …" | The device command failed in agent-device or on the device. | Read the quoted message; check `tapdance logs` and `tapdance logs --crash`. |
 
-## AXe iOS backend (untested on a real Mac)
+## AXe iOS backend
 
 | Error | Cause | Fix |
 | --- | --- | --- |

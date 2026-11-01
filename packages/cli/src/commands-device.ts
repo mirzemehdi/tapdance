@@ -159,19 +159,28 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       }),
     );
 
+  /** iOS profile edits end when the owner presses Enter (a simulator has no window close to wait for). */
+  const pressEnter = async () => {
+    if (!process.stdin.isTTY) throw new TapdanceError("USAGE", "Editing an iOS profile needs a terminal");
+    process.stderr.write("Press Enter when you are done setting it up… ");
+    await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()));
+    process.stdin.pause();
+  };
   const profile = device.command("profile").description("Device profiles: an emulator you set up once (signed in, configured) that leases boot from");
   profile
     .command("create <name>")
-    .description("Create a profile from an installed system image, then open it to set up (sign in, settings); close the window to save")
-    .option("--image-tag <tag>", "system image tag", "google_apis_playstore")
-    .option("--os <api>", "Android API level (default: the highest installed with that tag)")
-    .option("--device <id>", "avdmanager device id", "pixel_8")
+    .description("Create a profile (Android emulator or iOS simulator), then open it to set up (sign in, settings) and save")
+    .option("-p, --platform <platform>", "android or ios", "android")
+    .option("--image-tag <tag>", "Android system image tag", "google_apis_playstore")
+    .option("--os <version>", "Android API level or iOS version (default: the newest installed)")
+    .option("--device <model>", "avdmanager device id (Android, default pixel_8) or simulator model (iOS, default \"iPhone 16\")")
     .option("--no-edit", "only create it; set it up later with `device profile edit`")
-    .action(async (name: string, o: { imageTag: string; os?: string; device: string; edit: boolean }) =>
+    .action(async (name: string, o: { platform: string; imageTag: string; os?: string; device?: string; edit: boolean }) =>
       run(globals(), async (_t, out) => {
-        const record = await createProfile(name, { imageTag: o.imageTag, device: o.device, ...(o.os ? { osVersion: o.os } : {}), onProgress: (m) => out.progress(m) });
-        const final = o.edit ? await editProfile(name, { onProgress: (m) => out.progress(m) }) : record;
-        out.result({ profile: final }, () => `Profile ${name} ready (${final.image}). Lease it: tapdance device lease -p android --profile ${name}`);
+        const platform = platformArg(o.platform);
+        const record = await createProfile(name, { platform, imageTag: o.imageTag, ...(o.device ? { device: o.device } : {}), ...(o.os ? { osVersion: o.os } : {}), onProgress: (m) => out.progress(m) });
+        const final = o.edit ? await editProfile(name, { onProgress: (m) => out.progress(m), waitUntilDone: pressEnter }) : record;
+        out.result({ profile: final }, () => `Profile ${name} ready (${final.image}). Lease it: tapdance device lease -p ${platform} --profile ${name}`);
       }),
     );
   profile
@@ -179,7 +188,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .description("Open the profile writable with a window; what you do is kept when you close it")
     .action(async (name: string) =>
       run(globals(), async (_t, out) => {
-        const record = await editProfile(name, { onProgress: (m) => out.progress(m) });
+        const record = await editProfile(name, { onProgress: (m) => out.progress(m), waitUntilDone: pressEnter });
         out.result({ profile: record }, () => `Saved ${name}`);
       }),
     );

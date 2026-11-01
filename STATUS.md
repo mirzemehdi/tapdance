@@ -127,7 +127,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | D-07 | ⛔ | Windows workers: Simlock supports macOS and Linux only. Windows works as a control machine (CLI/MCP). |
 | D-08 | 🟡 | See D-05. |
 | D-09 | 🧪 | `.aab` → universal APK with bundletool before upload; unit-tested with a fake bundletool (`packages/sdk/src/tools.test.ts`). No real bundletool run. |
-| D-10 | 🟡 | Android device profiles created, set up and leased read-only on one Mac; a lease's changes were discarded ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Not yet: a real Google sign-in and Play purchase, profiles through the guard or a gateway, iOS profiles. |
+| D-10 | 🟡 | Device profiles on Android (a read-only boot of a prepared AVD) and iOS (a clone of a template simulator per lease) created and leased on one Mac; a lease's changes were discarded on both ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Not yet: a real Google sign-in and Play purchase, and profiles through the guard or a gateway (Simlock enrols only USB phones; next idea: turn a profile into a custom system image Simlock can lease by tag). |
 
 ### Interaction backends
 
@@ -144,9 +144,9 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | U-09 | ✅ | Settings on Android and iOS ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); bluetooth, mobile data, biometrics and location not exercised. |
 | U-10 | ✅ | Android shared storage push/pull locally and through the guard; iOS Photos and app container locally ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Android app-sandbox push/pull not exercised (needs a debuggable app using `run-as`). |
 | U-11 | 🟡 | Android post/list/open/close and an iOS push payload ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Reading iOS Notification Center is by `inspect_screen` only. |
-| U-12 | 🟡 | `perf frames` and `perf memory` on Android ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); iOS perf not exercised. Audio and MIDI not built (the audio probe was removed: it needs macOS Screen Recording). |
-| U-14 | 🧪 | `device_shell` / `tapdance device shell`; guard allow/deny tests incl. phones and the off switch (`guard.test.ts` 14–15). Not yet run on a device (same lease exec path as the file and settings tools, which ran for real). |
-| U-13 | 🧪 | `request_human`, `device done` and the viewer's Hand back (`packages/sdk/src/tapdance.test.ts`). Not yet used in a real sign-in. |
+| U-12 | 🟡 | `perf frames` and `perf memory` on Android; `perf memory` on iOS. iOS frame health is not available on simulators (agent-device supports it on real iPhones only) and says so ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Audio and MIDI are left to `device_shell` (U-14). |
+| U-14 | ✅ | `tapdance device shell` on a real Pixel 8: getprop, `wm density`, a pipe inside the emulator, stdin; refused on iOS ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Guard allow/deny incl. phones and the off switch: `guard.test.ts` 14–15. |
+| U-13 | ✅ | A real round trip: an SDK process waited in `requestHuman` on a leased iPhone 16 until `tapdance device done` from another process answered it (5 s) ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). The viewer's Hand back answers it the same way (unit-tested). |
 
 ### Workers and gateway
 
@@ -267,7 +267,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Y-06 | ⬜ | |
 | Y-07 | 🟡 | Maestro/xcodebuild reachable through `execute_tool`; no result envelope for them. Tapdance's own scenario files (`tapdance run`) return a PASS/FAIL report with per-step results; FakeProvider tests only, not run on a device. |
 | Y-08 | 🟡 | Per-session artifact folder + manifest. `tapdance run` writes an evidence folder per scenario run (report.json, report.md, failure screenshot and UI tree, device, OS, app id, repository commit, Tapdance and Node versions); FakeProvider tests only. No app version, logs or native framework results yet. |
-| Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows. The iOS sign-in example passed on a real simulator ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); the Android one has not passed yet. |
+| Y-09 | 🟡 | Scenario files replay a saved flow through Tapdance's own device calls (`tapdance run`, SDK `runScenario`); `scenarioFromToolCalls` turns MCP tool calls into a scenario and notes what will not replay (refs, external tools). No conversion to Maestro flows. The iOS sign-in example passed on a real simulator ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); the Android one passed too (8/8, 24.6 s) once the overloaded Mac was idle. |
 | Y-10 | 🟡 | Device settings, permissions, locale, time zone, orientation, appearance, location, biometrics, data reset and deep links/intents (U-08, U-09); battery and camera not covered. |
 | Y-11 | 🟡 | Agent vs human hold (take over / hand back); no read-only or paused states. |
 | Y-12 | 🟡 | Android device profiles (D-10): a prepared emulator booted read-only per lease. iOS and remote profiles not built. |
