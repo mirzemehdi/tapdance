@@ -127,7 +127,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | D-07 | ⛔ | Windows workers: Simlock supports macOS and Linux only. Windows works as a control machine (CLI/MCP). |
 | D-08 | 🟡 | See D-05. |
 | D-09 | ✅ | `.aab` → universal APK with bundletool 1.18.3 before upload, installed and driven on a real Pixel 8 ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); the missing-bundletool hint is unit-tested. |
-| D-10 | 🟡 | Device profiles on Android (a read-only boot of a prepared AVD) and iOS (a clone of a template simulator per lease) created and leased on one Mac; a lease's changes were discarded on both ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Not yet: a real Google sign-in and Play purchase, and profiles through the guard or a gateway (Simlock enrols only USB phones; next idea: turn a profile into a custom system image Simlock can lease by tag). |
+| D-10 | 🟡 | Device profiles on Android (a read-only boot of a prepared AVD) and iOS (a clone of a template simulator per lease) created and leased on one Mac; a lease's changes were discarded on both ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Not yet: a real Google sign-in and Play purchase, and profiles through the guard or a gateway. Simlock enrols only USB phones, and a profile turned into a custom system image does not carry its data: Simlock booted the image (tag found) but the emulator started from an empty data partition (tried 2026-11-02, removed). Remaining route: the guard serving profile leases itself. |
 
 ### Interaction backends
 
