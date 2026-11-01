@@ -268,7 +268,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
   device
     .command("push <path>")
-    .description("Copy a file onto the device (Android shared storage or a debuggable app's sandbox; iOS Photos or an app container, local simulators only)")
+    .description("Copy a file onto the device (Android shared storage or a debuggable app's sandbox; iOS Photos or an app's Documents)")
     .requiredOption("--to <destination>", "downloads, pictures, documents or app_sandbox")
     .option("--app <appId>", "app for app_sandbox (and iOS documents)")
     .option("--name <name>", "file name on the device")

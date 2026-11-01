@@ -98,6 +98,14 @@ TapdanceDemo.aab` on a Pixel 8 built a universal APK, uploaded and installed it;
 email and password, `Sign in` and `ui wait --text "Welcome, aab@tapdance.dev"` (92 ms) passed. The
 temporary APK folder is now removed after the upload.
 
+## iOS files through the worker guard (#5)
+
+A guard on `127.0.0.1:4732` with the default policy, one paired client. On a leased iPhone 16 with the
+demo app: `device push qa-pic.png --to pictures` (added to Photos), `device push qa-seed.json --to
+documents --app dev.tapdance.demo`, `device pull --app dev.tapdance.demo --path Documents/qa-seed.json`
+(the pulled artifact held `{"seed":42}`), and `--path ../../../../etc/hosts` refused with `FORBIDDEN`.
+The guard's staging folder was empty afterwards; the audit log recorded the four file requests.
+
 ## Changed after this run
 
 The `density`, `locale` and `time-zone` settings shown above were removed in favour of the generic

@@ -321,7 +321,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "push_file",
     title: "Put a file on the device",
     description:
-      "Copy a project file onto the leased device so the app can import, open or pick it. Android: downloads, pictures or documents (shared storage, visible in the system file picker and gallery), or app_sandbox (needs app_id and a debuggable build; name may be files/…, cache/…, databases/…, shared_prefs/…). iOS (only when the simulator runs on this machine): pictures (Photos), or documents/app_sandbox inside app_id's container. The path must be inside the project directory.",
+      "Copy a project file onto the leased device so the app can import, open or pick it. Android: downloads, pictures or documents (shared storage, visible in the system file picker and gallery), or app_sandbox (needs app_id and a debuggable build; name may be files/…, cache/…, databases/…, shared_prefs/…). iOS: pictures (Photos), or documents inside app_id's container (a remote simulator needs a worker guard). The path must be inside the project directory.",
     input: z
       .object({
         path: z.string().min(1).max(4096),
@@ -346,7 +346,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "pull_file",
     title: "Get a file from the device",
     description:
-      "Copy a file from the leased device into this session's artifacts (listed by get_test_artifacts). Android: device_path in /sdcard/{Download,Pictures,DCIM,Documents,Movies,Music}/, or app_id + relative_path (files/…, debuggable builds). iOS (local simulator only): app_id + relative_path inside its container, e.g. Documents/export.json.",
+      "Copy a file from the leased device into this session's artifacts (listed by get_test_artifacts). Android: device_path in /sdcard/{Download,Pictures,DCIM,Documents,Movies,Music}/, or app_id + relative_path (files/…, debuggable builds). iOS: app_id + relative_path inside its container, e.g. Documents/export.json (a remote simulator needs a worker guard).",
     input: z.object({ device_path: z.string().max(512).optional(), app_id: appId.optional(), relative_path: z.string().max(512).optional() }).strict(),
     annotations: { readOnlyHint: true },
     run: async (t, a) =>

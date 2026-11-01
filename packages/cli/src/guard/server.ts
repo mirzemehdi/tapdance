@@ -1,9 +1,13 @@
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { GuardTokens, audit, type GuardPolicy, type GuardToken } from "./policy.js";
-import { execOf, routeOf, rpcOf } from "./rules.js";
+import { parseExecStream } from "@tapdance/provider-simlock";
+import { GuardTokens, audit, guardDir, type GuardPolicy, type GuardToken } from "./policy.js";
+import { execOf, filesOf, routeOf, rpcOf, type FileRequest } from "./rules.js";
 
 /**
  * The worker guard: the only endpoint a remote control machine reaches on a worker in device-only
@@ -147,6 +151,95 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     return owners.size;
   };
 
+  /** Runs simctl against a lease through the local Simlock (it puts the leased simulator in). */
+  const simctl = async (leaseId: string, args: string[]) => {
+    const r = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}/exec`, {
+      method: "POST",
+      headers: { ...upstreamHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ tool: "simctl", args }),
+    });
+    if (!r.ok) throw new Error(`simctl ${args[0]} answered ${r.status}`);
+    return parseExecStream(await r.text());
+  };
+
+  /** The leased simulator's data container for an app, resolved on this Mac. */
+  const container = async (leaseId: string, appId: string): Promise<string | undefined> => {
+    const r = await simctl(leaseId, ["get_app_container", appId, "data"]);
+    const path = r.stdout.trim().split("\n").pop() ?? "";
+    if (r.exitCode !== 0 || !path.startsWith("/")) return undefined;
+    return realpath(path).catch(() => undefined);
+  };
+
+  /** Carries a file to or from a leased iOS simulator. Paths are the guard's own, never the caller's. */
+  const handleFiles = async (req: IncomingMessage, res: ServerResponse, leaseId: string, file: FileRequest, decide: (d: "allow" | "deny", e?: { reason?: string; command?: string; leaseId?: string }) => Promise<void>) => {
+    const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}`, { headers: upstreamHeaders });
+    const lease = detail.ok ? ((await detail.json()) as { lease?: { platform?: string } }).lease : undefined;
+    if (lease?.platform !== "ios") {
+      await decide("deny", { reason: "files route is for iOS simulators", leaseId });
+      return send(res, 400, "NOT_SUPPORTED", "This route is for iOS simulators; Android files go through exec");
+    }
+    const limit = policy.limits.maxUploadMB * 1024 * 1024;
+    if (file.op === "get") {
+      const root = await container(leaseId, file.appId);
+      if (!root) return send(res, 404, "APP_NOT_INSTALLED", `${file.appId} has no data container on this simulator`);
+      const target = await realpath(join(root, file.path)).catch(() => undefined);
+      // realpath follows links: whatever a link inside the container points at must still be inside it.
+      if (!target || !target.startsWith(root + sep)) {
+        await decide("deny", { reason: "path leaves the app container", leaseId });
+        return send(res, 403, "FORBIDDEN", "That path is not inside the app's container");
+      }
+      const info = await stat(target);
+      if (!info.isFile() || info.size > limit) return send(res, 400, "USAGE", info.isFile() ? "File too large" : "Not a file");
+      await decide("allow", { command: "files get", leaseId });
+      res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store" }).end(await readFile(target));
+      return;
+    }
+    const body = await readBody(req, limit);
+    if (body === undefined) {
+      await decide("deny", { reason: "file too large", leaseId });
+      return send(res, 413, "TOO_LARGE", `Files are limited to ${policy.limits.maxUploadMB} MB on this worker`);
+    }
+    if (file.destination === "photos") {
+      // Staged in the guard's own folder (mode 700) under a random name, handed to simctl, then deleted.
+      const dir = join(guardDir(env), "staging", leaseId, randomBytes(8).toString("hex"));
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      const staged = join(dir, file.name);
+      try {
+        await writeFile(staged, body, { mode: 0o600, flag: "wx" });
+        const r = await simctl(leaseId, ["addmedia", staged]);
+        if (r.exitCode !== 0) return send(res, 400, "DEVICE_ERROR", `simctl addmedia failed: ${r.stderr.trim().slice(0, 200)}`);
+      } finally {
+        await rm(join(guardDir(env), "staging", leaseId), { recursive: true, force: true });
+      }
+      await decide("allow", { command: "files put photos", leaseId });
+      return send200(res, { ok: true, devicePath: "Photos" });
+    }
+    const root = await container(leaseId, file.appId);
+    if (!root) return send(res, 404, "APP_NOT_INSTALLED", `${file.appId} has no data container on this simulator`);
+    const documents = join(root, "Documents");
+    await mkdir(documents, { recursive: true });
+    // Documents itself must be a real folder in the container, not a link out of it.
+    if ((await lstat(documents)).isSymbolicLink() || !(await realpath(documents)).startsWith(root + sep)) {
+      await decide("deny", { reason: "Documents is not inside the container", leaseId });
+      return send(res, 403, "FORBIDDEN", "The app's Documents folder is not inside its container");
+    }
+    const target = join(documents, file.name);
+    const existing = await lstat(target).catch(() => undefined);
+    if (existing?.isSymbolicLink()) {
+      await decide("deny", { reason: "target is a link", leaseId });
+      return send(res, 403, "FORBIDDEN", "Refusing to write through a link");
+    }
+    const tmp = join(dirname(target), `.tapdance-${randomBytes(6).toString("hex")}`);
+    await writeFile(tmp, body, { mode: 0o644, flag: "wx" });
+    await rename(tmp, target);
+    await decide("allow", { command: "files put documents", leaseId });
+    return send200(res, { ok: true, devicePath: `Documents/${file.name}` });
+  };
+
+  const send200 = (res: ServerResponse, value: unknown) => {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(value));
+  };
+
   /** A JSON-RPC reply that reports success: no `error` member and no `result.ok === false`. */
   const rpcSucceeded = (data: unknown): boolean => {
     if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
@@ -206,6 +299,15 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           if (owners.get(r.leaseId) !== token.id) {
             await decide("deny", { reason: "not this token's lease", leaseId: r.leaseId });
             return send(res, 404, "UNKNOWN_LEASE", "No such lease for this token");
+          }
+          if (r.action === "files-put" || r.action === "files-get") {
+            const decision = filesOf(r.action === "files-put" ? "PUT" : "GET", new URL(path, "http://guard").searchParams, policy);
+            if (!decision.ok) {
+              await decide("deny", { reason: decision.reason, leaseId: r.leaseId, command: "files" });
+              return send(res, 403, "FORBIDDEN", decision.reason);
+            }
+            await handleFiles(req, res, r.leaseId, decision.value, decide);
+            return;
           }
           if ((r.action === "stream" && !policy.allow.streaming) || (r.action === "input" && !policy.allow.input)) {
             await decide("deny", { reason: `${r.action} disabled by policy`, leaseId: r.leaseId });

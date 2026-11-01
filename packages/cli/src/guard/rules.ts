@@ -15,7 +15,7 @@ export type Route =
   | { kind: "identity" }
   | { kind: "status" }
   | { kind: "catalog" }
-  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" }
+  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" }
   | { kind: "rpc" }
   | { kind: "agent-device-health" }
   | { kind: "upload"; path: string }
@@ -25,12 +25,13 @@ const LEASE = /^[0-9a-f]{32}$/;
 
 export function routeOf(method: string, rawPath: string): Decision<Route> {
   const path = rawPath.split("?")[0] ?? "";
-  if (path.includes("..") || path.includes("//") || /%2e|%2f/i.test(rawPath)) return deny("path not allowed");
+  // Encoded dots and slashes are refused in the path; query values are validated by each route's rules.
+  if (path.includes("..") || path.includes("//") || /%2e|%2f/i.test(path)) return deny("path not allowed");
   if (method === "GET" && path === "/v1/healthz") return { ok: true, value: { kind: "healthz" } };
   if (method === "GET" && path === "/v1/identity") return { ok: true, value: { kind: "identity" } };
   if (method === "GET" && path === "/v1/status") return { ok: true, value: { kind: "status" } };
   if (method === "GET" && path === "/v1/catalog") return { ok: true, value: { kind: "catalog" } };
-  const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events))?$/.exec(path);
+  const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files))?$/.exec(path);
   if (lease) {
     const leaseId = lease[1]!;
     if (!LEASE.test(leaseId)) return deny("unknown lease id format");
@@ -40,6 +41,8 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
     if (sub === "exec" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "exec" } };
     if ((sub === "stream" || sub === "events") && method === "GET") return { ok: true, value: { kind: "lease", leaseId, action: sub } };
     if (sub === "input" && method === "GET") return { ok: true, value: { kind: "lease", leaseId, action: "input" } };
+    if (sub === "files" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "files-put" } };
+    if (sub === "files" && method === "GET") return { ok: true, value: { kind: "lease", leaseId, action: "files-get" } };
     return deny("lease route not allowed");
   }
   if (path === "/v1/agent-device/rpc" && method === "POST") return { ok: true, value: { kind: "rpc" } };
@@ -130,6 +133,38 @@ export function rpcOf(body: unknown, policy: GuardPolicy): Decision<RpcCall> {
   const narrowed = narrow(command, params);
   if (narrowed) return deny(narrowed);
   return { ok: true, value: { method: "command", command, leaseId } };
+}
+
+/** A file name the guard writes: no directories, no leading dot. */
+export const FILE_NAME = /^(?!\.)[A-Za-z0-9 _.()+-]{1,128}$/;
+/** A path inside an app's data container the guard reads: fixed top folders, plain names, no "..". */
+export const CONTAINER_PATH = /^(Documents|Library|tmp)(\/(?!\.{1,2}(\/|$))[A-Za-z0-9 _.()+-]{1,128}){1,8}$/;
+const PHOTO = /\.(png|jpe?g|heic|gif|mov|mp4|m4v)$/i;
+
+export type FileRequest =
+  | { op: "put"; destination: "photos"; name: string }
+  | { op: "put"; destination: "documents"; appId: string; name: string }
+  | { op: "get"; appId: string; path: string };
+
+/**
+ * Files for a leased iOS simulator: the caller names a destination kind, an app and a plain file name,
+ * never a path on the Mac. The guard itself resolves where that is (simctl, through Simlock).
+ */
+export function filesOf(method: "PUT" | "GET", query: URLSearchParams, policy: GuardPolicy): Decision<FileRequest> {
+  if (!policy.allow.files) return deny("files is disabled by the local policy");
+  const app = query.get("app") ?? "";
+  if (method === "GET") {
+    const path = query.get("path") ?? "";
+    if (!APP_ID.test(app)) return deny("app must be an app id");
+    if (!CONTAINER_PATH.test(path)) return deny("path must be inside the app's Documents, Library or tmp folder");
+    return { ok: true, value: { op: "get", appId: app, path } };
+  }
+  const name = query.get("name") ?? "";
+  if (!FILE_NAME.test(name)) return deny("name must be a plain file name");
+  const destination = query.get("destination");
+  if (destination === "photos") return PHOTO.test(name) ? { ok: true, value: { op: "put", destination, name } } : deny("Photos takes images and videos");
+  if (destination === "documents") return APP_ID.test(app) ? { ok: true, value: { op: "put", destination, appId: app, name } } : deny("documents needs app");
+  return deny("destination must be photos or documents");
 }
 
 /** Settings that change the leased device only. macOS host permissions (TCC) are never reachable. */

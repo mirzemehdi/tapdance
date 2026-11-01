@@ -164,6 +164,27 @@ export class SimlockHttp {
    * Runs one allowlisted adb/simctl command on the lease's device (the worker fills the device in).
    * Internal only: Tapdance never forwards caller-chosen arguments here.
    */
+  /** Worker guard only: carries a file into a leased iOS simulator (Photos, or an app's Documents). */
+  async putFile(leaseId: string, query: Record<string, string>, bytes: Buffer): Promise<{ devicePath: string }> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/files?${new URLSearchParams(query)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: new Uint8Array(bytes),
+      timeoutMs: 300_000,
+    });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw filesUnsupported();
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/files");
+    return (await response.json()) as { devicePath: string };
+  }
+
+  /** Worker guard only: reads a file from an app's container on a leased iOS simulator. */
+  async getFile(leaseId: string, query: Record<string, string>): Promise<Buffer> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/files?${new URLSearchParams(query)}`, { timeoutMs: 300_000 });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw filesUnsupported();
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/files");
+    return Buffer.from(await response.arrayBuffer());
+  }
+
   async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000, stdin?: string): Promise<ExecResult> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/exec`, {
       method: "POST",
@@ -174,6 +195,12 @@ export class SimlockHttp {
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/exec");
     return parseExecStream(await response.text());
   }
+}
+
+function filesUnsupported(): TapdanceError {
+  return new TapdanceError("NOT_SUPPORTED", "This endpoint cannot carry files to an iOS simulator", {
+    hint: "Files for a remote iOS simulator go through a worker in device-only mode (tapdance worker guard), or run Tapdance on the Mac itself.",
+  });
 }
 
 /** Parses Simlock's exec Server-Sent Events: `output` chunks, then `exit` or `error`. */

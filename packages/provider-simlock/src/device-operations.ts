@@ -14,6 +14,11 @@ export interface DeviceOperationContext {
   exec: (command: DeviceCommand, timeoutMs?: number) => Promise<ExecResult>;
   /** True when the device runs on this machine (local worker), so host paths are meaningful. */
   local: boolean;
+  /** Remote iOS files through a worker guard's files route (the guard resolves every path itself). */
+  remoteFiles?: {
+    put: (query: Record<string, string>, bytes: Buffer) => Promise<{ devicePath: string }>;
+    get: (query: Record<string, string>) => Promise<Buffer>;
+  };
 }
 
 const SHARED_DIR: Record<string, string> = { downloads: "Download", pictures: "Pictures", documents: "Documents" };
@@ -201,7 +206,13 @@ async function pushFile(ctx: DeviceOperationContext, handle: LeaseHandle, op: Ex
     return { ok: true, message: `Pushed ${name} to ${devicePath}`, devicePath };
   }
   if (!ctx.local) {
-    throw notSupported("Pushing files to a remote iOS simulator is not supported", "simctl needs the file on the Mac that runs the simulator; run Tapdance on that Mac, or have the app download it.");
+    if (!ctx.remoteFiles) throw notSupported("Pushing files to a remote iOS simulator needs a worker guard", "Use a worker in device-only mode, or run Tapdance on the Mac that runs the simulator.");
+    if (info.size > MAX_PUSH_BYTES * 4) throw new TapdanceError("USAGE", `Files are limited to ${MAX_PUSH_BYTES * 4 / 1024 / 1024} MB`);
+    const bytes = await readFile(local);
+    if (op.destination === "pictures") return { ok: true, message: `Added ${name} to Photos`, ...(await ctx.remoteFiles.put({ destination: "photos", name }, bytes)) };
+    if (op.destination === "downloads") throw notSupported("iOS has no shared Downloads folder", "Use documents with app_id (the app's Documents folder) or pictures.");
+    const r = await ctx.remoteFiles.put({ destination: "documents", app: needApp(op.appId, "Files on iOS"), name }, bytes);
+    return { ok: true, message: `Copied ${name} into ${op.appId}'s Documents`, ...r };
   }
   if (op.destination === "pictures") {
     await run(ctx, { tool: "simctl", args: ["addmedia", local] }, "add media");
@@ -224,7 +235,13 @@ async function pullFile(ctx: DeviceOperationContext, handle: LeaseHandle, op: Ex
     await writeFile(op.outPath, bytes, { mode: 0o600 });
     return { ok: true, message: `Pulled ${bytes.length} bytes`, path: op.outPath };
   }
-  if (!ctx.local) throw notSupported("Pulling files from a remote iOS simulator is not supported", "Run Tapdance on the Mac that runs the simulator.");
+  if (!ctx.local) {
+    if (!ctx.remoteFiles) throw notSupported("Pulling files from a remote iOS simulator needs a worker guard", "Use a worker in device-only mode, or run Tapdance on the Mac that runs the simulator.");
+    const bytes = await ctx.remoteFiles.get({ app: needApp(op.appId, "pull_file on iOS"), path: op.relativePath ?? "" });
+    await mkdir(dirname(op.outPath), { recursive: true });
+    await writeFile(op.outPath, bytes, { mode: 0o600 });
+    return { ok: true, message: `Pulled ${bytes.length} bytes`, path: op.outPath };
+  }
   const container = await appContainer(ctx, needApp(op.appId, "pull_file on iOS"));
   const source = resolve(container, op.relativePath ?? "");
   if (!source.startsWith(`${container}/`)) throw new TapdanceError("USAGE", "relative_path must stay inside the app's container (for example Documents/export.json)");

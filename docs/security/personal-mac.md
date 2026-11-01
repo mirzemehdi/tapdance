@@ -126,6 +126,12 @@ has been installed on a real machine yet.
   `databases/`, `shared_prefs/`, `no_backup/` (24 MB at most). Values that reach the emulator's own
   shell are validated and single-quoted. No `adb push`/`pull` of Mac paths, no `simctl addmedia` or
   `spawn`, no host shell.
+- **Files for leased iOS simulators** (`allow.files`): `POST/GET /v1/leases/<id>/files` with a
+  destination kind (`photos`, or `documents` + an app id), a plain file name or a path inside the app's
+  `Documents`, `Library` or `tmp`. The guard asks the simulator (through Simlock) where that app's
+  container is, follows links before checking the result is still inside it, refuses to write through a
+  link, stages Photos uploads in its own mode-700 folder and deletes them. A client never names a path on
+  the Mac.
 - **A shell inside leased emulators** (`allow.deviceShell`, default `true`): any `adb shell …` on an
   emulator the client leased. It runs in the emulator's own Android VM, which is wiped at release, not
   on the Mac. It is refused on physical phones, and everything that reaches the Mac (`adb push`/`pull`,

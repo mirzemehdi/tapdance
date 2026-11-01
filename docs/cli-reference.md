@@ -231,9 +231,10 @@ the device is wiped on release.
   reads the setting where the platform can. A combination a platform cannot do fails with
   `NOT_SUPPORTED` and says what to do instead.
 - `push`: Android shared storage (media-scanned) or a debuggable app's sandbox, up to 24 MB; iOS Photos
-  or an app's container, only when the simulator runs on this machine.
+  or an app's Documents (a remote simulator needs a worker guard).
 - `pull`: Android shared storage (`/sdcard/Download/…` and the other media folders) or `--app` with
-  `--path`; iOS `--app` with `--path` inside its container, local simulators only. Saved as an artifact.
+  `--path`; iOS `--app` with `--path` inside its container (remote: through a worker guard). Saved as an
+  artifact.
 - `notifications`: `list` (Android), `open`/`close` the shade (Android), `post` a shell notification
   (Android) or, with `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator).
 - `shell` (Android emulators only): runs the command with `adb shell` **inside the leased emulator**
@@ -801,8 +802,7 @@ Commands:
                                     orientation, status-bar-time
   push [options] <path>             Copy a file onto the device (Android shared
                                     storage or a debuggable app's sandbox; iOS
-                                    Photos or an app container, local simulators
-                                    only)
+                                    Photos or an app's Documents)
   pull [options] [devicePath]       Copy a file from the device into this
                                     session's artifacts
   notifications [options] <action>  list | open | close | post notifications on
@@ -986,7 +986,7 @@ Options:
 Usage: tapdance device push [options] <path>
 
 Copy a file onto the device (Android shared storage or a debuggable app's
-sandbox; iOS Photos or an app container, local simulators only)
+sandbox; iOS Photos or an app's Documents)
 
 Options:
   --to <destination>  downloads, pictures, documents or app_sandbox

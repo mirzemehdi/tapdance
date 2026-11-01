@@ -838,6 +838,7 @@ export class SimlockProvider implements DeviceProvider {
         scope: { ...this.selection(handle), ...this.scope(handle) },
         exec: (command, timeoutMs) => this.execOn(handle, command.tool, command.args, timeoutMs, command.stdin),
         local: this.isLocal(),
+        ...(this.isLocal() ? {} : { remoteFiles: { put: (q, bytes) => this.http.putFile(handle.leaseId, q, bytes), get: (q) => this.http.getFile(handle.leaseId, q) } }),
       },
       handle,
       operation,

@@ -33,6 +33,10 @@ interface FakeOptions {
   status?: unknown;
   /** Answers lease.allocate with HTTP 200 and this JSON-RPC error instead of granting. */
   allocateError?: { code: number; message: string };
+  /** Platform in GET /v1/leases/<id> (default "ios"). */
+  leasePlatform?: string;
+  /** What `simctl get_app_container … data` prints (an app's data container on the "Mac"). */
+  container?: string;
 }
 
 async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
@@ -58,7 +62,7 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
     }
     if (lease && req.method === "GET" && !req.url!.includes("/stream")) {
       if (options.leaseDelayMs) await new Promise((r) => setTimeout(r, options.leaseDelayMs));
-      res.writeHead(live.has(lease[1]!) ? 200 : 404, { "content-type": "application/json" }).end(JSON.stringify({ lease: { id: lease[1] } }));
+      res.writeHead(live.has(lease[1]!) ? 200 : 404, { "content-type": "application/json" }).end(JSON.stringify({ lease: { id: lease[1], platform: options.leasePlatform ?? "ios" } }));
       return;
     }
     if (req.url === "/v1/status" && options.status !== undefined) {
@@ -66,7 +70,9 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
       return;
     }
     if (lease && req.url!.endsWith("/exec")) {
-      res.writeHead(200, { "content-type": "text/event-stream" }).end('event: exit\ndata: {"exitCode":0}\n\n');
+      const args = (JSON.parse(body || "{}") as { args?: string[] }).args ?? [];
+      const out = args[0] === "get_app_container" && options.container ? `event: output\ndata: ${JSON.stringify({ stream: "stdout", chunk: `${options.container}\n` })}\n\n` : "";
+      res.writeHead(200, { "content-type": "text/event-stream" }).end(`${out}event: exit\ndata: {"exitCode":0}\n\n`);
       return;
     }
     if (req.url?.startsWith("/v1/agent-device/upload")) {
@@ -492,6 +498,53 @@ describe("worker guard: hardening", () => {
     const off = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, deviceShell: false } });
     await off.allocate(off.alice.secret, A);
     expect((await off.exec(off.alice.secret, A, "adb", ["shell", "id"])).status).toBe(403);
+  });
+
+  it("16. files reach a leased iOS simulator's Photos or app container only (#5)", async () => {
+    const { mkdir: mk, readFile: rf, symlink, writeFile: wf } = await import("node:fs/promises");
+    const root = await mkdtemp(join(tmpdir(), "td-container-"));
+    await mk(join(root, "Documents"));
+    await wf(join(root, "Documents", "export.json"), '{"ok":true}');
+    const outside = await mkdtemp(join(tmpdir(), "td-outside-"));
+    await wf(join(outside, "secret.txt"), "owner's file");
+    await symlink(join(outside, "secret.txt"), join(root, "Documents", "link.txt"));
+    const { realpath: rp } = await import("node:fs/promises");
+    const t = await setup({}, { container: await rp(root) });
+    await t.allocate(t.alice.secret, A);
+    const put = (secret: string, lease: string, q: string, body = "data") => t.call(secret, "POST", `/v1/leases/${lease}/files?${q}`, body, { "content-type": "application/octet-stream" });
+    const get = (secret: string, lease: string, q: string) => t.call(secret, "GET", `/v1/leases/${lease}/files?${q}`);
+    // Writes land in the app's Documents, under the given plain name only.
+    expect((await put(t.alice.secret, A, "destination=documents&app=com.example&name=seed.json", '{"n":1}')).status).toBe(200);
+    expect(await rf(join(root, "Documents", "seed.json"), "utf8")).toBe('{"n":1}');
+    for (const name of ["../escape.json", "/Users/owner/x", ".hidden", "a/b.json", ""]) {
+      // Refused by the route check (encoded slashes and dots: 404) or by the name rule (403).
+      expect([403, 404], name).toContain((await put(t.alice.secret, A, `destination=documents&app=com.example&name=${encodeURIComponent(name)}`)).status);
+    }
+    const { readdir: rd } = await import("node:fs/promises");
+    expect((await rd(join(root, "Documents"))).sort()).toEqual(["export.json", "link.txt", "seed.json"]);
+    // No writing through a link that points out of the container.
+    expect((await put(t.alice.secret, A, "destination=documents&app=com.example&name=link.txt", "overwrite")).status).toBe(403);
+    expect(await rf(join(outside, "secret.txt"), "utf8")).toBe("owner's file");
+    // Photos takes media only; the staged copy is handed to simctl addmedia and removed.
+    expect((await put(t.alice.secret, A, "destination=photos&name=cat.png", "PNG")).status).toBe(200);
+    expect(t.upstream.seen.some((x) => x.path.endsWith("/exec") && x.body.includes("addmedia"))).toBe(true);
+    expect((await put(t.alice.secret, A, "destination=photos&name=script.sh")).status).toBe(403);
+    // Reads stay inside the container, links included.
+    const ok = await get(t.alice.secret, A, "app=com.example&path=Documents%2Fexport.json");
+    expect(ok.status).toBe(200);
+    expect(await ok.text()).toBe('{"ok":true}');
+    expect((await get(t.alice.secret, A, "app=com.example&path=Documents%2Flink.txt")).status).toBe(403);
+    for (const path of ["../../etc/passwd", "/etc/passwd", "Documents/../../x", "Other/x"]) {
+      expect([403, 404], path).toContain((await get(t.alice.secret, A, `app=com.example&path=${encodeURIComponent(path)}`)).status);
+    }
+    // Another client's lease, an Android lease, and the policy switch.
+    expect((await put(t.mallory.secret, A, "destination=documents&app=com.example&name=x.json")).status).toBe(404);
+    const android = await setup({}, { leasePlatform: "android", container: root });
+    await android.allocate(android.alice.secret, A);
+    expect((await android.call(android.alice.secret, "POST", `/v1/leases/${A}/files?destination=photos&name=a.png`, "x")).status).toBe(400);
+    const off = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, files: false } }, { container: root });
+    await off.allocate(off.alice.secret, A);
+    expect((await off.call(off.alice.secret, "GET", `/v1/leases/${A}/files?app=com.example&path=Documents%2Fexport.json`)).status).toBe(403);
   });
 });
 
