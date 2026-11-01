@@ -32,11 +32,14 @@ import {
   type WaitResult,
   type AlertAction,
   type AlertResult,
+  type DeviceOperation,
+  type DeviceOperationResult,
 } from "@tapdance/core";
+import { aabToApk } from "./bundletool.js";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, extname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createProvider } from "./provider-factory.js";
 
@@ -372,14 +375,41 @@ export class Tapdance {
 
   // ------------------------------------------------------------ apps
 
-  async installApp(appPath: string, appId?: string): Promise<{ appId?: string; path: string }> {
+  async installApp(appPath: string, appId?: string): Promise<{ appId?: string; path: string; convertedFrom?: string }> {
     await this.guardHuman();
-    return this.onDevice((handle, provider) =>
-      provider.installApp(handle, appPath, { ...(appId ? { appId } : {}), onProgress: (m) => this.progress(m) }),
+    // An Android App Bundle becomes a universal APK here, before upload, so gateways and the guard
+    // only ever see an APK.
+    const converted = extname(appPath).toLowerCase() === ".aab" ? await aabToApk(appPath, { env: this.options.env ?? process.env, onProgress: (m) => this.progress(m), ...(this.resolved.config.tools.paths["bundletool"] ? { bundletool: this.resolved.config.tools.paths["bundletool"] } : {}) }) : undefined;
+    const result = await this.onDevice((handle, provider) =>
+      provider.installApp(handle, converted ?? appPath, { ...(appId ? { appId } : {}), onProgress: (m) => this.progress(m) }),
     );
+    return converted ? { ...result, convertedFrom: appPath } : result;
   }
 
-  async launchApp(appId: string, options: { relaunch?: boolean; url?: string } = {}): Promise<ActionResult> {
+  /**
+   * Device-level operations: reset, settings, files, notifications, intents, perf, audio. A pulled
+   * file becomes a session artifact. Mutations wait for a person holding the device to hand it back.
+   */
+  async device(operation: DeviceOperation): Promise<DeviceOperationResult & { artifact?: ArtifactRef }> {
+    const readOnly =
+      (operation.kind === "notifications" && operation.action === "list") ||
+      operation.kind === "perf" ||
+      operation.kind === "audio" ||
+      operation.kind === "pull-file" ||
+      (operation.kind === "setting" && operation.change.value === undefined && operation.change.name !== "reset-keychain");
+    if (!readOnly) await this.guardHuman();
+    return this.onDevice(async (handle, provider) => {
+      if (!provider.device) throw new TapdanceError("NOT_SUPPORTED", `The ${provider.name} provider has no device-level operations`);
+      if (operation.kind !== "pull-file") return provider.device(handle, operation);
+      const name = basename(operation.devicePath ?? operation.relativePath ?? "file");
+      const outPath = await this.artifacts.allocate(this.session.id, "other", extname(name).slice(1) || "bin", operation.outPath || undefined);
+      const result = await provider.device(handle, { ...operation, outPath });
+      const artifact = await this.artifacts.record({ kind: "other", path: result.path ?? outPath, sessionId: this.session.id, leaseId: handle.leaseId, note: `pulled ${name}` });
+      return { ...result, artifact };
+    });
+  }
+
+  async launchApp(appId: string, options: { relaunch?: boolean; url?: string; args?: string[] } = {}): Promise<ActionResult> {
     await this.guardHuman();
     return this.onDevice((handle, provider) => provider.launchApp(handle, appId, options));
   }

@@ -200,3 +200,18 @@ describe("tapdance CLI (built)", () => {
     expect({ undocumented, missingTools, missingKeys }).toEqual({ undocumented: [], missingTools: [], missingKeys: [] });
   }, 120_000);
 });
+
+describe("repository URL", () => {
+  it("every clone command and package points at the repository package.json declares", () => {
+    const declared = (JSON.parse(readFileSync(join(root, "packages/cli/package.json"), "utf8")) as { repository: { url: string } }).repository.url.replace(/\.git$/, "");
+    for (const pkg of ["core", "sdk", "mcp", "provider-simlock"]) {
+      const url = (JSON.parse(readFileSync(join(root, `packages/${pkg}/package.json`), "utf8")) as { repository: { url: string } }).repository.url.replace(/\.git$/, "");
+      expect(url, pkg).toBe(declared);
+    }
+    for (const file of ["README.md", "docs/installation.md", "docs/deployment/laptop-worker.md", "docs/deployment/local.md", "docs/testing/field-testing.md"]) {
+      for (const m of readFileSync(join(root, file), "utf8").matchAll(/git clone (https:\/\/github\.com\/[^\s]+?)(?:\.git)?(?=\s)/g)) {
+        expect(m[1], file).toBe(declared);
+      }
+    }
+  });
+});

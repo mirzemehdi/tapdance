@@ -164,11 +164,11 @@ export class SimlockHttp {
    * Runs one allowlisted adb/simctl command on the lease's device (the worker fills the device in).
    * Internal only: Tapdance never forwards caller-chosen arguments here.
    */
-  async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000): Promise<ExecResult> {
+  async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000, stdin?: string): Promise<ExecResult> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/exec`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tool, args }),
+      body: JSON.stringify(stdin === undefined ? { tool, args } : { tool, args, stdin }),
       timeoutMs,
     });
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/exec");

@@ -12,3 +12,4 @@ terraform.tfvars
 .DS_Store
 coverage/
 examples/*/build/
+.claude/worktrees/

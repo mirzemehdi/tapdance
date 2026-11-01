@@ -43,7 +43,7 @@ Every machine in a procedure (VPS, laptop, Mac, N2 VM) needs Node.js 22.13 or la
 build of this repository:
 
 ```bash
-git clone https://github.com/tapdance-dev/tapdance.git
+git clone https://github.com/mirzemehdi/tapdance.git
 cd tapdance
 corepack enable          # gives you the pnpm version pinned in package.json
 pnpm install

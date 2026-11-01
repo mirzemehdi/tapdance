@@ -203,3 +203,81 @@ export interface LogResult {
   truncated: boolean;
   artifact?: ArtifactRef;
 }
+
+/** An explicit Android intent for `launch_app`. Values are validated and quoted by the provider. */
+export interface IntentSpec {
+  action?: string;
+  data?: string;
+  component?: string;
+  categories?: string[];
+  flags?: string;
+  extras?: Record<string, string | number | boolean>;
+}
+
+/** Device settings an agent may change on its leased device. Every change ends with the lease (the device is wiped). */
+export const DEVICE_SETTINGS = [
+  "wifi",
+  "bluetooth",
+  "airplane",
+  "mobile-data",
+  "location",
+  "animations",
+  "appearance",
+  "text-size",
+  "faceid",
+  "touchid",
+  "fingerprint",
+  "permission",
+  "reset-keychain",
+  "orientation",
+  "density",
+  "locale",
+  "time-zone",
+  "status-bar-time",
+] as const;
+export type DeviceSettingName = (typeof DEVICE_SETTINGS)[number];
+
+export interface DeviceSettingChange {
+  name: DeviceSettingName;
+  /** on/off, light/dark, a text size, portrait/landscape-left…, a dpi number, a locale tag, a zone, HH:MM, or grant/deny/reset. */
+  value?: string;
+  appId?: string;
+  /** For `permission`: camera, microphone, photos, notifications, location… */
+  permission?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export type FileDestination = "downloads" | "pictures" | "documents" | "app_sandbox";
+
+export interface DeviceNotification {
+  package: string;
+  title?: string;
+  text?: string;
+  key?: string;
+  postedAt?: string;
+}
+
+/** Device-level operations beyond UI driving. Optional for providers; absent means NOT_SUPPORTED. */
+export type DeviceOperation =
+  | { kind: "uninstall"; appId: string }
+  | { kind: "clear-app-data"; appId: string }
+  | { kind: "setting"; change: DeviceSettingChange }
+  | { kind: "intent"; intent: IntentSpec }
+  | { kind: "push-file"; localPath: string; destination: FileDestination; appId?: string; name?: string }
+  | { kind: "pull-file"; outPath: string; devicePath?: string; appId?: string; relativePath?: string }
+  | { kind: "notifications"; action: "list" | "open" | "close"; appId?: string }
+  | { kind: "post-notification"; title?: string; text?: string; appId?: string; payload?: Record<string, unknown> }
+  | { kind: "perf"; metric: "frames" | "memory"; appId?: string }
+  | { kind: "audio"; action: "start" | "status" | "stop"; durationMs?: number };
+
+export interface DeviceOperationResult {
+  ok: boolean;
+  message: string;
+  /** Operation-specific data: the setting read back, notifications, a perf summary, audio buckets… */
+  data?: Record<string, unknown>;
+  /** A file the operation wrote on this machine (pulled file). */
+  path?: string;
+  /** Where a pushed file landed on the device. */
+  devicePath?: string;
+}

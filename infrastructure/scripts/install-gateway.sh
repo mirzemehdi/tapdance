@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-TAPDANCE_REPO="${TAPDANCE_REPO:-https://github.com/tapdance-dev/tapdance.git}"
+TAPDANCE_REPO="${TAPDANCE_REPO:-https://github.com/mirzemehdi/tapdance.git}"
 TAPDANCE_REF="${TAPDANCE_REF:-main}"
 TAPDANCE_SOURCE_DIR="${TAPDANCE_SOURCE_DIR:-$HOME/tapdance}"
 TAPDANCE_NPM_SPEC=""

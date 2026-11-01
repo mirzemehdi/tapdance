@@ -24,10 +24,32 @@ export const GuardPolicySchema = z
         logs: z.boolean().default(true),
         streaming: z.boolean().default(true),
         input: z.boolean().default(true),
+        /** Device settings (network, permissions, appearance, density, locale, time zone, status bar). */
+        settings: z.boolean().default(true),
+        /** Files pushed to or pulled from the leased device's shared storage or a debuggable app's sandbox. */
+        files: z.boolean().default(true),
+        /** Reading and posting notifications; off by default because notifications can hold private text. */
+        notifications: z.boolean().default(false),
+        /** Frame, memory and audio-level measurements. */
+        perf: z.boolean().default(true),
         /** Physical phones plugged into the Mac carry the owner's data; off unless the owner turns it on. */
         physicalDevices: z.boolean().default(false),
       })
-      .default({ install: true, interaction: true, inspection: true, screenshots: true, recording: true, logs: true, streaming: true, input: true, physicalDevices: false }),
+      .default({
+        install: true,
+        interaction: true,
+        inspection: true,
+        screenshots: true,
+        recording: true,
+        logs: true,
+        streaming: true,
+        input: true,
+        settings: true,
+        files: true,
+        notifications: false,
+        perf: true,
+        physicalDevices: false,
+      }),
     limits: z
       .object({
         maxSessions: z.number().int().min(1).max(16).default(1),

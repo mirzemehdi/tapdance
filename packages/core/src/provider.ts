@@ -16,6 +16,8 @@ import type {
   WaitResult,
   AlertAction,
   AlertResult,
+  DeviceOperation,
+  DeviceOperationResult,
 } from "./types.js";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -64,7 +66,7 @@ export interface DeviceProvider {
   release(handle: LeaseHandle): Promise<{ released: boolean }>;
 
   installApp(handle: LeaseHandle, appPath: string, options?: CallOptions & { appId?: string }): Promise<AppInstallResult>;
-  launchApp(handle: LeaseHandle, appId: string, options?: { relaunch?: boolean; url?: string }): Promise<ActionResult>;
+  launchApp(handle: LeaseHandle, appId: string, options?: { relaunch?: boolean; url?: string; args?: string[] }): Promise<ActionResult>;
   stopApp(handle: LeaseHandle, appId: string): Promise<ActionResult>;
   listApps(handle: LeaseHandle): Promise<string[]>;
 
@@ -88,6 +90,9 @@ export interface DeviceProvider {
 
   logs(handle: LeaseHandle, options: { lines: number; appId?: string }): Promise<LogResult>;
   crashLogs(handle: LeaseHandle, options: { lines: number; appId?: string }): Promise<LogResult>;
+
+  /** Optional: device-level operations (reset, settings, files, notifications, perf, audio, intents). */
+  device?(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult>;
 
   /** Optional: endpoints for a live screen + input viewer. Undefined when the backend has none. */
   viewer?(handle: LeaseHandle): Promise<ViewerEndpoints>;

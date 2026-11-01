@@ -218,7 +218,7 @@ These are the steps the script automates.
 5. **Tapdance** from source (it bundles Simlock and agent-device):
 
    ```bash
-   git clone https://github.com/tapdance-dev/tapdance.git
+   git clone https://github.com/mirzemehdi/tapdance.git
    cd tapdance && corepack enable && pnpm install && pnpm build
    alias tapdance="node $PWD/packages/cli/dist/main.js"
    ```

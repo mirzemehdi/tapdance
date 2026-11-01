@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { LocalArtifactStore, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, table } from "./output.js";
 
@@ -176,6 +176,105 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       }),
     );
 
+  device
+    .command("setting <name> [value]")
+    .description(`Change (or, without a value, read) a device setting: ${DEVICE_SETTINGS.join(", ")}`)
+    .option("--app <appId>", "the app a permission or locale applies to")
+    .option("--permission <permission>", "for `setting permission <grant|deny|reset>`: camera, microphone, photos, notifications, location…")
+    .option("--lat <latitude>", "for `setting location`: move the device here", Number)
+    .option("--lon <longitude>", "for `setting location`", Number)
+    .action(async (name: string, value: string | undefined, o: { app?: string; permission?: string; lat?: number; lon?: number }) =>
+      run(globals(), async (t, out) => {
+        if (!(DEVICE_SETTINGS as readonly string[]).includes(name)) throw new TapdanceError("USAGE", `Unknown setting "${name}"`, { hint: `One of: ${DEVICE_SETTINGS.join(", ")}` });
+        const r = await t.device({
+          kind: "setting",
+          change: {
+            name: name as DeviceSettingName,
+            ...(value !== undefined ? { value } : {}),
+            ...(o.app ? { appId: o.app } : {}),
+            ...(o.permission ? { permission: o.permission } : {}),
+            ...(o.lat !== undefined ? { latitude: o.lat } : {}),
+            ...(o.lon !== undefined ? { longitude: o.lon } : {}),
+          },
+        });
+        out.result(r, () => r.message);
+      }),
+    );
+  device
+    .command("push <path>")
+    .description("Copy a file onto the device (Android shared storage or a debuggable app's sandbox; iOS Photos or an app container, local simulators only)")
+    .requiredOption("--to <destination>", "downloads, pictures, documents or app_sandbox")
+    .option("--app <appId>", "app for app_sandbox (and iOS documents)")
+    .option("--name <name>", "file name on the device")
+    .action(async (path: string, o: { to: string; app?: string; name?: string }) =>
+      run(globals(), async (t, out) => {
+        if (!["downloads", "pictures", "documents", "app_sandbox"].includes(o.to)) throw new TapdanceError("USAGE", "--to must be downloads, pictures, documents or app_sandbox");
+        const r = await t.device({ kind: "push-file", localPath: path, destination: o.to as "downloads", ...(o.app ? { appId: o.app } : {}), ...(o.name ? { name: o.name } : {}) });
+        out.result(r, () => r.message);
+      }),
+    );
+  device
+    .command("pull [devicePath]")
+    .description("Copy a file from the device into this session's artifacts")
+    .option("--app <appId>", "read from this app's sandbox/container")
+    .option("--path <relativePath>", "with --app: path inside it, e.g. files/export.json or Documents/export.json")
+    .option("-o, --out <file>", "write here instead of the artifacts directory")
+    .action(async (devicePath: string | undefined, o: { app?: string; path?: string; out?: string }) =>
+      run(globals(), async (t, out) => {
+        const r = await t.device({ kind: "pull-file", outPath: o.out ?? "", ...(devicePath ? { devicePath } : {}), ...(o.app ? { appId: o.app } : {}), ...(o.path ? { relativePath: o.path } : {}) });
+        out.result(r, () => r.path ?? r.message);
+      }),
+    );
+  device
+    .command("notifications <action>")
+    .description("list | open | close | post notifications on the device")
+    .option("--app <appId>", "filter (list) or the app a push payload goes to (post)")
+    .option("--title <title>", "post: title")
+    .option("--text <text>", "post: body")
+    .option("--payload <json>", "post: a push payload (APNs-style JSON) delivered to --app")
+    .action(async (action: string, o: { app?: string; title?: string; text?: string; payload?: string }) =>
+      run(globals(), async (t, out) => {
+        const app = o.app ? { appId: o.app } : {};
+        let r;
+        if (action === "post") {
+          let payload: Record<string, unknown> | undefined;
+          if (o.payload) {
+            try {
+              payload = JSON.parse(o.payload) as Record<string, unknown>;
+            } catch {
+              throw new TapdanceError("USAGE", "--payload must be JSON");
+            }
+          }
+          r = await t.device({ kind: "post-notification", ...app, ...(o.title ? { title: o.title } : {}), ...(o.text ? { text: o.text } : {}), ...(payload ? { payload } : {}) });
+        } else if (action === "list" || action === "open" || action === "close") r = await t.device({ kind: "notifications", action, ...app });
+        else throw new TapdanceError("USAGE", "action must be list, open, close or post");
+        const list = (r.data?.["notifications"] as Array<{ package: string; title?: string; text?: string }> | undefined) ?? undefined;
+        out.result(r, () => (list ? (list.map((n) => `${n.package}: ${n.title ?? ""}${n.text ? ` — ${n.text}` : ""}`).join("\n") || "No notifications") : r.message));
+      }),
+    );
+  device
+    .command("perf <metric>")
+    .description("Measure frames (frame health since the last reading) or memory")
+    .option("--app <appId>", "app to measure (default: the foreground app)")
+    .action(async (metric: string, o: { app?: string }) =>
+      run(globals(), async (t, out) => {
+        if (metric !== "frames" && metric !== "memory") throw new TapdanceError("USAGE", "metric must be frames or memory");
+        const r = await t.device({ kind: "perf", metric, ...(o.app ? { appId: o.app } : {}) });
+        out.result(r, () => JSON.stringify(r.data, null, 2));
+      }),
+    );
+  device
+    .command("audio <action>")
+    .description("Audio level probe: start [--duration <ms>], status, stop")
+    .option("--duration <ms>", "how long start measures", Number)
+    .action(async (action: string, o: { duration?: number }) =>
+      run(globals(), async (t, out) => {
+        if (!["start", "status", "stop"].includes(action)) throw new TapdanceError("USAGE", "action must be start, status or stop");
+        const r = await t.device({ kind: "audio", action: action as "start", ...(o.duration ? { durationMs: o.duration } : {}) });
+        out.result(r, () => (action === "start" ? r.message : JSON.stringify(r.data, null, 2)));
+      }),
+    );
+
   // Hidden: the detached renewer `device lease` starts.
   program
     .command("__keepalive", { hidden: true })
@@ -202,12 +301,40 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .description("Launch an installed app")
     .option("--relaunch", "kill and restart it")
     .option("--url <url>", "deep link to open")
-    .action(async (appId: string, o: { relaunch?: boolean; url?: string }) =>
+    .option("--arg <arg>", "launch argument passed to the app (repeatable; implies --relaunch)", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--intent-action <action>", "Android: start an explicit intent with this action")
+    .option("--intent-data <uri>", "Android: intent data URI")
+    .option("--intent-component <component>", "Android: component, e.g. com.example/.MainActivity")
+    .option("--intent-extra <key=value>", "Android: string extra (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
+    .action(async (appId: string, o: { relaunch?: boolean; url?: string; arg?: string[]; intentAction?: string; intentData?: string; intentComponent?: string; intentExtra?: string[] }) =>
       run(globals(), async (t, out) => {
-        const r = await t.launchApp(appId, { ...(o.relaunch ? { relaunch: true } : {}), ...(o.url ? { url: o.url } : {}) });
+        if (o.intentAction || o.intentData || o.intentComponent) {
+          const extras = Object.fromEntries((o.intentExtra ?? []).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
+          const r = await t.device({
+            kind: "intent",
+            intent: { ...(o.intentAction ? { action: o.intentAction } : {}), ...(o.intentData ? { data: o.intentData } : {}), ...(o.intentComponent ? { component: o.intentComponent } : {}), ...(Object.keys(extras).length ? { extras } : {}) },
+          });
+          out.result(r, () => r.message);
+          return;
+        }
+        const r = await t.launchApp(appId, { ...(o.relaunch ? { relaunch: true } : {}), ...(o.url ? { url: o.url } : {}), ...(o.arg?.length ? { args: o.arg } : {}) });
         out.result(r, () => r.message);
       }),
     );
+  app
+    .command("uninstall <appId>")
+    .description("Remove an installed app")
+    .action(async (appId: string) => run(globals(), async (t, out) => {
+      const r = await t.device({ kind: "uninstall", appId });
+      out.result(r, () => r.message);
+    }));
+  app
+    .command("clear <appId>")
+    .description("Clear an app's data (first-launch state); iOS also: device setting reset-keychain")
+    .action(async (appId: string) => run(globals(), async (t, out) => {
+      const r = await t.device({ kind: "clear-app-data", appId });
+      out.result(r, () => r.message);
+    }));
   app
     .command("stop <appId>")
     .description("Force-stop an app")

@@ -29,7 +29,7 @@ Install Tapdance from source on **both** machines (it is not on npm yet, so the
 `gateway setup` now points to installing from source):
 
 ```bash
-git clone https://github.com/tapdance-dev/tapdance.git
+git clone https://github.com/mirzemehdi/tapdance.git
 cd tapdance && corepack enable && pnpm install && pnpm build
 alias tapdance="node $PWD/packages/cli/dist/main.js"
 ```
@@ -53,9 +53,8 @@ This command:
 5. Prints the worker join token **once**. Copy it somewhere safe for step 3; do not paste it into
    chat, issues or committed files.
 
-`--public-url` only changes the instructions it prints. Those printed next steps currently contain
-`npm install -g tapdance` (wrong: see above) and a `worker login` line without
-`--accept-gateway-exec`; use the commands on this page instead. Need another join token later (a second
+`--public-url` only changes the instructions it prints: the worker's install step and a `worker login`
+line with `--gateway <public URL>` and `--accept-gateway-exec`. Need another join token later (a second
 laptop, or a lost one)?
 
 ```bash

@@ -51,7 +51,7 @@ open issues on the repository.
 node --version                    # v22.13.0 or later
 gh auth status                    # must show a logged-in account
 
-git clone https://github.com/tapdance-dev/tapdance.git ~/tapdance
+git clone https://github.com/mirzemehdi/tapdance.git ~/tapdance
 cd ~/tapdance
 git rev-parse --short HEAD        # write this down: it goes in every report
 corepack enable
@@ -60,7 +60,7 @@ pnpm build
 ```
 
 Use the repository URL the owner gave you if it differs; `packages/cli/package.json` lists
-`https://github.com/tapdance-dev/tapdance`.
+`https://github.com/mirzemehdi/tapdance`.
 
 Put the CLI on your `PATH` with a wrapper (aliases do not work in non-interactive shells):
 

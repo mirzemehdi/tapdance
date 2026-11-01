@@ -51,7 +51,9 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
       }
       if (call.method.endsWith("lease.allocate")) live.add(call.params.leaseId);
       if (call.method.endsWith("lease.release")) live.delete(call.params.leaseId);
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", result: { ok: true, echo: call } }));
+      // A screenshot answers with a downloadable artifact named after the lease, as agent-device does.
+      const artifact = (call.params as { command?: string }).command === "screenshot" ? { artifacts: [{ artifactId: `art-${call.params.leaseId.slice(0, 4)}` }] } : {};
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", result: { ok: true, echo: call, ...artifact } }));
       return;
     }
     if (lease && req.method === "GET" && !req.url!.includes("/stream")) {
@@ -68,7 +70,11 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
       return;
     }
     if (req.url?.startsWith("/v1/agent-device/upload")) {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ uploaded: body.length }));
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ uploaded: body.length, uploadId: `up-${req.headers["x-agent-device-lease-id"] ?? "none"}`.slice(0, 7) }));
+      return;
+    }
+    if (req.url?.startsWith("/v1/agent-device/artifacts/")) {
+      res.writeHead(200, { "content-type": "image/png" }).end("PNGDATA");
       return;
     }
     res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ leases: [{ id: A }, { id: B }], devices: [] }));
@@ -221,6 +227,16 @@ describe("worker guard vs a malicious remote client", () => {
     for (const command of ["install-from-source", "replay", "test", "batch", "metro", "push", "perf", "trace", "debug", "settings", "doctor"]) {
       expect((await t.rpc(t.alice.secret, "agent_device.command", { command, leaseId: A })).status, command).toBe(403);
     }
+    // Their device-only forms pass; host-touching forms do not.
+    const rpc = (command: string, positionals: string[], extra: Record<string, unknown> = {}) => t.rpc(t.alice.secret, "agent_device.command", { command, leaseId: A, positionals, ...extra });
+    expect((await rpc("perf", ["frames"])).status).toBe(200);
+    expect((await rpc("perf", ["memory", "sample"])).status).toBe(200);
+    expect((await rpc("perf", ["cpu", "profile", "start"], { flags: { leaseId: A, kind: "xctrace", out: "/Users/owner/x.trace" } })).status).toBe(403);
+    expect((await rpc("settings", ["appearance", "dark"])).status).toBe(200);
+    expect((await rpc("settings", ["permission", "grant", "screen-recording"])).status).toBe(403);
+    expect((await rpc("settings", ["shell-hack", "on"])).status).toBe(403);
+    expect((await rpc("audio", ["probe", "start", "5"])).status).toBe(200);
+    expect((await rpc("push", ["com.example.app", "/Users/owner/.ssh/id_rsa"])).status).toBe(403);
     expect((await t.exec(t.alice.secret, A, "xcodebuild", ["-scheme", "Evil", "build"])).status).toBe(403);
     expect((await t.call(t.alice.secret, "POST", "/v1/lease-requests", { platform: "ios" })).status).toBe(404);
     expect(GuardPolicySchema.safeParse({ profile: "approved-build" }).success).toBe(false);
@@ -376,4 +392,79 @@ describe("worker guard: hardening", () => {
     const policy = GuardPolicySchema.parse({});
     for (const body of bodies) expect(execOf(body, policy), JSON.stringify(body)).toMatchObject({ ok: true });
   });
+
+  it("13. uploads and artifacts belong to the client that created them (H-06)", async () => {
+    const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 1, tokenDays: 7 } });
+    await t.allocate(t.alice.secret, A);
+    await t.allocate(t.mallory.secret, B);
+    // Uploads must name one of the caller's own leases.
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" })).status).toBe(403);
+    expect((await t.call(t.mallory.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, { "x-agent-device-lease-id": A })).status).toBe(403);
+    const pre = await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, { "x-agent-device-lease-id": A });
+    const uploadId = ((await pre.json()) as { uploadId: string }).uploadId;
+    expect(uploadId).toBe("up-aaaa");
+    // Mallory cannot push bytes into, finalize or install Alice's upload.
+    expect((await t.call(t.mallory.secret, "PUT", `/v1/agent-device/upload/direct/${uploadId}`, "bytes", { "x-agent-device-lease-id": B })).status).toBe(403);
+    expect((await t.call(t.mallory.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, { "x-agent-device-lease-id": B })).status).toBe(403);
+    expect((await t.rpc(t.mallory.secret, "agent_device.command", { command: "install", leaseId: B, positionals: [uploadId] })).status).toBe(403);
+    // Alice can.
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, { "x-agent-device-lease-id": A })).status).toBe(200);
+    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "install", leaseId: A, positionals: [uploadId] })).status).toBe(200);
+    // Artifacts: only the client whose command produced one can download it; unknown ids are refused.
+    const shot = await t.rpc(t.alice.secret, "agent_device.command", { command: "screenshot", leaseId: A });
+    expect(JSON.stringify(await shot.json())).toContain("art-aaaa");
+    expect((await t.call(t.mallory.secret, "GET", "/v1/agent-device/artifacts/art-aaaa")).status).toBe(404);
+    expect((await t.call(t.mallory.secret, "GET", "/v1/agent-device/artifacts/guessed-id")).status).toBe(404);
+    const mine = await t.call(t.alice.secret, "GET", "/v1/agent-device/artifacts/art-aaaa");
+    expect(mine.status).toBe(200);
+    expect(await mine.text()).toBe("PNGDATA");
+  });
+
+  it("14. the device-command channel allows exactly the shapes Tapdance builds (#14)", async () => {
+    const { deviceCommands: dc } = await import("@tapdance/provider-simlock");
+    const all = GuardPolicySchema.parse({ allow: { notifications: true } });
+    const built = [
+      dc.android.startIntent({ action: "android.intent.action.VIEW", data: "https://example.com/a?b=c&d=e", component: "com.example/.Main", categories: ["android.intent.category.DEFAULT"], flags: "0x10000000", extras: { mode: "first run; rm -rf /", count: 3, fresh: true } }),
+      dc.android.density(420),
+      dc.android.density("reset"),
+      dc.android.appLocale("com.example", "de-DE"),
+      dc.android.timeZone("Europe/Berlin"),
+      dc.android.autoTimeZone(false),
+      dc.android.notifications(),
+      dc.android.shade(true),
+      dc.android.postNotification("Hi there", "Body with $(stuff)"),
+      dc.android.pushShared("/sdcard/Download/song.mid", "TVRoZA=="),
+      dc.android.pushSandbox("com.example", "files/seed.json", "e30="),
+      dc.android.pullShared("/sdcard/Download/export.pdf"),
+      dc.android.pullSandbox("com.example", "files/export.json"),
+      dc.android.mediaScan("/sdcard/Pictures/cat.png"),
+      dc.ios.statusBarTime("09:41"),
+      dc.ios.statusBarClear(),
+    ];
+    for (const cmd of built) expect(execOf(cmd, all), JSON.stringify(cmd.args)).toMatchObject({ ok: true });
+    // Injection attempts and paths outside the allowed areas.
+    const refused: Array<{ tool: string; args: string[]; stdin?: string }> = [
+      { tool: "adb", args: ["shell", "am", "start", "-W", "-a", "x; reboot"] },
+      { tool: "adb", args: ["shell", "am", "start", "-W", "-d", "'a'b'"] },
+      { tool: "adb", args: ["shell", "base64 -d > '/sdcard/../data/x'"], stdin: "e30=" },
+      { tool: "adb", args: ["shell", "base64 -d > '/data/local/tmp/x'"], stdin: "e30=" },
+      { tool: "adb", args: ["shell", "base64", "'/sdcard/Download/../../data/x'"] },
+      { tool: "adb", args: ["shell", "run-as", "com.example", "sh", "-c", "'base64 -d > ../../x'"], stdin: "e30=" },
+      { tool: "adb", args: ["shell", "run-as", "com.example", "sh", "-c", "'reboot'"] },
+      { tool: "adb", args: ["shell", "settings", "put", "global", "adb_enabled", "0"] },
+      { tool: "adb", args: ["shell", "dumpsys", "notification", "--noredact"], stdin: "x" },
+      { tool: "adb", args: ["push", "/Users/owner/.ssh/id_rsa", "/sdcard/Download/k"] },
+      { tool: "adb", args: ["pull", "/sdcard/Download/x", "/Users/owner/x"] },
+      { tool: "simctl", args: ["addmedia", "/Users/owner/Pictures/private.jpg"] },
+      { tool: "simctl", args: ["status_bar", "override", "--time", "9:41; rm"] },
+    ];
+    for (const cmd of refused) expect(execOf(cmd, all).ok, JSON.stringify(cmd.args)).toBe(false);
+    // Notifications stay off unless the owner turns them on; files can be turned off.
+    expect(execOf(dc.android.notifications(), GuardPolicySchema.parse({})).ok).toBe(false);
+    expect(execOf(dc.android.pushShared("/sdcard/Download/a.txt", "YQ=="), GuardPolicySchema.parse({ allow: { files: false } })).ok).toBe(false);
+    // The builders refuse what they cannot quote.
+    expect(() => dc.android.startIntent({ data: "it's" })).toThrow(/single quote/);
+    expect(() => dc.android.pushShared("/sdcard/Download/../x", "")).toThrow();
+  });
 });
+

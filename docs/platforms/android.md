@@ -3,10 +3,10 @@
 How to prepare a machine to serve Android emulators to Tapdance, which app files work, where logs come
 from, and what is not supported yet.
 
-> **Status: implemented, not yet run end to end.** The Android path uses the same code as the iOS
-> path that was tested on a real Mac, but the test Mac lacked the Android command-line tools, so no
-> Android emulator has been leased through Tapdance yet. See [STATUS.md](../../STATUS.md) (P-01,
-> D-01, D-02).
+> **Status: run end to end on macOS.** Android 34 emulators leased through Tapdance on a Mac: CLI and
+> MCP loops, a custom APK, a Google Play image, the browser viewer and Google's Android CLI
+> ([evidence](../testing/evidence/2026-11-01-android.md)). Not yet run on a Linux/KVM worker or through
+> a remote gateway. See [STATUS.md](../../STATUS.md) (P-01, D-01, D-02).
 
 ## Where Android emulators can run
 
@@ -132,7 +132,7 @@ Tapdance runs, not on a remote worker (E-04).
 
 ## Limitations
 
-- Not yet run end to end (see the status note at the top).
+- Linux/KVM workers and remote Android not yet run (see the status note at the top).
 - No uninstall, clear-data or explicit wipe command; a release wipes the emulator.
 - Physical Android phones: `device lease --physical` exists and Simlock can enroll USB phones, but this
   path is untested with Tapdance.

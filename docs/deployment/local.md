@@ -45,7 +45,7 @@ Details per platform: [Android](../platforms/android.md) and [iOS](../platforms/
 Tapdance is not published to npm yet. Install it from source:
 
 ```bash
-git clone https://github.com/tapdance-dev/tapdance.git
+git clone https://github.com/mirzemehdi/tapdance.git
 cd tapdance
 corepack enable
 pnpm install

@@ -30,7 +30,10 @@ import {
   type WaitResult,
   type AlertAction,
   type AlertResult,
+  type DeviceOperation,
+  type DeviceOperationResult,
 } from "@tapdance/core";
+import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError } from "./agent-device-errors.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type SimlockWorker } from "./http.js";
@@ -511,13 +514,15 @@ export class SimlockProvider implements DeviceProvider {
     }
   }
 
-  async launchApp(handle: LeaseHandle, appId: string, options: { relaunch?: boolean; url?: string } = {}): Promise<ActionResult> {
+  async launchApp(handle: LeaseHandle, appId: string, options: { relaunch?: boolean; url?: string; args?: string[] } = {}): Promise<ActionResult> {
     checkAppId(appId);
+    if (options.args?.some((a) => typeof a !== "string" || a.length > 1024 || a.includes("\u0000"))) throw new TapdanceError("USAGE", "Launch arguments must be short plain strings");
     try {
       await this.client(this.data(handle)).apps.open({
         app: appId,
         ...(options.url ? { url: options.url } : {}),
-        ...(options.relaunch ? { relaunch: true } : {}),
+        ...(options.relaunch || options.args?.length ? { relaunch: true } : {}),
+        ...(options.args?.length ? { launchArgs: options.args } : {}),
         ...this.selection(handle),
         ...this.scope(handle),
       } as never);
@@ -809,6 +814,20 @@ export class SimlockProvider implements DeviceProvider {
     const out = toLogResult("simulator faults and crash messages (last 10 min)", result.stdout, lines);
     out.lines.push("Note: full iOS crash reports (.ips) stay on the worker in ~/Library/Logs/DiagnosticReports.");
     return out;
+  }
+
+  async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
+    const data = this.data(handle);
+    return runDeviceOperation(
+      {
+        client: this.client(data),
+        scope: { ...this.selection(handle), ...this.scope(handle) },
+        exec: (command, timeoutMs) => this.http.exec(handle.leaseId, command.tool, command.args, timeoutMs, command.stdin),
+        local: this.connection.kind === "local",
+      },
+      handle,
+      operation,
+    );
   }
 
   async viewer(handle: LeaseHandle): Promise<ViewerEndpoints> {

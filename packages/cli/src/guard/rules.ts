@@ -1,3 +1,4 @@
+import { deviceCommands } from "@tapdance/sdk";
 import type { GuardPolicy } from "./policy.js";
 
 /**
@@ -84,6 +85,11 @@ const COMMANDS: Record<string, Exclude<keyof GuardPolicy["allow"], "physicalDevi
   "app-switcher": "interaction",
   alert: "interaction",
   orientation: "interaction",
+  clipboard: "interaction",
+  settings: "settings",
+  perf: "perf",
+  audio: "perf",
+  push: "notifications",
   screenshot: "screenshots",
   record: "recording",
   logs: "logs",
@@ -122,7 +128,44 @@ export function rpcOf(body: unknown, policy: GuardPolicy): Decision<RpcCall> {
   if (!area) return deny(`agent-device command "${command || "(none)"}" is not part of the device API`);
   if (area !== "session" && !policy.allow[area]) return deny(`"${command}" is disabled by the local policy (${area})`);
   if (!leaseId || !LEASE.test(leaseId)) return deny("commands must name their lease");
+  const narrowed = narrow(command, params);
+  if (narrowed) return deny(narrowed);
   return { ok: true, value: { method: "command", command, leaseId } };
+}
+
+/** Settings that change the leased device only. macOS host permissions (TCC) are never reachable. */
+const DEVICE_SETTINGS = new Set(["wifi", "bluetooth", "airplane", "mobile-data", "location", "animations", "appearance", "text-size", "faceid", "touchid", "fingerprint", "clear-app-state", "reset-keychain", "permission"]);
+const HOST_PERMISSIONS = new Set(["accessibility", "screen-recording", "input-monitoring"]);
+/** Flags that would make agent-device read or write a path on the worker. */
+const PATH_FLAGS = ["out", "tracePath", "template", "kind", "path", "file", "payloadFile"];
+
+/**
+ * Commands whose read-only or device-only forms are allowed, and whose other forms run tools or touch
+ * files on the worker (xctrace/simpleperf profiles, payload files, macOS permissions). Returns a reason
+ * to refuse, or undefined.
+ */
+function narrow(command: string, params: Record<string, unknown>): string | undefined {
+  const pos = Array.isArray(params["positionals"]) ? (params["positionals"] as unknown[]).map(String) : [];
+  const flags = params["flags"] && typeof params["flags"] === "object" ? (params["flags"] as Record<string, unknown>) : {};
+  const pathFlag = PATH_FLAGS.find((f) => flags[f] !== undefined || params[f] !== undefined);
+  switch (command) {
+    case "perf":
+      if (pathFlag) return `perf --${pathFlag} is not allowed: profiles write files on the worker`;
+      if (pos[0] === "frames" && pos.length === 1) return undefined;
+      if (pos[0] === "memory" && pos[1] === "sample" && pos.length === 2) return undefined;
+      return "only `perf frames` and `perf memory sample` are allowed";
+    case "audio":
+      return pos[0] === "probe" && ["start", "status", "stop"].includes(pos[1] ?? "") && pos.slice(2).every((x) => /^[0-9]{1,6}$/.test(x)) ? undefined : "only `audio probe start|status|stop` is allowed";
+    case "settings":
+      if (!DEVICE_SETTINGS.has(pos[0] ?? "")) return `setting "${pos[0] ?? ""}" is not allowed`;
+      if (pos[0] === "permission" && pos.some((x) => HOST_PERMISSIONS.has(x))) return "macOS host permissions cannot be changed remotely";
+      return pos.every((x) => /^[A-Za-z0-9_.:+-]{1,128}$/.test(x)) ? undefined : "setting arguments not allowed";
+    case "push":
+      // A JSON payload only: a path would make agent-device read a file on the worker.
+      return pos.length === 2 && APP_ID.test(pos[0]!) && pos[1]!.trim().startsWith("{") && pathFlag === undefined ? undefined : "push needs an app id and an inline JSON payload";
+    default:
+      return undefined;
+  }
 }
 
 // Output paths in screenshot/record requests are the *client's* paths: agent-device's daemon treats a
@@ -136,37 +179,104 @@ const DURATION = /^[1-9][0-9]?m$/;
 /** The only log predicates Tapdance generates (see provider-simlock), with the app id slot validated. */
 const PREDICATE = /^[A-Za-z0-9_.()" =[\]-]+$/;
 
+type Area = Exclude<keyof GuardPolicy["allow"], "physicalDevices">;
+type ExecValue = { tool: "adb" | "simctl"; args: string[]; stdin?: string };
+
+const { APP_ID: DEVICE_APP_ID, QUOTED, PLAIN, SHARED_PATH, SANDBOX_PATH, LOCALE, TIME_ZONE, CLOCK, INTENT_FLAG, EXTRA_KEY, MAX_PUSH_BYTES } = deviceCommands;
+const value = (v: string | undefined) => v !== undefined && (PLAIN.test(v) || QUOTED.test(v));
+const unquote = (v: string) => (v.startsWith("'") ? v.slice(1, -1) : v);
+
+/** `am start -W` followed only by known flags with validated values (see device-commands.ts). */
+function intentArgs(rest: string[]): boolean {
+  if (rest.length === 0) return false;
+  for (let i = 0; i < rest.length; ) {
+    const flag = rest[i]!;
+    if (flag === "-a" || flag === "-d" || flag === "-c") {
+      if (!value(rest[i + 1])) return false;
+      i += 2;
+    } else if (flag === "-n") {
+      if (!/^[A-Za-z][A-Za-z0-9_.]*\/[A-Za-z0-9_.$]+$/.test(rest[i + 1] ?? "")) return false;
+      i += 2;
+    } else if (flag === "-f") {
+      if (!INTENT_FLAG.test(rest[i + 1] ?? "")) return false;
+      i += 2;
+    } else if (flag === "--es" || flag === "--ez" || flag === "--ei") {
+      if (!EXTRA_KEY.test(rest[i + 1] ?? "")) return false;
+      const v = rest[i + 2] ?? "";
+      if (flag === "--ez" ? !/^(true|false)$/.test(v) : flag === "--ei" ? !/^-?[0-9]{1,10}$/.test(v) : !value(v)) return false;
+      i += 3;
+    } else return false;
+  }
+  return true;
+}
+
 /**
- * Exact argument lists the guard lets through to Simlock's exec. This is what makes a lease
- * "device-only": no spawn of arbitrary programs, no file transfer, no shell.
+ * Exact argument lists the guard lets through to Simlock's exec, each under a policy switch. This is
+ * what makes a lease "device-only": no spawn of arbitrary programs, no host paths, no host shell.
+ * Simlock runs adb/simctl with argument arrays and inserts the leased device itself; strings that
+ * reach the Android device's own shell are limited to validated, single-quoted values.
  */
-export function execOf(body: unknown, policy: GuardPolicy): Decision<{ tool: "adb" | "simctl"; args: string[] }> {
+export function execOf(body: unknown, policy: GuardPolicy): Decision<ExecValue> {
   if (body === null || typeof body !== "object") return deny("malformed exec");
   const { tool, args, stdin } = body as { tool?: unknown; args?: unknown; stdin?: unknown };
-  if (stdin !== undefined) return deny("stdin is not allowed");
   if ((tool !== "adb" && tool !== "simctl") || !Array.isArray(args) || !args.every((a) => typeof a === "string")) return deny("exec needs tool adb|simctl and string args");
+  if (stdin !== undefined && typeof stdin !== "string") return deny("stdin must be a string");
   const a = args as string[];
-  const ok = (value: { tool: "adb" | "simctl"; args: string[] }) => ({ ok: true as const, value });
+  const gate = (area: Area, v: ExecValue): Decision<ExecValue> => (policy.allow[area] ? { ok: true, value: v } : deny(`${area} is disabled by the local policy`));
+  const plain = (area: Area) => (stdin !== undefined ? deny("stdin is not allowed for this command") : gate(area, { tool: tool as "adb" | "simctl", args: a }));
   if (tool === "simctl") {
-    if (a.length === 2 && a[0] === "terminate" && APP_ID.test(a[1]!)) return policy.allow.interaction ? ok({ tool, args: a }) : deny("interaction disabled");
+    if (a.length === 2 && a[0] === "terminate" && APP_ID.test(a[1]!)) return plain("interaction");
     if (a[0] === "spawn" && a[1] === "log" && a[2] === "show") {
-      if (!policy.allow.logs) return deny("logs disabled by the local policy");
       const rest = a.slice(3);
       const allowed: string[][] = [];
       for (let i = 0; i < rest.length; i += 2) allowed.push([rest[i]!, rest[i + 1] ?? ""]);
-      const valid = allowed.every(([flag, value]) =>
-        flag === "--last" ? DURATION.test(value!) : flag === "--style" ? value === "compact" : flag === "--predicate" ? PREDICATE.test(value!) && value!.length < 600 : false,
+      const valid = allowed.every(([flag, v]) =>
+        flag === "--last" ? DURATION.test(v!) : flag === "--style" ? v === "compact" : flag === "--predicate" ? PREDICATE.test(v!) && v!.length < 600 : false,
       );
-      return valid ? ok({ tool, args: a }) : deny("log show arguments not allowed");
+      return valid ? plain("logs") : deny("log show arguments not allowed");
     }
+    if (a.length === 4 && a[0] === "status_bar" && a[1] === "override" && a[2] === "--time" && CLOCK.test(a[3]!)) return plain("settings");
+    if (a.length === 2 && a[0] === "status_bar" && a[1] === "clear") return plain("settings");
     return deny(`simctl ${String(a[0] ?? "")} is not part of the device API`);
   }
-  if (a.length === 4 && a[0] === "shell" && a[1] === "am" && a[2] === "force-stop" && APP_ID.test(a[3]!)) return policy.allow.interaction ? ok({ tool, args: a }) : deny("interaction disabled");
-  if (a.length === 3 && a[0] === "shell" && a[1] === "pidof" && APP_ID.test(a[2]!)) return ok({ tool, args: a });
+  if (a.length === 4 && a[0] === "shell" && a[1] === "am" && a[2] === "force-stop" && APP_ID.test(a[3]!)) return plain("interaction");
+  if (a.length === 3 && a[0] === "shell" && a[1] === "pidof" && APP_ID.test(a[2]!)) return stdin === undefined ? { ok: true, value: { tool, args: a } } : deny("stdin is not allowed for this command");
   if (a[0] === "logcat") {
-    if (!policy.allow.logs) return deny("logs disabled by the local policy");
     const okFlags = a.slice(1).every((x, i, arr) => ["-d", "-v", "threadtime", "-t", "-b", "crash"].includes(x) || /^--pid=\d+$/.test(x) || (arr[i - 1] === "-t" && LINES.test(x)));
-    return okFlags ? ok({ tool, args: a }) : deny("logcat arguments not allowed");
+    return okFlags ? plain("logs") : deny("logcat arguments not allowed");
   }
-  return deny(`adb ${String(a[0] ?? "")} is not part of the device API`);
+  if (a[0] !== "shell") return deny(`adb ${String(a[0] ?? "")} is not part of the device API`);
+  const s = a.slice(1);
+  // Launch with an explicit intent.
+  if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
+  // Settings.
+  if (s.length === 3 && s[0] === "wm" && s[1] === "density" && (s[2] === "reset" || /^[0-9]{2,3}$/.test(s[2]!))) return plain("settings");
+  if (s.length === 6 && s[0] === "cmd" && s[1] === "locale" && s[2] === "set-app-locales" && DEVICE_APP_ID.test(s[3]!) && s[4] === "--locales" && LOCALE.test(s[5]!)) return plain("settings");
+  if (s.length === 5 && s[0] === "settings" && s[1] === "put" && s[2] === "global" && s[3] === "auto_time_zone" && (s[4] === "0" || s[4] === "1")) return plain("settings");
+  if (s.length === 6 && s[0] === "service" && s[1] === "call" && s[2] === "alarm" && s[3] === "3" && s[4] === "s16" && TIME_ZONE.test(s[5]!)) return plain("settings");
+  // Notifications.
+  if (s.length === 3 && s[0] === "dumpsys" && s[1] === "notification" && s[2] === "--noredact") return plain("notifications");
+  if (s.length === 3 && s[0] === "cmd" && s[1] === "statusbar" && (s[2] === "expand-notifications" || s[2] === "collapse")) return plain("interaction");
+  if (s.length === 7 && s[0] === "cmd" && s[1] === "notification" && s[2] === "post" && s[3] === "-t" && value(s[4]) && s[5] === "tapdance" && value(s[6])) return plain("notifications");
+  // Files: shared storage and a debuggable app's own sandbox, contents base64 on stdin or stdout.
+  const pushShared = s.length === 1 ? /^base64 -d > '(.+)'$/.exec(s[0]!) : null;
+  if (pushShared && SHARED_PATH.test(pushShared[1]!)) return withFile(stdin, a, policy);
+  if (s.length === 5 && s[0] === "run-as" && DEVICE_APP_ID.test(s[1]!) && s[2] === "sh" && s[3] === "-c") {
+    const m = /^'base64 -d > (.+)'$/.exec(s[4]!);
+    if (m && SANDBOX_PATH.test(m[1]!)) return withFile(stdin, a, policy);
+  }
+  if (s.length === 2 && s[0] === "base64" && QUOTED.test(s[1]!) && SHARED_PATH.test(unquote(s[1]!))) return plain("files");
+  if (s.length === 4 && s[0] === "run-as" && DEVICE_APP_ID.test(s[1]!) && s[2] === "base64" && SANDBOX_PATH.test(s[3]!)) return plain("files");
+  if (s.length === 6 && s[0] === "am" && s[1] === "broadcast" && s[2] === "-a" && s[3] === "android.intent.action.MEDIA_SCANNER_SCAN_FILE" && s[4] === "-d") {
+    const m = /^'file:\/\/(.+)'$/.exec(s[5]!);
+    if (m && SHARED_PATH.test(m[1]!)) return plain("files");
+  }
+  return deny(`adb shell ${String(s[0] ?? "")} is not part of the device API`);
+}
+
+function withFile(stdin: string | undefined, args: string[], policy: GuardPolicy): Decision<ExecValue> {
+  if (!policy.allow.files) return deny("files is disabled by the local policy");
+  if (stdin === undefined || !/^[A-Za-z0-9+/=\s]*$/.test(stdin)) return deny("file contents must be base64 on stdin");
+  if ((stdin.length * 3) / 4 > Math.min(MAX_PUSH_BYTES, policy.limits.maxUploadMB * 1024 * 1024)) return deny("file too large");
+  return { ok: true, value: { tool: "adb", args, stdin } };
 }

@@ -35,6 +35,19 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   const owners = new Map<string, string>();
   /** Lease ids whose allocate is still running: reserved in `owners`, not yet known to Simlock. */
   const allocating = new Set<string>();
+  /** agent-device upload id → guard token id, learned from upload replies. */
+  const uploads = new Map<string, string>();
+  /** agent-device artifact id → guard token id, learned from the replies to that token's commands. */
+  const artifacts = new Map<string, string>();
+  /** Records every id of `key` ("uploadId", "artifactId") in a reply as belonging to `owner`. */
+  const learnIds = (text: string, key: string, into: Map<string, string>, owner: string) => {
+    for (const m of text.matchAll(new RegExp(`"${key}"\\s*:\\s*"([A-Za-z0-9_.-]{1,200})"`, "g"))) if (!into.has(m[1]!)) into.set(m[1]!, owner);
+  };
+  /** An upload id named by `text` (a request body or path) that belongs to another client. */
+  const foreignUpload = (text: string, owner: string): string | undefined => {
+    for (const [id, who] of uploads) if (who !== owner && text.includes(id)) return id;
+    return undefined;
+  };
   const upstreamHeaders = { Authorization: `Bearer ${upstream.token}` };
 
   const send = (res: ServerResponse, status: number, code: string, message: string) => {
@@ -59,7 +72,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     return Buffer.concat(chunks);
   };
 
-  const forward = async (req: IncomingMessage, res: ServerResponse, body?: Buffer | Readable, rewrite?: (data: unknown) => unknown) => {
+  const forward = async (req: IncomingMessage, res: ServerResponse, body?: Buffer | Readable, rewrite?: (data: unknown) => unknown, observe?: (text: string) => void) => {
     const headers: Record<string, string> = { ...upstreamHeaders };
     for (const [h, v] of Object.entries(req.headers)) {
       if (typeof v !== "string") continue;
@@ -83,14 +96,31 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     });
     if (rewrite && (answer.headers.get("content-type") ?? "").includes("json")) {
       const data = rewrite(await answer.json());
-      res.writeHead(answer.status, { ...passHeaders, "content-type": "application/json" }).end(JSON.stringify(data));
+      const text = JSON.stringify(data);
+      observe?.(text);
+      res.writeHead(answer.status, { ...passHeaders, "content-type": "application/json" }).end(text);
       return answer;
     }
     res.writeHead(answer.status, passHeaders);
     if (answer.body) {
       const stream = Readable.fromWeb(answer.body as never);
       req.on("close", () => stream.destroy());
+      if (observe) {
+        // Streamed replies (progress events, then the result) are scanned as they pass; a short tail
+        // carries over so an id split across two chunks is still seen.
+        let tail = "";
+        stream.on("data", (chunk: Buffer) => {
+          const text = tail + chunk.toString("utf8");
+          observe(text);
+          tail = text.slice(-256);
+        });
+      }
       stream.pipe(res);
+      await new Promise<void>((resolve) => {
+        stream.on("end", resolve);
+        stream.on("close", resolve);
+        stream.on("error", () => resolve());
+      });
     } else res.end();
     return answer;
   };
@@ -180,7 +210,8 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             return send(res, 403, "FORBIDDEN", `${r.action} is disabled by the worker's local policy`);
           }
           if (r.action === "exec") {
-            const body = await readBody(req, 64 * 1024);
+            // File pushes carry base64 contents on stdin; everything else is a short argument list.
+            const body = await readBody(req, policy.allow.files ? Math.ceil(Math.min(24, policy.limits.maxUploadMB) * 1024 * 1024 * 1.4) + 64 * 1024 : 64 * 1024);
             let parsed: unknown;
             try {
               parsed = body ? JSON.parse(body.toString("utf8")) : undefined;
@@ -271,8 +302,14 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             const cap = policy.limits.maxLeaseMinutes * 60_000;
             if (typeof p["ttlMs"] !== "number" || p["ttlMs"] > cap) p["ttlMs"] = cap;
           }
+          const foreign = foreignUpload(body!.toString("utf8"), token.id);
+          if (foreign) {
+            await decide("deny", { reason: "upload belongs to another client", ...(call.command ? { command: call.command } : {}), leaseId: call.leaseId! });
+            return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours");
+          }
           await decide("allow", { command: call.command ?? call.method, ...(call.leaseId ? { leaseId: call.leaseId } : {}) });
-          await forward(req, res, Buffer.from(JSON.stringify(parsed)));
+          const owner_ = token.id;
+          await forward(req, res, Buffer.from(JSON.stringify(parsed)), undefined, (text) => learnIds(text, "artifactId", artifacts, owner_));
           // `close` ends the session; ownership lasts until the lease is released or expires.
           if (call.method === "lease.release") owners.delete(call.leaseId!);
           return;
@@ -288,6 +325,31 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             await decide("deny", { reason: "upload too large" });
             return send(res, 413, "TOO_LARGE", `Uploads are limited to ${policy.limits.maxUploadMB} MB on this worker`);
           }
+          // Uploads name their lease in a header; it must be this client's, and an upload id in the path
+          // or body must be one this client started.
+          const uploadLease = req.headers["x-agent-device-lease-id"];
+          if (typeof uploadLease !== "string" || owners.get(uploadLease) !== token.id) {
+            await decide("deny", { reason: "upload without one of this token's leases" });
+            return send(res, 403, "FORBIDDEN", "refused: uploads must name one of your leases");
+          }
+          const owner_ = token.id;
+          const directId = /\/upload\/direct\/([A-Za-z0-9_-]+)$/.exec(r.path)?.[1];
+          if (directId && uploads.get(directId) !== token.id) {
+            await decide("deny", { reason: "upload belongs to another client", leaseId: uploadLease });
+            return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours");
+          }
+          if (r.path.endsWith("/finalize")) {
+            const body = await readBody(req, 64 * 1024);
+            const text = body?.toString("utf8") ?? "";
+            const named = /"uploadId"\s*:\s*"([A-Za-z0-9_.-]+)"/.exec(text)?.[1];
+            if (!named || uploads.get(named) !== token.id) {
+              await decide("deny", { reason: "finalize of an upload that is not this client's", leaseId: uploadLease });
+              return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours");
+            }
+            await decide("allow", { command: "upload finalize", leaseId: uploadLease });
+            await forward(req, res, body, undefined, (t) => learnIds(t, "artifactId", artifacts, owner_));
+            return;
+          }
           let seen = 0;
           const counted = new Readable({ read() {} });
           req.on("data", (c: Buffer) => {
@@ -298,14 +360,20 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             } else counted.push(c);
           });
           req.on("end", () => counted.push(null));
-          await decide("allow", { command: "upload" });
-          await forward(req, res, counted);
+          await decide("allow", { command: "upload", leaseId: uploadLease });
+          await forward(req, res, counted, undefined, (t) => learnIds(t, "uploadId", uploads, owner_));
           return;
         }
-        case "artifact":
+        case "artifact": {
+          const id = decodeURIComponent(r.path.split("/").pop() ?? "");
+          if (artifacts.get(id) !== token.id) {
+            await decide("deny", { reason: "artifact belongs to another client or is unknown" });
+            return send(res, 404, "NOT_FOUND", "No such artifact for this token");
+          }
           await decide("allow", { command: "artifact download" });
           await forward(req, res);
           return;
+        }
       }
     } catch (error) {
       options.log?.(`guard: ${(error as Error).message}`);

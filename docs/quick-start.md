@@ -6,9 +6,9 @@ on this computer (mode A, `provider: "local"`).
 
 The iOS steps below are the path that has been run for real, on a MacBook Pro M1 Pro with Xcode 26.5
 and an iPhone 16 / iOS 18.5 simulator ([evidence](testing/evidence/2026-11-01-local-ios.md)). Android
-uses the same commands but **has not been run end to end yet** (see [STATUS.md](../STATUS.md), D-01).
-Installing your own simulator `.app` has been run locally with a small demo app (`examples/ios-demo`);
-installing an Android APK has not (F-01).
+uses the same commands and has run on the same Mac with Android 34 emulators, a custom APK
+(`examples/android-demo`) and a Google Play image ([evidence](testing/evidence/2026-11-01-android.md)).
+Not yet run: Android on a Linux/KVM worker and Android through a remote gateway (D-02, M-02).
 
 Before you start, [install Tapdance](installation.md) and the platform tools (Xcode for iOS; the Android
 SDK with command-line tools for Android).
@@ -115,7 +115,7 @@ tapdance app launch com.example.myapp --relaunch        # kill and start again
 tapdance app launch com.example.myapp --url myapp://settings   # open a deep link
 ```
 
-On Android (untested), install an `.apk`, for example `app/build/outputs/apk/debug/app-debug.apk`, and
+On Android, install an `.apk`, for example `app/build/outputs/apk/debug/app-debug.apk`, and
 launch it by package name. An `.aab` is refused.
 
 ## 7. Inspect and drive the UI
@@ -228,8 +228,9 @@ See [mcp.md](mcp.md) for the tools and the recommended workflow, and the setup p
 [Claude Code](agents/claude-code.md), [Codex](agents/codex.md) and [Cursor](agents/cursor.md).
 
 The MCP server has been verified with a scripted MCP client on a real iOS simulator; it has not yet
-been run from inside Claude Code, Codex or Cursor, and Android has not run on a device (see
-[STATUS.md](../STATUS.md) P-01).
+been run from inside Claude Code, Codex or Cursor. It has run on Android 34 emulators on a Mac
+([evidence](testing/evidence/2026-11-01-android.md)), not yet on a Linux worker (see
+[STATUS.md](../STATUS.md) P-01, D-02).
 
 ## Where next
 

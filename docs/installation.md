@@ -52,7 +52,7 @@ installs the wrong program today. The CLI package is named `@tapdance/cli` (the 
 You need Node.js 22.13+ and pnpm 10 (the repository pins `pnpm@10.20.0`; `corepack enable` provides it).
 
 ```bash
-git clone https://github.com/tapdance-dev/tapdance.git   # the repository URL declared in package.json
+git clone https://github.com/mirzemehdi/tapdance.git   # the repository URL declared in package.json
 cd tapdance
 corepack enable
 pnpm install

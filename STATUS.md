@@ -47,7 +47,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 
 | ID | | Notes |
 | --- | --- | --- |
-| P-01 | 🟡 | iOS loop ✅ on a real simulator ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android loop ✅ on real emulators ([evidence](docs/testing/evidence/2026-11-01-android.md)). No recorded run from a real agent (Claude Code/Codex/Cursor) yet; Android not run. |
+| P-01 | 🟡 | iOS loop ✅ on a real simulator ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android loop ✅ on real emulators ([evidence](docs/testing/evidence/2026-11-01-android.md)). No recorded run from a real agent (Claude Code/Codex/Cursor) yet; Linux/KVM and remote Android not run. |
 | P-02 | ✅ | CLI and MCP verified for real; SDK (`@tapdance/sdk`) is what both use. |
 | P-03 | 🟡 | Local ✅. Self-hosted implemented, not run across machines. |
 | P-04 | ✅ | No billing, dashboard or hosted fleet code. |

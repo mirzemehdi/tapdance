@@ -45,6 +45,20 @@ export interface ToolSpec {
 
 export const TOOLS: ToolSpec[] = [
   {
+    name: "bundletool",
+    description: "Google's bundletool: Android App Bundles (.aab) to APKs; install_app uses it to turn an .aab into a universal APK",
+    executable: "bundletool",
+    homepage: "https://github.com/google/bundletool",
+    license: "Apache-2.0 (Google)",
+    os: ["darwin", "linux", "win32"],
+    location: "control",
+    versionArgs: ["version"],
+    discovery: ["bundletool help", "bundletool help build-apks"],
+    install: "brew install bundletool  (or the jar from https://github.com/google/bundletool/releases, then set tools.paths.bundletool)",
+    env: ["JAVA_HOME", "ANDROID_*"],
+    notes: "install_app converts an .aab with `build-apks --mode=universal`, signed with the Android debug keystore, before uploading. Direct runs are reachable for agents only with tools.allowMutation (no read-only mode).",
+  },
+  {
     name: "asc",
     description: "Official App Store Connect CLI: apps, TestFlight, builds, metadata, screenshots, subscriptions, analytics, signing, Xcode Cloud and more",
     executable: "asc",

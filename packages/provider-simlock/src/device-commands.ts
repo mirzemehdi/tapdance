@@ -1,0 +1,132 @@
+import { TapdanceError, type IntentSpec } from "@tapdance/core";
+
+/**
+ * Device-level commands Tapdance sends through Simlock's lease exec (`POST /v1/leases/{id}/exec`).
+ * Simlock runs `adb`/`simctl` on the machine that owns the leased device and puts that device into
+ * the command itself, so these reach a remote emulator or simulator the same way as a local one.
+ *
+ * Every builder here produces one fixed shape. The worker guard (packages/cli/src/guard/rules.ts)
+ * accepts exactly these shapes and nothing else, and a unit test checks that each builder's output
+ * passes the guard. Values that reach the Android device's shell are validated and single-quoted;
+ * they never reach a shell on the worker host (adb and simctl are spawned with argument arrays).
+ */
+export interface DeviceCommand {
+  tool: "adb" | "simctl";
+  args: string[];
+  /** One-shot stdin (file contents, base64). */
+  stdin?: string;
+}
+
+export const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
+/** A value safe to pass to the Android device shell without quotes. */
+export const PLAIN = /^[A-Za-z0-9_.:/=+@,%-]{1,512}$/;
+/** A value single-quoted for the Android device shell: no quote, newline or NUL inside. */
+export const QUOTED = /^'[^'\n\r\0]{0,2048}'$/;
+export const SHARED_DIRS = ["Download", "Pictures", "DCIM", "Documents", "Movies", "Music"] as const;
+export const SHARED_PATH = /^\/sdcard\/(Download|Pictures|DCIM|Documents|Movies|Music)\/(?!\.{1,2}$)[A-Za-z0-9 _.()+-]{1,128}$/;
+export const SANDBOX_PATH = /^(files|cache|databases|shared_prefs|no_backup)\/(?!\.{1,2}$)[A-Za-z0-9 _.()+-]{1,128}$/;
+export const LOCALE = /^[a-zA-Z]{2,3}(-[A-Za-z0-9]{2,8}){0,3}$/;
+export const TIME_ZONE = /^[A-Za-z]+(\/[A-Za-z0-9_+-]+){0,2}$/;
+export const CLOCK = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
+export const INTENT_FLAG = /^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$/;
+export const EXTRA_KEY = /^[A-Za-z][A-Za-z0-9_.]{0,127}$/;
+/** Files pushed through exec travel as base64 on stdin; keep them small enough for one request. */
+export const MAX_PUSH_BYTES = 24 * 1024 * 1024;
+
+const usage = (message: string, hint?: string) => new TapdanceError("USAGE", message, hint ? { hint } : {});
+
+/** Quotes a value for the Android device shell, refusing what cannot be quoted safely. */
+export function quote(value: string, what: string): string {
+  if (PLAIN.test(value)) return value;
+  const q = `'${value}'`;
+  if (!QUOTED.test(q)) throw usage(`${what} cannot contain a single quote, a newline or a NUL`);
+  return q;
+}
+
+function app(id: string): string {
+  if (!APP_ID.test(id)) throw usage(`"${id}" is not a valid app id`);
+  return id;
+}
+
+export type { IntentSpec };
+
+export const android = {
+  /** `am start -W` with an explicit intent; every field validated, values quoted for the device shell. */
+  startIntent(intent: IntentSpec): DeviceCommand {
+    const args = ["shell", "am", "start", "-W"];
+    if (intent.action) args.push("-a", quote(intent.action, "intent action"));
+    if (intent.data) args.push("-d", quote(intent.data, "intent data"));
+    if (intent.component) {
+      if (!/^[A-Za-z][A-Za-z0-9_.]*\/[A-Za-z0-9_.$]+$/.test(intent.component)) throw usage("component must look like com.example/.MainActivity");
+      args.push("-n", intent.component);
+    }
+    for (const c of intent.categories ?? []) args.push("-c", quote(c, "intent category"));
+    if (intent.flags) {
+      if (!INTENT_FLAG.test(intent.flags)) throw usage("flags must be a number such as 0x10000000");
+      args.push("-f", intent.flags);
+    }
+    for (const [key, value] of Object.entries(intent.extras ?? {})) {
+      if (!EXTRA_KEY.test(key)) throw usage(`extra key "${key}" is not allowed`);
+      if (typeof value === "boolean") args.push("--ez", key, String(value));
+      else if (typeof value === "number" && Number.isInteger(value)) args.push("--ei", key, String(value));
+      else args.push("--es", key, quote(String(value), `extra ${key}`));
+    }
+    if (args.length === 4) throw usage("An intent needs at least an action, data or component");
+    return { tool: "adb", args };
+  },
+  density(value: number | "reset"): DeviceCommand {
+    if (value !== "reset" && !(Number.isInteger(value) && value >= 72 && value <= 960)) throw usage("density must be 72-960 dpi or reset");
+    return { tool: "adb", args: ["shell", "wm", "density", String(value)] };
+  },
+  appLocale(appId: string, locale: string): DeviceCommand {
+    if (!LOCALE.test(locale)) throw usage(`"${locale}" is not a locale tag such as de-DE`);
+    return { tool: "adb", args: ["shell", "cmd", "locale", "set-app-locales", app(appId), "--locales", locale] };
+  },
+  /** Automatic time zone detection would immediately override a manual zone. */
+  autoTimeZone(on: boolean): DeviceCommand {
+    return { tool: "adb", args: ["shell", "settings", "put", "global", "auto_time_zone", on ? "1" : "0"] };
+  },
+  timeZone(zone: string): DeviceCommand {
+    if (!TIME_ZONE.test(zone)) throw usage(`"${zone}" is not a time zone such as Europe/Berlin`);
+    return { tool: "adb", args: ["shell", "service", "call", "alarm", "3", "s16", zone] };
+  },
+  notifications(): DeviceCommand {
+    return { tool: "adb", args: ["shell", "dumpsys", "notification", "--noredact"] };
+  },
+  shade(open: boolean): DeviceCommand {
+    return { tool: "adb", args: ["shell", "cmd", "statusbar", open ? "expand-notifications" : "collapse"] };
+  },
+  postNotification(title: string, text: string): DeviceCommand {
+    return { tool: "adb", args: ["shell", "cmd", "notification", "post", "-t", quote(title, "title"), "tapdance", quote(text, "text")] };
+  },
+  pushShared(path: string, base64: string): DeviceCommand {
+    if (!SHARED_PATH.test(path)) throw usage(`Files go to /sdcard/{${SHARED_DIRS.join(",")}}/<name>; "${path}" is not allowed`);
+    return { tool: "adb", args: ["shell", `base64 -d > '${path}'`], stdin: base64 };
+  },
+  pushSandbox(appId: string, relative: string, base64: string): DeviceCommand {
+    if (!SANDBOX_PATH.test(relative)) throw usage(`App files go to files/, cache/, databases/, shared_prefs/ or no_backup/; "${relative}" is not allowed`);
+    return { tool: "adb", args: ["shell", "run-as", app(appId), "sh", "-c", `'base64 -d > ${relative}'`], stdin: base64 };
+  },
+  pullShared(path: string): DeviceCommand {
+    if (!SHARED_PATH.test(path)) throw usage(`Only files in /sdcard/{${SHARED_DIRS.join(",")}}/ can be pulled; "${path}" is not allowed`);
+    return { tool: "adb", args: ["shell", "base64", `'${path}'`] };
+  },
+  pullSandbox(appId: string, relative: string): DeviceCommand {
+    if (!SANDBOX_PATH.test(relative)) throw usage(`"${relative}" is not under files/, cache/, databases/, shared_prefs/ or no_backup/`);
+    return { tool: "adb", args: ["shell", "run-as", app(appId), "base64", relative] };
+  },
+  mediaScan(path: string): DeviceCommand {
+    if (!SHARED_PATH.test(path)) throw usage(`"${path}" is not in shared storage`);
+    return { tool: "adb", args: ["shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", `'file://${path}'`] };
+  },
+};
+
+export const ios = {
+  statusBarTime(time: string): DeviceCommand {
+    if (!CLOCK.test(time)) throw usage("time must be HH:MM");
+    return { tool: "simctl", args: ["status_bar", "override", "--time", time] };
+  },
+  statusBarClear(): DeviceCommand {
+    return { tool: "simctl", args: ["status_bar", "clear"] };
+  },
+};

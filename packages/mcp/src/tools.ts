@@ -4,7 +4,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { TOOL_REGISTRY, TapdanceError, parseTarget, redactObject, toTapdanceError, toolStatus, type ArtifactRef, type ElementTarget, type Tapdance } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, TOOL_REGISTRY, TapdanceError, parseTarget, redactObject, toTapdanceError, toolStatus, type ArtifactRef, type DeviceSettingName, type ElementTarget, type IntentSpec, type Tapdance } from "@tapdance/sdk";
 
 /**
  * Tool definitions, kept apart from transport so tests can check every schema and handler without
@@ -209,7 +209,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "install_app",
     title: "Install an app",
     description:
-      "Upload and install an app onto the leased device: an .apk for Android, a simulator .app bundle for iOS (.ipa and .aab are refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps.",
+      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (.ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps.",
     input: z.object({ path: z.string().min(1).max(4096).describe("Absolute or working-directory-relative path to the .apk or .app."), app_id: appId.optional() }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: async (t, a) => json({ installed: await t.installApp(confinePath(a["path"] as string), a["app_id"] as string | undefined), next: "launch_app" }),
@@ -217,11 +217,40 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: "launch_app",
     title: "Launch an app",
-    description: "Start (or bring to front) an installed app by package/bundle id, optionally opening a deep link.",
-    input: z.object({ app_id: appId, relaunch: z.boolean().optional().describe("Kill and restart for a clean launch."), url: z.string().url().max(2048).optional().describe("Deep link to open in the app.") }).strict(),
+    description:
+      "Start (or bring to front) an installed app by package/bundle id, optionally opening a deep link, with launch arguments (args, implies relaunch; iOS: e.g. [\"-AppleLanguages\", \"(de)\"]), or on Android with an explicit intent (action, data, component, categories, flags, extras).",
+    input: z
+      .object({
+        app_id: appId,
+        relaunch: z.boolean().optional().describe("Kill and restart for a clean launch."),
+        url: z.string().url().max(2048).optional().describe("Deep link to open in the app."),
+        args: z.array(z.string().max(1024)).max(32).optional().describe("Launch arguments passed to the app process."),
+        intent: z
+          .object({
+            action: z.string().max(256).optional(),
+            data: z.string().max(2048).optional(),
+            component: z.string().max(256).optional().describe("com.example/.MainActivity"),
+            categories: z.array(z.string().max(256)).max(8).optional(),
+            flags: z.string().max(12).optional().describe("e.g. 0x10000000"),
+            extras: z.record(z.string().max(128), z.union([z.string().max(2048), z.number(), z.boolean()])).optional(),
+          })
+          .strict()
+          .optional()
+          .describe("Android only: start this intent instead of the launcher activity."),
+      })
+      .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    run: async (t, a) =>
-      json({ ...(await t.launchApp(a["app_id"] as string, { ...(a["relaunch"] ? { relaunch: true } : {}), ...(a["url"] ? { url: a["url"] as string } : {}) })), next: "inspect_screen" }),
+    run: async (t, a) => {
+      if (a["intent"]) return json({ ...(await t.device({ kind: "intent", intent: a["intent"] as IntentSpec })), next: "inspect_screen" });
+      return json({
+        ...(await t.launchApp(a["app_id"] as string, {
+          ...(a["relaunch"] ? { relaunch: true } : {}),
+          ...(a["url"] ? { url: a["url"] as string } : {}),
+          ...(a["args"] ? { args: a["args"] as string[] } : {}),
+        })),
+        next: "inspect_screen",
+      });
+    },
   },
   {
     name: "stop_app",
@@ -230,6 +259,154 @@ export const TOOLS: ToolDefinition[] = [
     input: z.object({ app_id: appId }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: async (t, a) => json(await t.stopApp(a["app_id"] as string)),
+  },
+  {
+    name: "uninstall_app",
+    title: "Uninstall an app",
+    description: "Remove an installed app from the leased device (for a fresh-install test, install_app again afterwards). Succeeds with wasInstalled: false when it was not installed.",
+    input: z.object({ app_id: appId }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    run: async (t, a) => json(await t.device({ kind: "uninstall", appId: a["app_id"] as string })),
+  },
+  {
+    name: "clear_app_data",
+    title: "Clear an app's data",
+    description:
+      "Reset an app to its first-launch state without reinstalling (Android pm clear; iOS clears its data container). On iOS the keychain is shared: also call set_device_setting reset-keychain for a signed-out first run. Relaunch the app afterwards. To start over with a whole clean device, release_device and lease_device again: every lease starts wiped.",
+    input: z.object({ app_id: appId }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    run: async (t, a) => json({ ...(await t.device({ kind: "clear-app-data", appId: a["app_id"] as string })), next: "launch_app" }),
+  },
+  {
+    name: "set_device_setting",
+    title: "Change a device setting",
+    description: [
+      "Change (or, without value, read) a setting on the leased device. Changes last until the lease ends (every lease starts from a clean device).",
+      "wifi | bluetooth | airplane | mobile-data | animations: on|off (iOS simulator: status bar only for wifi/airplane).",
+      "location: on|off, or latitude+longitude to move the device. appearance: light|dark|toggle. text-size: extra-small … accessibility-extra-extra-extra-large.",
+      "permission: value grant|deny|reset, permission camera|microphone|photos|contacts|notifications|location|calendar|…, app_id.",
+      "faceid|touchid: match|nonmatch|enroll|unenroll (iOS). fingerprint: match|nonmatch (Android). reset-keychain (iOS, every app).",
+      "orientation: portrait|landscape-left|landscape-right|portrait-upside-down. density: dpi or reset (Android). locale: a tag such as de-DE for app_id (Android 13+; iOS: launch_app args).",
+      "time-zone: e.g. Europe/Berlin (Android). status-bar-time: HH:MM or clear (iOS, for screenshots).",
+    ].join(" "),
+    input: z
+      .object({
+        name: z.enum(DEVICE_SETTINGS),
+        value: z.string().max(64).optional(),
+        app_id: appId.optional(),
+        permission: z.string().max(40).optional(),
+        latitude: z.number().min(-90).max(90).optional(),
+        longitude: z.number().min(-180).max(180).optional(),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) =>
+      json(
+        await t.device({
+          kind: "setting",
+          change: {
+            name: a["name"] as DeviceSettingName,
+            ...(a["value"] !== undefined ? { value: a["value"] as string } : {}),
+            ...(a["app_id"] ? { appId: a["app_id"] as string } : {}),
+            ...(a["permission"] ? { permission: a["permission"] as string } : {}),
+            ...(typeof a["latitude"] === "number" ? { latitude: a["latitude"] as number } : {}),
+            ...(typeof a["longitude"] === "number" ? { longitude: a["longitude"] as number } : {}),
+          },
+        }),
+      ),
+  },
+  {
+    name: "push_file",
+    title: "Put a file on the device",
+    description:
+      "Copy a project file onto the leased device so the app can import, open or pick it. Android: downloads, pictures or documents (shared storage, visible in the system file picker and gallery), or app_sandbox (needs app_id and a debuggable build; name may be files/…, cache/…, databases/…, shared_prefs/…). iOS (only when the simulator runs on this machine): pictures (Photos), or documents/app_sandbox inside app_id's container. The path must be inside the project directory.",
+    input: z
+      .object({
+        path: z.string().min(1).max(4096),
+        destination: z.enum(["downloads", "pictures", "documents", "app_sandbox"]),
+        app_id: appId.optional(),
+        name: z.string().min(1).max(160).optional().describe("File name on the device (default: the local name)."),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) =>
+      json(
+        await t.device({
+          kind: "push-file",
+          localPath: confinePath(a["path"] as string),
+          destination: a["destination"] as "downloads",
+          ...(a["app_id"] ? { appId: a["app_id"] as string } : {}),
+          ...(a["name"] ? { name: a["name"] as string } : {}),
+        }),
+      ),
+  },
+  {
+    name: "pull_file",
+    title: "Get a file from the device",
+    description:
+      "Copy a file from the leased device into this session's artifacts (listed by get_test_artifacts). Android: device_path in /sdcard/{Download,Pictures,DCIM,Documents,Movies,Music}/, or app_id + relative_path (files/…, debuggable builds). iOS (local simulator only): app_id + relative_path inside its container, e.g. Documents/export.json.",
+    input: z.object({ device_path: z.string().max(512).optional(), app_id: appId.optional(), relative_path: z.string().max(512).optional() }).strict(),
+    annotations: { readOnlyHint: true },
+    run: async (t, a) =>
+      json(
+        await t.device({
+          kind: "pull-file",
+          outPath: "",
+          ...(a["device_path"] ? { devicePath: a["device_path"] as string } : {}),
+          ...(a["app_id"] ? { appId: a["app_id"] as string } : {}),
+          ...(a["relative_path"] ? { relativePath: a["relative_path"] as string } : {}),
+        }),
+      ),
+  },
+  {
+    name: "notifications",
+    title: "Notifications",
+    description:
+      "list: the notifications currently posted (Android; filter with app_id). open/close: pull the notification shade down or up (Android), then inspect_screen and tap to act on one. post: a test notification (Android shell notification with title/text; with app_id + payload, a push payload delivered to that app, which is how to test pushes on the iOS simulator). Workers in device-only mode turn this off unless the owner allows it.",
+    input: z
+      .object({
+        action: z.enum(["list", "open", "close", "post"]),
+        app_id: appId.optional(),
+        title: z.string().max(200).optional(),
+        text: z.string().max(1000).optional(),
+        payload: z.record(z.string(), z.unknown()).optional().describe("APNs-style JSON payload, e.g. {\"aps\":{\"alert\":{\"title\":\"Hi\",\"body\":\"…\"}}}."),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) => {
+      const action = a["action"] as "list" | "open" | "close" | "post";
+      const appIdArg = a["app_id"] ? { appId: a["app_id"] as string } : {};
+      if (action === "post") {
+        return json(
+          await t.device({
+            kind: "post-notification",
+            ...appIdArg,
+            ...(a["title"] ? { title: a["title"] as string } : {}),
+            ...(a["text"] ? { text: a["text"] as string } : {}),
+            ...(a["payload"] ? { payload: a["payload"] as Record<string, unknown> } : {}),
+          }),
+        );
+      }
+      return json(await t.device({ kind: "notifications", action, ...appIdArg }));
+    },
+  },
+  {
+    name: "measure_performance",
+    title: "Measure performance",
+    description:
+      "frames: frame health of the foreground app since the last reading (total and janky frames, slow frames, percentiles where the platform reports them); measure, scroll or animate, then measure again. memory: a process memory sample. Simulator and emulator numbers are not device-representative; compare runs on the same device model.",
+    input: z.object({ metric: z.enum(["frames", "memory"]), app_id: appId.optional() }).strict(),
+    annotations: { readOnlyHint: true },
+    run: async (t, a) => json(await t.device({ kind: "perf", metric: a["metric"] as "frames", ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) })),
+  },
+  {
+    name: "audio_levels",
+    title: "Measure audio levels",
+    description:
+      "Measure the audio the device renders as loudness buckets (dBFS): start (optionally for duration_ms), then status or stop for the buckets. Use it to check that a tap makes a sound and when it starts. Capturing the audio itself and feeding audio into the microphone are not supported.",
+    input: z.object({ action: z.enum(["start", "status", "stop"]), duration_ms: z.number().int().min(500).max(300_000).optional() }).strict(),
+    annotations: { readOnlyHint: true },
+    run: async (t, a) => json(await t.device({ kind: "audio", action: a["action"] as "start", ...(a["duration_ms"] ? { durationMs: a["duration_ms"] as number } : {}) })),
   },
   {
     name: "inspect_screen",

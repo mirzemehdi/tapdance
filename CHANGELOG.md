@@ -60,4 +60,4 @@ Android end to end, two machines over a real network, Google Cloud N2, cloud Mac
 a full device loop over Streamable HTTP MCP, and installing a custom app through a gateway.
 See [STATUS.md](STATUS.md).
 
-[0.1.0]: https://github.com/tapdance-dev/tapdance
+[0.1.0]: https://github.com/mirzemehdi/tapdance

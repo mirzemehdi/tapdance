@@ -16,7 +16,7 @@ From [STATUS.md](../../STATUS.md) (V-01 to V-05), as of 2026-11-01:
 | Login with the one-time key, cookie, refusal without it | Yes, on one Mac, scripted |
 | The page in a real browser (live picture, a click tapped the device, status panel updated) | Yes, on one Mac, through a gateway running on that Mac ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)) |
 | Viewing from another computer (SSH tunnel or Tailscale) | **Not yet** |
-| Android emulator stream | **Not yet** (Android has not run end to end) |
+| Android emulator stream | Yes, on one Mac: live stream, Home, tap, Screenshot and recording buttons ([evidence](../testing/evidence/2026-11-01-android.md)) |
 
 ## How it works
 

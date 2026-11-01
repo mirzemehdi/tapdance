@@ -9,5 +9,7 @@ export {
   isPrivateHost,
   type SimlockConnection,
 } from "./connection.js";
+export * as deviceCommands from "./device-commands.js";
+export type { DeviceCommand } from "./device-commands.js";
 export { fromAgentDeviceError } from "./agent-device-errors.js";
 export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";

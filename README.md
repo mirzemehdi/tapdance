@@ -31,7 +31,7 @@ Tapdance is not published to npm yet. The npm name `tapdance` belongs to an unre
 so do not `npm install -g tapdance`. Install from source:
 
 ```bash
-git clone https://github.com/tapdance-dev/tapdance.git
+git clone https://github.com/mirzemehdi/tapdance.git
 cd tapdance
 corepack enable
 pnpm install
@@ -78,14 +78,15 @@ browser, take over, and hand back. `install_app` accepts only paths inside the p
 (iOS: `xcodebuild … -sdk iphonesimulator -derivedDataPath ./build`).
 
 The MCP server has been verified with a scripted MCP client on a real iOS simulator; it has not yet
-been run from inside Claude Code, Codex or Cursor, and Android has not run on a device (see
-[STATUS.md](STATUS.md) P-01).
+been run from inside Claude Code, Codex or Cursor. Android has run on Android 34 emulators on a Mac
+([evidence](docs/testing/evidence/2026-11-01-android.md)), not yet on a Linux worker (see
+[STATUS.md](STATUS.md) P-01, D-02).
 
 ## Deployment modes
 
 | Mode | Agent runs on | Devices run on | Config | Tested today (see [STATUS.md](STATUS.md)) |
 | --- | --- | --- | --- | --- |
-| Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android emulator: implemented, not run. |
+| Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). **Android emulator on macOS: yes** ([evidence](docs/testing/evidence/2026-11-01-android.md)); Linux not run. |
 | Laptop as remote worker | An ordinary VPS (no KVM needed) that also runs the gateway | Your laptop or Mac, which dials out to the gateway | `provider: "self-hosted"` | Gateway + joined worker + CLI, MCP and viewer worked with **both on one Mac** ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)). **Not yet tested across two machines over a real network.** |
 | Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM | `provider: "self-hosted"` | Terraform and scripts written. **Never provisioned; Android not run.** |
 | Personal Mac, device-only | A VPS | Your Mac, reached over Tailscale through `tapdance worker guard` | `provider: "self-hosted"`, endpoint = guard URL | Full MCP loop through the guard on one Mac ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); across Tailscale not tested. |

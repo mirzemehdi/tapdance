@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/tapdance-dev/tapdance/security/advisories/new
+    url: https://github.com/mirzemehdi/tapdance/security/advisories/new
     about: Report security problems privately. Do not open a public issue.
   - name: What works today
-    url: https://github.com/tapdance-dev/tapdance/blob/main/STATUS.md
+    url: https://github.com/mirzemehdi/tapdance/blob/main/STATUS.md
     about: Check STATUS.md before reporting. It lists what is proven, untested, missing or blocked.
