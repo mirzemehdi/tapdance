@@ -113,7 +113,7 @@ every key.
 ```text
 tapdance devices [-p, --platform <android|ios>]
 tapdance devices list [-p, --platform <android|ios>]
-tapdance devices install <platform> <version>
+tapdance devices install <platform> <version> [--image-tag <tag>]
 ```
 
 `devices` (or `devices list`) shows, per platform, capacity (running, limit, warm, leased), the models
@@ -122,7 +122,10 @@ and OS versions that can be leased, Android image tags, running devices and the 
 `devices install ios 18.5` or `devices install android 35` installs an iOS runtime or Android system
 image **on this machine's worker** by running the bundled `simlock --local component install`. Downloads
 are several GB. Android images need their SDK licences accepted first (see
-[installation.md](installation.md#android-macos-or-linux-with-kvm)).
+[installation.md](installation.md#android-macos-or-linux-with-kvm)). Simlock's installer fetches only `google_apis`; with
+`--image-tag google_apis_playstore`, `google_atd` or `aosp_atd`, Tapdance runs the SDK's `sdkmanager`
+for `system-images;android-<version>;<tag>;<host ABI>` instead (it may ask you to accept a licence).
+See [platforms/android.md](platforms/android.md) for which tier to use.
 
 ### `workers`
 
@@ -761,14 +764,12 @@ Usage: tapdance devices [options] [command]
 List device models you can lease and what is running
 
 Options:
-  -p, --platform <platform>     android or ios
-  -h, --help                    display help for command
+  -p, --platform <platform>               android or ios
+  -h, --help                              display help for command
 
 Commands:
-  install <platform> <version>  Install an iOS runtime or Android system image
-                                on this worker (several GB; Simlock never
-                                downloads on its own)
-  list [options]                Same as `tapdance devices`
+  install [options] <platform> <version>  Install an iOS runtime or Android system image on this worker (several GB; Simlock never downloads on its own)
+  list [options]                          Same as `tapdance devices`
 ```
 
 ### `tapdance devices install`
@@ -780,7 +781,10 @@ Install an iOS runtime or Android system image on this worker (several GB;
 Simlock never downloads on its own)
 
 Options:
-  -h, --help  display help for command
+  --image-tag <tag>  Android: another image than google_apis
+                     (google_apis_playstore, google_atd, aosp_atd); installed
+                     with the SDK's sdkmanager
+  -h, --help         display help for command
 ```
 
 ### `tapdance devices list`

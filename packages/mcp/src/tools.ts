@@ -172,7 +172,7 @@ export const TOOLS: ToolDefinition[] = [
         platform,
         device: z.string().min(1).max(100).optional().describe("Model, e.g. \"Pixel 8\" or \"iPhone 16\". Omit for any phone."),
         os_version: z.string().min(1).max(40).optional().describe("OS version or range, e.g. \"18.5\" (iOS) or \"34\" (Android API level)."),
-        image_tag: z.string().min(1).max(60).optional().describe("Android system image tag. Leave unset for normal app testing: you get the lighter google_apis image (Google Play services, no Play Store). Ask for \"google_apis_playstore\" only when the test needs the Play Store itself (Play Billing purchases, a Play sign-in); it uses more memory and CPU on the host."),
+        image_tag: z.string().min(1).max(60).optional().describe("Android system image tag. Leave unset for normal app testing: you get the lighter google_apis image (Google Play services, no Play Store). Ask for \"google_apis_playstore\" only when the test needs the Play Store itself (Play Billing purchases, a Play sign-in); it uses more memory and CPU on the host. \"google_atd\" (when list_devices shows it) is the lightest: for app-logic tests only, with no Play Store, no status bar or notification shade and no home screen."),
         profile: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).optional().describe("A device profile on the machine running this server (list_devices shows profile:<name>): an emulator the owner set up once, e.g. signed in to a Play license-tester account. Booted read-only: nothing this lease changes is kept."),
         ttl_minutes: z.number().int().min(1).max(240).optional().describe("Lease time to live; the server renews it while connected."),
       })

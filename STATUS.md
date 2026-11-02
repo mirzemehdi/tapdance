@@ -321,6 +321,7 @@ paths below were exercised only by unit tests.
 | `doctor` retries a slow first `/v1/healthz` and names an http→https switch; `connect` probes the address before saving (#37, #38) | W-07 | 🧪 | `provider.test.ts` "doctor reachability" |
 | `ui inspect --bounds`; `ui swipe --until` matches part of a label and stops at the end of a list; emulator notification lists readable through the guard by default (#35) | Y-04, H-06 | 🧪 | `guard.test.ts` 14 |
 | `device release` reports an unreachable worker (exit 4) and keeps the record to retry | C-04 | 🧪 | build |
+| Android image tiers: agents told to lease `google_apis_playstore` only when a test needs the Play Store; `devices install --image-tag google_atd` (ATD test images). Leasing an ATD image is untested. | R-06 | 🧪 | build + `--help` |
 | `host-setup.sh` on Linux without `/dev/kvm` skips the emulator and system image and stops before `host up` (#19) | W-07 | 🧪 | `bash -n` only |
 
 ## Bugs found by running for real (fixed)

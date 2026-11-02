@@ -79,6 +79,19 @@ tapdance device lease --platform android --image-tag google_apis_playstore   # n
 `--os` takes an API level. An image with another tag (for example `google_apis_playstore`) must be
 installed with `sdkmanager` first; Simlock's installer fetches only `google_apis`.
 
+**Three image tiers, heaviest first:**
+
+| Tag | Has | Use it for |
+| --- | --- | --- |
+| `google_apis_playstore` | Play Store, Google Play services, full system UI | Play Billing purchases and restores, a Play sign-in |
+| `google_apis` (the default) | Google Play services, full system UI, no Play Store | Normal app testing |
+| `google_atd` / `aosp_atd` | Google's Automated Test Device images: Google Play services (`google_atd` only); no Play Store, no status bar or notification shade, no home screen, no keyboard app, software rendering; made to run without a window. About 600 MB instead of 1.5 GB; Google reports 33–55% faster test runs. | App logic and UI flows inside the app, when the host is short of memory or CPU |
+
+`tapdance devices install android 34 --image-tag google_atd` installs one (with the SDK's
+`sdkmanager`; arm64 images exist for API 30–37), and `--image-tag google_atd` leases it. **ATD with
+Tapdance is untested:** typing relies on agent-device's own keyboard helper, and notification, Home
+and app-switcher steps cannot work without the system UI.
+
 **Use the Play Store image only when a test needs it.** Without `--image-tag`, Simlock picks
 `google_apis`: Google Play services (sign-in SDKs, Maps, push) without the Play Store app, and lighter
 on the host. `google_apis_playstore` is for tests that need the Play Store itself: Play Billing

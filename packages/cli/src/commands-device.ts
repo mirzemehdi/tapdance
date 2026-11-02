@@ -1,6 +1,8 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { Command } from "commander";
-import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, table, yellow } from "./output.js";
 
@@ -28,6 +30,9 @@ function point(name: string, value: string): { x: number; y: number } {
   if (!m) throw new TapdanceError("USAGE", `${name} must look like 120,640`);
   return { x: Number(m[1]), y: Number(m[2]) };
 }
+
+/** Android system image tags Tapdance knows, lightest last: Play Store, Google APIs, test images. */
+export const ANDROID_IMAGE_TAGS = ["google_apis_playstore", "google_apis", "google_atd", "aosp_atd"] as const;
 
 export function registerDeviceCommands(program: Command, globals: () => GlobalOptions): void {
   // ------------------------------------------------------------- discovery
@@ -57,11 +62,25 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   devices
     .command("install <platform> <version>")
     .description("Install an iOS runtime or Android system image on this worker (several GB; Simlock never downloads on its own)")
-    .action(async (platform: string, version: string) => {
+    .option("--image-tag <tag>", `Android: another image than google_apis (${ANDROID_IMAGE_TAGS.filter((t) => t !== "google_apis").join(", ")}); installed with the SDK's sdkmanager`)
+    .action(async (platform: string, version: string, o: { imageTag?: string }) => {
       const { spawnSync } = await import("node:child_process");
       const { simlockBin } = await import("./context.js");
-      platformArg(platform);
+      const p = platformArg(platform);
       if (!/^[A-Za-z0-9._;-]+$/.test(version)) throw new TapdanceError("USAGE", "version looks wrong");
+      if (o.imageTag && o.imageTag !== "google_apis") {
+        // Simlock's installer fetches google_apis only; other tags come straight from sdkmanager.
+        if (p !== "android") throw new TapdanceError("USAGE", "--image-tag is for Android system images");
+        if (!(ANDROID_IMAGE_TAGS as readonly string[]).includes(o.imageTag)) throw new TapdanceError("USAGE", `Unknown image tag "${o.imageTag}"`, { hint: `Use one of: ${ANDROID_IMAGE_TAGS.join(", ")}.` });
+        if (!/^\d{2}(\.\d)?$/.test(version)) throw new TapdanceError("USAGE", "Give the Android API level, e.g. 34");
+        const sdk = findAndroidSdk();
+        const sdkmanager = sdk ? join(sdk, "cmdline-tools", "latest", "bin", "sdkmanager") : undefined;
+        if (!sdkmanager || !existsSync(sdkmanager)) throw new TapdanceError("PROVIDER_UNAVAILABLE", "sdkmanager was not found", { hint: "Install the Android command-line tools (scripts/host-setup.sh --prerequisites-only does it)." });
+        const abi = process.arch === "arm64" ? "arm64-v8a" : "x86_64";
+        const r = spawnSync(sdkmanager, ["--install", `system-images;android-${version};${o.imageTag};${abi}`], { stdio: "inherit" });
+        process.exitCode = r.status ?? 1;
+        return;
+      }
       const r = spawnSync(process.execPath, [simlockBin(), "--local", "component", "install", platform, version], { stdio: "inherit" });
       process.exitCode = r.status ?? 1;
     });
