@@ -15,7 +15,7 @@ From [STATUS.md](../../STATUS.md) (V-01 to V-05), as of 2026-11-01:
 | Human touch blocks the agent with `HUMAN_HELD` | Yes, on one Mac, scripted |
 | Login with the one-time key, cookie, refusal without it | Yes, on one Mac, scripted |
 | The page in a real browser (live picture, a click tapped the device, status panel updated) | Yes, on one Mac, through a gateway running on that Mac ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)) |
-| Viewing from another computer (SSH tunnel or Tailscale) | **Not yet** |
+| Viewing from another computer (SSH tunnel or Tailscale) | Reported by the field test: the tailnet IP worked but a plain-`http` page could not decode video and the MagicDNS name was refused; both fixed (screenshot mode, tailnet names allowed; unit-tested). Live video from another computer needs `ssh -L` or HTTPS. |
 | Android emulator stream | Yes, on one Mac: live stream, Home, tap, Screenshot and recording buttons ([evidence](../testing/evidence/2026-11-01-android.md)) |
 
 ## How it works

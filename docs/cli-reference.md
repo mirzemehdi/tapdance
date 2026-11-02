@@ -368,7 +368,7 @@ codes when the run cannot start (3 when there is no device and nothing to lease)
 ### `view`
 
 ```text
-tapdance view [--host <host>] [--port <port>]
+tapdance view [--host <host>] [--port <port>] [--allow-host <name>]...
 ```
 
 Serves a live view of this session's device on `127.0.0.1:4710` (from `viewer.host` and `viewer.port`)
@@ -379,6 +379,17 @@ keys, Home/Back, screenshots and recordings. A touch takes control from the agen
 Public addresses are refused. `--host 0.0.0.0` is allowed with a warning: anyone who can reach the
 port and has the link can control the device. Prefer loopback plus `ssh -L` or a private network. Stops
 on Ctrl-C. Needs Simlock's `stream` and `input` capabilities (on after `tapdance worker install`).
+
+Bound to a tailnet address, the page also answers to this machine's Tailscale names (its MagicDNS name,
+short name and 100.x addresses, from `tailscale status`) and prints the link with the MagicDNS name;
+`--allow-host` adds other names. The key in the link works while the viewer runs (it is not single-use);
+anyone with the link can control the device.
+
+Browsers allow the live video decoder (WebCodecs) only on `https://` or `localhost`. Opened over plain
+`http://` on another address (a tailnet IP or name), the page switches to **screenshot mode**: about two
+refreshed screenshots per second, with a banner saying why; tap, type, Take over and Hand back still
+work. For live video, open it through `ssh -L` (localhost) or behind HTTPS. Startup errors show in the
+banner instead of leaving the page on "loading…".
 
 ## Workers and gateways
 
@@ -436,9 +447,12 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 
 | Command | Meaning |
 | --- | --- |
-| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint, or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint, or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
-| `host down [--revoke] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. The Simlock worker keeps running (`tapdance worker stop`). |
+| `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
+| `host resume` | Start hosting again the way it ran before `pause`: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
+| `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
+| `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
 ### `connect`
 
@@ -1036,7 +1050,8 @@ Android emulators: run a command with `adb shell` inside the leased emulator
 (not on this machine)
 
 Options:
-  --stdin <file>       pass this file's contents on stdin
+  --stdin <file>       pass this text file on stdin (binary: base64 it and
+                       decode on the device with `base64 -d`)
   --timeout <seconds>  default 120
   -h, --help           display help for command
 ```
@@ -1389,8 +1404,8 @@ Commands:
                      WebSocket; no inbound port is opened
   logout             Leave the gateway and serve local agents only
   start              Start the worker daemon
-  stop               Stop the worker daemon (leases on it end when their TTL
-                     runs out)
+  stop               Stop the worker: end its leases, stop the daemon and shut
+                     down the emulators and simulators it created
   status             Show the worker's devices, leases and capabilities
   logs               Print the worker daemon log
   restart            Restart the worker daemon (ends agent-device sessions on
@@ -1600,7 +1615,8 @@ Options:
 ```text
 Usage: tapdance worker stop [options]
 
-Stop the worker daemon (leases on it end when their TTL runs out)
+Stop the worker: end its leases, stop the daemon and shut down the emulators and
+simulators it created
 
 Options:
   -h, --help  display help for command
@@ -1722,15 +1738,22 @@ Set up this Mac or Linux machine as a device host for a remote agent, in one
 command
 
 Options:
-  -h, --help      display help for command
+  -h, --help       display help for command
 
 Commands:
-  up [options]    Worker, guard service, pairing, Tailscale and a self-test,
-                  step by step; prints a block to paste to the agent's machine
-  status          Show the state of each `host up` step on this machine
-  down [options]  Stop hosting: remove the guard service and `tailscale serve`
-                  for its port (tokens are kept unless --revoke)
-  help [command]  display help for command
+  up [options]     Worker, guard service, pairing, Tailscale and a self-test,
+                   step by step; prints a block to paste to the agent's machine
+  pause            Stop hosting for now, keeping the pairing: the guard (and
+                   caffeinate), Tailscale exposure, the worker and its devices
+                   stop, and nothing restarts at login
+  resume           Start hosting again after `host pause`, the same way as
+                   before (guard flags, Tailscale, login services)
+  token [options]  Hand a pairing token to the agent: copy it to the clipboard
+                   (default) or show it once
+  status           Show the state of each `host up` step on this machine
+  down [options]   Stop hosting: remove the guard service and `tailscale serve`
+                   for its port (tokens are kept unless --revoke)
+  help [command]   display help for command
 ```
 
 ### `tapdance host up`
@@ -1753,9 +1776,52 @@ Options:
   --repair               revoke the existing pairing with this label and issue a
                          new token
   --skip-self-test       do not lease a device through the guard at the end
+  --warm <counts>        booted spare devices kept ready for fast leases, per
+                         platform, e.g. android=1,ios=0 (0 frees the memory;
+                         default: Simlock keeps one per device kind used)
   -y, --yes              approve pairing without a prompt (you are at this
                          machine)
   -h, --help             display help for command
+```
+
+### `tapdance host pause`
+
+```text
+Usage: tapdance host pause [options]
+
+Stop hosting for now, keeping the pairing: the guard (and caffeinate), Tailscale
+exposure, the worker and its devices stop, and nothing restarts at login
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host resume`
+
+```text
+Usage: tapdance host resume [options]
+
+Start hosting again after `host pause`, the same way as before (guard flags,
+Tailscale, login services)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host token`
+
+```text
+Usage: tapdance host token [options]
+
+Hand a pairing token to the agent: copy it to the clipboard (default) or show it
+once
+
+Options:
+  --label <name>  which pairing (default: the only one, or this machine's
+                  hostname)
+  --copy          copy it to the clipboard (the default)
+  --show          print it once (it stays in your terminal's scrollback)
+  -h, --help      display help for command
 ```
 
 ### `tapdance host status`
@@ -1780,6 +1846,9 @@ Stop hosting: remove the guard service and `tailscale serve` for its port
 Options:
   --revoke    also revoke every paired control machine and delete the pairing
               token files
+  --all       everything: --revoke, plus end the worker's leases, shut down the
+              emulators and simulators it created, stop it and remove its login
+              service
   -y, --yes   do not ask for confirmation
   -h, --help  display help for command
 ```
@@ -1805,10 +1874,12 @@ Open a live view of this session's device in your browser (watch the agent, take
 over, hand back)
 
 Options:
-  --host <host>  address to listen on (loopback by default; use SSH -L or
-                 Tailscale to reach it)
-  --port <port>  port to listen on
-  -h, --help     display help for command
+  --host <host>        address to listen on (loopback by default; use SSH -L or
+                       Tailscale to reach it)
+  --port <port>        port to listen on
+  --allow-host <name>  another name the page may be opened by (repeatable); this
+                       machine's Tailscale names are allowed already
+  -h, --help           display help for command
 ```
 
 ### `tapdance report`

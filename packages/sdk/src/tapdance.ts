@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   LocalArtifactStore,
@@ -39,7 +39,7 @@ import { aabToApk } from "./bundletool.js";
 import { PROFILE_PROVIDER, ProfileProvider } from "@tapdance/provider-simlock";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createProvider } from "./provider-factory.js";
@@ -501,6 +501,19 @@ export class Tapdance {
   }
 
   // ------------------------------------------------------------ evidence
+
+  /** The current screen as PNG bytes, kept nowhere (the viewer's fallback when it cannot decode video). */
+  async frame(): Promise<Buffer> {
+    return this.onDevice(async (handle, provider) => {
+      const dir = await mkdtemp(join(tmpdir(), "tapdance-frame-"));
+      try {
+        const shot = await provider.screenshot(handle, join(dir, "frame.png"));
+        return await readFile(shot.path);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  }
 
   async screenshot(outPath?: string, note?: string): Promise<ArtifactRef> {
     return this.onDevice(async (handle, provider) => {

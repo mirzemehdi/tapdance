@@ -38,7 +38,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         const inv = await t.devices(o.platform ? platformArg(o.platform) : undefined);
         out.result(inv, () => {
           const lines: string[] = [];
-          for (const c of inv.capacity) lines.push(`${bold(c.platform)}: ${c.running}/${c.limit} running, ${c.warm} warm, ${c.leased} leased`);
+          for (const c of inv.capacity) lines.push(`${bold(c.platform)}: ${c.running}/${c.limit} running, ${c.leased} leased${c.warm ? `, ${c.warm} warm spare${c.warm > 1 ? "s" : ""} (booted, not in use; kept for a fast next lease)` : ""}`);
           for (const c of inv.catalog) {
             lines.push("", `${bold(c.platform === "ios" ? "iOS" : "Android")} models: ${c.models.slice(0, 25).join(", ")}${c.models.length > 25 ? dim(` … +${c.models.length - 25}`) : ""}`);
             if (c.osVersions.length) lines.push(`  OS versions: ${c.osVersions.join(", ")}${c.defaultOsVersion ? ` (default ${c.defaultOsVersion})` : ""}`);
@@ -321,7 +321,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   device
     .command("shell <command...>")
     .description("Android emulators: run a command with `adb shell` inside the leased emulator (not on this machine)")
-    .option("--stdin <file>", "pass this file's contents on stdin")
+    .option("--stdin <file>", "pass this text file on stdin (binary: base64 it and decode on the device with `base64 -d`)")
     .option("--timeout <seconds>", "default 120", Number)
     .action(async (command: string[], o: { stdin?: string; timeout?: number }) =>
       run(globals(), async (t, out) => {

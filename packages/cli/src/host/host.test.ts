@@ -20,6 +20,10 @@ import {
   serveModeOf,
   tailscaleServeArgs,
   tailscaleServeOffArgs,
+  tokenFingerprint,
+  clipboardCommand,
+  parseWarm,
+  warmSettings,
 } from "./plan.js";
 
 /** Pure parts of `host up/status/down` and `connect`. No test here runs tailscale, launchctl, Simlock or a device. */
@@ -154,15 +158,42 @@ describe("rendering", () => {
       tokenPath: "/Users/w/.tapdance/worker/pairing-vps.token",
       devices: "android 34 (google_apis_playstore), ios 26.5",
       selfTest: "PASS (screenshot ok)",
+      fingerprint: "a1b2c3",
+      label: "vps",
     });
     expect(block.split("\n")).toEqual([
       "TAPDANCE HOST READY",
       "endpoint:  https://my-mac.tail1234.ts.net:4720",
-      "token:     written to /Users/w/.tapdance/worker/pairing-vps.token (mode 600) — send it to your agent privately",
+      "token:     saved to /Users/w/.tapdance/worker/pairing-vps.token (mode 600), fingerprint a1b2c3. Copy it: tapdance host token --label vps",
       "devices:   android 34 (google_apis_playstore), ios 26.5",
       "self-test: PASS (screenshot ok)",
       "on the agent machine:  tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-vps.token",
     ]);
+  });
+
+  it("tags a token with a short fingerprint and finds a clipboard tool (#22)", () => {
+    expect(tokenFingerprint("tdg_example")).toMatch(/^[0-9a-f]{6}$/);
+    expect(tokenFingerprint("tdg_example\n")).toBe(tokenFingerprint("tdg_example"));
+    expect(tokenFingerprint("tdg_other")).not.toBe(tokenFingerprint("tdg_example"));
+    expect(clipboardCommand("darwin", () => false)).toEqual(["pbcopy"]);
+    expect(clipboardCommand("linux", (b) => b === "xclip")).toEqual(["xclip", "-selection", "clipboard"]);
+    expect(clipboardCommand("linux", (b) => b === "wl-copy" || b === "xclip")).toEqual(["wl-copy"]);
+    expect(clipboardCommand("linux", () => false)).toBeUndefined();
+  });
+
+  it("turns --warm into Simlock warm-pool settings (#25)", () => {
+    expect(parseWarm("android=1,ios=0")).toEqual({ android: 1, ios: 0 });
+    expect(() => parseWarm("android=lots")).toThrow(/warm count/);
+    const limits = { android: 2, ios: 5 };
+    expect(warmSettings({ android: 0, ios: 0 }, limits)).toEqual([["warmPool.enabled", "false"]]);
+    expect(warmSettings({ android: 1, ios: 0 }, limits)).toEqual([
+      ["warmPool.enabled", "true"],
+      ["warmPool.reserveRunning.android", "1"],
+      ["warmPool.reserveRunning.ios", "5"],
+    ]);
+    // An omitted platform keeps one spare; more spares than slots reserve nothing.
+    expect(warmSettings({ android: 5 }, limits)).toContainEqual(["warmPool.reserveRunning.android", "0"]);
+    expect(warmSettings({ android: 5 }, limits)).toContainEqual(["warmPool.reserveRunning.ios", "4"]);
   });
 
   it("describes the catalog per platform", () => {

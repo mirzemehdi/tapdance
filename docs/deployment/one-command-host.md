@@ -107,6 +107,35 @@ To cut off a paired machine without stopping, or to see what it did, see
 `host down` asks first (`--yes` skips the question). It leaves the Simlock worker running for local
 agents; stop it with `tapdance worker stop`.
 
+## Pause, resume, or stop for good
+
+| You want to | Run (on the Mac) |
+| --- | --- |
+| Stop for now, come back later without re-pairing | `tapdance host pause` |
+| Start again exactly as before | `tapdance host resume` |
+| Hand the token to the agent | `tapdance host token` (copies it; `--show` prints it) |
+| Cut the VPS off but keep hosting | `tapdance worker guard revoke all` |
+| Stop everything and revoke | `tapdance host down --all` |
+
+`host pause` stops the guard (and its `caffeinate` when you used `--keep-awake`), turns off the
+Tailscale exposure, ends leases, shuts down the emulators and simulators the worker created (never your
+own), stops the worker, and removes both login services, so nothing starts at your next login. The
+pairing token is kept and still expires on its own date. `host resume` reinstalls both services with
+the same flags, serves the guard on Tailscale again, and tells you whether the token is still valid; if
+it expired, run `tapdance host up --repair` and `tapdance host token`.
+
+Stop devices this way rather than quitting emulators by hand: Simlock keeps records of its devices, and
+a device stopped behind its back makes the next lease fail until the worker resets them (it does that by
+itself when it starts with no lease active).
+
+## Warm spares
+
+Simlock keeps one booted, unleased **warm spare** of each device kind it has served, so the next lease
+is fast. `tapdance devices` shows it as "warm spare (booted, not in use)" and `host status` shows how
+much memory the devices use. On a laptop, `tapdance host up --warm android=0,ios=0` turns spares off
+(leases then cold-boot; idle devices shut down after 10 minutes), and `--warm android=1,ios=0` keeps one
+Android spare only.
+
 ## Starting from nothing: `scripts/host-setup.sh`
 
 On a Mac or Linux machine with nothing installed:

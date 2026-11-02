@@ -10,6 +10,7 @@ import { agentDeviceBin, output, simlockBin, type GlobalOptions } from "./contex
 import { bold, dim, renderChecks, yellow } from "./output.js";
 import { readSecret } from "./commands-setup.js";
 import { registerGuardCommands } from "./commands-guard.js";
+import { warmSettings, type WarmCounts } from "./host/plan.js";
 
 const exec = promisify(execFile);
 
@@ -64,12 +65,77 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
   for (let attempt = 1; ; attempt++) {
     try {
       await simlock([...flag, "daemon", "start"]);
+      if (!gateway) await reconcileDevices(out);
       return;
     } catch (error) {
       if (attempt >= 3) throw error;
       await new Promise((r) => setTimeout(r, 2000 * attempt));
     }
   }
+}
+
+/**
+ * Devices stopped outside Simlock (a crash, a reboot, someone quitting an emulator) stay "ready" in its
+ * records, and the next lease fails with "No Android device with serial …". Right after a start, when
+ * no lease is active (nothing to lose), Simlock's `nuke` without `--delete-devices` resets its device
+ * state; it deletes nothing.
+ */
+async function reconcileDevices(out: ReturnType<typeof output>): Promise<void> {
+  const status = safeJson(await simlock(["--local", "status", "--json"]).catch(() => "{}")) as { leases?: unknown[] } | undefined;
+  if (!status || (Array.isArray(status.leases) && status.leases.length > 0)) return;
+  await simlock(["--local", "nuke", "--yes"]).then(() => out.progress("Reset Simlock's device records (no lease was active)"), () => undefined);
+}
+
+/**
+ * Stops the worker for good: ends Simlock's leases, stops the daemon, shuts down the emulators and
+ * simulators Simlock created (named simlock_* / simlock-*; never the developer's own), stops its adb
+ * server, and optionally removes its login service. Simlock itself leaves its warm devices running
+ * when it stops; killing them afterwards by hand leaves its records stale.
+ */
+export async function stopWorkerCompletely(out: ReturnType<typeof output>, options: { uninstallService: boolean }): Promise<{ stoppedDevices: string[]; serviceRemoved: boolean }> {
+  const running = await workerRunning();
+  if (running) {
+    await simlock(["--local", "nuke", "--yes"]).catch(() => "");
+    await simlock(["--local", "daemon", "stop"]).catch(() => "");
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline && existsSync(join(simlockHome(), "daemon.sock"))) await new Promise((r) => setTimeout(r, 1000));
+  }
+  let serviceRemoved = false;
+  if (options.uninstallService) {
+    serviceRemoved = await simlock(["--local", "daemon", "uninstall"]).then(() => true, () => false);
+  }
+  const stoppedDevices: string[] = [];
+  const sdk = process.env["ANDROID_HOME"] ?? process.env["ANDROID_SDK_ROOT"] ?? join(homedir(), osPlatform() === "darwin" ? "Library/Android/sdk" : "Android/Sdk");
+  const adb = existsSync(join(sdk, "platform-tools", "adb")) ? join(sdk, "platform-tools", "adb") : "adb";
+  let port: number | undefined;
+  try {
+    const p = (JSON.parse(await readFile(join(simlockHome(), "adb-server.json"), "utf8")) as { port?: unknown }).port;
+    if (typeof p === "number") port = p;
+  } catch {
+    // No Simlock adb server recorded.
+  }
+  for (const server of [...(port ? [String(port)] : []), "5037"]) {
+    const list = await exec(adb, ["-P", server, "devices"], { timeout: 15_000 }).then((r) => r.stdout, () => "");
+    for (const serial of [...list.matchAll(/^(emulator-\d+)\s+device/gm)].map((m) => m[1]!)) {
+      const name = await exec(adb, ["-P", server, "-s", serial, "emu", "avd", "name"], { timeout: 10_000 }).then((r) => r.stdout.split("\n")[0]?.trim() ?? "", () => "");
+      // Only Simlock's own emulators; a developer's AVD keeps running.
+      if (!name.startsWith("simlock_")) continue;
+      await exec(adb, ["-P", server, "-s", serial, "emu", "kill"], { timeout: 15_000 }).catch(() => undefined);
+      stoppedDevices.push(`${serial} (${name})`);
+    }
+  }
+  if (osPlatform() === "darwin") {
+    for (const set of [[], ["--set", join(simlockHome(), "devices", "ios")]]) {
+      const raw = await exec("xcrun", ["simctl", ...set, "list", "devices", "booted", "--json"], { timeout: 30_000 }).then((r) => r.stdout, () => "{}");
+      const devices = Object.values((safeJson(raw) as { devices?: Record<string, Array<{ udid: string; name: string }>> } | undefined)?.devices ?? {}).flat();
+      for (const d of devices.filter((x) => x.name.startsWith("simlock-"))) {
+        await exec("xcrun", ["simctl", ...set, "shutdown", d.udid], { timeout: 60_000 }).catch(() => undefined);
+        stoppedDevices.push(`${d.name} (${d.udid})`);
+      }
+    }
+  }
+  await killStaleAdbServer(out);
+  return { stoppedDevices, serviceRemoved };
 }
 
 /**
@@ -151,7 +217,7 @@ function checkGatewayUrl(raw: string): string {
  * restarts the worker and (with `service`) installs Simlock's login service. `host up` runs it too.
  */
 export async function installWorker(
-  o: { stream: boolean; iosBackend: string; service?: boolean; checks?: DoctorCheck[] },
+  o: { stream: boolean; iosBackend: string; service?: boolean; checks?: DoctorCheck[]; warm?: WarmCounts },
   out: ReturnType<typeof output>,
 ): Promise<{ settings: string[]; checks: DoctorCheck[]; status: unknown }> {
   if (osPlatform() === "win32") {
@@ -186,6 +252,7 @@ export async function installWorker(
     await simlock(["--local", "config", "set", key, value]);
   }
   await restart(false, out);
+  if (o.warm) await applyWarm(out, o.warm);
   if (o.service) {
     out.progress("Installing the login service");
     await simlock(["--local", "daemon", "install"]);
@@ -195,6 +262,47 @@ export async function installWorker(
 }
 
 /** The local worker daemon's own status, or undefined when it does not answer. */
+/** Applies a warm-spare count per platform to the local worker, restarting it when anything changed. */
+export async function applyWarm(out: ReturnType<typeof output>, warm: WarmCounts): Promise<Array<[string, string]>> {
+  const status = (await localWorkerStatus()) as { capacity?: Record<string, { limit?: number } | undefined> } | undefined;
+  const limits = { android: status?.capacity?.["android"]?.limit ?? 2, ios: status?.capacity?.["ios"]?.limit ?? 5 };
+  const settings = warmSettings(warm, limits);
+  for (const [key, value] of settings) {
+    out.progress(`simlock config set ${key} ${value}`);
+    await simlock(["--local", "config", "set", key, value]);
+  }
+  await restart(false, out);
+  return settings;
+}
+
+/** Ends every lease on the local worker (Simlock's nuke without --delete-devices: deletes nothing). */
+export async function simlockNuke(): Promise<void> {
+  await simlock(["--local", "nuke", "--yes"]).catch(() => "");
+}
+
+/** Whether the local Simlock daemon runs (its socket file can outlive a crash, so ask it). */
+export async function workerRunning(): Promise<boolean> {
+  return /running/i.test(await simlock(["--local", "daemon", "status"], 20_000).catch(() => "stopped"));
+}
+
+/** Simlock's own login service: `daemon install` adds it (and starts the daemon), `uninstall` removes it. */
+export async function workerServiceInstalled(): Promise<boolean> {
+  return /Service: installed/i.test(await simlock(["--local", "daemon", "status"], 20_000).catch(() => ""));
+}
+
+export async function setWorkerService(on: boolean): Promise<void> {
+  await simlock(["--local", "daemon", on ? "install" : "uninstall"]);
+}
+
+/** Starts the worker after a pause and resets stale device records when nothing is leased. */
+export async function startWorker(out: ReturnType<typeof output>): Promise<void> {
+  await ensureSimlockHelpersExecutable(out);
+  if (!(await workerRunning())) await simlock(["--local", "daemon", "start"]).catch(() => "");
+  const deadline = Date.now() + 90_000;
+  while (Date.now() < deadline && !(await workerRunning())) await new Promise((r) => setTimeout(r, 1000));
+  await reconcileDevices(out);
+}
+
 export async function localWorkerStatus(): Promise<unknown> {
   return simlock(["--local", "status", "--json"], 20_000).then(safeJson, () => undefined);
 }
@@ -305,7 +413,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
 
   for (const [name, args, help] of [
     ["start", ["daemon", "start"], "Start the worker daemon"],
-    ["stop", ["daemon", "stop"], "Stop the worker daemon (leases on it end when their TTL runs out)"],
+    ["stop", ["daemon", "stop"], "Stop the worker: end its leases, stop the daemon and shut down the emulators and simulators it created"],
     ["status", ["status"], "Show the worker's devices, leases and capabilities"],
     ["logs", ["daemon", "logs"], "Print the worker daemon log"],
   ] as const) {
@@ -315,8 +423,14 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
       .action(async () => {
         const out = output(globals());
         try {
+          if (name === "stop") {
+            const r = await stopWorkerCompletely(out, { uninstallService: false });
+            out.result({ stopped: true, ...r }, () => `Stopped the worker${r.stoppedDevices.length ? ` and ${r.stoppedDevices.length} device(s): ${r.stoppedDevices.join(", ")}` : ""}.`);
+            return;
+          }
           if (name === "start") await ensureSimlockHelpersExecutable(out);
           const text = await simlock(["--local", ...args, ...(name === "status" && globals().json ? ["--json"] : [])]);
+          if (name === "start") await reconcileDevices(out);
           out.result(safeJson(text) ?? { output: text }, () => text);
         } catch (error) {
           process.exitCode = out.error(error);

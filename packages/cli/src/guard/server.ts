@@ -82,7 +82,9 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     const headers: Record<string, string> = { ...upstreamHeaders };
     for (const [h, v] of Object.entries(req.headers)) {
       if (typeof v !== "string") continue;
-      if (["content-type", "content-length", "accept", "if-none-match"].includes(h) || h.startsWith("x-agent-device-")) headers[h] = v;
+      // agent-device's upload protocol describes the artifact and resumes in headers (agent-device
+      // 0.21.35 daemon-client): without them Simlock refuses the upload.
+      if (["content-type", "content-length", "accept", "if-none-match", "content-range", "x-upload-offset", "upload-offset"].includes(h) || h.startsWith("x-agent-device-") || h.startsWith("x-artifact-")) headers[h] = v;
     }
     if (Buffer.isBuffer(body)) headers["content-length"] = String(body.length);
     const init: RequestInit & { duplex?: string } = { method: req.method ?? "GET", headers };

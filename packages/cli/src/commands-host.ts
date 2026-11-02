@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -18,10 +18,10 @@ import {
 import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
-import { installWorker, localWorkerStatus, readUserConfig } from "./commands-worker.js";
+import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, workerRunning, workerServiceInstalled } from "./commands-worker.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, servicePlatform } from "./commands-guard.js";
 import { GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
-import { commandFailed, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
+import { commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
 import {
   assertHostPlatform,
   cloudCheck,
@@ -43,6 +43,9 @@ import {
   serveModeOf,
   tailscaleServeArgs,
   tailscaleServeOffArgs,
+  tokenFingerprint,
+  clipboardCommand,
+  parseWarm,
   type HostUpOptions,
   type StepRef,
 } from "./host/plan.js";
@@ -128,6 +131,28 @@ function findTailscale(): string | undefined {
 }
 
 /** The pairing files `host up` wrote, with what the guard thinks of each token. */
+/** Puts text on the clipboard through the platform's tool (stdin, never argv). */
+async function copyToClipboard(text: string): Promise<boolean> {
+  const cmd = clipboardCommand(osPlatform(), (bin) => findOnPath(bin, process.env["PATH"] ?? "", existsSync) !== undefined);
+  if (!cmd) return false;
+  const { spawn } = await import("node:child_process");
+  return new Promise((resolve) => {
+    const child = spawn(cmd[0]!, cmd.slice(1), { stdio: ["pipe", "ignore", "ignore"] });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+    child.stdin.end(text);
+  });
+}
+
+interface PausedState {
+  pausedAt: string;
+  guardService: boolean;
+  allowAdminAccount: boolean;
+  keepAwake: boolean;
+  tailscale: boolean;
+  workerService: boolean;
+}
+
 async function pairings(): Promise<Array<{ label: string; path: string; state: "active" | "expired or revoked" }>> {
   const dir = guardDir();
   const names = await readdir(dir).catch(() => [] as string[]);
@@ -154,6 +179,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .option("--keep-awake", "macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline")
     .option("--repair", "revoke the existing pairing with this label and issue a new token")
     .option("--skip-self-test", "do not lease a device through the guard at the end")
+    .option("--warm <counts>", "booted spare devices kept ready for fast leases, per platform, e.g. android=1,ios=0 (0 frees the memory; default: Simlock keeps one per device kind used)")
     .option("-y, --yes", "approve pairing without a prompt (you are at this machine)")
     .action(async (o: HostUpOptions) => {
       const g = globals();
@@ -190,11 +216,13 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           // On a re-run (worker answering, guard service running) leave both alone: restarting the
           // worker would end the sessions of an agent that is using this host right now.
           const service = await guardServiceState(platform, homedir(), { run: runCommand, uid: process.getuid?.() ?? 0 });
+          const warm = o.warm ? parseWarm(o.warm) : undefined;
           if (service.running && (await localWorkerStatus()) !== undefined) {
-            out.progress("The worker already runs (from an earlier `host up`); left as is. `tapdance worker install --service` reconfigures it.");
+            if (warm) await applyWarm(out, warm);
+            else out.progress("The worker already runs (from an earlier `host up`); left as is. `tapdance worker install --service` reconfigures it.");
             return;
           }
-          await installWorker({ stream: true, iosBackend: "agent-device", service: true, checks: prereq.checks }, out);
+          await installWorker({ stream: true, iosBackend: "agent-device", service: true, checks: prereq.checks, ...(warm ? { warm } : {}) }, out);
         });
 
         const { policy } = await loadPolicy();
@@ -303,17 +331,140 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         });
 
         await step(out, "summary", async () => undefined);
-        const block = { endpoint, tokenPath, devices, selfTest };
+        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label };
         out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios }, () =>
           [
             renderReadyBlock(block),
+            dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host up --warm android=0,ios=0. Stop everything: tapdance host pause.`),
             ...(endpoint.startsWith("http://127.0.0.1")
               ? ["", yellow("The endpoint is loopback only: an agent on another machine cannot reach it until Tailscale is set up (then run this command again).")]
               : []),
           ].join("\n"),
         );
+        // One keypress to get the token onto the clipboard; it never reaches the terminal.
+        if (!g.json && process.stdin.isTTY && process.stdout.isTTY && (await confirm("Copy the token to the clipboard now?"))) {
+          const copied = await copyToClipboard(secret);
+          out.progress(copied ? "Token copied. Paste it to your agent privately (a direct message, not a shared channel)." : "No clipboard tool found; run `tapdance host token --show` to see it.");
+        }
       } catch (error) {
         process.exitCode = reportFailure(out, Boolean(g.json), error);
+      }
+    });
+
+  host
+    .command("pause")
+    .description("Stop hosting for now, keeping the pairing: the guard (and caffeinate), Tailscale exposure, the worker and its devices stop, and nothing restarts at login")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const platform = assertHostPlatform(osPlatform());
+        const { policy } = await loadPolicy();
+        const io = { run: runCommand, uid: process.getuid?.() ?? 0 };
+        // Remember how the guard ran, so `resume` brings back the same thing.
+        const paths = guardServicePaths(platform, homedir());
+        const definition = await readFile(paths.file, "utf8").catch(() => "");
+        const bin = findTailscale();
+        const served = bin ? serveHasPort((await runCommand(bin, ["serve", "status", "--json"])).out, policy.listen.port) : false;
+        const state: PausedState = {
+          pausedAt: new Date().toISOString(),
+          guardService: definition !== "",
+          allowAdminAccount: definition.includes("--allow-admin-account"),
+          keepAwake: definition.includes("caffeinate"),
+          tailscale: served,
+          workerService: await workerServiceInstalled(),
+        };
+        await mkdir(guardDir(), { recursive: true, mode: 0o700 });
+        await writeFile(join(guardDir(), "paused.json"), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+        out.progress("Stopping the guard (and caffeinate)");
+        await uninstallGuardService(platform, homedir(), io);
+        if (bin && served) {
+          await runCommand(bin, tailscaleServeOffArgs(policy.listen.port, "https"));
+          await runCommand(bin, tailscaleServeOffArgs(policy.listen.port, "http"));
+        }
+        out.progress("Ending leases and stopping the worker and its devices");
+        if (await workerRunning()) await simlockNuke();
+        if (state.workerService) await setWorkerService(false);
+        const worker = await stopWorkerCompletely(out, { uninstallService: false });
+        out.result({ paused: true, ...state, stoppedDevices: worker.stoppedDevices }, () =>
+          [
+            `Paused. The VPS cannot reach this machine; no guard, caffeinate, worker or ${worker.stoppedDevices.length ? `devices (${worker.stoppedDevices.length} shut down)` : "devices"} run, and nothing starts at login.`,
+            dim("The pairing token is kept (it still expires on its own date). Start again with `tapdance host resume`."),
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  host
+    .command("resume")
+    .description("Start hosting again after `host pause`, the same way as before (guard flags, Tailscale, login services)")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        assertHostPlatform(osPlatform());
+        const file = join(guardDir(), "paused.json");
+        const state = JSON.parse(await readFile(file, "utf8").catch(() => "{}")) as Partial<PausedState>;
+        if (!state.pausedAt) out.warn("No pause was recorded; starting with defaults (guard without caffeinate, Tailscale if logged in).");
+        out.progress("Starting the worker");
+        if (state.workerService !== false) await setWorkerService(true);
+        await startWorker(out);
+        out.progress("Starting the guard");
+        const guard = await installGuardAsService({ allowAdminAccount: Boolean(state.allowAdminAccount), keepAwake: Boolean(state.keepAwake) });
+        const { policy } = await loadPolicy();
+        const port = policy.listen.port;
+        let endpoint = hostEndpoint(undefined, port);
+        const bin = findTailscale();
+        if (bin && state.tailscale !== false) {
+          const ts = parseTailscaleStatus((await runCommand(bin, ["status", "--json"])).out);
+          if (ts.loggedIn && ts.dnsName) {
+            const mode = ts.https ? "https" : "http";
+            const r = await runCommand(bin, tailscaleServeArgs(port, mode));
+            if (r.ok) endpoint = hostEndpoint(ts.dnsName, port, mode);
+            else out.warn(`tailscale serve failed: ${r.out.split("\n")[0] ?? ""}`);
+          } else out.warn("Tailscale is not logged in; the guard stays on loopback until you log in and run `tapdance host resume` again.");
+        }
+        await rm(file, { force: true });
+        const paired = await pairings();
+        const active = paired.filter((p) => p.state === "active");
+        out.result({ resumed: true, endpoint, guard, pairings: paired }, () =>
+          [
+            `Resumed: guard ${state.keepAwake ? "(with caffeinate) " : ""}answering, endpoint ${endpoint}.`,
+            active.length
+              ? `Pairing ${active.map((p) => `"${p.label}"`).join(", ")} still valid: the VPS can connect again as before.`
+              : yellow("No valid pairing token (expired or revoked): run `tapdance host up --repair` to issue a new one, then hand it over with `tapdance host token`."),
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  host
+    .command("token")
+    .description("Hand a pairing token to the agent: copy it to the clipboard (default) or show it once")
+    .option("--label <name>", "which pairing (default: the only one, or this machine's hostname)")
+    .option("--copy", "copy it to the clipboard (the default)")
+    .option("--show", "print it once (it stays in your terminal's scrollback)")
+    .action(async (o: { label?: string; copy?: boolean; show?: boolean }) => {
+      const out = output(globals());
+      try {
+        const files = await pairings();
+        const label = o.label ? sanitizeLabel(o.label) : files.length === 1 ? files[0]!.label : defaultLabel(hostname());
+        const file = files.find((p) => p.label === label);
+        if (!file) throw new TapdanceError("USAGE", `No pairing token for "${label}"`, { hint: files.length ? `Pass --label with one of: ${files.map((p) => p.label).join(", ")}` : "Pair first with `tapdance host up`." });
+        if (file.state !== "active") throw new TapdanceError("AUTH_FAILED", `The "${label}" pairing is ${file.state}`, { hint: "Issue a new one with `tapdance host up --repair`." });
+        const token = (await readFile(file.path, "utf8")).trim();
+        const fingerprint = tokenFingerprint(token);
+        if (o.show) {
+          out.warn("Showing the token: anyone who sees it can drive this machine's devices until it expires or you revoke it.");
+          out.secretResult({ label, token, fingerprint }, () => token);
+          return;
+        }
+        if (!(await copyToClipboard(token))) throw new TapdanceError("NOT_SUPPORTED", "No clipboard tool found", { hint: "Install wl-copy or xclip, or use `tapdance host token --show`." });
+        out.result({ label, copied: true, fingerprint }, () => `Token for "${label}" copied (fingerprint ${fingerprint}). Paste it to your agent privately; \`tapdance connect\` prints the same fingerprint.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
       }
     });
 
@@ -331,7 +482,12 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const gateway = joinedGateway();
         rows.push({ step: "account", ok: !gateway && process.getuid?.() !== 0, detail: `${userInfo().username}${admin ? " (administrator)" : ""}${gateway ? `; joined gateway ${gateway}` : ""}` });
         const worker = await localWorkerStatus();
-        rows.push({ step: "worker", ok: worker !== undefined, detail: worker !== undefined ? "the local Simlock worker answers" : "not answering (tapdance worker start)" });
+        const ws = worker as { capacity?: Record<string, { running?: number; warm?: number } | undefined>; ramBudget?: { usedBytes?: number; limitBytes?: number } } | undefined;
+        const gb = (n?: number) => (n === undefined ? "?" : (n / 1024 ** 3).toFixed(1));
+        const devicesLine = ws
+          ? (["android", "ios"] as const).map((p) => `${p} ${ws.capacity?.[p]?.running ?? 0} running (${ws.capacity?.[p]?.warm ?? 0} warm spare)`).join(", ") + `; devices use ${gb(ws.ramBudget?.usedBytes)} of ${gb(ws.ramBudget?.limitBytes)} GB budget`
+          : "";
+        rows.push({ step: "worker", ok: worker !== undefined, detail: worker !== undefined ? `the local Simlock worker answers; ${devicesLine}` : "not answering (tapdance worker start, or tapdance host resume)" });
         const { policy } = await loadPolicy();
         const port = policy.listen.port;
         const localUrl = `http://${policy.listen.host}:${port}`;
@@ -366,14 +522,16 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .command("down")
     .description("Stop hosting: remove the guard service and `tailscale serve` for its port (tokens are kept unless --revoke)")
     .option("--revoke", "also revoke every paired control machine and delete the pairing token files")
+    .option("--all", "everything: --revoke, plus end the worker's leases, shut down the emulators and simulators it created, stop it and remove its login service")
     .option("-y, --yes", "do not ask for confirmation")
-    .action(async (o: { revoke?: boolean; yes?: boolean }) => {
+    .action(async (o: { revoke?: boolean; all?: boolean; yes?: boolean }) => {
+      if (o.all) o.revoke = true;
       const out = output(globals());
       try {
         const platform = assertHostPlatform(osPlatform());
         if (!o.yes) {
           if (!process.stdin.isTTY) throw new TapdanceError("USAGE", "host down needs confirmation", { hint: "Run it in a terminal, or pass --yes." });
-          if (!(await confirm(`Stop the worker guard${o.revoke ? ", revoke every paired control machine" : ""} and remove its Tailscale exposure?`))) {
+          if (!(await confirm(o.all ? "Stop hosting completely: revoke every paired control machine, remove the guard and its Tailscale exposure, shut down the worker's devices, stop the worker and remove its login service?" : `Stop the worker guard${o.revoke ? ", revoke every paired control machine" : ""} and remove its Tailscale exposure?`))) {
             throw new TapdanceError("USAGE", "Cancelled; nothing changed");
           }
         }
@@ -396,12 +554,15 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             removed.push(p.path);
           }
         }
-        out.result({ service: service.file, serviceRemoved: service.removed, tailscale, revoked, removedTokenFiles: removed }, () =>
+        const worker = o.all ? await stopWorkerCompletely(out, { uninstallService: true }) : undefined;
+        out.result({ service: service.file, serviceRemoved: service.removed, tailscale, revoked, removedTokenFiles: removed, ...(worker ? { worker } : {}) }, () =>
           [
             service.removed ? `Removed the guard service (${service.file}).` : "No guard service was installed.",
             `Tailscale: ${tailscale}.`,
             o.revoke ? `Revoked ${revoked} token(s); deleted ${removed.length} token file(s).` : dim("Pairings are kept; revoke them with `tapdance worker guard revoke all` or `tapdance host down --revoke`."),
-            dim("The Simlock worker still runs for local agents; stop it with `tapdance worker stop`."),
+            worker
+              ? `Worker stopped${worker.serviceRemoved ? " and its login service removed" : ""}; shut down ${worker.stoppedDevices.length} device(s)${worker.stoppedDevices.length ? `: ${worker.stoppedDevices.join(", ")}` : ""}. Start again with \`tapdance host up\`.`
+              : dim("The Simlock worker still runs for local agents; stop everything with `tapdance host down --all`."),
           ].join("\n"),
         );
       } catch (error) {
@@ -423,7 +584,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         if (!token) throw new TapdanceError("USAGE", "No token given", { hint: `Pipe the token file in: tapdance connect ${endpoint} < pairing-<label>.token` });
         await writeConfigFile(userConfigPath(), { ...(await readUserConfig()), provider: "self-hosted", endpoint });
         const saved = await saveCredentials({ token, endpoint: origin });
-        out.progress(`Wrote ${userConfigPath()} (provider self-hosted, endpoint ${endpoint}); token saved to ${saved} (mode 600) for ${origin} only`);
+        out.progress(`Wrote ${userConfigPath()} (provider self-hosted, endpoint ${endpoint}); token saved to ${saved} (mode 600) for ${origin} only; fingerprint ${tokenFingerprint(token)} (it should match what host up showed)`);
         const t = await open(g, out, { fleet: false });
         let checks: DoctorCheck[];
         try {

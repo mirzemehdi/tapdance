@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
+import { execFile } from "node:child_process";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { Command } from "commander";
@@ -23,7 +24,8 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
     .description("Open a live view of this session's device in your browser (watch the agent, take over, hand back)")
     .option("--host <host>", "address to listen on (loopback by default; use SSH -L or Tailscale to reach it)")
     .option("--port <port>", "port to listen on")
-    .action(async (o: { host?: string; port?: string }) =>
+    .option("--allow-host <name>", "another name the page may be opened by (repeatable); this machine's Tailscale names are allowed already", (v: string, prev: string[] = []) => [...prev, v])
+    .action(async (o: { host?: string; port?: string; allowHost?: string[] }) =>
       run(globals(), async (t, out) => {
         const cfg = t.resolved.config.viewer;
         const host = o.host ?? cfg.host;
@@ -33,14 +35,21 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
         }
         if (host === "0.0.0.0") out.warn("Listening on all interfaces: anyone who can reach this port and has the link can control the device.");
         await t.viewer(); // fails early, with a clear error, when no device is leased
-        const { url, close } = await startViewer(t, { host, port, holdMs: cfg.humanHoldMs, log: (m) => out.progress(m) });
+        const loopback = ["127.0.0.1", "localhost", "::1"].includes(host);
+        // Names this machine answers to on its tailnet (MagicDNS, its 100.x addresses), so the link can
+        // use the name and a browser opening it by name is not refused as DNS rebinding.
+        const tailnet = loopback ? { names: [] as string[] } : await tailnetNames();
+        const allowedHosts = [...tailnet.names, ...(o.allowHost ?? [])];
+        const { url, close } = await startViewer(t, { host, port, holdMs: cfg.humanHoldMs, allowedHosts, log: (m) => out.progress(m) });
+        const shown = tailnet.dnsName && (host === "0.0.0.0" || tailnet.names.includes(host)) ? url.replace(`//${host}:`, `//${tailnet.dnsName}:`) : url;
         // The link's `#k=` key is the one secret this command exists to hand the person: not redacted.
-        out.secretResult({ url }, () =>
+        out.secretResult({ url: shown }, () =>
           [
-            bold(`Viewer: ${url}`),
-            dim("The link carries a one-time key; it stops working when this process exits or the lease ends."),
-            dim(`From another computer: ssh -L ${port}:127.0.0.1:${port} <this-host>, then open the link there.`),
-            dim("Ctrl-C to stop."),
+            bold(`Viewer: ${shown}`),
+            dim("Anyone with this link can watch and control the device while this viewer runs (Ctrl-C stops it; so does the lease ending)."),
+            loopback
+              ? dim(`From another computer: ssh -L ${port}:127.0.0.1:${port} <this-host>, then open the link there (live video).`)
+              : dim("Open it from a device on the same network. Over plain http on a non-localhost address, browsers do not allow the video decoder, so the page shows refreshed screenshots; for live video use https (tailscale serve) or ssh -L to localhost."),
           ].join("\n"),
         );
         await new Promise<void>((resolve) => {
@@ -54,7 +63,7 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
 
 export async function startViewer(
   t: Tapdance,
-  options: { host: string; port: number; holdMs: number; log: (m: string) => void },
+  options: { host: string; port: number; holdMs: number; allowedHosts?: string[]; log: (m: string) => void },
 ): Promise<{ url: string; close: () => Promise<void> }> {
   const key = randomBytes(18).toString("base64url");
   const cookieName = "td_view";
@@ -64,10 +73,23 @@ export async function startViewer(
     const expected = Buffer.from(key);
     return given.length === expected.length && timingSafeEqual(given, expected);
   };
-  // DNS rebinding guard: only loopback names, or the address we were told to bind, may appear in Host.
+  // DNS rebinding guard: only loopback names, the address we were told to bind, and names this
+  // machine has on its tailnet (or `--allow-host`) may appear in Host.
+  const allowed = new Set(["127.0.0.1", "localhost", "::1", options.host, ...(options.allowedHosts ?? [])].map((h) => h.toLowerCase()));
   const hostOk = (req: IncomingMessage): boolean => {
-    const host = (req.headers.host ?? "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
-    return ["127.0.0.1", "localhost", "::1", options.host].includes(host);
+    const host = (req.headers.host ?? "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+    return allowed.has(host);
+  };
+  // Fallback frames (pages that cannot decode video): one screenshot at a time, reused for 400 ms.
+  let lastFrame: { at: number; png: Buffer } | undefined;
+  let pendingFrame: Promise<Buffer> | undefined;
+  const frame = async (): Promise<Buffer> => {
+    if (lastFrame && Date.now() - lastFrame.at < 400) return lastFrame.png;
+    pendingFrame ??= t.frame().then((png) => {
+      lastFrame = { at: Date.now(), png };
+      return png;
+    }).finally(() => (pendingFrame = undefined));
+    return pendingFrame;
   };
   const originOk = (req: IncomingMessage): boolean => {
     const origin = req.headers.origin;
@@ -114,6 +136,11 @@ export async function startViewer(
         if (!record) return send(res, 410, { error: "No device is leased in this session any more." });
         const status = await t.status().catch((e: TapdanceError) => ({ error: e.message }));
         return send(res, 200, { device: status, takeover, recording: record.recording ?? null, artifacts: (await t.listArtifacts()).slice(-10), humanRequest: (await t.pendingHumanRequest()) ?? null });
+      }
+      if (url.pathname === "/api/frame") {
+        const png = await frame();
+        res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" }).end(png);
+        return;
       }
       if (url.pathname === "/stream") {
         const { endpoints } = await t.viewer();
@@ -222,4 +249,25 @@ export async function startViewer(
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
+}
+
+/** This machine's tailnet names and addresses from `tailscale status --json`; empty without Tailscale. */
+export async function tailnetNames(): Promise<{ names: string[]; dnsName?: string }> {
+  const raw = await new Promise<string>((resolve) => {
+    execFile("tailscale", ["status", "--json"], { timeout: 5000 }, (error, stdout) => resolve(error ? "" : stdout));
+  });
+  return parseTailnetNames(raw);
+}
+
+export function parseTailnetNames(raw: string): { names: string[]; dnsName?: string } {
+  try {
+    const self = (JSON.parse(raw) as { Self?: { DNSName?: unknown; HostName?: unknown; TailscaleIPs?: unknown } }).Self ?? {};
+    const dnsName = typeof self.DNSName === "string" && self.DNSName ? self.DNSName.replace(/\.$/, "") : undefined;
+    const ips = Array.isArray(self.TailscaleIPs) ? self.TailscaleIPs.filter((x): x is string => typeof x === "string") : [];
+    // The short MagicDNS name (before the first dot) resolves inside the tailnet too.
+    const names = [...(dnsName ? [dnsName, dnsName.split(".")[0]!] : []), ...ips];
+    return { names, ...(dnsName ? { dnsName } : {}) };
+  } catch {
+    return { names: [] };
+  }
 }

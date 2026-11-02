@@ -100,8 +100,10 @@ tapdance connect <endpoint host up printed> < pairing-<label>.token   # on the V
 
 `host up` sets up device-only mode step by step and prints the `connect` line to paste on the agent's
 machine; the token goes to a mode-600 file, never to the terminal. You can cut the paired machine off
-at any time from the Mac (`tapdance worker guard revoke all`, or `tapdance host down --revoke`); see
-[Take access away](docs/security/personal-mac.md#take-access-away). The installer's prerequisite step
+at any time from the Mac (`tapdance worker guard revoke all`, or `tapdance host down --all`), or pause
+and resume hosting without re-pairing (`tapdance host pause` / `tapdance host resume`); see
+[Take access away](docs/security/personal-mac.md#take-access-away). `tapdance host token` copies the
+token to your clipboard. The installer's prerequisite step
 and the build were run on a scratch home; `host up` itself has **not yet run end to end** (no fresh
 machine, no second machine yet): see
 [one-command host](docs/deployment/one-command-host.md).

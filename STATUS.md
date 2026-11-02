@@ -158,14 +158,14 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | W-04 | 🟡 | TTL + keepalive + idle release + owner-scoped MCP shutdown; per-session lock. Interrupted-allocation cleanup relies on Simlock cancelling on disconnect. |
 | W-05 | 🟡 | `gateway setup` ✅ on macOS (tokens, capabilities, config); Caddy/Tailscale steps untested. |
 | W-06 | 🟡 | See C-05. |
-| W-07 | 🟡 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` (prerequisite check and install with one confirmation, checksum-verified official downloads, a no-sudo pnpm shim for the build) and `scripts/host-setup.ps1`. Run for real: the installer's check and install of Node.js, the Android command-line tools, platform-tools and emulator into a scratch macOS home, the Temurin download, and a fresh clone and build with only that Node.js (#20). Tailscale without HTTPS certificates falls back to `serve --http` inside the tailnet (#21, unit-tested). Not yet run: `host up` end to end, Linux, the system image download, two machines. |
+| W-07 | 🟡 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` (prerequisite check and install with one confirmation, checksum-verified official downloads, a no-sudo pnpm shim for the build) and `scripts/host-setup.ps1`. Run for real: the installer's check and install of Node.js, the Android command-line tools, platform-tools and emulator into a scratch macOS home, the Temurin download, and a fresh clone and build with only that Node.js (#20). Tailscale without HTTPS certificates falls back to `serve --http` inside the tailnet (#21, unit-tested). First real run by the owner (2026-11-02) passed its self-test; fixes since: token handover (`host token`, copy prompt, fingerprint), `host pause` / `host resume`, `host down --all`, warm-spare control (`--warm`), uploads through the guard (#23). Those fixes are unit-tested only. Not yet run: `host up` on a fresh Mac, Linux, the system image download, two machines. |
 
 ### Browser viewer
 
 | ID | | Notes |
 | --- | --- | --- |
 | V-01 | ✅ | `tapdance view`: real H.264 frames (meta, avcC, keyframes) proxied from Simlock's lease stream and decoded in the browser with WebCodecs ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). |
-| V-02 | 🟡 | stream, tap, status ✅ ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)); Home, tap, Screenshot and Start/Stop recording buttons ✅ on Android ([evidence](docs/testing/evidence/2026-11-01-android.md)); second computer untested. Back/Apps are Android-only (disabled for iOS). |
+| V-02 | 🟡 | stream, tap, status ✅ ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)); Home, tap, Screenshot and Start/Stop recording buttons ✅ on Android ([evidence](docs/testing/evidence/2026-11-01-android.md)); second computer untested. Back/Apps are Android-only (disabled for iOS). | Over a tailnet: MagicDNS names are allowed and pages that cannot decode video (plain http off localhost) fall back to refreshed screenshots (`viewer.test.ts`; not yet seen in the owner's browser).
 | V-03 | ✅ | A touch sets a human hold; the agent's next tap failed with `HUMAN_HELD` (retryable). Take over / Hand back. Advisory: enforced by Tapdance, not by Simlock. |
 | V-04 | ✅ | Loopback-only, one-time key in the URL fragment, HttpOnly cookie, Host/Origin checks; token stays server-side. |
 | V-05 | ✅ | Simlock console is view-only/operator-only; lease stream + input socket used instead (ADR). |
@@ -311,6 +311,7 @@ paths below were exercised only by unit tests.
 | Scenario files and `tapdance run`: YAML/JSON schema with MCP step names, replay through the SDK, PASS/FAIL report with failure screenshot and UI tree, `continue_on_failure`, exit code 12 (`SCENARIO_FAILED`), recorder from MCP tool calls. Not yet run on a real device. | Y-07, Y-08, Y-09 | 🧪 | `packages/sdk/src/scenario.test.ts`, `packages/cli/src/cli.test.ts` |
 | MCP: `list_apps`, short log replies (`contains`, `level`), action replies with `screenChanged`/`resolvedBy`/`typed`, stale refs refused, progress notifications | S-02, S-04, Y-04 | 🧪 | `packages/mcp/src/mcp.test.ts`, `packages/provider-simlock/src/provider.test.ts` |
 | Worker guard as a login service (`worker guard install/uninstall`): plist and systemd unit text, launchctl/systemctl calls against a fake runner, no tokens in the service environment | H-03 | 🧪 | `packages/cli/src/guard/service.test.ts` |
+| Guard forwards agent-device upload headers; a 31 MB APK installed through a real guard (#23) | H-06 | ✅ | `guard.test.ts` 17; real run 2026-11-02 |
 | One-command host (`host up/status/down`, `connect`): Tailscale parsing, ready block, step-failure formatting, Windows refusal, cloud-VM detection | W-07 | 🧪 | `packages/cli/src/host/host.test.ts` |
 
 ## Bugs found by running for real (fixed)

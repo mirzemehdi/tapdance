@@ -109,8 +109,10 @@ Everything here runs on your Mac; nothing the paired machine sends can undo it.
 | See what they did | `tapdance worker guard audit` | Every request, allowed or refused (no tokens, no file contents). |
 | Cut off one machine | `tapdance worker guard revoke <id>` | Its token stops working on its next request. Hosting continues for others. |
 | Cut off every machine | `tapdance worker guard revoke all` | All tokens stop working. Pair again with `tapdance host up` (or `worker guard pair`). |
+| Pause, keep the pairing | `tapdance host pause` | Guard (and `caffeinate`), Tailscale exposure, worker and its devices stop; nothing restarts at login. `tapdance host resume` brings it all back. |
 | Stop hosting | `tapdance host down --revoke` | Revokes every token, removes the guard's login service and the Tailscale exposure. |
-| Stop the devices too | `tapdance worker stop` | No emulators or simulators to drive. |
+| Stop everything | `tapdance host down --all` | `--revoke`, plus ends leases, shuts down the worker's devices, stops it and removes its login service. |
+| Stop the devices | `tapdance worker stop` | Ends leases, stops the worker and shuts down the emulators and simulators it created. |
 | Instantly, without a terminal | Quit or disconnect Tailscale | The paired machine can no longer reach your Mac at all. |
 
 Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–90) in

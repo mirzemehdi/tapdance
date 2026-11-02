@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { TapdanceError, redactSecrets, type CatalogEntry, type DoctorCheck } from "@tapdance/sdk";
 
@@ -201,6 +202,8 @@ export interface HostUpOptions {
   yes?: boolean;
   skipSelfTest?: boolean;
   repair?: boolean;
+  /** `--warm android=1,ios=0`: booted spare devices per platform. */
+  warm?: string;
 }
 
 const shellWord = (s: string) => (/^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
@@ -239,12 +242,56 @@ export interface ReadyBlock {
   selfTest: string;
 }
 
-export function renderReadyBlock(r: ReadyBlock): string {
+export type WarmCounts = { android?: number; ios?: number };
+
+/** Parses `--warm android=1,ios=0`. */
+export function parseWarm(spec: string): WarmCounts {
+  const out: WarmCounts = {};
+  for (const part of spec.split(",").map((p) => p.trim()).filter(Boolean)) {
+    const m = /^(android|ios)=(\d{1,2})$/.exec(part);
+    if (!m) throw new TapdanceError("USAGE", `"${part}" is not a warm count`, { hint: "Use --warm android=1,ios=0 (a number of booted spares per platform; 0 turns them off)." });
+    out[m[1] as "android" | "ios"] = Number(m[2]);
+  }
+  return out;
+}
+
+/**
+ * Simlock settings for a warm-spare count per platform. Simlock keeps booted spares of the device kinds
+ * it has served; `warmPool.reserveRunning.<platform>` holds running slots back from them, so
+ * reserving `limit - count` leaves room for `count` spares (0 spares: reserve every slot). With no
+ * spares anywhere the pool is off and idle devices shut down (`idle.shutdownAfterMs`).
+ */
+export function warmSettings(warm: WarmCounts, limits: { android: number; ios: number }): Array<[string, string]> {
+  const want = { android: warm.android ?? 1, ios: warm.ios ?? 1 };
+  if (want.android === 0 && want.ios === 0) return [["warmPool.enabled", "false"]];
+  return [
+    ["warmPool.enabled", "true"],
+    ["warmPool.reserveRunning.android", String(Math.max(0, limits.android - want.android))],
+    ["warmPool.reserveRunning.ios", String(Math.max(0, limits.ios - want.ios))],
+  ];
+}
+
+/** A short, safe-to-show tag for a token: the first 6 hex characters of its SHA-256. */
+export function tokenFingerprint(token: string): string {
+  return createHash("sha256").update(token.trim()).digest("hex").slice(0, 6);
+}
+
+/** The clipboard command for this platform, as an argument array (stdin carries the text). */
+export function clipboardCommand(platform: NodeJS.Platform, has: (bin: string) => boolean): string[] | undefined {
+  if (platform === "darwin") return ["pbcopy"];
+  if (platform === "win32") return ["clip"];
+  if (has("wl-copy")) return ["wl-copy"];
+  if (has("xclip")) return ["xclip", "-selection", "clipboard"];
+  if (has("xsel")) return ["xsel", "--clipboard", "--input"];
+  return undefined;
+}
+
+export function renderReadyBlock(r: ReadyBlock & { fingerprint?: string; label?: string }): string {
   const file = r.tokenPath.split(/[\\/]/).at(-1) ?? "token-file";
   return [
     "TAPDANCE HOST READY",
     `endpoint:  ${r.endpoint}`,
-    `token:     written to ${r.tokenPath} (mode 600) — send it to your agent privately`,
+    `token:     saved to ${r.tokenPath} (mode 600)${r.fingerprint ? `, fingerprint ${r.fingerprint}` : ""}. Copy it: tapdance host token${r.label ? ` --label ${r.label}` : ""}`,
     `devices:   ${r.devices}`,
     `self-test: ${r.selfTest}`,
     `on the agent machine:  tapdance connect ${r.endpoint} < ${file}`,

@@ -78,6 +78,17 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - `host up|status|down`, `connect`, `worker guard install|uninstall`, `scripts/host-setup.sh`.
 - Docs: Android proven locally; repository URL `github.com/mirzemehdi/tapdance`; purchase-testing guide.
 
+### Added after the first field run (issues #20–#25)
+
+- Guard forwards agent-device's upload headers: app installs through the guard work for large apps.
+- `tapdance host pause` / `host resume`, `host down --all`, `host token` (clipboard, fingerprint),
+  `host up --warm android=N,ios=M`; `worker stop` also shuts down the worker's devices, and `worker start`
+  resets stale device records when nothing is leased.
+- Viewer: Tailscale names allowed, screenshot mode where browsers forbid the video decoder, errors in
+  the banner.
+- `host-setup.sh` installs prerequisites (one confirmation, checksummed official downloads); pnpm
+  without sudo; Tailscale without HTTPS certificates served over HTTP inside the tailnet.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

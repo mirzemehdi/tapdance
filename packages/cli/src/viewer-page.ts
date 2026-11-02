@@ -125,6 +125,23 @@ async function stream() {
   setBanner("Stream ended. Reload to reconnect.", "human");
 }
 
+// Without WebCodecs (browsers allow it only on https or localhost), show refreshed screenshots.
+let framesMode = false;
+async function frames() {
+  framesMode = true;
+  for (;;) {
+    try {
+      const r = await fetch("/api/frame", { cache: "no-store" });
+      if (r.status === 410 || r.status === 401) { setBanner("The device is gone or this link expired. Run \"tapdance view\" again.", "human"); return; }
+      if (r.ok) {
+        const bmp = await createImageBitmap(await r.blob());
+        paint(bmp, bmp.width, bmp.height); bmp.close();
+      }
+    } catch (e) { setBanner("Screenshot failed: " + (e && e.message ? e.message : e), "human"); }
+    await new Promise((res) => setTimeout(res, 500));
+  }
+}
+
 // ---------------------------------------------------------------- input
 let ws, down = false;
 function send(tag, body) {
@@ -182,7 +199,9 @@ async function refresh() {
   document.getElementById("rec").textContent = b.recording ? "Stop recording" : "Start recording";
   // Simlock acts on Home only for iOS simulators; Back and Apps are Android keys.
   for (const name of ["back", "app_switcher"]) { const el = document.querySelector('[data-button="' + name + '"]'); if (el) { el.disabled = d.platform === "ios"; el.title = d.platform === "ios" ? "Android only" : ""; } }
+  // In screenshot mode the banner keeps explaining why, unless the agent asks for a person or you took over.
   if (b.humanRequest) setBanner("The agent asks you: " + b.humanRequest.reason + " — press Take over, do it, then Hand back.", "human");
+  else if (framesMode && !b.takeover) { /* keep the screenshot-mode notice */ }
   else if (!banner.classList.contains("human") || b.takeover) setBanner(b.takeover ? "You have control. The agent is paused until you hand back." : "Live. The agent is driving; touch the screen to take control briefly.", b.takeover ? "human" : "");
   document.getElementById("artifacts").innerHTML = (b.artifacts || []).slice().reverse().map((a) => '<li><a target="_blank" href="/api/artifact?id=' + encodeURIComponent(a.id) + '">' + esc(a.kind) + "</a> " + esc(new Date(a.createdAt).toLocaleTimeString()) + "</li>").join("");
 }
@@ -191,15 +210,20 @@ async function start() {
   if (m) {
     const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ k: m[1] }) });
     history.replaceState(null, "", "/");
-    if (!r.ok) { setBanner("This link has expired. Run \"tapdance view\" again.", "human"); return; }
+    if (!r.ok) { setBanner("This link no longer works (the viewer restarted). Run \"tapdance view\" again.", "human"); return; }
   }
   const probe = await fetch("/api/status");
-  if (probe.status === 401) { setBanner("Open the link \"tapdance view\" printed (it carries a one-time key).", "human"); return; }
-  stream().catch((e) => setBanner("Stream failed: " + e.message, "human"));
+  if (probe.status === 401) { setBanner("Open the link \"tapdance view\" printed (it carries the key).", "human"); return; }
+  if (!window.isSecureContext || typeof VideoDecoder === "undefined") {
+    frames();
+  } else {
+    stream().catch((e) => setBanner("Stream failed: " + e.message, "human"));
+  }
   connectInput();
-  refresh(); setInterval(refresh, 3000);
+  refresh(); setInterval(() => refresh().catch(() => undefined), 3000);
+  if (framesMode) setBanner("Screenshot mode (about 2 per second): over plain http on a non-localhost address the browser does not allow the live video decoder. Tap and type still work. For live video use https or ssh -L to localhost.", "human");
 }
-start();
+start().catch((e) => setBanner("The viewer could not start: " + (e && e.message ? e.message : e) + ". Reload to try again.", "human"));
 </script>
 </body>
 </html>`;

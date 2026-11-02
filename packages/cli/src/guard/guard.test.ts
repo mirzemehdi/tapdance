@@ -23,7 +23,7 @@ const C = "c".repeat(32);
 interface Upstream {
   server: Server;
   url: string;
-  seen: Array<{ method: string; path: string; body: string }>;
+  seen: Array<{ method: string; path: string; body: string; headers: Record<string, string | string[] | undefined> }>;
 }
 
 interface FakeOptions {
@@ -45,7 +45,7 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
   const server = createServer(async (req, res) => {
     let body = "";
     for await (const c of req) body += c;
-    seen.push({ method: req.method ?? "", path: req.url ?? "", body });
+    seen.push({ method: req.method ?? "", path: req.url ?? "", body, headers: req.headers });
     const lease = /^\/v1\/leases\/([0-9a-f]{32})/.exec(req.url ?? "");
     if (req.url === "/v1/agent-device/rpc") {
       const call = JSON.parse(body) as { method: string; params: { leaseId: string } };
@@ -545,6 +545,26 @@ describe("worker guard: hardening", () => {
     const off = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, files: false } }, { container: root });
     await off.allocate(off.alice.secret, A);
     expect((await off.call(off.alice.secret, "GET", `/v1/leases/${A}/files?app=com.example&path=Documents%2Fexport.json`)).status).toBe(403);
+  });
+
+  it("17. uploads keep agent-device's artifact and resume headers (#23)", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    const headers = {
+      "x-agent-device-lease-id": A,
+      "content-type": "application/octet-stream",
+      "x-artifact-type": "file",
+      "x-artifact-filename": "app-debug.apk",
+      "x-artifact-hash": "a".repeat(64),
+      "x-artifact-hash-algorithm": "sha256",
+      "content-range": "bytes 0-3/4",
+      "x-upload-offset": "0",
+    };
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload", "APK!", headers)).status).toBe(200);
+    const forwarded = t.upstream.seen.find((x) => x.path === "/v1/agent-device/upload")!.headers;
+    for (const [k, v] of Object.entries(headers)) expect(forwarded[k], k).toBe(v);
+    // The client's credential never reaches Simlock; the guard sends the local one.
+    expect(forwarded["authorization"]).toBe("Bearer slk_LOCALONLYSECRET");
   });
 });
 
