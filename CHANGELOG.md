@@ -164,6 +164,9 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   simulator's crash reports (.ips) since the lease began, pulled as artifacts with a summary of the
   exception and the crashed thread. Through a worker guard only reports naming the lease's simulator
   are served.
+- Fixed: after a `pnpm install` that moved agent-device (a new version or patch), the worker kept
+  running the old copy, because `worker install` stored its absolute path in Simlock's config.
+  `worker start` and `worker restart` now point Simlock at the agent-device this Tapdance ships.
 
 ### Not yet proven
 

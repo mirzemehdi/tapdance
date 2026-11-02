@@ -64,7 +64,10 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
   while (Date.now() < deadline && existsSync(join(gateway ? join(simlockHome(), "gateway") : simlockHome(), "daemon.sock"))) {
     await new Promise((r) => setTimeout(r, 1000));
   }
-  if (!gateway) await killStaleAdbServer(out);
+  if (!gateway) {
+    await killStaleAdbServer(out);
+    await syncAgentDeviceCommand(out);
+  }
   for (let attempt = 1; ; attempt++) {
     try {
       await simlock([...flag, "daemon", "start"]);
@@ -321,10 +324,34 @@ export async function setWorkerService(on: boolean): Promise<void> {
 }
 
 /** Starts the worker after a pause and resets stale device records when nothing is leased. */
+/**
+ * Points Simlock at the agent-device this Tapdance ships. `worker install` stores its absolute path,
+ * and a `pnpm install` that changes it (a version or a patch: the folder name changes) left the
+ * worker running the old copy, e.g. without the landscape tap fix (#56).
+ */
+export async function syncAgentDeviceCommand(
+  out: Pick<ReturnType<typeof output>, "progress">,
+  home: string = simlockHome(),
+  set: (path: string) => Promise<unknown> = (path) => simlock(["--local", "config", "set", "capabilities.agent-device.command", path]),
+): Promise<boolean> {
+  let current: unknown;
+  try {
+    current = (JSON.parse(await readFile(join(home, "config.json"), "utf8")) as { capabilities?: Record<string, { command?: unknown }> }).capabilities?.["agent-device"]?.command;
+  } catch {
+    return false;
+  }
+  const wanted = agentDeviceBin();
+  if (typeof current !== "string" || current === wanted) return false;
+  await set(wanted);
+  out.progress(`Pointed the worker at this Tapdance's agent-device (${wanted.split("/node_modules/.pnpm/")[1]?.split("/")[0] ?? wanted})`);
+  return true;
+}
+
 export async function startWorker(out: ReturnType<typeof output>): Promise<void> {
   await ensureSimlockHelpersExecutable(out);
   if (!(await workerRunning())) {
     await killStaleAdbServer(out);
+    await syncAgentDeviceCommand(out);
     await simlock(["--local", "daemon", "start"]).catch(() => "");
   }
   const deadline = Date.now() + 90_000;
