@@ -571,8 +571,13 @@ describe("worker guard: hardening", () => {
     expect(upload.status).toBe(403);
     expect((await cmd("record", ["start"])).status).toBe(403);
     expect((await t.exec(viewer.secret, A, "adb", ["shell", "id"])).status).toBe(403);
+    // The refusal names the token's limit and the pairing that would allow it, not a policy switch
+    // that is already on (self-test C5).
     const refused = await (await cmd("record", ["start"])).text();
-    expect(refused).toContain("allow.recording");
+    expect(refused).toContain("this token is limited to interaction, inspection, screenshots, and recording is not one of them");
+    expect(refused).toContain("--scope interaction,inspection,screenshots,recording");
+    expect(refused).not.toContain("allow.recording");
+    expect(await upload.text()).toContain("install is not one of them");
     // The unscoped token still gets everything the policy allows.
     await t.allocate(t.alice.secret, B);
     expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "record", leaseId: B, positionals: ["start"] })).status).toBe(200);

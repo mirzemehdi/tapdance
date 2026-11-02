@@ -178,6 +178,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (self-test C1): a worker restart during a lease left the lease alive but its device gone, and
   every command failed with "refused: simlock picks the device" (USAGE). That is now LEASE_LOST with
   the fix, and the client clears its session. `worker restart` refuses while leases run unless `--force`.
+- Fixed (self-test C5): a release whose calls both failed (the guard restarting mid-release) printed
+  "Released" and forgot the lease while the guard still held it, so the next lease hit the session
+  limit. It is now kept for another release. A token whose scopes refuse an area that the policy allows
+  is told so, with the `worker guard pair --scope` that would allow it, instead of being sent to a
+  policy switch that is already on; an upload refused by the guard arrives as FORBIDDEN, not DEVICE_ERROR.
 
 ### Not yet proven
 

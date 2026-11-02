@@ -550,24 +550,31 @@ export class SimlockProvider implements DeviceProvider {
   async release(handle: LeaseHandle): Promise<{ released: boolean; unreachable?: boolean }> {
     const client = this.agentClient(handle);
     let released = false;
-    let unreachable = 0;
-    const isUnreachable = (error: unknown) => ["PROVIDER_UNREACHABLE", "WORKER_OFFLINE"].includes(fromAgentDeviceError(error, "release").code);
+    let failed = 0;
+    // An error that says the lease or session is already over is an answer; anything else (the
+    // worker or guard unreachable or restarting mid-call, a transport error) means nobody released it.
+    const isGone = (error: unknown) => {
+      const e = fromAgentDeviceError(error, "release");
+      return e.code === "LEASE_LOST" || e.code === "NO_ACTIVE_LEASE" || /not active|no such (lease|session)|unknown lease|already (ended|released|closed)|not found/i.test(e.message);
+    };
     // `close` ends the agent-device session and, with it, the Simlock lease; `release` covers a
     // session that never opened. Either answering "not active" means it is already gone.
     try {
       await client.sessions.close({ ...this.scope(handle) } as never);
       released = true;
     } catch (error) {
-      if (isUnreachable(error)) unreachable++;
+      if (!isGone(error)) failed++;
     }
     try {
       const result = await client.leases.release({ ...this.scope(handle) } as never);
       released = released || result.released;
     } catch (error) {
-      if (isUnreachable(error)) unreachable++;
+      if (!isGone(error)) failed++;
     }
     this.clients.delete(this.data(handle).agentDeviceSession);
-    return { released, ...(unreachable === 2 ? { unreachable: true } : {}) };
+    // Both calls failed without saying the lease is over: keep it, so release can be run again (a
+    // guard restart mid-release printed "Released" while the guard still held the lease).
+    return { released, ...(!released && failed === 2 ? { unreachable: true } : {}) };
   }
 
   // ---------------------------------------------------------------- apps

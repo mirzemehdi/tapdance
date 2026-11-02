@@ -654,6 +654,26 @@ describe("iOS gaps (#48-#50)", () => {
     // The same hint when the session's app was killed (#50).
     expect(fromAgentDeviceError({ message: "app 'com.measify.pianolune' is not running" }, "inspect").hint).toMatch(/launch it again/);
   });
+  it("keeps a lease whose release nobody answered, and accepts an already-ended one", async () => {
+    const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "ios", deviceId: "U", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "ios:mobile:U", tenant: "local", runId: "r", clientId: "c" } } as never;
+    const withClient = (fail: Error) =>
+      new (class extends SimlockProvider {
+        protected override agentClient() {
+          const reject = async () => {
+            throw fail;
+          };
+          return { sessions: { close: reject }, leases: { release: reject } } as never;
+        }
+      })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+    // A guard restarting mid-release: agent-device's transport error, not "unreachable" by name.
+    expect(await withClient(new Error("Retry command. If this persists, verify the remote daemon URL")).release(handle)).toEqual({ released: false, unreachable: true });
+    expect(await withClient(new Error("session not active")).release(handle)).toEqual({ released: false });
+  });
+  it("passes a guard's refusal of an upload through as its own code and text", () => {
+    const e = fromAgentDeviceError({ code: "COMMAND_FAILED", message: 'Upload failed: {"error":{"code":"FORBIDDEN","message":"Refused: this token is limited to interaction, screenshots, and install is not one of them."}}' }, "install");
+    expect(e.code).toBe("FORBIDDEN");
+    expect(e.message).toBe("install failed: Refused: this token is limited to interaction, screenshots, and install is not one of them.");
+  });
   it("reports a lease whose device the worker forgot (restart mid-lease) as lost, with the fix", () => {
     const e = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused: simlock picks the device" }, "inspect");
     expect(e.code).toBe("LEASE_LOST");

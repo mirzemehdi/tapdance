@@ -52,6 +52,13 @@ const STALE_CLAIM_HINT =
 export function fromAgentDeviceError(error: unknown, action: string): TapdanceError {
   if (error instanceof TapdanceError) return error;
   const e = (error ?? {}) as AgentDeviceLikeError;
+  // agent-device wraps an upload refused by a worker guard as text ("Upload failed: {"error": …}");
+  // the guard's own code and message are the answer (self-test C5).
+  const wrapped = typeof e.message === "string" ? /\{"error":\{"code":"(FORBIDDEN|UNKNOWN_LEASE|NO_CAPACITY)","message":"((?:[^"\\]|\\.)*)"\}\}/.exec(e.message) : null;
+  if (wrapped) {
+    const inner = JSON.parse(`"${wrapped[2]}"`) as string;
+    return new TapdanceError(wrapped[1] === "UNKNOWN_LEASE" ? "LEASE_LOST" : (wrapped[1] as ErrorCode), `${action} failed: ${inner}`);
+  }
   const rawCode = typeof e.code === "string" ? e.code : "";
   const message = typeof e.message === "string" ? e.message : String(error);
   const backendDetails = e.details !== null && typeof e.details === "object" ? (e.details as Record<string, unknown>) : {};

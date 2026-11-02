@@ -94,6 +94,17 @@ export function loadLeaseBook(file: string): { owners: Map<string, string>; phys
   return { owners, physical };
 }
 
+/**
+ * A policy refusal that the host policy allows but the token's scopes do not: says so, with the
+ * pairing that would allow it, instead of sending the owner to a policy switch that is already on.
+ */
+export function scopeRefusal(message: string, token: GuardToken | undefined, hostPolicy: GuardPolicy): string | undefined {
+  if (!token?.scopes) return undefined;
+  const area = /local policy \((\w+)\)/.exec(message)?.[1] ?? (/App installs are disabled/.test(message) ? "install" : undefined);
+  if (!area || !(hostPolicy.allow as Record<string, boolean>)[area]) return undefined;
+  return `Refused: this token is limited to ${token.scopes.join(", ")}, and ${area} is not one of them. The host owner can pair a token that includes it: tapdance worker guard pair --label <name> --scope ${[...token.scopes, area].join(",")}`;
+}
+
 export async function startGuard(options: GuardOptions): Promise<{ server: Server; url: string; close: () => Promise<void> }> {
   const { upstream } = options;
   const policy = options.policy;
@@ -137,9 +148,11 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     }
   };
 
+  /** The token a response answers, so a refusal can say when the token's scopes, not the policy, refused. */
+  const tokenOf = new WeakMap<ServerResponse, GuardToken>();
   const send = (res: ServerResponse, status: number, code: string, message: string) => {
     if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-    res.end(JSON.stringify({ error: { code, message } }));
+    res.end(JSON.stringify({ error: { code, message: scopeRefusal(message, tokenOf.get(res), hostPolicy) ?? message } }));
   };
 
   const authenticate = async (req: IncomingMessage): Promise<GuardToken | undefined> => {
@@ -437,6 +450,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
         return;
       }
       token = await authenticate(req);
+      if (token) tokenOf.set(res, token);
       if (!token) {
         await decide("deny", { reason: "unauthenticated" });
         return send(res, 401, "UNAUTHENTICATED", "Missing, expired or revoked worker-guard token");
