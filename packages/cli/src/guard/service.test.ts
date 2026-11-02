@@ -106,7 +106,7 @@ describe("guard service files (pure)", () => {
     );
     expect(env["PATH"]!.split(":")).toEqual(["/opt/sdk/platform-tools", "/opt/sdk/emulator", "/opt/sdk/cmdline-tools/latest/bin", "/opt/node/bin", "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
     expect(env).toEqual({ PATH: env["PATH"], ANDROID_HOME: "/opt/sdk", TAPDANCE_HOME: "/x/td" });
-    expect(guardServiceEnvironment({}, "/usr/bin/node")).toEqual({ PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" });
+    expect(guardServiceEnvironment({}, "/usr/bin/node")).toEqual({ PATH: "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin:/usr/sbin:/sbin" });
     // Builds need the JDK the owner uses (Kotlin Multiplatform runs Gradle from Xcode).
     const withJava = guardServiceEnvironment({ JAVA_HOME: "/jdk17" }, "/usr/bin/node");
     expect(withJava["JAVA_HOME"]).toBe("/jdk17");
