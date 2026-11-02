@@ -878,8 +878,10 @@ Options:
   -p, --platform <platform>  android or ios
   -d, --device <model>       model, e.g. "Pixel 8" or "iPhone 16"
   --os <version>             OS version or range (Android: API level)
-  --image-tag <tag>          Android system image tag, e.g.
-                             google_apis_playstore
+  --image-tag <tag>          Android system image tag; leave it out for normal
+                             testing (google_apis, lighter).
+                             google_apis_playstore only when the test needs the
+                             Play Store (billing, Play sign-in)
   --physical                 lease an enrolled physical device instead
   --profile <name>           boot a device profile from this machine (read-only:
                              the lease's changes are discarded)

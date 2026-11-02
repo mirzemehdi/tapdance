@@ -79,6 +79,15 @@ tapdance device lease --platform android --image-tag google_apis_playstore   # n
 `--os` takes an API level. An image with another tag (for example `google_apis_playstore`) must be
 installed with `sdkmanager` first; Simlock's installer fetches only `google_apis`.
 
+**Use the Play Store image only when a test needs it.** Without `--image-tag`, Simlock picks
+`google_apis`: Google Play services (sign-in SDKs, Maps, push) without the Play Store app, and lighter
+on the host. `google_apis_playstore` is for tests that need the Play Store itself: Play Billing
+purchases and restores, or a Play sign-in. An agent that runs a mixed test plan should lease
+`google_apis` for everything else and switch to a Play lease only for the purchase steps (release,
+then lease again with the tag). Simlock keeps one warm spare of each kind it has served, so a Play lease
+also leaves a Play spare booted until it idles out; `tapdance host up --warm android=0` turns spares
+off.
+
 Capacity: by default Simlock allows the smaller of CPU count ÷ 4 and RAM in GiB ÷ 8 emulators (at
 least 1), and counts 4 GiB of RAM per emulator.
 

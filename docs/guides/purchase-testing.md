@@ -54,7 +54,9 @@ Limits: profiles are **local only**: they work when the agent runs on the machin
 not from a VPS through a gateway or the worker guard. They have no browser stream (watch the emulator
 window), and Google may still ask for re-verification on an account that signs in from many emulators.
 
-**Agent on a VPS?** Lease a Play-image device (`image_tag: "google_apis_playstore"`); when the test
+**Agent on a VPS?** Run the rest of the test plan on a normal lease (no `image_tag`: the lighter
+`google_apis` image) and lease a Play-image device (`image_tag: "google_apis_playstore"`) only for the
+purchase steps; when the test
 reaches a sign-in, the agent calls `request_human` and you sign in through `tapdance view`, then press
 **Hand back**. The sign-in lasts until the lease ends, so keep one lease for the whole testing session
 (it is renewed in the background, up to `session.maxSessionMinutes`, 240 by default) and run every
