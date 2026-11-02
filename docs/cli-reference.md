@@ -450,7 +450,7 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 | `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint, or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
-| `host resume` | Start hosting again the way it ran before `pause`: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
+| `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -1738,22 +1738,22 @@ Set up this Mac or Linux machine as a device host for a remote agent, in one
 command
 
 Options:
-  -h, --help       display help for command
+  -h, --help        display help for command
 
 Commands:
-  up [options]     Worker, guard service, pairing, Tailscale and a self-test,
-                   step by step; prints a block to paste to the agent's machine
-  pause            Stop hosting for now, keeping the pairing: the guard (and
-                   caffeinate), Tailscale exposure, the worker and its devices
-                   stop, and nothing restarts at login
-  resume           Start hosting again after `host pause`, the same way as
-                   before (guard flags, Tailscale, login services)
-  token [options]  Hand a pairing token to the agent: copy it to the clipboard
-                   (default) or show it once
-  status           Show the state of each `host up` step on this machine
-  down [options]   Stop hosting: remove the guard service and `tailscale serve`
-                   for its port (tokens are kept unless --revoke)
-  help [command]   display help for command
+  up [options]      Worker, guard service, pairing, Tailscale and a self-test,
+                    step by step; prints a block to paste to the agent's machine
+  pause             Stop hosting for now, keeping the pairing: the guard (and
+                    caffeinate), Tailscale exposure, the worker and its devices
+                    stop, and nothing restarts at login
+  resume [options]  Start hosting again after `host pause`, the same way as
+                    before (guard flags, Tailscale, login services)
+  token [options]   Hand a pairing token to the agent: copy it to the clipboard
+                    (default) or show it once
+  status            Show the state of each `host up` step on this machine
+  down [options]    Stop hosting: remove the guard service and `tailscale serve`
+                    for its port (tokens are kept unless --revoke)
+  help [command]    display help for command
 ```
 
 ### `tapdance host up`
@@ -1805,7 +1805,11 @@ Start hosting again after `host pause`, the same way as before (guard flags,
 Tailscale, login services)
 
 Options:
-  -h, --help  display help for command
+  --allow-admin-account  run the guard from an administrator account (remembered
+                         from `host pause` when it was used)
+  --keep-awake           macOS: run the guard under `caffeinate -i` (remembered
+                         from `host pause` when it was used)
+  -h, --help             display help for command
 ```
 
 ### `tapdance host token`

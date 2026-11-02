@@ -121,7 +121,8 @@ agents; stop it with `tapdance worker stop`.
 Tailscale exposure, ends leases, shuts down the emulators and simulators the worker created (never your
 own), stops the worker, and removes both login services, so nothing starts at your next login. The
 pairing token is kept and still expires on its own date. `host resume` reinstalls both services with
-the same flags, serves the guard on Tailscale again, and tells you whether the token is still valid; if
+the same flags (if no pause was recorded, for example after `host down`, it says so: use `host up`, or
+pass `--allow-admin-account` / `--keep-awake` to `resume`), serves the guard on Tailscale again, and tells you whether the token is still valid; if
 it expired, run `tapdance host up --repair` and `tapdance host token`.
 
 Stop devices this way rather than quitting emulators by hand: Simlock keeps records of its devices, and

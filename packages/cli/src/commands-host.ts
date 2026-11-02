@@ -399,18 +399,28 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
   host
     .command("resume")
     .description("Start hosting again after `host pause`, the same way as before (guard flags, Tailscale, login services)")
-    .action(async () => {
+    .option("--allow-admin-account", "run the guard from an administrator account (remembered from `host pause` when it was used)")
+    .option("--keep-awake", "macOS: run the guard under `caffeinate -i` (remembered from `host pause` when it was used)")
+    .action(async (o: { allowAdminAccount?: boolean; keepAwake?: boolean }) => {
       const out = output(globals());
       try {
         assertHostPlatform(osPlatform());
         const file = join(guardDir(), "paused.json");
         const state = JSON.parse(await readFile(file, "utf8").catch(() => "{}")) as Partial<PausedState>;
-        if (!state.pausedAt) out.warn("No pause was recorded; starting with defaults (guard without caffeinate, Tailscale if logged in).");
+        const allowAdminAccount = Boolean(o.allowAdminAccount || state.allowAdminAccount);
+        const keepAwake = Boolean(o.keepAwake || state.keepAwake);
+        if (!state.pausedAt) {
+          out.warn(
+            `No pause was recorded (resume follows \`tapdance host pause\`). After \`host down\` or a first setup, use \`tapdance host up\`. Starting with ${allowAdminAccount ? "" : "no "}--allow-admin-account and ${keepAwake ? "" : "no "}--keep-awake.`,
+          );
+        }
+        // Refuse before starting anything, so a refused guard does not leave the worker half up.
+        assertGuardHostSafe(allowAdminAccount, "Run `tapdance host resume --allow-admin-account` to accept running the guard from this account, or use a dedicated standard account (docs/security/personal-mac.md).");
         out.progress("Starting the worker");
         if (state.workerService !== false) await setWorkerService(true);
         await startWorker(out);
         out.progress("Starting the guard");
-        const guard = await installGuardAsService({ allowAdminAccount: Boolean(state.allowAdminAccount), keepAwake: Boolean(state.keepAwake) });
+        const guard = await installGuardAsService({ allowAdminAccount, keepAwake });
         const { policy } = await loadPolicy();
         const port = policy.listen.port;
         let endpoint = hostEndpoint(undefined, port);
@@ -429,7 +439,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const active = paired.filter((p) => p.state === "active");
         out.result({ resumed: true, endpoint, guard, pairings: paired }, () =>
           [
-            `Resumed: guard ${state.keepAwake ? "(with caffeinate) " : ""}answering, endpoint ${endpoint}.`,
+            `Resumed: guard ${keepAwake ? "(with caffeinate) " : ""}answering, endpoint ${endpoint}.`,
             active.length
               ? `Pairing ${active.map((p) => `"${p.label}"`).join(", ")} still valid: the VPS can connect again as before.`
               : yellow("No valid pairing token (expired or revoked): run `tapdance host up --repair` to issue a new one, then hand it over with `tapdance host token`."),
