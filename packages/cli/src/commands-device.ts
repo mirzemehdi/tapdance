@@ -507,18 +507,24 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--configuration <name>", "iOS: build configuration", "Debug")
     .option("--gradle-task <task>", "Android: Gradle task", "assembleDebug")
     .option("--dir <path>", "Android: folder with gradlew inside the repository")
+    .option("--xcode-setting <KEY=VALUE>", "iOS: extra build setting, repeatable (ARCHS, EXCLUDED_ARCHS, ONLY_ACTIVE_ARCH, SWIFT_ACTIVE_COMPILATION_CONDITIONS, KOTLIN_FRAMEWORK_BUILD_TYPE and a few more)", (v: string, all: string[]) => [...all, v], [] as string[])
     .option("--launch <appId>", "launch this app once it is installed")
-    .action(async (o: { git: string; ref: string; project?: string; scheme?: string; configuration: string; gradleTask: string; dir?: string; launch?: string }) =>
+    .option("--verbose", "show every build log line (default: steps, errors and the outcome)")
+    .action(async (o: { git: string; ref: string; project?: string; scheme?: string; configuration: string; xcodeSetting: string[]; gradleTask: string; dir?: string; launch?: string; verbose?: boolean }) =>
       run(globals(), async (t, out) => {
-        const r = await t.buildApp({
-          repo: o.git,
-          ref: o.ref,
-          ...(o.project ? { project: o.project } : {}),
-          ...(o.scheme ? { scheme: o.scheme } : {}),
-          configuration: o.configuration,
-          gradleTask: o.gradleTask,
-          ...(o.dir ? { dir: o.dir } : {}),
-        });
+        const r = await t.buildApp(
+          {
+            repo: o.git,
+            ref: o.ref,
+            ...(o.project ? { project: o.project } : {}),
+            ...(o.scheme ? { scheme: o.scheme } : {}),
+            configuration: o.configuration,
+            ...(o.xcodeSetting.length > 0 ? { xcodeSettings: o.xcodeSetting } : {}),
+            gradleTask: o.gradleTask,
+            ...(o.dir ? { dir: o.dir } : {}),
+          },
+          { verbose: o.verbose === true },
+        );
         if (o.launch) await t.launchApp(o.launch, { relaunch: true });
         out.result(r, () => `Built ${r.artifact} from ${r.sha.slice(0, 12)} in ${r.seconds} s and installed it${o.launch ? `; launched ${o.launch}` : ""}`);
       }),

@@ -287,7 +287,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "build_app",
     title: "Build and install an app on the device's host",
     description:
-      "Build the app on the machine that runs the leased device and install it there, from a git repository the host's owner allow-listed (the host fetches it with its own credentials). The way to get an iOS app onto a remote simulator from a machine without Xcode. iOS: xcodebuild for the simulator (project and scheme found when the repository has one Xcode project); Android: ./gradlew assembleDebug (gradle_task, dir). Returns the exact commit built. Builds run the project's scripts on the host, so the owner turns them on per repository; a refusal names what to ask for. Takes minutes; progress shows the log.",
+      "Build the app on the machine that runs the leased device and install it there, from a git repository the host's owner allow-listed (the host fetches it with its own credentials). The way to get an iOS app onto a remote simulator from a machine without Xcode. iOS: xcodebuild for the simulator (project and scheme found when the repository has one Xcode project); Android: ./gradlew assembleDebug (gradle_task, dir). Returns the exact commit built. Builds run the project's scripts on the host, so the owner turns them on per repository; a refusal names what to ask for. Takes minutes; progress shows the steps and errors, and a failure names its cause.",
     input: z
       .object({
         repo: z.string().min(1).max(500),
@@ -295,6 +295,7 @@ export const TOOLS: ToolDefinition[] = [
         project: z.string().max(300).optional(),
         scheme: z.string().max(100).optional(),
         configuration: z.string().max(100).optional(),
+        xcode_settings: z.array(z.string().max(250)).max(20).optional().describe("iOS: extra build settings as KEY=VALUE, from a short list the host allows (ARCHS, EXCLUDED_ARCHS, ONLY_ACTIVE_ARCH, SWIFT_ACTIVE_COMPILATION_CONDITIONS, KOTLIN_FRAMEWORK_BUILD_TYPE…). Builds already use this Mac's simulator arch only."),
         gradle_task: z.string().max(200).optional(),
         dir: z.string().max(300).optional(),
       })
@@ -308,6 +309,7 @@ export const TOOLS: ToolDefinition[] = [
           ...(a["project"] ? { project: a["project"] as string } : {}),
           ...(a["scheme"] ? { scheme: a["scheme"] as string } : {}),
           ...(a["configuration"] ? { configuration: a["configuration"] as string } : {}),
+          ...(a["xcode_settings"] ? { xcodeSettings: a["xcode_settings"] as string[] } : {}),
           ...(a["gradle_task"] ? { gradleTask: a["gradle_task"] as string } : {}),
           ...(a["dir"] ? { dir: a["dir"] as string } : {}),
         }),

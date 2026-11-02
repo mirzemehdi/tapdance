@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCacheDir, checkBuildRequest, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
+import { buildCacheDir, checkBuildRequest, FailureDigest, hostSimulatorArch, isNotableBuildLine, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
 
 const SHA = "a".repeat(40);
 const settings: BuildSettings = { repos: ["https://github.com/acme/pianolune.git"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 };
 
 /** A fake git + xcodebuild + gradle: records commands and lays out what each would leave on disk. */
-function fakeRunner(root: string, opts: { onMain?: boolean } = {}): { run: CommandRunner; calls: string[] } {
+function fakeRunner(root: string, opts: { onMain?: boolean; xcodeFails?: string[] } = {}): { run: CommandRunner; calls: string[] } {
   const calls: string[] = [];
   const run: CommandRunner = async (command, args, o) => {
     calls.push([command.split("/").pop(), ...args.filter((a) => !a.startsWith(root))].join(" "));
@@ -20,6 +20,10 @@ function fakeRunner(root: string, opts: { onMain?: boolean } = {}): { run: Comma
     }
     if (command === "git" && args.includes("rev-parse")) return { code: args.some((a) => a.startsWith("origin/main")) ? 0 : 1, output: `${SHA}\n` };
     if (command === "git" && args.includes("merge-base")) return { code: opts.onMain === false ? 1 : 0, output: "" };
+    if (command === "xcodebuild" && opts.xcodeFails) {
+      for (const l of opts.xcodeFails) o.onLine(l);
+      return { code: 65, output: opts.xcodeFails.slice(-3).join("\n") };
+    }
     if (command === "xcodebuild") {
       const derived = args[args.indexOf("-derivedDataPath") + 1]!;
       await mkdir(join(derived, "Build", "Products", "Debug-iphonesimulator", "iosApp.app"), { recursive: true });
@@ -83,5 +87,66 @@ describe("builds on the host (#45)", () => {
     const { run, calls } = fakeRunner(root, { onMain: false });
     await expect(runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, { ...settings, protectedRefs: ["main"] }, root, () => undefined, run)).rejects.toThrow(/not on a protected branch/);
     expect(calls.some((c) => c.startsWith("xcodebuild"))).toBe(false);
+  });
+
+  it("builds only this Mac's simulator arch, and lets the caller's allowed settings win (#53)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const { run, calls } = fakeRunner(root);
+    await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, () => undefined, run);
+    const xcode = calls.find((c) => c.startsWith("xcodebuild"))!;
+    expect(xcode).toContain(`ARCHS=${hostSimulatorArch()} ONLY_ACTIVE_ARCH=YES`);
+    expect(hostSimulatorArch("x64")).toBe("x86_64");
+    expect(hostSimulatorArch("arm64")).toBe("arm64");
+
+    const req = checkBuildRequest({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios", xcodeSettings: ["ARCHS=x86_64", "EXCLUDED_ARCHS="] }, settings);
+    const second = fakeRunner(root);
+    await runBuild(req, settings, root, () => undefined, second.run);
+    const args = second.calls.find((c) => c.startsWith("xcodebuild"))!;
+    expect(args).toContain("ARCHS=x86_64");
+    expect(args).not.toContain("ARCHS=arm64");
+    expect(args).toContain("CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES ARCHS=x86_64 EXCLUDED_ARCHS= build");
+    for (const bad of ["SWIFT_EXEC=/bin/sh", "CC=clang", "OTHER_SWIFT_FLAGS=-x", "ARCHS=$(id)", "ARCHS=a/b", "archs=arm64"]) {
+      expect(() => checkBuildRequest({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios", xcodeSettings: [bad] }, settings), bad).toThrow();
+    }
+  });
+
+  it("names the cause of a failed build in the error, however far above the end it was (#53)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const noise = Array.from({ length: 2000 }, (_, i) => `builtin-copy line ${i}`);
+    const log = [
+      ...noise,
+      "> Task :shared:embedAndSignAppleFrameworkForXcode FAILED",
+      "* What went wrong:",
+      "Xcode requested target architectures that are not configured in your Gradle build: ios_x64.",
+      "The framework 'shared' cannot be built for these target architectures.",
+      "",
+      "* Try:",
+      "> Run with --stacktrace option to get the stack trace.",
+      ...noise,
+      "The following build commands failed:",
+      "\tPhaseScriptExecution Compile\\ Kotlin\\ Framework /x/Script.sh (in target 'iosApp' from project 'iosApp')",
+      "(1 failure)",
+      "** BUILD FAILED **",
+    ];
+    const { run } = fakeRunner(root, { xcodeFails: log });
+    const error = (await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, () => undefined, run).catch((e: unknown) => e)) as Error & { details?: Record<string, unknown> };
+    expect(error.message).toMatch(/^xcodebuild failed \(exit 65\):\n/);
+    expect(error.message).toContain("Xcode requested target architectures that are not configured in your Gradle build: ios_x64.");
+    expect(error.message).toContain("> Task :shared:embedAndSignAppleFrameworkForXcode FAILED");
+    expect(error.message).toContain("PhaseScriptExecution Compile");
+    expect(error.message).not.toContain("builtin-copy");
+    expect(error.message).not.toContain("--stacktrace");
+    expect(error.details?.["digest"]).toBeInstanceOf(Array);
+  });
+
+  it("keeps the digest bounded and the quiet log to steps, errors and the outcome", () => {
+    const d = new FailureDigest();
+    for (let i = 0; i < 100; i++) d.add(`/x/a.swift:${i}:1: error: bad ${i}`);
+    expect(d.lines()).toHaveLength(12);
+    expect(isNotableBuildLine("$ xcodebuild -project x")).toBe(true);
+    expect(isNotableBuildLine("** BUILD FAILED **")).toBe(true);
+    expect(isNotableBuildLine("e: file:///x/Main.kt:3:1 Unresolved reference")).toBe(true);
+    expect(isNotableBuildLine("    builtin-copy -exclude .DS_Store")).toBe(false);
+    expect(isNotableBuildLine("export PATH=/usr/bin")).toBe(false);
   });
 });

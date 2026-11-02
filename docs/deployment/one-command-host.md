@@ -180,13 +180,21 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   commits already on `main` of the remote, so a compromised agent with push rights cannot get an
   unreviewed branch built. The reply and the audit log name the exact commit.
 - **iOS:** `xcodebuild -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'` with
-  `CODE_SIGNING_ALLOWED=NO`; `--project` and `--scheme` when the repository has more than one Xcode
-  project. Kotlin Multiplatform apps call Gradle from a run-script phase, so the host needs a JDK on the
+  `CODE_SIGNING_ALLOWED=NO`, building only this Mac's simulator arch (`ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`
+  on Apple silicon, as Xcode's Run does; Kotlin Multiplatform apps usually declare only
+  `iosSimulatorArm64`). `--project` and `--scheme` when the repository has more than one Xcode
+  project. `--xcode-setting KEY=VALUE` passes a build setting from a short list (`ARCHS`,
+  `EXCLUDED_ARCHS`, `ONLY_ACTIVE_ARCH`, `SWIFT_ACTIVE_COMPILATION_CONDITIONS`,
+  `GCC_PREPROCESSOR_DEFINITIONS`, optimization and debug-info levels, `IPHONEOS_DEPLOYMENT_TARGET`,
+  `KOTLIN_FRAMEWORK_BUILD_TYPE`, bundle id and version numbers); settings that name tools or paths
+  are refused, because they would run code nobody reviewed. Kotlin Multiplatform apps call Gradle from a run-script phase, so the host needs a JDK on the
   guard's `PATH` or `JAVA_HOME`; `host builds enable` checks git, Xcode, Java and `gh`.
 - **Android:** `./gradlew assembleDebug` (`--gradle-task`, `--dir` for the folder with `gradlew`); the
   newest APK under `build/outputs/apk` is installed.
 - **Limits:** one build at a time, `--timeout-minutes` (45 by default), the build log streams to the
-  agent with secrets redacted.
+  agent with secrets redacted. The CLI shows steps, errors and the outcome (`--verbose` for every
+  line); a failed build's error names its cause: compiler errors, Gradle's "What went wrong" and the
+  failed build commands.
 - **Trust:** a build runs the repository's own scripts (Xcode run-script phases, Gradle) on the host as
   the hosting account: code execution by design. Allow only repositories you trust, prefer protected
   refs, and host from a dedicated standard account; `host builds enable` refuses an administrator

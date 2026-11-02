@@ -269,6 +269,8 @@ export interface AppBuildRequest {
   project?: string;
   scheme?: string;
   configuration?: string;
+  /** iOS: extra build settings, KEY=VALUE (the host allows a short list, e.g. ARCHS, EXCLUDED_ARCHS). */
+  xcodeSettings?: string[];
   gradleTask?: string;
   dir?: string;
 }

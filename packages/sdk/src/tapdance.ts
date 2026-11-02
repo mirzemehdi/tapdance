@@ -36,7 +36,7 @@ import {
   type DeviceOperation,
   type DeviceOperationResult, type TimedTap, type AppBuildRequest, type AppBuildResult } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
-import { PROFILE_PROVIDER, ProfileProvider } from "@tapdance/provider-simlock";
+import { PROFILE_PROVIDER, ProfileProvider, isNotableBuildLine } from "@tapdance/provider-simlock";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
 import { homedir, tmpdir } from "node:os";
@@ -537,13 +537,22 @@ export class Tapdance {
   /**
    * Builds the app on the machine that runs the leased device, from a git repository its owner
    * allow-listed, and installs it there (#45): how an agent without Xcode gets an iOS app onto a lease.
-   * Log lines go to progress.
+   * Log lines go to progress: by default only steps, errors and the outcome, with a count of the lines
+   * left out; `verbose` passes every line (#53).
    */
-  async buildApp(request: AppBuildRequest): Promise<AppBuildResult> {
+  async buildApp(request: AppBuildRequest, options: { verbose?: boolean } = {}): Promise<AppBuildResult> {
     await this.guardHuman();
+    let hidden = 0;
+    const onLine = (line: string) => {
+      if (options.verbose || isNotableBuildLine(line)) {
+        if (hidden > 0) this.progress(`… ${hidden} log lines`);
+        hidden = 0;
+        this.progress(line);
+      } else if (++hidden % 5000 === 0) this.progress(`… ${hidden} log lines`);
+    };
     return this.onDevice(async (handle, provider) => {
       if (!provider.buildApp) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} cannot build apps`);
-      return provider.buildApp(handle, request, (line) => this.progress(line));
+      return provider.buildApp(handle, request, onLine);
     });
   }
 

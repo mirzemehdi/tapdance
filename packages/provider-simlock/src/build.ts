@@ -23,6 +23,8 @@ export interface BuildRequest {
   project?: string;
   scheme?: string;
   configuration?: string;
+  /** iOS: extra build settings, KEY=VALUE, from XCODE_SETTING_KEYS only (#53). */
+  xcodeSettings?: string[];
   /** Android: the Gradle task (default assembleDebug); `dir` is the folder with gradlew. */
   gradleTask?: string;
   dir?: string;
@@ -56,6 +58,30 @@ const PROJECT = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}\.(xcodeproj|xcworksp
 const NAME = /^[A-Za-z0-9 _.-]{1,100}$/;
 const GRADLE_TASK = /^[A-Za-z0-9:_-]{1,200}$/;
 const DIR = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}$/;
+const SETTING_VALUE = /^[A-Za-z0-9 _.,=-]{0,200}$/;
+
+/**
+ * Build settings a caller may pass (#53). A short list on purpose: settings that name tools or paths
+ * (CC, SWIFT_EXEC, OTHER_SWIFT_FLAGS…) would let a caller run code the owner never reviewed.
+ */
+export const XCODE_SETTING_KEYS = [
+  "ARCHS",
+  "EXCLUDED_ARCHS",
+  "ONLY_ACTIVE_ARCH",
+  "SWIFT_ACTIVE_COMPILATION_CONDITIONS",
+  "GCC_PREPROCESSOR_DEFINITIONS",
+  "SWIFT_OPTIMIZATION_LEVEL",
+  "GCC_OPTIMIZATION_LEVEL",
+  "SWIFT_COMPILATION_MODE",
+  "ENABLE_TESTABILITY",
+  "DEBUG_INFORMATION_FORMAT",
+  "COMPILER_INDEX_STORE_ENABLE",
+  "IPHONEOS_DEPLOYMENT_TARGET",
+  "KOTLIN_FRAMEWORK_BUILD_TYPE",
+  "PRODUCT_BUNDLE_IDENTIFIER",
+  "MARKETING_VERSION",
+  "CURRENT_PROJECT_VERSION",
+] as const;
 
 /** A repository URL as compared with the allow-list: lower-case host, no trailing slash or .git. */
 export function normalizeRepo(url: string): string {
@@ -96,6 +122,18 @@ export function checkBuildRequest(body: unknown, settings: BuildSettings): Build
     if (!GRADLE_TASK.test(task)) throw new TapdanceError("USAGE", "gradleTask must be a Gradle task path such as :androidApp:assembleDebug");
     req.gradleTask = task;
   }
+  const settingsAsked = b["xcodeSettings"];
+  if (settingsAsked !== undefined) {
+    if (!Array.isArray(settingsAsked) || settingsAsked.length > 20) throw new TapdanceError("USAGE", "xcodeSettings must be a list of up to 20 KEY=VALUE strings");
+    req.xcodeSettings = settingsAsked.map((entry) => {
+      const m = typeof entry === "string" ? /^([A-Z0-9_]+)=(.*)$/.exec(entry) : null;
+      if (!m || !(XCODE_SETTING_KEYS as readonly string[]).includes(m[1]!)) {
+        throw new TapdanceError("USAGE", `xcode setting ${String(entry)} is not allowed`, { hint: `Allowed keys: ${XCODE_SETTING_KEYS.join(", ")}.` });
+      }
+      if (!SETTING_VALUE.test(m[2]!)) throw new TapdanceError("USAGE", `${m[1]} has characters that are not allowed (letters, digits, space and _ . , = - only)`);
+      return `${m[1]}=${m[2]}`;
+    });
+  }
   const dir = str("dir");
   if (dir !== undefined) {
     if (!DIR.test(dir)) throw new TapdanceError("USAGE", "dir must be a folder inside the repository");
@@ -124,8 +162,15 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   const env = gitEnv(settings);
   const step = async (command: string, args: string[], what: string, cwd?: string, extraEnv: NodeJS.ProcessEnv = {}) => {
     onLine(`$ ${command} ${args.join(" ")}`);
-    const r = await run(command, args, { ...(cwd ? { cwd } : {}), env: { ...env, ...extraEnv }, timeoutMs: left(), onLine });
-    if (r.code !== 0) throw new TapdanceError("DEVICE_ERROR", `${what} failed (exit ${r.code})`, { details: { tail: r.output.split("\n").slice(-30).join("\n") } });
+    const digest = new FailureDigest();
+    const r = await run(command, args, { ...(cwd ? { cwd } : {}), env: { ...env, ...extraEnv }, timeoutMs: left(), onLine: (l) => (digest.add(l), onLine(l)) });
+    if (r.code !== 0) {
+      // The cause is often hundreds of lines above the end (#53): name it in the message itself.
+      const cause = digest.lines();
+      throw new TapdanceError("DEVICE_ERROR", `${what} failed (exit ${r.code})${cause.length > 0 ? `:\n  ${cause.join("\n  ")}` : ""}`, {
+        details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n") },
+      });
+    }
     return r.output;
   };
   const git = (args: string[], what: string) => step("git", ["-C", src, ...args], what);
@@ -187,6 +232,12 @@ async function buildIos(req: BuildRequest, src: string, cache: string, step: Ste
   const scheme = req.scheme ?? project.split("/").pop()!.replace(/\.(xcodeproj|xcworkspace)$/, "");
   const configuration = req.configuration ?? "Debug";
   const derived = join(cache, "DerivedData");
+  // The generic simulator destination builds every simulator arch (arm64 and x86_64), and Kotlin
+  // Multiplatform apps usually declare only iosSimulatorArm64 (#53). Build this Mac's arch, as Xcode's
+  // Run does; the caller's own ARCHS/ONLY_ACTIVE_ARCH win.
+  const extra = req.xcodeSettings ?? [];
+  const given = new Set(extra.map((s) => s.split("=")[0]));
+  const defaults = [`ARCHS=${hostSimulatorArch()}`, "ONLY_ACTIVE_ARCH=YES"].filter((s) => !given.has(s.split("=")[0]));
   await step(
     "xcodebuild",
     [
@@ -203,6 +254,8 @@ async function buildIos(req: BuildRequest, src: string, cache: string, step: Ste
       "-derivedDataPath",
       derived,
       "CODE_SIGNING_ALLOWED=NO",
+      ...defaults,
+      ...extra,
       "build",
     ],
     "xcodebuild",
@@ -213,6 +266,64 @@ async function buildIos(req: BuildRequest, src: string, cache: string, step: Ste
   const app = apps.find((n) => n === `${scheme}.app`) ?? apps[0];
   if (!app) throw new TapdanceError("DEVICE_ERROR", `xcodebuild finished but left no .app in ${products}`);
   return join(products, app);
+}
+
+/** The simulator arch this Mac runs natively. */
+export function hostSimulatorArch(arch: string = process.arch): string {
+  return arch === "x64" ? "x86_64" : "arm64";
+}
+
+/**
+ * Collects the lines that say why a build failed (#53): compiler errors, Gradle's "What went wrong"
+ * block and xcodebuild's list of failed commands. Bounded, so a 25,000-line log costs nothing.
+ */
+export class FailureDigest {
+  private readonly errors: string[] = [];
+  private readonly blocks: string[] = [];
+  private capture: { end: (line: string) => boolean; left: number } | undefined;
+
+  add(raw: string): void {
+    const line = raw.replace(/\s+$/, "");
+    if (this.capture) {
+      if (this.capture.end(line) || this.capture.left-- <= 0) this.capture = undefined;
+      else if (line.trim()) {
+        this.push(this.blocks, line.trim(), 30);
+        return;
+      }
+    }
+    if (/^\* What went wrong:/.test(line)) {
+      this.push(this.blocks, "What went wrong:", 30);
+      this.capture = { end: (l) => /^\* (Try|Exception is|Get more help)/.test(l), left: 15 };
+    } else if (/^The following build commands failed:/.test(line)) {
+      this.push(this.blocks, line, 30);
+      this.capture = { end: (l) => l.trim() === "" || /^\(\d+ failures?\)/.test(l.trim()), left: 10 };
+    } else if (/(^|\s)(fatal )?error: /i.test(line) || /^e: /.test(line) || /^> Task \S+ FAILED/.test(line)) {
+      this.push(this.errors, line.trim(), 12);
+    }
+  }
+
+  lines(): string[] {
+    return [...this.errors, ...this.blocks].slice(0, 40).map((l) => (l.length > 400 ? `${l.slice(0, 400)}…` : l));
+  }
+
+  private push(into: string[], line: string, max: number): void {
+    if (into.length < max && !into.includes(line)) into.push(line);
+  }
+}
+
+/** Whether a build log line belongs in the quiet default view: steps, errors and the outcome (#53). */
+export function isNotableBuildLine(line: string): boolean {
+  return (
+    /^\$ /.test(line) ||
+    /^(Building|Built) /.test(line) ||
+    /^warning: some submodules/.test(line) ||
+    /(^|\s)(fatal )?error: /i.test(line) ||
+    /^e: /.test(line) ||
+    /\*\* (BUILD|ARCHIVE) (SUCCEEDED|FAILED) \*\*/.test(line) ||
+    /^BUILD (SUCCESSFUL|FAILED)/.test(line) ||
+    /^> Task \S+ FAILED/.test(line) ||
+    /^\* What went wrong:/.test(line)
+  );
 }
 
 /** The repository's one Xcode workspace (or else project), up to two folders deep. */

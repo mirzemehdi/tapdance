@@ -302,7 +302,8 @@ tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]...
                      [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
 tapdance app kill <appId>
-tapdance app build --git <url> --ref <ref> [--project <path>] [--scheme <s>] [--configuration <c>] [--gradle-task <t>] [--dir <path>] [--launch <appId>]
+tapdance app build --git <url> --ref <ref> [--project <path>] [--scheme <s>] [--configuration <c>] [--xcode-setting <K=V>]...
+                  [--gradle-task <t>] [--dir <path>] [--launch <appId>] [--verbose]
 tapdance app uninstall <appId>
 tapdance app clear <appId>
 tapdance app list
@@ -1304,18 +1305,26 @@ its owner allow-listed, and install it there (an agent without Xcode can test
 iOS)
 
 Options:
-  --git <url>             repository URL (must be on the host's build
-                          allow-list)
-  --ref <ref>             branch, tag or commit sha; the reply names the exact
-                          commit built
-  --project <path>        iOS: .xcodeproj or .xcworkspace inside the repository
-                          (found when there is only one)
-  --scheme <name>         iOS: Xcode scheme (default: the project's name)
-  --configuration <name>  iOS: build configuration (default: "Debug")
-  --gradle-task <task>    Android: Gradle task (default: "assembleDebug")
-  --dir <path>            Android: folder with gradlew inside the repository
-  --launch <appId>        launch this app once it is installed
-  -h, --help              display help for command
+  --git <url>                  repository URL (must be on the host's build
+                               allow-list)
+  --ref <ref>                  branch, tag or commit sha; the reply names the
+                               exact commit built
+  --project <path>             iOS: .xcodeproj or .xcworkspace inside the
+                               repository (found when there is only one)
+  --scheme <name>              iOS: Xcode scheme (default: the project's name)
+  --configuration <name>       iOS: build configuration (default: "Debug")
+  --gradle-task <task>         Android: Gradle task (default: "assembleDebug")
+  --dir <path>                 Android: folder with gradlew inside the
+                               repository
+  --xcode-setting <KEY=VALUE>  iOS: extra build setting, repeatable (ARCHS,
+                               EXCLUDED_ARCHS, ONLY_ACTIVE_ARCH,
+                               SWIFT_ACTIVE_COMPILATION_CONDITIONS,
+                               KOTLIN_FRAMEWORK_BUILD_TYPE and a few more)
+                               (default: [])
+  --launch <appId>             launch this app once it is installed
+  --verbose                    show every build log line (default: steps, errors
+                               and the outcome)
+  -h, --help                   display help for command
 ```
 
 ### `tapdance app kill`

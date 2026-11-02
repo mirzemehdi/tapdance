@@ -135,6 +135,14 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   promo; builds tolerate a submodule the host cannot fetch; the guard service PATH includes Homebrew and
   `JAVA_HOME`.
 
+### Field run 4 (issue #53)
+
+- Fixed: iOS builds compiled x86_64 as well and failed for Kotlin Multiplatform apps that declare only
+  `iosSimulatorArm64`; builds now use the host's simulator arch only. A failed build's error names its
+  cause (compiler errors, Gradle's "What went wrong", the failed build commands) instead of a raw tail.
+- Added: `app build --xcode-setting KEY=VALUE` (MCP `xcode_settings`, a short allow-list of keys) and
+  `--verbose`; by default the CLI shows only steps, errors and the outcome.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,
