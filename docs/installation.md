@@ -49,12 +49,15 @@ installs the wrong program today. The CLI package is named `@tapdance/cli` (the 
 
 ### From source (the supported way today)
 
-You need Node.js 22.13+ and pnpm 10 (the repository pins `pnpm@10.20.0`; `corepack enable` provides it).
+You need Node.js 22.13+ and pnpm 10 (the repository pins `pnpm@10.20.0`; Corepack provides it). The
+build's own scripts call `pnpm`, so it must be on your PATH: `corepack enable` puts it next to Node
+(which may need sudo); `corepack enable --install-directory ~/.local/bin pnpm` puts it in your home
+folder instead.
 
 ```bash
 git clone https://github.com/mirzemehdi/tapdance.git   # the repository URL declared in package.json
 cd tapdance
-corepack enable
+corepack enable --install-directory ~/.local/bin pnpm   # ~/.local/bin must be on your PATH
 pnpm install
 pnpm build
 node packages/cli/dist/main.js --version                 # prints 0.1.0

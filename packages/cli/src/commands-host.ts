@@ -40,6 +40,7 @@ import {
   sanitizeLabel,
   serveHasPort,
   summarizePrerequisites,
+  serveModeOf,
   tailscaleServeArgs,
   tailscaleServeOffArgs,
   type HostUpOptions,
@@ -259,12 +260,15 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             out.warn(`Tailscale is ${state.loggedIn ? "connected but has no MagicDNS name" : `not logged in (${state.backendState})`}; the guard stays on loopback. Run \`tailscale up\` (and turn on MagicDNS), then this command again.`);
             return hostEndpoint(undefined, port);
           }
-          const args = tailscaleServeArgs(port);
+          // Without tailnet HTTPS certificates, serve plain HTTP inside the tailnet: WireGuard encrypts it.
+          const mode = state.https ? "https" : "http";
+          if (mode === "http") out.progress("This tailnet has no HTTPS certificates; serving the guard over HTTP inside the tailnet (WireGuard-encrypted). Turn on HTTPS certificates (admin console → DNS) for an https:// endpoint.");
+          const args = tailscaleServeArgs(port, mode);
           const serve = await runCommand(bin, args);
           if (!serve.ok) {
-            throw commandFailed([bin, ...args], serve.out, "tailscale serve could not expose the guard", "Turn on HTTPS certificates for your tailnet (admin console → DNS → HTTPS Certificates; https://tailscale.com/kb/1153/enabling-https), then run this command again, or pass --no-tailscale.");
+            throw commandFailed([bin, ...args], serve.out, "tailscale serve could not expose the guard", "Check `tailscale serve status`; on a tailnet with HTTPS certificates see https://tailscale.com/kb/1153/enabling-https. Or pass --no-tailscale.");
           }
-          return hostEndpoint(state.dnsName, port);
+          return hostEndpoint(state.dnsName, port, mode);
         });
 
         const { devices, selfTest } = await step(out, "self-test", async () => {
@@ -340,9 +344,15 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const bin = findTailscale();
         if (bin) {
           const state = parseTailscaleStatus((await runCommand(bin, ["status", "--json"])).out);
-          const served = serveHasPort((await runCommand(bin, ["serve", "status", "--json"])).out, port);
-          if (state.loggedIn && served) endpoint = hostEndpoint(state.dnsName, port);
-          rows.push({ step: "tailscale", ok: state.loggedIn && served, detail: `${state.loggedIn ? `logged in as ${state.dnsName ?? "?"}` : state.backendState}; ${served ? `serving :${port}` : `not serving :${port}`}` });
+          const serveStatus = (await runCommand(bin, ["serve", "status", "--json"])).out;
+          const served = serveHasPort(serveStatus, port);
+          const mode = serveModeOf(serveStatus, port) ?? (state.https ? "https" : "http");
+          if (state.loggedIn && served) endpoint = hostEndpoint(state.dnsName, port, mode);
+          rows.push({
+            step: "tailscale",
+            ok: state.loggedIn && served,
+            detail: `${state.loggedIn ? `logged in as ${state.dnsName ?? "?"}` : state.backendState}; ${served ? `serving :${port} over ${mode}` : `not serving :${port}`}; tailnet HTTPS certificates ${state.https ? "on" : "off"}`,
+          });
         } else rows.push({ step: "tailscale", ok: false, detail: "not installed" });
         out.result({ ready: rows.every((r) => r.ok), endpoint, steps: rows }, () =>
           [table([["STEP", "STATE", "DETAIL"], ...rows.map((r) => [r.step, r.ok ? green("ok") : yellow("not ready"), r.detail])]), "", `endpoint: ${endpoint}`].join("\n"),
@@ -372,8 +382,10 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         let tailscale = "not installed";
         const bin = findTailscale();
         if (bin) {
-          const r = await runCommand(bin, tailscaleServeOffArgs(policy.listen.port));
-          tailscale = r.ok ? `stopped serving :${policy.listen.port}` : `nothing to stop (${r.out.split("\n")[0] ?? ""})`;
+          // Turn off both modes: the one set is removed, the other is a harmless no-op.
+          const https = await runCommand(bin, tailscaleServeOffArgs(policy.listen.port, "https"));
+          const http = await runCommand(bin, tailscaleServeOffArgs(policy.listen.port, "http"));
+          tailscale = https.ok || http.ok ? `stopped serving :${policy.listen.port}` : `nothing to stop (${(https.out || http.out).split("\n")[0] ?? ""})`;
         }
         let revoked = 0;
         const removed: string[] = [];

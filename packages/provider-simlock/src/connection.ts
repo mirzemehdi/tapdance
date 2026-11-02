@@ -95,8 +95,8 @@ export function remoteConnection(options: {
   if (!options.token) {
     throw new TapdanceError("AUTH_FAILED", `No agent token for ${options.endpoint}`, {
       hint:
-        "Create one on the gateway (`tapdance gateway token --role agent --label <agent>`), then " +
-        "store it with `tapdance config set-token` or export TAPDANCE_TOKEN.",
+        `A Mac in device-only mode (worker guard): run \`tapdance connect ${options.endpoint} < pairing-<label>.token\` with the token file \`tapdance host up\` wrote there. ` +
+        "A gateway: create one there (`tapdance gateway token --role agent --label <agent>`), then store it with `tapdance config set-token` or export TAPDANCE_TOKEN.",
     });
   }
   const url = new URL(options.endpoint);

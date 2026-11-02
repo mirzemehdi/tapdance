@@ -33,7 +33,7 @@ so do not `npm install -g tapdance`. Install from source:
 ```bash
 git clone https://github.com/mirzemehdi/tapdance.git
 cd tapdance
-corepack enable
+corepack enable --install-directory ~/.local/bin pnpm   # no sudo; plain `corepack enable` also works if it may write next to node
 pnpm install
 pnpm build
 mkdir -p ~/.local/bin
@@ -84,15 +84,24 @@ been run from inside Claude Code, Codex or Cursor. Android has run on Android 34
 
 ### Agent on a VPS, devices on your Mac
 
+On a Mac (or Linux machine) with nothing installed, one line installs the prerequisites (after one
+confirmation), Tapdance itself, and runs `host up`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label my-mac
+```
+
+With Tapdance already installed:
+
 ```bash
 tapdance host up                                    # on the Mac: worker, guard, pairing, Tailscale, self-test
-tapdance connect https://<mac>.<tailnet>.ts.net:4720 < pairing-<label>.token   # on the VPS
+tapdance connect <endpoint host up printed> < pairing-<label>.token   # on the VPS (http:// when the tailnet has no HTTPS certificates)
 ```
 
 `host up` sets up device-only mode step by step and prints the `connect` line to paste on the agent's
-machine; the token goes to a mode-600 file, never to the terminal. On a machine without Tapdance,
-`scripts/host-setup.sh` installs it from source first. **Built and unit-tested, not yet run end to
-end** (no fresh machine, no Tailscale, no second machine yet): see
+machine; the token goes to a mode-600 file, never to the terminal. The installer's prerequisite step
+and the build were run on a scratch home; `host up` itself has **not yet run end to end** (no fresh
+machine, no second machine yet): see
 [one-command host](docs/deployment/one-command-host.md).
 
 ## Deployment modes

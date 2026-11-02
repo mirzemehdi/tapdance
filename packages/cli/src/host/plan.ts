@@ -116,19 +116,26 @@ export interface TailscaleState {
   backendState: string;
   /** This machine's MagicDNS name without the trailing dot, e.g. mac.tailnet.ts.net. */
   dnsName?: string;
+  /** The tailnet can issue HTTPS certificates (`CertDomains` is non-empty). Off by default on many tailnets. */
+  https: boolean;
 }
+
+/** How `tailscale serve` exposes the guard: HTTPS when the tailnet has certificates, else plain HTTP
+ *  inside the tailnet (WireGuard already encrypts it; `connect` accepts http on *.ts.net and 100.64/10). */
+export type ServeMode = "https" | "http";
 
 /** Reads `tailscale status --json`. Unknown or malformed input means "not usable", never a guess. */
 export function parseTailscaleStatus(raw: string): TailscaleState {
-  let data: { BackendState?: unknown; Self?: { DNSName?: unknown } };
+  let data: { BackendState?: unknown; Self?: { DNSName?: unknown }; CertDomains?: unknown };
   try {
     data = JSON.parse(raw) as typeof data;
   } catch {
-    return { loggedIn: false, backendState: "unreadable" };
+    return { loggedIn: false, backendState: "unreadable", https: false };
   }
   const backendState = typeof data.BackendState === "string" ? data.BackendState : "unknown";
   const dns = typeof data.Self?.DNSName === "string" ? data.Self.DNSName.replace(/\.$/, "") : "";
-  return { loggedIn: backendState === "Running", backendState, ...(dns ? { dnsName: dns } : {}) };
+  const https = Array.isArray(data.CertDomains) && data.CertDomains.length > 0;
+  return { loggedIn: backendState === "Running", backendState, https, ...(dns ? { dnsName: dns } : {}) };
 }
 
 /** True when `tailscale serve status --json` shows an HTTPS listener on this port. */
@@ -143,16 +150,30 @@ export function serveHasPort(raw: string, port: number): boolean {
   return Object.keys(data.Web ?? {}).some((host) => host.endsWith(`:${port}`));
 }
 
-export function tailscaleServeArgs(port: number): string[] {
-  return ["serve", "--bg", `--https=${port}`, `http://127.0.0.1:${port}`];
+export function tailscaleServeArgs(port: number, mode: ServeMode = "https"): string[] {
+  return ["serve", "--bg", `--${mode}=${port}`, `http://127.0.0.1:${port}`];
 }
 
-export function tailscaleServeOffArgs(port: number): string[] {
-  return ["serve", `--https=${port}`, "off"];
+/** Turns off whichever mode serves the port (each call is harmless when that mode is not set). */
+export function tailscaleServeOffArgs(port: number, mode: ServeMode = "https"): string[] {
+  return ["serve", `--${mode}=${port}`, "off"];
 }
 
-export function hostEndpoint(dnsName: string | undefined, port: number): string {
-  return dnsName ? `https://${dnsName}:${port}` : `http://127.0.0.1:${port}`;
+export function hostEndpoint(dnsName: string | undefined, port: number, mode: ServeMode = "https"): string {
+  return dnsName ? `${mode}://${dnsName}:${port}` : `http://127.0.0.1:${port}`;
+}
+
+/** Which mode `tailscale serve status --json` shows for this port, if any. */
+export function serveModeOf(raw: string, port: number): ServeMode | undefined {
+  let data: { TCP?: Record<string, { HTTPS?: unknown; HTTP?: unknown }> };
+  try {
+    data = JSON.parse(raw) as typeof data;
+  } catch {
+    return undefined;
+  }
+  const tcp = data.TCP?.[String(port)];
+  if (!tcp) return undefined;
+  return tcp.HTTPS ? "https" : "http";
 }
 
 // ------------------------------------------------------------------ pairing

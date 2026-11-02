@@ -17,6 +17,7 @@ import {
   renderReadyBlock,
   serveHasPort,
   summarizePrerequisites,
+  serveModeOf,
   tailscaleServeArgs,
   tailscaleServeOffArgs,
 } from "./plan.js";
@@ -98,10 +99,24 @@ describe("cloud VM detection", () => {
 describe("tailscale", () => {
   it("reads the MagicDNS name and login state from `tailscale status --json`", () => {
     const running = JSON.stringify({ BackendState: "Running", Self: { DNSName: "my-mac.tail1234.ts.net.", HostName: "my-mac" } });
-    expect(parseTailscaleStatus(running)).toEqual({ loggedIn: true, backendState: "Running", dnsName: "my-mac.tail1234.ts.net" });
-    expect(parseTailscaleStatus(JSON.stringify({ BackendState: "NeedsLogin", Self: { DNSName: "" } }))).toEqual({ loggedIn: false, backendState: "NeedsLogin" });
-    expect(parseTailscaleStatus("not json")).toEqual({ loggedIn: false, backendState: "unreadable" });
-    expect(parseTailscaleStatus("{}")).toEqual({ loggedIn: false, backendState: "unknown" });
+    expect(parseTailscaleStatus(running)).toEqual({ loggedIn: true, backendState: "Running", dnsName: "my-mac.tail1234.ts.net", https: false });
+    expect(parseTailscaleStatus(JSON.stringify({ BackendState: "NeedsLogin", Self: { DNSName: "" } }))).toEqual({ loggedIn: false, backendState: "NeedsLogin", https: false });
+    expect(parseTailscaleStatus("not json")).toEqual({ loggedIn: false, backendState: "unreadable", https: false });
+    expect(parseTailscaleStatus("{}")).toEqual({ loggedIn: false, backendState: "unknown", https: false });
+  });
+
+  it("tells a tailnet with HTTPS certificates from one without (#21)", () => {
+    const base = { BackendState: "Running", Self: { DNSName: "my-mac.tail1234.ts.net." } };
+    expect(parseTailscaleStatus(JSON.stringify({ ...base, CertDomains: ["my-mac.tail1234.ts.net"] })).https).toBe(true);
+    expect(parseTailscaleStatus(JSON.stringify({ ...base, CertDomains: null })).https).toBe(false);
+    expect(parseTailscaleStatus(JSON.stringify({ ...base, CertDomains: [] })).https).toBe(false);
+    // Without certificates the guard is served over HTTP inside the tailnet, and the endpoint says so.
+    expect(tailscaleServeArgs(4720, "http")).toEqual(["serve", "--bg", "--http=4720", "http://127.0.0.1:4720"]);
+    expect(tailscaleServeOffArgs(4720, "http")).toEqual(["serve", "--http=4720", "off"]);
+    expect(hostEndpoint("my-mac.tail1234.ts.net", 4720, "http")).toBe("http://my-mac.tail1234.ts.net:4720");
+    expect(serveModeOf(JSON.stringify({ TCP: { "4720": { HTTP: true } } }), 4720)).toBe("http");
+    expect(serveModeOf(JSON.stringify({ TCP: { "4720": { HTTPS: true } } }), 4720)).toBe("https");
+    expect(serveModeOf(JSON.stringify({ TCP: {} }), 4720)).toBeUndefined();
   });
 
   it("finds the guard port in `tailscale serve status --json`", () => {

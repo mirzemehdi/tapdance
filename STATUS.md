@@ -158,7 +158,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | W-04 | 🟡 | TTL + keepalive + idle release + owner-scoped MCP shutdown; per-session lock. Interrupted-allocation cleanup relies on Simlock cancelling on disconnect. |
 | W-05 | 🟡 | `gateway setup` ✅ on macOS (tokens, capabilities, config); Caddy/Tailscale steps untested. |
 | W-06 | 🟡 | See C-05. |
-| W-07 | 🧪 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` and `scripts/host-setup.ps1` written. Unit tests cover the pure parts only (`packages/cli/src/host/host.test.ts`: Tailscale status parsing, final block, step-failure formatting, Windows refusal, cloud-VM detection, MCP snippets). `connect` was run once against an unreachable endpoint in a scratch home (config, mode-600 credentials, doctor failure, snippets). `host up` has **not** been run on any machine; Tailscale, the self-test lease through the guard, and two machines are unproven. The setup script is checked with `bash -n` only. |
+| W-07 | 🟡 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` (prerequisite check and install with one confirmation, checksum-verified official downloads, a no-sudo pnpm shim for the build) and `scripts/host-setup.ps1`. Run for real: the installer's check and install of Node.js, the Android command-line tools, platform-tools and emulator into a scratch macOS home, the Temurin download, and a fresh clone and build with only that Node.js (#20). Tailscale without HTTPS certificates falls back to `serve --http` inside the tailnet (#21, unit-tested). Not yet run: `host up` end to end, Linux, the system image download, two machines. |
 
 ### Browser viewer
 
