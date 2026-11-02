@@ -151,6 +151,7 @@ tapdance device renew [--ttl <minutes>]
 tapdance device release
 tapdance device request-human --reason <text> [--wait <seconds> | --no-wait]
 tapdance device request-human --cancel
+tapdance device clipboard <get | set <text>>
 tapdance device done
 ```
 
@@ -193,6 +194,9 @@ opens the request and returns at once: `device status` then shows "waiting for a
 back at …", so an agent can keep working. `--cancel` withdraws the open request (plans changed); a
 waiting `request-human` in another process then exits 13. Use it for a Google sign-in, a password sheet
 or a CAPTCHA: the person types secrets on the device, never in chat.
+
+`device clipboard get` prints what is on the device clipboard (what a Copy button or the share sheet
+copied); `device clipboard set <text>` puts text there before a paste test.
 
 `device done` tells the agent you finished what it asked for with `request_human` (for example
 signing in); the viewer's **Hand back** does the same.
@@ -247,7 +251,9 @@ on a remote worker too; a worker in device-only mode decides with its policy (`a
 them, and reading a physical phone's; off by default), `allow.perf`). Every change ends with the lease:
 the device is wiped on release.
 
-- `setting`: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`), `location`
+- `setting`: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`; on the iOS
+  simulator `wifi`/`airplane` are refused, because it uses the Mac's network and cannot go offline, and
+  `animations` has no switch), `location`
   (`on`/`off`, or `--lat`/`--lon`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid`
   (iOS), `fingerprint` (Android), `permission <grant|deny|reset> --permission <p> --app <id>`,
   `reset-keychain` (iOS), `orientation` (`portrait`, `landscape` = `landscape-left`, `landscape-right`,
@@ -266,12 +272,15 @@ file, so on emulator images, which allow it). Other Android settings
   | TalkBack on (when the image has the Android Accessibility Suite) | `device shell -- settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService`, then `-- settings put secure accessibility_enabled 1` |
   | Move the clock (needs root: `google_apis` images, not `google_apis_playstore`) | `device shell -- settings put global auto_time 0`, then `-- su 0 date 1103190026` (MMDDhhmmYY) |
 
-- `push`: Android shared storage (media-scanned) or a debuggable app's sandbox, up to 24 MB; iOS Photos
-  or an app's Documents (a remote simulator needs a worker guard).
+- `push`: Android shared storage (media-scanned) or a debuggable app's sandbox, up to 24 MB; iOS Photos,
+  `--to files` (the Files app's On My iPhone, which every app's document picker sees: use it for import
+  tests), or an app's Documents (a remote simulator needs a worker guard).
 - `pull`: Android shared storage (`/sdcard/Download/…` and the other media folders) or `--app` with
-  `--path`; iOS `--app` with `--path` inside its container (remote: through a worker guard). Saved as an
+  `--path`; iOS `--app` with `--path` inside its container, or `--files <name>` from On My iPhone
+  (remote: through a worker guard). Saved as an
   artifact.
-- `notifications`: `list` (Android), `open`/`close` the shade (Android), `post` a shell notification
+- `notifications`: `list` (Android), `open`/`close` the shade (Android) or Notification Center (iOS: a
+  swipe from the top-left edge, untested), `post` a shell notification
   (Android) or, with `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator).
 - `shell` (Android emulators only): runs the command with `adb shell` **inside the leased emulator**
   (its own VM, wiped at release; never this machine), e.g. `tapdance device shell -- dumpsys
@@ -292,6 +301,7 @@ tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]...
                      [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
 tapdance app kill <appId>
+tapdance app build --git <url> --ref <ref> [--project <path>] [--scheme <s>] [--configuration <c>] [--gradle-task <t>] [--dir <path>] [--launch <appId>]
 tapdance app uninstall <appId>
 tapdance app clear <appId>
 tapdance app list
@@ -310,7 +320,17 @@ explicit Android intent instead. `stop` force-stops it (on Android that also can
 jobs). `kill` ends it the way a user does by swiping it away: Home, then `am stop-app` (Android 14+) or
 a memory trim and `am kill`, keeping its alarms and jobs; it then checks the process is gone and exits 7
 with the surviving pid when something (a foreground service) keeps it alive. On iOS both use the
-simulator's terminate. `uninstall` removes it. `clear` clears its data
+simulator's terminate.
+
+`launch --locale de-DE` runs the app in that language: on iOS through the launch arguments
+`-AppleLanguages (de)` and `-AppleLocale de_DE`, on Android 13+ by setting the app's own locale (`cmd
+locale set-app-locales`) and relaunching it.
+
+`build` (through a worker guard whose owner turned builds on) builds the app on the machine that runs
+the leased device, from an allow-listed git repository and ref, and installs it on the lease; the log
+streams as progress and the reply names the exact commit. This is how an agent without Xcode gets an
+iOS app onto a remote simulator. See [Builds on the host](deployment/one-command-host.md#builds-on-the-host).
+Unit-tested only. `uninstall` removes it. `clear` clears its data
 (first-launch state); on iOS the keychain is shared, see `device setting reset-keychain`. `list` lists
 the apps the automation backend sees.
 
@@ -460,7 +480,7 @@ machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
 | `worker install [--no-stream] [--ios-backend <agent-device\|axe>] [--service]` | Configure the bundled Simlock worker (agent-device on, pointing at the bundled agent-device; stream and input on unless `--no-stream`), restart it, and print the host checks. `--ios-backend axe` also sets Simlock's `drivers.ios.deviceSet` to `default` and `ios.uiBackend: "axe"` in `~/.tapdance/config.json`. `--service` installs a launchd / systemd `--user` login service. Refused on Windows. |
 | `worker login --accept-gateway-exec --gateway <url> [--label <name>] [--token-stdin] [--no-viewer]` | Join a gateway. `--accept-gateway-exec` is required: without it the command refuses with `FORBIDDEN`, because a joined gateway, and every agent token it issues, can run programs on this machine (Simlock's exec; `simctl spawn` starts any program). Pass it only on a machine you dedicate to being a worker. The worker dials out over an authenticated WebSocket; no inbound port is opened. The URL must be `wss://`, or `ws://` to a private address (loopback, RFC 1918, Tailscale 100.64/10 or `*.ts.net`); `http(s)://` is converted. The join token comes from `TAPDANCE_WORKER_TOKEN`, else stdin when piped (`--token-stdin` documents that), else a hidden prompt. `--no-viewer` leaves stream and input off. |
 | `worker logout` | Leave the gateway, turn the worker's own HTTP API back on, restart. Revoke the join token on the gateway afterwards. |
-| `worker guard start` / `pair` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator: H-02; dedicated-account script and Tailscale exposure untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
+| `worker guard start` / `pair [--scope <areas>]` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator: H-02; dedicated-account script and Tailscale exposure untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
 | `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). Not yet installed on a real machine (H-03). See [security/personal-mac.md](security/personal-mac.md#keep-the-guard-running). |
 | `worker cleanup` | Release device claims left behind by agent-device processes that have gone (a worker restart, the machine going offline mid-lease). Such a claim blocks the next lease of that emulator with "owned by session …". Only claims whose owner process is provably dead are touched; an unfinished screen recording of such a session is set aside (renamed `*.abandoned-<time>`) so its claim can go. `worker start`/`restart` and the worker guard (before each lease) do this on their own. |
 | `worker start` / `stop` / `status` / `logs` / `restart` | Start, stop, show, print the log of, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. |
@@ -502,11 +522,12 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 
 | Command | Meaning |
 | --- | --- |
-| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line, a security note on what the token allows, and on Tailscale a suggested ACL). `--scope` limits a newly issued pairing token to those policy areas (see [threat model](security/threat-model.md)). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
+| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--allow-admin-account]` / `host builds disable` / `host builds status` / `host builds key` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `key` creates a read-only deploy key and prints its public half. `enable` and `disable` restart the guard when no lease is running. |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -866,6 +887,9 @@ Commands:
                                     (sign in, approve a purchase, solve a
                                     check); waits until they hand back, or
                                     returns at once with --no-wait
+  clipboard <action> [text]         Read (get) or write (set <text>) the device
+                                    clipboard: paste flows, checking what a Copy
+                                    button copied
   done                              Tell the agent you finished what it asked
                                     for (request_human), e.g. after signing in
   profile                           Device profiles: an emulator you set up once
@@ -887,7 +911,8 @@ Commands:
                                     browser-first-run off
   push [options] <path>             Copy a file onto the device (Android shared
                                     storage or a debuggable app's sandbox; iOS
-                                    Photos or an app's Documents)
+                                    Photos, the Files app, or an app's
+                                    Documents)
   pull [options] [devicePath]       Copy a file from the device into this
                                     session's artifacts
   notifications [options] <action>  list | open | close | post notifications on
@@ -942,6 +967,18 @@ Options:
                     it was handed back
   --cancel          withdraw the open request (a waiting request-human exits 13)
   -h, --help        display help for command
+```
+
+### `tapdance device clipboard`
+
+```text
+Usage: tapdance device clipboard [options] <action> [text]
+
+Read (get) or write (set <text>) the device clipboard: paste flows, checking
+what a Copy button copied
+
+Options:
+  -h, --help  display help for command
 ```
 
 ### `tapdance device done`
@@ -1094,10 +1131,11 @@ Options:
 Usage: tapdance device push [options] <path>
 
 Copy a file onto the device (Android shared storage or a debuggable app's
-sandbox; iOS Photos or an app's Documents)
+sandbox; iOS Photos, the Files app, or an app's Documents)
 
 Options:
-  --to <destination>  downloads, pictures, documents or app_sandbox
+  --to <destination>  downloads, pictures, documents, app_sandbox, or files
+                      (iOS: Files › On My iPhone, seen by document pickers)
   --app <appId>       app for app_sandbox (and iOS documents)
   --name <name>       file name on the device
   -h, --help          display help for command
@@ -1114,6 +1152,7 @@ Options:
   --app <appId>          read from this app's sandbox/container
   --path <relativePath>  with --app: path inside it, e.g. files/export.json or
                          Documents/export.json
+  --files <name>         iOS: a file in Files › On My iPhone
   -o, --out <file>       write here instead of the artifacts directory
   -h, --help             display help for command
 ```
@@ -1177,6 +1216,10 @@ Commands:
   uninstall <appId>         Remove an installed app
   clear <appId>             Clear an app's data (first-launch state); iOS also:
                             device setting reset-keychain
+  build [options]           Build the app on the machine that runs the leased
+                            device, from a git repository its owner
+                            allow-listed, and install it there (an agent without
+                            Xcode can test iOS)
   kill <appId>              End an app the way a user does (Home, then gone;
                             alarms and jobs kept, unlike stop) and check its
                             process is gone
@@ -1216,6 +1259,9 @@ Options:
   --intent-component <component>  Android: component, e.g.
                                   com.example/.MainActivity
   --intent-extra <key=value>      Android: string extra (repeatable)
+  --locale <locale>               run the app in this language, e.g. de-DE (iOS:
+                                  launch arguments; Android 13+: the app's own
+                                  locale)
   -h, --help                      display help for command
 ```
 
@@ -1240,6 +1286,30 @@ reset-keychain
 
 Options:
   -h, --help  display help for command
+```
+
+### `tapdance app build`
+
+```text
+Usage: tapdance app build [options]
+
+Build the app on the machine that runs the leased device, from a git repository
+its owner allow-listed, and install it there (an agent without Xcode can test
+iOS)
+
+Options:
+  --git <url>             repository URL (must be on the host's build
+                          allow-list)
+  --ref <ref>             branch, tag or commit sha; the reply names the exact
+                          commit built
+  --project <path>        iOS: .xcodeproj or .xcworkspace inside the repository
+                          (found when there is only one)
+  --scheme <name>         iOS: Xcode scheme (default: the project's name)
+  --configuration <name>  iOS: build configuration (default: "Debug")
+  --gradle-task <task>    Android: Gradle task (default: "assembleDebug")
+  --dir <path>            Android: folder with gradlew inside the repository
+  --launch <appId>        launch this app once it is installed
+  -h, --help              display help for command
 ```
 
 ### `tapdance app kill`
@@ -1636,9 +1706,12 @@ Usage: tapdance worker guard pair [options]
 Approve a control machine locally: prints a revocable device-only token once
 
 Options:
-  --label <name>  who it is for, e.g. hetzner-vps
-  --days <n>      lifetime in days (policy maximum applies)
-  -h, --help      display help for command
+  --label <name>   who it is for, e.g. hetzner-vps
+  --days <n>       lifetime in days (policy maximum applies)
+  --scope <areas>  limit this token to these policy areas, e.g.
+                   interaction,inspection,screenshots (default: everything the
+                   policy allows)
+  -h, --help       display help for command
 ```
 
 ### `tapdance worker guard tokens`
@@ -1910,6 +1983,8 @@ Commands:
   warm [options] <counts>  Set how many booted spare devices the worker keeps
                            (e.g. android=0,ios=0), without re-running host up;
                            restarts the worker only when nothing is leased
+  builds                   Let the agent build apps on this machine from
+                           allow-listed git repositories (off by default)
   token [options]          Hand a pairing token to the agent: copy it to the
                            clipboard (default) or show it once
   status                   Show the state of each `host up` step on this machine
@@ -1938,6 +2013,9 @@ Options:
   --repair               revoke the existing pairing with this label and issue a
                          new token
   --skip-self-test       do not lease a device through the guard at the end
+  --scope <areas>        limit the pairing token to these policy areas, e.g.
+                         interaction,inspection,screenshots,streaming,input (no
+                         install: it cannot put apps on the devices)
   --warm <counts>        booted spare devices kept ready for fast leases, per
                          platform, e.g. android=1,ios=0 (0 frees the memory;
                          default: Simlock keeps one per device kind used)
@@ -1985,6 +2063,83 @@ without re-running host up; restarts the worker only when nothing is leased
 Options:
   --now       restart the worker even if a lease is running (that ends the
               lease)
+  -h, --help  display help for command
+```
+
+### `tapdance host builds`
+
+```text
+Usage: tapdance host builds [options] [command]
+
+Let the agent build apps on this machine from allow-listed git repositories (off
+by default)
+
+Options:
+  -h, --help        display help for command
+
+Commands:
+  enable [options]  Allow builds from these repositories (git mode): the agent
+                    sends a repo and ref, this machine fetches and builds it
+  disable           Turn builds off (the allow-list is kept)
+  status            Show whether builds are on, the allowed repositories and the
+                    build cache size
+  key               Create a read-only deploy key for --git-auth deploy-key and
+                    print its public half to add to the repository
+  help [command]    display help for command
+```
+
+### `tapdance host builds enable`
+
+```text
+Usage: tapdance host builds enable [options]
+
+Allow builds from these repositories (git mode): the agent sends a repo and ref,
+this machine fetches and builds it
+
+Options:
+  --repo <url>              repository allowed to be built (repeatable)
+  --git-auth <mode>         how git reaches private repositories: gh (this
+                            machine's `gh auth`), deploy-key (`host builds
+                            key`), or none (default: "none")
+  --protected-ref <branch>  only build commits already on this branch of the
+                            remote, e.g. main (repeatable)
+  --timeout-minutes <n>     longest build (default: "45")
+  --allow-admin-account     accept the risk of building on an administrator
+                            account
+  -h, --help                display help for command
+```
+
+### `tapdance host builds disable`
+
+```text
+Usage: tapdance host builds disable [options]
+
+Turn builds off (the allow-list is kept)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host builds status`
+
+```text
+Usage: tapdance host builds status [options]
+
+Show whether builds are on, the allowed repositories and the build cache size
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host builds key`
+
+```text
+Usage: tapdance host builds key [options]
+
+Create a read-only deploy key for --git-auth deploy-key and print its public
+half to add to the repository
+
+Options:
   -h, --help  display help for command
 ```
 

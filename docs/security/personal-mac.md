@@ -187,12 +187,23 @@ Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–
 - **Audit log.** `~/.tapdance/worker/audit.log` (mode 600) records every request: client id, route,
   command, allow/deny and reason — never tokens or bodies. `tapdance worker guard audit` shows it.
 
+### Scoped tokens
+
+`tapdance worker guard pair --label ci --scope interaction,inspection,screenshots` (or `host up --scope …`)
+issues a token limited to those policy areas: the host policy and the token's scopes must both allow a
+request. A token without `install` cannot put apps on the devices, which matters most for iOS, where an
+installed simulator app runs as this Mac account ([threat model](threat-model.md)). Scope names are the
+`allow` switches of the policy file. `worker guard tokens` lists each token's scopes; `host status` shows
+the pairing's age and expiry. `host up` keeps a valid pairing as it is: pass `--repair` with `--scope` to
+reissue it with scopes.
+
 ### What it does not do (yet)
 
-- **Builds.** Only the `device-only` profile exists. Remote Xcode builds are refused; an
-  approved-build profile and isolated builds in disposable macOS VMs (Virtualization.framework) are
-  not implemented (H-08). Building an untrusted Xcode project runs its Run Script phases with your
-  build user's rights; Tapdance does not sandbox builds.
+- **Isolated builds.** Builds are off by default; the owner can allow them from listed git
+  repositories (`tapdance host builds enable`, [Builds on the host](../deployment/one-command-host.md#builds-on-the-host)).
+  They run with the hosting account's rights: a repository's Run Script phases and Gradle scripts are
+  code execution on the Mac. Builds in disposable macOS VMs (Virtualization.framework) are not
+  implemented (H-08); Tapdance does not sandbox builds.
 - **Mutual TLS, replay protection, short-lived per-session tokens.** Transport security comes from
   Tailscale (WireGuard). Guard tokens are bearer tokens with an expiry (H-05).
 - **Per-session staging directories and storage quotas on the Mac.** Uploads and artifacts live in

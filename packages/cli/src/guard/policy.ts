@@ -11,7 +11,7 @@ import { TapdanceError, redactSecrets, tapdanceHome } from "@tapdance/sdk";
  */
 export const GuardPolicySchema = z
   .object({
-    /** Only "device-only" exists: no builds, no shell. Build modes are reserved and refused at start. */
+    /** Only "device-only" exists: no host shell. Builds from allow-listed git repositories are `allow.builds` + `builds`. */
     profile: z.enum(["device-only"]).default("device-only"),
     listen: z.object({ host: z.string().default("127.0.0.1"), port: z.number().int().min(0).max(65535).default(4720) }).default({ host: "127.0.0.1", port: 4720 }),
     allow: z
@@ -29,8 +29,9 @@ export const GuardPolicySchema = z
         /** Files pushed to or pulled from the leased device's shared storage or a debuggable app's sandbox. */
         files: z.boolean().default(true),
         /**
-         * Posting notifications, and reading them on a physical phone (its notifications can hold the
-         * owner's private text). Reading an emulator's or simulator's list is part of `inspection`.
+         * Notifications on a physical phone: reading them (they can hold the owner's private text) and
+         * posting to it. On emulators and simulators, reading is part of `inspection` and posting (a
+         * shell notification, a push payload) part of `interaction`.
          */
         notifications: z.boolean().default(false),
         /** Frame and memory measurements. */
@@ -39,6 +40,12 @@ export const GuardPolicySchema = z
         deviceShell: z.boolean().default(true),
         /** Physical phones plugged into the Mac carry the owner's data; off unless the owner turns it on. */
         physicalDevices: z.boolean().default(false),
+        /**
+         * Build an app on this machine from an allow-listed git repository and install it on the lease.
+         * Building runs the project's scripts (Xcode run-script phases, Gradle): code execution on this
+         * machine as this account. Off by default; `tapdance host builds enable`.
+         */
+        builds: z.boolean().default(false),
       })
       .default({
         install: true,
@@ -55,7 +62,20 @@ export const GuardPolicySchema = z
         perf: true,
         deviceShell: true,
         physicalDevices: false,
+        builds: false,
       }),
+    /** Builds on this machine (`allow.builds`): which repositories, which refs, how to reach them. */
+    builds: z
+      .object({
+        /** Repository URLs that may be built (https or ssh), compared without a trailing .git or slash. */
+        repos: z.array(z.string().min(1).max(500)).max(100).default([]),
+        /** When set, only commits on these branches of the remote (e.g. main) are built. */
+        protectedRefs: z.array(z.string().regex(/^(?!-)[A-Za-z0-9._/-]{1,200}$/)).max(20).default([]),
+        /** How git reaches private repositories: the host's `gh auth`, a read-only deploy key, or nothing. */
+        gitAuth: z.enum(["none", "gh", "deploy-key"]).default("none"),
+        timeoutMinutes: z.number().int().min(1).max(240).default(45),
+      })
+      .default({ repos: [], protectedRefs: [], gitAuth: "none", timeoutMinutes: 45 }),
     limits: z
       .object({
         maxSessions: z.number().int().min(1).max(16).default(1),
@@ -100,6 +120,25 @@ export interface GuardToken {
   createdAt: string;
   expiresAt: string;
   revokedAt?: string;
+  /**
+   * Policy areas this token may use (e.g. ["interaction", "inspection", "screenshots"]). Absent: every
+   * area the host policy allows. A scope never widens the policy: both must allow a request.
+   */
+  scopes?: string[];
+}
+
+/** The host policy as one token may use it: each `allow` switch also needs the token's scope. */
+export function scopedPolicy(policy: GuardPolicy, token: GuardToken | undefined): GuardPolicy {
+  if (!token?.scopes) return policy;
+  const allow = Object.fromEntries(
+    Object.entries(policy.allow).map(([area, on]) => [area, on && (area === "physicalDevices" ? on : token.scopes!.includes(area))]),
+  ) as GuardPolicy["allow"];
+  return { ...policy, allow };
+}
+
+/** The scope names a token can be issued with: the policy's allow switches except physicalDevices. */
+export function scopeNames(): string[] {
+  return Object.keys(GuardPolicySchema.parse({}).allow).filter((k) => k !== "physicalDevices");
 }
 
 const hash = (secret: string) => createHash("sha256").update(secret).digest("hex");
@@ -125,10 +164,17 @@ export class GuardTokens {
     await chmod(this.path, 0o600);
   }
 
-  async issue(label: string, days: number): Promise<{ secret: string; token: GuardToken }> {
+  async issue(label: string, days: number, scopes?: string[]): Promise<{ secret: string; token: GuardToken }> {
     const secret = `tdg_${randomBytes(24).toString("base64url")}`;
     const now = Date.now();
-    const token: GuardToken = { id: `gt_${randomBytes(6).toString("hex")}`, label, hash: hash(secret), createdAt: new Date(now).toISOString(), expiresAt: new Date(now + days * 86_400_000).toISOString() };
+    const token: GuardToken = {
+      id: `gt_${randomBytes(6).toString("hex")}`,
+      label,
+      hash: hash(secret),
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + days * 86_400_000).toISOString(),
+      ...(scopes ? { scopes } : {}),
+    };
     await this.save([...(await this.all()), token]);
     return { secret, token };
   }

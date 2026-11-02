@@ -115,6 +115,17 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed: Android missing when a stray adb server sat on Simlock's port (`worker start/restart` stop it;
   `doctor` and `devices` say so); `host up`'s run-again hint dropping `--warm`.
 
+### After the iOS field run (issues #45–#50)
+
+- Builds on the host from allow-listed git repositories: `host builds enable|disable|status|key`,
+  `app build`, MCP `build_app` (off by default; protected refs; credentials stay on the host).
+- Scoped guard tokens (`worker guard pair --scope`, `host up --scope`); `docs/security/threat-model.md`.
+- iOS: `device push --to files` / `pull --files` (Files app), `device clipboard`, `app launch --locale`,
+  Notification Center open/close, `app list` from simctl, alert get from the screen, status-bar time read.
+- Changed: iOS wifi/airplane are refused (the simulator cannot go offline) instead of faking the status
+  bar; posting a notification to a simulator or emulator needs `interaction`, not `notifications`.
+- Fixed: `perf memory` refused by the guard.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

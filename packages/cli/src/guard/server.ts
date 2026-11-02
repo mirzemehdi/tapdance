@@ -1,13 +1,15 @@
+import { TapdanceError, deviceCommands, redactSecrets } from "@tapdance/sdk";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { parseExecStream } from "@tapdance/provider-simlock";
-import { GuardTokens, audit, guardDir, type GuardPolicy, type GuardToken } from "./policy.js";
-import { execOf, filesOf, routeOf, rpcOf, type FileRequest } from "./rules.js";
+import { checkBuildRequest, parseExecStream, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
+import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
+import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
 
 /**
  * The worker guard: the only endpoint a remote control machine reaches on a worker in device-only
@@ -23,6 +25,8 @@ import { execOf, filesOf, routeOf, rpcOf, type FileRequest } from "./rules.js";
  * to a remote gateway (that would hand the gateway shell-equivalent rights around the guard).
  */
 export interface GuardOptions {
+  /** Runs build commands (tests pass a fake; the service uses spawn). */
+  buildRunner?: CommandRunner;
   upstream: SimlockConnection;
   policy: GuardPolicy;
   env?: NodeJS.ProcessEnv;
@@ -36,7 +40,9 @@ export interface GuardOptions {
 }
 
 export async function startGuard(options: GuardOptions): Promise<{ server: Server; url: string; close: () => Promise<void> }> {
-  const { upstream, policy } = options;
+  const { upstream } = options;
+  const policy = options.policy;
+  const hostPolicy = options.policy;
   const env = options.env ?? process.env;
   const doFetch = options.fetchImpl ?? fetch;
   const tokens = new GuardTokens(env);
@@ -170,6 +176,16 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     return owners.size;
   };
 
+  /** Runs adb or simctl against a lease through the local Simlock (it puts the leased device in). */
+  const execUpstream = async (leaseId: string, tool: "adb" | "simctl", args: string[]) => {
+    const r = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}/exec`, {
+      method: "POST",
+      headers: { ...upstreamHeaders, "content-type": "application/json" },
+      body: JSON.stringify({ tool, args }),
+    });
+    if (!r.ok) throw new Error(`${tool} ${args[0]} answered ${r.status}`);
+    return parseExecStream(await r.text());
+  };
   /** Runs simctl against a lease through the local Simlock (it puts the leased simulator in). */
   const simctl = async (leaseId: string, args: string[]) => {
     const r = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}/exec`, {
@@ -189,6 +205,53 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     return realpath(path).catch(() => undefined);
   };
 
+  /** The leased simulator's Files app storage ("On My iPhone"), resolved and created on this Mac. */
+  const filesRoot = async (leaseId: string): Promise<string | undefined> => {
+    const r = await simctl(leaseId, deviceCommands.ios.filesGroups().args);
+    const group = r.exitCode === 0 ? deviceCommands.parseGroupContainer(r.stdout, deviceCommands.FILES_GROUP) : undefined;
+    if (!group) return undefined;
+    const root = await realpath(group).catch(() => undefined);
+    if (!root) return undefined;
+    const storage = join(root, "File Provider Storage");
+    await mkdir(storage, { recursive: true });
+    // The storage folder must be a real folder inside the group container, not a link out of it.
+    if ((await lstat(storage)).isSymbolicLink() || !(await realpath(storage)).startsWith(root + sep)) return undefined;
+    return storage;
+  };
+
+  let building = false;
+  /** The owner's build settings, with the deploy key `host builds key` created, when there is one. */
+  const buildSettings = (): BuildSettings => {
+    const key = join(guardDir(env), "builds", "deploy_key");
+    return { ...hostPolicy.builds, ...(existsSync(key) ? { deployKeyPath: key } : {}) };
+  };
+  /**
+   * Builds on this machine and installs the result on the lease, streaming the log as NDJSON lines
+   * ({"log": …}, then {"result": …} or {"error": …}).
+   */
+  const runBuildRoute = async (res: ServerResponse, leaseId: string, request: BuildRequest, decide: (d: "allow" | "deny", e?: { reason?: string; command?: string; leaseId?: string }) => Promise<void>) => {
+    building = true;
+    res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
+    const line = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
+    try {
+      const result = await runBuild(request, buildSettings(), join(guardDir(env), "builds"), (l) => line({ log: redactSecrets(l) }), options.buildRunner);
+      const install =
+        request.platform === "ios"
+          ? await execUpstream(leaseId, "simctl", ["install", result.artifact])
+          : await execUpstream(leaseId, "adb", ["install", "-r", "-t", result.artifact]);
+      if (install.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Installing the build failed: ${(install.stderr || install.stdout).trim().split("\n").slice(-3).join(" ")}`);
+      await decide("allow", { command: `build installed ${result.sha}`, leaseId });
+      line({ result: { sha: result.sha, seconds: result.seconds, artifact: result.artifact.split(sep).pop(), installed: true } });
+    } catch (error) {
+      const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", (error as Error).message);
+      await decide("deny", { reason: `build failed: ${e.message}`, leaseId });
+      line({ error: { code: e.code, message: e.message, ...(e.hint ? { hint: e.hint } : {}), ...(e.details?.["tail"] ? { tail: e.details["tail"] } : {}) } });
+    } finally {
+      building = false;
+      res.end();
+    }
+  };
+
   /** Carries a file to or from a leased iOS simulator. Paths are the guard's own, never the caller's. */
   const handleFiles = async (req: IncomingMessage, res: ServerResponse, leaseId: string, file: FileRequest, decide: (d: "allow" | "deny", e?: { reason?: string; command?: string; leaseId?: string }) => Promise<void>) => {
     const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${leaseId}`, { headers: upstreamHeaders });
@@ -198,6 +261,20 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       return send(res, 400, "NOT_SUPPORTED", "This route is for iOS simulators; Android files go through exec");
     }
     const limit = policy.limits.maxUploadMB * 1024 * 1024;
+    if (file.op === "get" && "area" in file) {
+      const root = await filesRoot(leaseId);
+      if (!root) return send(res, 404, "DEVICE_ERROR", "The Files app's local storage was not found on this simulator");
+      const target = await realpath(join(root, file.path)).catch(() => undefined);
+      if (!target || !target.startsWith(root + sep)) {
+        await decide("deny", { reason: "path leaves On My iPhone", leaseId });
+        return send(res, 404, "USAGE", "No such file in On My iPhone");
+      }
+      const info = await stat(target);
+      if (!info.isFile() || info.size > limit) return send(res, 400, "USAGE", info.isFile() ? "File too large" : "Not a file");
+      await decide("allow", { command: "files get files", leaseId });
+      res.writeHead(200, { "content-type": "application/octet-stream", "cache-control": "no-store" }).end(await readFile(target));
+      return;
+    }
     if (file.op === "get") {
       const root = await container(leaseId, file.appId);
       if (!root) return send(res, 404, "APP_NOT_INSTALLED", `${file.appId} has no data container on this simulator`);
@@ -232,6 +309,20 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       }
       await decide("allow", { command: "files put photos", leaseId });
       return send200(res, { ok: true, devicePath: "Photos" });
+    }
+    if (file.destination === "files") {
+      const storage = await filesRoot(leaseId);
+      if (!storage) return send(res, 404, "DEVICE_ERROR", "The Files app's local storage was not found on this simulator");
+      const target = join(storage, file.name);
+      if ((await lstat(target).catch(() => undefined))?.isSymbolicLink()) {
+        await decide("deny", { reason: "target is a link", leaseId });
+        return send(res, 403, "FORBIDDEN", "Refusing to write through a link");
+      }
+      const tmp = join(storage, `.tapdance-${randomBytes(6).toString("hex")}`);
+      await writeFile(tmp, body, { mode: 0o644, flag: "wx" });
+      await rename(tmp, target);
+      await decide("allow", { command: "files put files", leaseId });
+      return send200(res, { ok: true, devicePath: `On My iPhone/${file.name}` });
     }
     const root = await container(leaseId, file.appId);
     if (!root) return send(res, 404, "APP_NOT_INSTALLED", `${file.appId} has no data container on this simulator`);
@@ -289,6 +380,9 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
         await decide("deny", { reason: "unauthenticated" });
         return send(res, 401, "UNAUTHENTICATED", "Missing, expired or revoked worker-guard token");
       }
+      // This token's view of the policy: a switch is on only when the host allows it and the token's
+      // scopes (when it has any) include it.
+      const policy = scopedPolicy(hostPolicy, token);
       const r = route.value;
       switch (r.kind) {
         case "identity":
@@ -318,6 +412,29 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           if (owners.get(r.leaseId) !== token.id) {
             await decide("deny", { reason: "not this token's lease", leaseId: r.leaseId });
             return send(res, 404, "UNKNOWN_LEASE", "No such lease for this token");
+          }
+          if (r.action === "build") {
+            if (!policy.allow.builds) {
+              await decide("deny", { reason: "builds off", leaseId: r.leaseId, command: "build" });
+              return send(res, 403, "FORBIDDEN", policyOff("builds", "Builds"));
+            }
+            if (building) return send(res, 429, "NO_CAPACITY", "Another build is running on this host; try again when it finishes");
+            const raw = await readBody(req, 64 * 1024);
+            // The platform is the lease's, not whatever the client says.
+            const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${r.leaseId}`, { headers: upstreamHeaders });
+            const platform = detail.ok ? ((await detail.json()) as { lease?: { platform?: string } }).lease?.platform : undefined;
+            let request: BuildRequest;
+            try {
+              const asked = raw ? (JSON.parse(raw.toString("utf8")) as Record<string, unknown>) : {};
+              request = checkBuildRequest({ ...asked, platform }, buildSettings());
+            } catch (error) {
+              const e = error instanceof TapdanceError ? error : new TapdanceError("USAGE", "The build request is not valid JSON");
+              await decide("deny", { reason: e.message, leaseId: r.leaseId, command: "build" });
+              return send(res, e.code === "FORBIDDEN" ? 403 : 400, e.code, e.message);
+            }
+            await decide("allow", { command: `build ${request.platform} ${request.repo}@${request.ref}`, leaseId: r.leaseId });
+            await runBuildRoute(res, r.leaseId, request, decide);
+            return;
           }
           if (r.action === "files-put" || r.action === "files-get") {
             const decision = filesOf(r.action === "files-put" ? "PUT" : "GET", new URL(path, "http://guard").searchParams, policy);
@@ -363,7 +480,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           } catch {
             parsed = undefined;
           }
-          const decision = rpcOf(parsed, policy);
+          const decision = rpcOf(parsed, policy, (id) => physicalLeases.has(id));
           if (!decision.ok && env["TAPDANCE_GUARD_DEBUG"]) {
             // Shapes only, never values: enough to extend the allowlist safely.
             const shape = (v: unknown, depth = 0): unknown =>
@@ -516,7 +633,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   server.on("upgrade", async (req, socket, head) => {
     const route = routeOf("GET", req.url ?? "/");
     const token = await authenticate(req);
-    if (!route.ok || route.value.kind !== "lease" || route.value.action !== "input" || !token || owners.get(route.value.leaseId) !== token.id || !policy.allow.input) {
+    if (!route.ok || route.value.kind !== "lease" || route.value.action !== "input" || !token || owners.get(route.value.leaseId) !== token.id || !scopedPolicy(hostPolicy, token).allow.input) {
       await audit({ ...(token ? { client: token.id } : {}), method: "WS", path: (req.url ?? "").split("?")[0]!, decision: "deny", reason: "input not allowed" }, env).catch(() => undefined);
       socket.destroy();
       return;

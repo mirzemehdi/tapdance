@@ -250,7 +250,8 @@ export interface DeviceSettingChange {
   longitude?: number;
 }
 
-export type FileDestination = "downloads" | "pictures" | "documents" | "app_sandbox";
+/** `files` (iOS): the Files app's "On My iPhone", which every app's document picker sees. */
+export type FileDestination = "downloads" | "pictures" | "documents" | "app_sandbox" | "files";
 
 export interface DeviceNotification {
   package: string;
@@ -261,6 +262,26 @@ export interface DeviceNotification {
 }
 
 /** Device-level operations beyond UI driving. Optional for providers; absent means NOT_SUPPORTED. */
+/** An app build on the device's host from a git repository (iOS: xcodebuild; Android: Gradle). */
+export interface AppBuildRequest {
+  repo: string;
+  ref: string;
+  project?: string;
+  scheme?: string;
+  configuration?: string;
+  gradleTask?: string;
+  dir?: string;
+}
+
+export interface AppBuildResult {
+  /** The exact commit that was built. */
+  sha: string;
+  seconds: number;
+  /** File name of the built .app or .apk (it stays on the host). */
+  artifact: string;
+  installed: boolean;
+}
+
 /** One tap of a timed sequence: `t` ms after the start, at (x, y); `hold` ms makes it a long press. */
 export interface TimedTap {
   t: number;
@@ -274,12 +295,16 @@ export type DeviceOperation =
   | { kind: "clear-app-data"; appId: string }
   /** Android: taps (or holds) at set times, run as one script inside the emulator so the network adds no delay between them. */
   | { kind: "tap-sequence"; steps: TimedTap[] }
+  /** Read or write the device clipboard (paste flows, checking what "Copy link" copied). */
+  | { kind: "clipboard"; action: "get" } | { kind: "clipboard"; action: "set"; text: string }
+  /** Android 13+: one app's language (`cmd locale set-app-locales`), e.g. "de-DE". */
+  | { kind: "app-locale"; appId: string; locale: string }
   /** End an app the way a user does (to the background, then gone), keeping its alarms and jobs: unlike a force-stop. */
   | { kind: "kill-app"; appId: string }
   | { kind: "setting"; change: DeviceSettingChange }
   | { kind: "intent"; intent: IntentSpec }
   | { kind: "push-file"; localPath: string; destination: FileDestination; appId?: string; name?: string }
-  | { kind: "pull-file"; outPath: string; devicePath?: string; appId?: string; relativePath?: string }
+  | { kind: "pull-file"; outPath: string; devicePath?: string; appId?: string; relativePath?: string; filesName?: string }
   | { kind: "notifications"; action: "list" | "open" | "close"; appId?: string }
   | { kind: "post-notification"; title?: string; text?: string; appId?: string; payload?: Record<string, unknown> }
   | { kind: "perf"; metric: "frames" | "memory"; appId?: string }

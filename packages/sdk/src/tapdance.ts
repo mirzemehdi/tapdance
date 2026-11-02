@@ -34,7 +34,7 @@ import {
   type AlertAction,
   type AlertResult,
   type DeviceOperation,
-  type DeviceOperationResult, type TimedTap } from "@tapdance/core";
+  type DeviceOperationResult, type TimedTap, type AppBuildRequest, type AppBuildResult } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
 import { PROFILE_PROVIDER, ProfileProvider } from "@tapdance/provider-simlock";
 import { hostChecks } from "./host-checks.js";
@@ -519,6 +519,7 @@ export class Tapdance {
       (operation.kind === "notifications" && operation.action === "list") ||
       operation.kind === "perf" ||
       operation.kind === "pull-file" ||
+      (operation.kind === "clipboard" && operation.action === "get") ||
       (operation.kind === "setting" && operation.change.value === undefined && operation.change.name !== "reset-keychain");
     if (!readOnly) await this.guardHuman();
     if (operation.kind === "shell" && Buffer.byteLength(operation.stdin ?? "") > 16 * 1024 * 1024) throw new TapdanceError("USAGE", "stdin is limited to 16 MB");
@@ -533,9 +534,36 @@ export class Tapdance {
     });
   }
 
-  async launchApp(appId: string, options: { relaunch?: boolean; url?: string; args?: string[] } = {}): Promise<ActionResult> {
+  /**
+   * Builds the app on the machine that runs the leased device, from a git repository its owner
+   * allow-listed, and installs it there (#45): how an agent without Xcode gets an iOS app onto a lease.
+   * Log lines go to progress.
+   */
+  async buildApp(request: AppBuildRequest): Promise<AppBuildResult> {
     await this.guardHuman();
-    return this.onDevice((handle, provider) => provider.launchApp(handle, appId, options));
+    return this.onDevice(async (handle, provider) => {
+      if (!provider.buildApp) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} cannot build apps`);
+      return provider.buildApp(handle, request, (line) => this.progress(line));
+    });
+  }
+
+  /**
+   * Launches an app. `locale` (e.g. "de-DE") runs it in that language: iOS through the launch
+   * arguments -AppleLanguages/-AppleLocale, Android 13+ by setting the app's own locale first.
+   */
+  async launchApp(appId: string, options: { relaunch?: boolean; url?: string; args?: string[]; locale?: string } = {}): Promise<ActionResult> {
+    await this.guardHuman();
+    const { locale, ...launch } = options;
+    if (!locale) return this.onDevice((handle, provider) => provider.launchApp(handle, appId, launch));
+    if (!/^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|\d{3}))?$/.test(locale)) throw new TapdanceError("USAGE", `"${locale}" is not a locale such as de-DE or pt-BR`);
+    const { record } = await this.active();
+    if (record.handle.platform === "ios") {
+      const language = locale.split("-").slice(0, -1).join("-") || locale;
+      const args = [...(launch.args ?? []), "-AppleLanguages", `(${locale.includes("-") ? language : locale})`, "-AppleLocale", locale.replace(/-/g, "_")];
+      return this.onDevice((handle, provider) => provider.launchApp(handle, appId, { ...launch, args }));
+    }
+    await this.device({ kind: "app-locale", appId, locale });
+    return this.onDevice((handle, provider) => provider.launchApp(handle, appId, { ...launch, relaunch: true }));
   }
 
   async stopApp(appId: string): Promise<ActionResult> {

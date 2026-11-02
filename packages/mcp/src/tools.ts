@@ -227,6 +227,7 @@ export const TOOLS: ToolDefinition[] = [
         relaunch: z.boolean().optional().describe("Kill and restart for a clean launch."),
         url: z.string().url().max(2048).optional().describe("Deep link to open in the app."),
         args: z.array(z.string().max(1024)).max(32).optional().describe("Launch arguments passed to the app process."),
+        locale: z.string().max(20).optional().describe("Run the app in this language, e.g. \"de-DE\" (iOS: -AppleLanguages/-AppleLocale; Android 13+: the app's own locale, then a relaunch)."),
         intent: z
           .object({
             action: z.string().max(256).optional(),
@@ -249,6 +250,7 @@ export const TOOLS: ToolDefinition[] = [
           ...(a["relaunch"] ? { relaunch: true } : {}),
           ...(a["url"] ? { url: a["url"] as string } : {}),
           ...(a["args"] ? { args: a["args"] as string[] } : {}),
+        ...(a["locale"] ? { locale: a["locale"] as string } : {}),
         })),
         next: "inspect_screen",
       });
@@ -269,6 +271,47 @@ export const TOOLS: ToolDefinition[] = [
     input: z.object({ app_id: appId }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
     run: async (t, a) => json(await t.device({ kind: "uninstall", appId: a["app_id"] as string })),
+  },
+  {
+    name: "clipboard",
+    title: "Read or write the clipboard",
+    description: "Read the device clipboard (action get: what a Copy button or share sheet copied) or set it (action set with text) before a paste test.",
+    input: z.object({ action: z.enum(["get", "set"]), text: z.string().max(65_536).optional() }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) => {
+      if (a["action"] === "set" && typeof a["text"] !== "string") throw new TapdanceError("USAGE", "clipboard set needs text");
+      return json(await t.device(a["action"] === "get" ? { kind: "clipboard", action: "get" } : { kind: "clipboard", action: "set", text: a["text"] as string }));
+    },
+  },
+  {
+    name: "build_app",
+    title: "Build and install an app on the device's host",
+    description:
+      "Build the app on the machine that runs the leased device and install it there, from a git repository the host's owner allow-listed (the host fetches it with its own credentials). The way to get an iOS app onto a remote simulator from a machine without Xcode. iOS: xcodebuild for the simulator (project and scheme found when the repository has one Xcode project); Android: ./gradlew assembleDebug (gradle_task, dir). Returns the exact commit built. Builds run the project's scripts on the host, so the owner turns them on per repository; a refusal names what to ask for. Takes minutes; progress shows the log.",
+    input: z
+      .object({
+        repo: z.string().min(1).max(500),
+        ref: z.string().min(1).max(200).describe("Branch, tag or commit sha."),
+        project: z.string().max(300).optional(),
+        scheme: z.string().max(100).optional(),
+        configuration: z.string().max(100).optional(),
+        gradle_task: z.string().max(200).optional(),
+        dir: z.string().max(300).optional(),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    run: async (t, a) =>
+      json(
+        await t.buildApp({
+          repo: a["repo"] as string,
+          ref: a["ref"] as string,
+          ...(a["project"] ? { project: a["project"] as string } : {}),
+          ...(a["scheme"] ? { scheme: a["scheme"] as string } : {}),
+          ...(a["configuration"] ? { configuration: a["configuration"] as string } : {}),
+          ...(a["gradle_task"] ? { gradleTask: a["gradle_task"] as string } : {}),
+          ...(a["dir"] ? { dir: a["dir"] as string } : {}),
+        }),
+      ),
   },
   {
     name: "kill_app",
@@ -293,11 +336,11 @@ export const TOOLS: ToolDefinition[] = [
     title: "Change a device setting",
     description: [
       "Change (or, without value, read) a setting on the leased device. Changes last until the lease ends (every lease starts from a clean device).",
-      "wifi | bluetooth | airplane | mobile-data | animations: on|off (iOS simulator: status bar only for wifi/airplane).",
+      "wifi | bluetooth | airplane | mobile-data | animations: on|off (Android; the iOS simulator uses the Mac's network and cannot go offline, so wifi/airplane are refused there).",
       "location: on|off, or latitude+longitude to move the device. appearance: light|dark|toggle. text-size: extra-small … accessibility-extra-extra-extra-large.",
       "permission: value grant|deny|reset, permission camera|microphone|photos|contacts|notifications|location|calendar|…, app_id.",
       "faceid|touchid: match|nonmatch|enroll|unenroll (iOS). fingerprint: match|nonmatch (Android). reset-keychain (iOS, every app).",
-      "orientation: portrait|landscape (= landscape-left)|landscape-left|landscape-right|portrait-upside-down. status-bar-time: HH:MM or clear (iOS, for screenshots).",
+      "orientation: portrait|landscape (= landscape-left)|landscape-left|landscape-right|portrait-upside-down. status-bar-time: HH:MM (or H:MM), clear, or no value to read it (iOS, for screenshots).",
       "browser-first-run: off (Android: Chrome opens links without its welcome, sign-in and default-browser screens; set it before a test that opens links).",
       "Anything else on Android (density, locale, time zone, …): device_shell, e.g. `wm density 320`. iOS language: launch_app args [\"-AppleLanguages\", \"(de)\"].",
     ].join(" "),
@@ -331,11 +374,11 @@ export const TOOLS: ToolDefinition[] = [
     name: "push_file",
     title: "Put a file on the device",
     description:
-      "Copy a project file onto the leased device so the app can import, open or pick it. Android: downloads, pictures or documents (shared storage, visible in the system file picker and gallery), or app_sandbox (needs app_id and a debuggable build; name may be files/…, cache/…, databases/…, shared_prefs/…). iOS: pictures (Photos), or documents inside app_id's container (a remote simulator needs a worker guard). The path must be inside the project directory.",
+      "Copy a project file onto the leased device so the app can import, open or pick it. Android: downloads, pictures or documents (shared storage, visible in the system file picker and gallery), or app_sandbox (needs app_id and a debuggable build; name may be files/…, cache/…, databases/…, shared_prefs/…). iOS: pictures (Photos), files (the Files app's On My iPhone, which every document picker sees: use this for import tests), or documents inside app_id's container (a remote simulator needs a worker guard). The path must be inside the project directory.",
     input: z
       .object({
         path: z.string().min(1).max(4096),
-        destination: z.enum(["downloads", "pictures", "documents", "app_sandbox"]),
+        destination: z.enum(["downloads", "pictures", "documents", "app_sandbox", "files"]),
         app_id: appId.optional(),
         name: z.string().min(1).max(160).optional().describe("File name on the device (default: the local name)."),
       })
@@ -356,8 +399,8 @@ export const TOOLS: ToolDefinition[] = [
     name: "pull_file",
     title: "Get a file from the device",
     description:
-      "Copy a file from the leased device into this session's artifacts (listed by get_test_artifacts). Android: device_path in /sdcard/{Download,Pictures,DCIM,Documents,Movies,Music}/, or app_id + relative_path (files/…, debuggable builds). iOS: app_id + relative_path inside its container, e.g. Documents/export.json (a remote simulator needs a worker guard).",
-    input: z.object({ device_path: z.string().max(512).optional(), app_id: appId.optional(), relative_path: z.string().max(512).optional() }).strict(),
+      "Copy a file from the leased device into this session's artifacts (listed by get_test_artifacts). Android: device_path in /sdcard/{Download,Pictures,DCIM,Documents,Movies,Music}/, or app_id + relative_path (files/…, debuggable builds). iOS: app_id + relative_path inside its container, e.g. Documents/export.json, or files_name for a file in the Files app's On My iPhone (a remote simulator needs a worker guard).",
+    input: z.object({ device_path: z.string().max(512).optional(), app_id: appId.optional(), relative_path: z.string().max(512).optional(), files_name: z.string().max(160).optional() }).strict(),
     annotations: { readOnlyHint: true },
     run: async (t, a) =>
       json(
@@ -367,6 +410,7 @@ export const TOOLS: ToolDefinition[] = [
           ...(a["device_path"] ? { devicePath: a["device_path"] as string } : {}),
           ...(a["app_id"] ? { appId: a["app_id"] as string } : {}),
           ...(a["relative_path"] ? { relativePath: a["relative_path"] as string } : {}),
+          ...(a["files_name"] ? { filesName: a["files_name"] as string } : {}),
         }),
       ),
   },

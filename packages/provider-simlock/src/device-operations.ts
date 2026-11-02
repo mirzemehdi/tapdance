@@ -3,7 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import type { AgentDeviceClient } from "agent-device";
 import { TapdanceError, type DeviceNotification, type DeviceOperation, type DeviceOperationResult, type LeaseHandle } from "@tapdance/core";
 import { fromAgentDeviceError } from "./agent-device-errors.js";
-import { android, ios, MAX_PUSH_BYTES, type DeviceCommand } from "./device-commands.js";
+import { android, FILES_GROUP, ios, MAX_PUSH_BYTES, parseGroupContainer, type DeviceCommand } from "./device-commands.js";
 import type { ExecResult } from "./http.js";
 
 /** What the provider lends this module: the lease's agent-device client and Simlock's lease exec. */
@@ -79,6 +79,7 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
   const scope = ctx.scope;
   switch (op.kind) {
     case "uninstall": {
+      if (!isAndroid && op.appId.startsWith("com.apple.")) throw notSupported(`${op.appId} is a system app; system apps cannot be removed from a simulator`);
       const r = (await agentDevice(`uninstall ${op.appId}`, () => ctx.client.apps.uninstall({ app: op.appId, ...scope } as never))) as { wasInstalled?: boolean };
       return { ok: true, message: r?.wasInstalled === false ? `${op.appId} was not installed` : `Uninstalled ${op.appId}`, data: { wasInstalled: r?.wasInstalled ?? true } };
     }
@@ -92,6 +93,22 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
     }
     case "kill-app":
       return killApp(ctx, handle, op.appId);
+    case "clipboard": {
+      const command = ctx.client.command as unknown as { clipboard: (o: unknown) => Promise<{ text?: string; textLength?: number }> };
+      if (op.action === "get") {
+        const r = await agentDevice("read the clipboard", () => command.clipboard({ action: "read", ...scope }));
+        return { ok: true, message: r?.text ? `Clipboard: ${r.text.slice(0, 200)}` : "The clipboard is empty", data: { text: r?.text ?? "" } };
+      }
+      if (op.text.length > 64 * 1024) throw new TapdanceError("USAGE", "Clipboard text is limited to 64 KB");
+      await agentDevice("write the clipboard", () => command.clipboard({ action: "write", text: op.text, ...scope }));
+      return { ok: true, message: `Copied ${op.text.length} character(s) to the clipboard` };
+    }
+    case "app-locale": {
+      if (!isAndroid) throw notSupported("Per-app locale through a setting is Android only", "On iOS pass locale to launch_app (it sets -AppleLanguages and -AppleLocale).");
+      const r = await run(ctx, android.appLocale(op.appId, op.locale), `set ${op.appId}'s locale`);
+      if (/Unknown command|Error/i.test(r.stdout)) throw notSupported(`This Android version cannot set an app's locale (${r.stdout.trim().slice(0, 120)})`, "Per-app locales need Android 13 (API 33) or newer.");
+      return { ok: true, message: `${op.appId} now runs in ${op.locale} (relaunch it)` };
+    }
     case "tap-sequence": {
       if (!isAndroid) throw notSupported("Timed tap sequences are Android only", "On iOS, tap one at a time.");
       const cmd = android.tapSequence(op.steps);
@@ -135,7 +152,7 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
         const list = op.appId ? all.filter((n) => n.package === op.appId) : all;
         return { ok: true, message: `${list.length} notification(s)`, data: { notifications: list } };
       }
-      if (!isAndroid) throw notSupported("Opening Notification Center is not automated on iOS", "Swipe down from the top-left edge with swipe (points), then inspect_screen.");
+      if (!isAndroid) return notificationCenter(ctx, op.action === "open");
       await run(ctx, android.shade(op.action === "open"), `${op.action} the notification shade`);
       return { ok: true, message: op.action === "open" ? "Opened the notification shade; inspect_screen to read or tap it" : "Closed the notification shade" };
     }
@@ -175,6 +192,14 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
   let value = change.value;
   const scope = ctx.scope;
   const update = (options: Record<string, unknown>) => agentDevice(`setting ${name}`, () => ctx.client.settings.update({ ...options, ...scope } as never));
+  // The simulator shares the Mac's network: agent-device only redraws the status bar for these, and
+  // that also drops a status-bar time override. Saying "offline" would mislead a test (#48).
+  if (!isAndroid && (name === "wifi" || name === "airplane") && value !== undefined) {
+    throw notSupported(
+      `The iOS simulator cannot go offline: it uses the Mac's network, so ${name} ${value} would only change the status bar`,
+      "Test offline paths on Android (airplane on works there), or make the app's server unreachable in a test build. For a screenshot, status-bar-time keeps the clock.",
+    );
+  }
   if (AGENT_DEVICE_SETTINGS.has(name)) {
     if (name === "location" && change.latitude !== undefined && change.longitude !== undefined) {
       const r = await update({ setting: "location", state: "set", latitude: change.latitude, longitude: change.longitude, ...(change.appId ? { app: change.appId } : {}) });
@@ -213,10 +238,21 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       await ctx.exec({ tool: "adb", args: ["shell", "am", "force-stop", "com.android.chrome"] });
       return { ok: true, message: "Chrome now starts without its first-run screens (until the lease ends)" };
     }
-    case "status-bar-time":
+    case "status-bar-time": {
       if (isAndroid) throw notSupported("status-bar-time is iOS only");
-      await run(ctx, value === "clear" || value === undefined ? ios.statusBarClear() : ios.statusBarTime(value), "status bar");
-      return { ok: true, message: value && value !== "clear" ? `Status bar shows ${value}` : "Status bar restored" };
+      if (value === undefined) {
+        const r = await run(ctx, ios.statusBarList(), "read the status bar");
+        const time = /Time:\s*(\S+)/.exec(r.stdout)?.[1];
+        return { ok: true, message: time ? `Status bar time is overridden to ${time}` : "The status bar shows the real time", data: { time: time ?? null } };
+      }
+      if (value === "clear") {
+        await run(ctx, ios.statusBarClear(), "status bar");
+        return { ok: true, message: "Status bar restored" };
+      }
+      const time = /^\d:\d\d$/.test(value) ? `0${value}` : value;
+      await run(ctx, ios.statusBarTime(time), "status bar");
+      return { ok: true, message: `Status bar shows ${time}` };
+    }
   }
   throw new TapdanceError("USAGE", `Unknown setting "${name}"`);
 }
@@ -227,6 +263,7 @@ async function pushFile(ctx: DeviceOperationContext, handle: LeaseHandle, op: Ex
   if (!info?.isFile()) throw new TapdanceError("USAGE", `${op.localPath} is not a file`);
   const name = op.name ?? basename(local);
   if (handle.platform === "android") {
+    if (op.destination === "files") throw notSupported("files is the iOS Files app", "On Android use downloads or documents: shared storage the system file picker shows.");
     if (info.size > MAX_PUSH_BYTES) throw new TapdanceError("USAGE", `Files are limited to ${MAX_PUSH_BYTES / 1024 / 1024} MB`);
     const base64 = (await readFile(local)).toString("base64");
     if (op.destination === "app_sandbox") {
@@ -245,14 +282,23 @@ async function pushFile(ctx: DeviceOperationContext, handle: LeaseHandle, op: Ex
     if (info.size > MAX_PUSH_BYTES * 4) throw new TapdanceError("USAGE", `Files are limited to ${MAX_PUSH_BYTES * 4 / 1024 / 1024} MB`);
     const bytes = await readFile(local);
     if (op.destination === "pictures") return { ok: true, message: `Added ${name} to Photos`, ...(await ctx.remoteFiles.put({ destination: "photos", name }, bytes)) };
-    if (op.destination === "downloads") throw notSupported("iOS has no shared Downloads folder", "Use documents with app_id (the app's Documents folder) or pictures.");
-    const r = await ctx.remoteFiles.put({ destination: "documents", app: needApp(op.appId, "Files on iOS"), name }, bytes);
+    if (op.destination === "downloads") throw notSupported("iOS has no shared Downloads folder", "Use files (the Files app's On My iPhone, seen by document pickers), pictures, or documents with app_id.");
+    if (op.destination === "files") return { ok: true, message: `Put ${name} in Files › On My iPhone`, ...(await ctx.remoteFiles.put({ destination: "files", name }, bytes)) };
+    const r = await ctx.remoteFiles.put({ destination: "documents", app: needApp(op.appId, "documents on iOS (or use files for the Files app)"), name }, bytes);
     return { ok: true, message: `Copied ${name} into ${op.appId}'s Documents`, ...r };
   }
   if (op.destination === "pictures") {
     await run(ctx, { tool: "simctl", args: ["addmedia", local] }, "add media");
     return { ok: true, message: `Added ${name} to Photos`, devicePath: "Photos" };
   }
+  if (op.destination === "files") {
+    if (!PLAIN_NAME.test(name)) throw new TapdanceError("USAGE", "name must be a plain file name");
+    const root = await filesStorage(ctx);
+    await mkdir(root, { recursive: true });
+    await copyFile(local, join(root, name));
+    return { ok: true, message: `Put ${name} in Files › On My iPhone`, devicePath: `On My iPhone/${name}` };
+  }
+  if (op.destination === "downloads") throw notSupported("iOS has no shared Downloads folder", "Use files (the Files app's On My iPhone, seen by document pickers), pictures, or documents with app_id.");
   const container = await appContainer(ctx, needApp(op.appId, "Files on iOS"));
   const target = join(container, op.destination === "app_sandbox" && name.includes("/") ? name : join("Documents", name));
   if (!resolve(target).startsWith(container)) throw new TapdanceError("USAGE", "The path must stay inside the app's container");
@@ -272,10 +318,18 @@ async function pullFile(ctx: DeviceOperationContext, handle: LeaseHandle, op: Ex
   }
   if (!ctx.local) {
     if (!ctx.remoteFiles) throw notSupported("Pulling files from a remote iOS simulator needs a worker guard", "Use a worker in device-only mode, or run Tapdance on the Mac that runs the simulator.");
-    const bytes = await ctx.remoteFiles.get({ app: needApp(op.appId, "pull_file on iOS"), path: op.relativePath ?? "" });
+    const bytes = op.filesName
+      ? await ctx.remoteFiles.get({ area: "files", path: op.filesName })
+      : await ctx.remoteFiles.get({ app: needApp(op.appId, "pull_file on iOS"), path: op.relativePath ?? "" });
     await mkdir(dirname(op.outPath), { recursive: true });
     await writeFile(op.outPath, bytes, { mode: 0o600 });
     return { ok: true, message: `Pulled ${bytes.length} bytes`, path: op.outPath };
+  }
+  if (op.filesName) {
+    if (!PLAIN_NAME.test(op.filesName)) throw new TapdanceError("USAGE", "files_name must be a plain file name");
+    await mkdir(dirname(op.outPath), { recursive: true });
+    await copyFile(join(await filesStorage(ctx), op.filesName), op.outPath);
+    return { ok: true, message: `Pulled ${op.filesName} from Files › On My iPhone`, path: op.outPath };
   }
   const container = await appContainer(ctx, needApp(op.appId, "pull_file on iOS"));
   const source = resolve(container, op.relativePath ?? "");
@@ -283,6 +337,16 @@ async function pullFile(ctx: DeviceOperationContext, handle: LeaseHandle, op: Ex
   await mkdir(dirname(op.outPath), { recursive: true });
   await copyFile(source, op.outPath);
   return { ok: true, message: `Pulled ${basename(source)}`, path: op.outPath };
+}
+
+const PLAIN_NAME = /^(?!\.)[A-Za-z0-9 _.()+-]{1,128}$/;
+
+/** The simulator's File Provider local storage: the Files app's "On My iPhone" (#47). */
+async function filesStorage(ctx: DeviceOperationContext): Promise<string> {
+  const r = await run(ctx, ios.filesGroups(), "find the Files app's storage");
+  const group = parseGroupContainer(r.stdout, FILES_GROUP);
+  if (!group) throw new TapdanceError("DEVICE_ERROR", "The Files app's local storage was not found on this simulator");
+  return join(group, "File Provider Storage");
 }
 
 async function appContainer(ctx: DeviceOperationContext, appId: string): Promise<string> {
@@ -330,4 +394,18 @@ async function killApp(ctx: DeviceOperationContext, handle: LeaseHandle, appId: 
     };
   }
   return { ok: true, message: `Ended ${appId} like a user (pid ${before} gone; alarms and jobs kept)`, data: { method, pidBefore: before } };
+}
+
+/**
+ * iOS Notification Center: a swipe down from the top-left edge opens it, a swipe up from the bottom
+ * closes it (the simulator has no API for either).
+ */
+async function notificationCenter(ctx: DeviceOperationContext, open: boolean): Promise<DeviceOperationResult> {
+  const snap = (await agentDevice("read the screen size", () => ctx.client.capture.snapshot({ interactiveOnly: true, ...ctx.scope } as never))) as { viewport?: { width?: number; height?: number } };
+  const w = snap?.viewport?.width ?? 402;
+  const h = snap?.viewport?.height ?? 874;
+  const x = Math.round(w * 0.25);
+  const [from, to] = open ? [{ x, y: 2 }, { x, y: Math.round(h * 0.7) }] : [{ x: Math.round(w / 2), y: h - 2 }, { x: Math.round(w / 2), y: Math.round(h * 0.3) }];
+  await agentDevice(`${open ? "open" : "close"} Notification Center`, () => ctx.client.interactions.swipe({ from, to, ...ctx.scope } as never));
+  return { ok: true, message: open ? "Opened Notification Center; inspect_screen (all) to read it" : "Closed Notification Center" };
 }

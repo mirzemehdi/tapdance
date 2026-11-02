@@ -32,6 +32,8 @@ import {
   type AlertResult,
   type DeviceOperation,
   type DeviceOperationResult,
+  type AppBuildRequest,
+  type AppBuildResult,
 } from "@tapdance/core";
 import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
@@ -395,6 +397,16 @@ export class SimlockProvider implements DeviceProvider {
     return this.client(this.data(handle));
   }
 
+  async buildApp(handle: LeaseHandle, request: AppBuildRequest, onLine: (line: string) => void): Promise<AppBuildResult> {
+    this.data(handle);
+    if (this.isLocal()) {
+      throw new TapdanceError("NOT_SUPPORTED", "Builds on the host go through a worker guard", {
+        hint: "On this Mac, build with `tapdance tool xcodebuild -- …` (or Gradle) and `tapdance app install <path>`.",
+      });
+    }
+    return this.http.build(handle.leaseId, { ...request, platform: handle.platform }, onLine);
+  }
+
   /** Runs adb/simctl against the leased device (Simlock's lease exec puts the device in). */
   protected execOn(handle: LeaseHandle, tool: "adb" | "simctl", args: string[], timeoutMs?: number, stdin?: string): Promise<ExecResult> {
     return this.http.exec(handle.leaseId, tool, args, timeoutMs, stdin);
@@ -608,11 +620,18 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   async listApps(handle: LeaseHandle): Promise<string[]> {
+    let apps: string[];
     try {
-      return await this.agentClient(handle).apps.list({ ...this.scope(handle) } as never);
+      apps = await this.agentClient(handle).apps.list({ ...this.scope(handle) } as never);
     } catch (error) {
       throw fromAgentDeviceError(error, "list apps");
     }
+    // agent-device answers [] for a simulator; simctl knows what is installed (#50).
+    if (handle.platform === "ios" && (!Array.isArray(apps) || apps.length === 0)) {
+      const r = await this.execOn(handle, "simctl", deviceCommands.ios.listApps().args, 30_000).catch(() => undefined);
+      if (r && r.exitCode === 0) return parseSimctlApps(r.stdout).map((a) => a.bundleId);
+    }
+    return apps;
   }
 
   // ---------------------------------------------------------------- UI
@@ -672,7 +691,17 @@ export class SimlockProvider implements DeviceProvider {
       } as never)) as unknown as { message?: string; x?: number; y?: number; settle?: { diff?: unknown } };
       out = actionResult(result, `Tapped ${describe(target)}`);
     } catch (error) {
-      throw fromAgentDeviceError(error, `tap ${describe(target)}`);
+      const mapped = fromAgentDeviceError(error, `tap ${describe(target)}`);
+      // agent-device refuses a target "occluded" by the keyboard even when the target is one of the
+      // keyboard's own controls (the swipe-typing tutorial's Continue, #50). Tap its centre instead.
+      if (target.kind !== "point" && /occlud/i.test(mapped.message) && /keyboard/i.test(mapped.message)) {
+        const point = await this.centerOf(handle, target).catch(() => undefined);
+        if (point) {
+          const result = await this.agentClient(handle).interactions.press({ x: point.x, y: point.y, ...this.scope(handle) } as never);
+          return { ...actionResult(result, `Tapped ${describe(target)} at (${point.x}, ${point.y})`), warning: "The keyboard covered the target's usual tap path; it was tapped at its centre instead" };
+        }
+      }
+      throw mapped;
     }
     // Some system surfaces (the file picker, the share sheet) drop the automation helper's touch
     // events while `adb shell input tap` works. When a settled tap changed nothing there, repeat it
@@ -835,9 +864,34 @@ export class SimlockProvider implements DeviceProvider {
       };
     } catch (error) {
       const mapped = fromAgentDeviceError(error, `alert ${action}`);
-      if (/alert not found|no (active |visible )?alert|ALERT_NOT_FOUND/i.test(mapped.message) || mapped.details?.["backendCode"] === "ALERT_NOT_FOUND") return { present: false };
+      if (/alert not found|no (active |visible )?alert|ALERT_NOT_FOUND/i.test(mapped.message) || mapped.details?.["backendCode"] === "ALERT_NOT_FOUND") {
+        // agent-device's alert lookup can miss a system alert that its own snapshot shows (iOS
+        // location prompts, #50): read it from the screen before answering "none".
+        return action === "get" ? ((await this.alertFromScreen(handle).catch(() => undefined)) ?? { present: false }) : { present: false };
+      }
       throw mapped;
     }
+  }
+
+  /** An alert as the screen shows it: the `alert` element, its texts and its buttons. */
+  private async alertFromScreen(handle: LeaseHandle): Promise<AlertResult | undefined> {
+    const { elements } = await this.inspect(handle, { interactiveOnly: false });
+    const i = elements.findIndex((e) => /alert/i.test(e.role));
+    if (i < 0) return undefined;
+    const depth = elements[i]!.depth ?? 0;
+    const inside: UiElement[] = [];
+    for (const e of elements.slice(i + 1)) {
+      if ((e.depth ?? depth + 1) <= depth) break;
+      inside.push(e);
+    }
+    const texts = inside.filter((e) => /text|label|static/i.test(e.role) && e.label).map((e) => e.label!);
+    const buttons = inside.filter((e) => /button/i.test(e.role) && e.label).map((e) => e.label!);
+    return {
+      present: true,
+      ...(elements[i]!.label ?? texts[0] ? { title: (elements[i]!.label ?? texts[0])! } : {}),
+      ...(texts.length > 1 ? { message: texts.slice(1).join(" ") } : {}),
+      ...(buttons.length ? { buttons } : {}),
+    };
   }
 
   async typeText(handle: LeaseHandle, text: string, target?: ElementTarget): Promise<ActionResult> {
@@ -1368,4 +1422,15 @@ export function parseUiautomator(xml: string, interactiveOnly: boolean): ScreenI
     if (/:id\/url_bar$/.test(attrs["resource-id"] ?? "") && label) warnings.push(`browser: ${label}`);
   }
   return { ...(packages.size ? { app: [...packages].join(", ") } : {}), elements, truncated: false, warnings };
+}
+
+/** Apps from `simctl listapps` (an old-style plist): bundle id, name and whether it is a user app. */
+export function parseSimctlApps(plist: string): Array<{ bundleId: string; name?: string; user: boolean }> {
+  const out: Array<{ bundleId: string; name?: string; user: boolean }> = [];
+  for (const m of plist.matchAll(/^\s{4}"?([A-Za-z0-9_.-]+)"?\s*=\s*\{([\s\S]*?)^\s{4}\};/gm)) {
+    const body = m[2]!;
+    const name = /CFBundleDisplayName\s*=\s*"?([^";\n]+)"?;/.exec(body)?.[1] ?? /CFBundleName\s*=\s*"?([^";\n]+)"?;/.exec(body)?.[1];
+    out.push({ bundleId: m[1]!, ...(name ? { name } : {}), user: /ApplicationType\s*=\s*User;/.test(body) });
+  }
+  return out;
 }

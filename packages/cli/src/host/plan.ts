@@ -207,6 +207,8 @@ export interface HostUpOptions {
   repair?: boolean;
   /** `--warm android=1,ios=0`: booted spare devices per platform. */
   warm?: string;
+  /** `--scope interaction,inspection`: the pairing token's policy areas. */
+  scope?: string;
 }
 
 const shellWord = (s: string) => (/^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
@@ -223,6 +225,7 @@ export function hostUpCommand(o: HostUpOptions, add: Partial<HostUpOptions> = {}
     ...(m.repair ? ["--repair"] : []),
     ...(m.skipSelfTest ? ["--skip-self-test"] : []),
     ...(m.warm ? [`--warm ${shellWord(m.warm)}`] : []),
+    ...(m.scope ? [`--scope ${shellWord(m.scope)}`] : []),
     ...(m.yes ? ["--yes"] : []),
   ].join(" ");
 }

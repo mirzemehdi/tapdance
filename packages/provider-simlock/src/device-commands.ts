@@ -28,6 +28,20 @@ export const SANDBOX_PATH = /^(files|cache|databases|shared_prefs|no_backup)\/(?
 export const CLOCK = /^([01][0-9]|2[0-3]):[0-5][0-9]$/;
 export const INTENT_FLAG = /^(0x[0-9a-fA-F]{1,8}|[0-9]{1,10})$/;
 export const EXTRA_KEY = /^[A-Za-z][A-Za-z0-9_.]{0,127}$/;
+/** The app group whose "File Provider Storage" folder is the Files app's "On My iPhone". */
+export const FILES_GROUP = "group.com.apple.FileProvider.LocalStorage";
+
+/** The path of `group` in `simctl get_app_container … groups` output (lines "<group>\t<path>"). */
+export function parseGroupContainer(stdout: string, group: string): string | undefined {
+  for (const line of stdout.split("\n")) {
+    const [name, path] = line.trim().split(/\s+(?=\/)/);
+    if (name === group && path?.startsWith("/")) return path;
+  }
+  return undefined;
+}
+
+/** A BCP 47 locale such as de, de-DE, pt-BR or zh-Hans-CN. */
+export const LOCALE = /^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|\d{3}))?$/;
 /** The most taps one timed sequence may hold. */
 export const MAX_SEQUENCE_STEPS = 500;
 /** Chrome without its welcome, sign-in and default-browser screens. */
@@ -119,6 +133,11 @@ export const android = {
   uiautomatorDump(): DeviceCommand {
     return { tool: "adb", args: ["shell", "uiautomator", "dump", "/dev/tty"] };
   },
+  /** Android 13+: one app's language, e.g. de-DE. */
+  appLocale(appId: string, locale: string): DeviceCommand {
+    if (!LOCALE.test(locale)) throw usage(`"${locale}" is not a locale such as de-DE or pt-BR`);
+    return { tool: "adb", args: ["shell", "cmd", "locale", "set-app-locales", app(appId), "--locales", locale] };
+  },
   /** The Home key, through Android's input service. */
   home(): DeviceCommand {
     return { tool: "adb", args: ["shell", "input", "keyevent", "3"] };
@@ -177,6 +196,16 @@ export const ios = {
   statusBarTime(time: string): DeviceCommand {
     if (!CLOCK.test(time)) throw usage("time must be HH:MM");
     return { tool: "simctl", args: ["status_bar", "override", "--time", time] };
+  },
+  /** The Files app's app-group containers (one of them is "On My iPhone"). */
+  filesGroups(): DeviceCommand {
+    return { tool: "simctl", args: ["get_app_container", "com.apple.DocumentsApp", "groups"] };
+  },
+  listApps(): DeviceCommand {
+    return { tool: "simctl", args: ["listapps"] };
+  },
+  statusBarList(): DeviceCommand {
+    return { tool: "simctl", args: ["status_bar", "list"] };
   },
   statusBarClear(): DeviceCommand {
     return { tool: "simctl", args: ["status_bar", "clear"] };

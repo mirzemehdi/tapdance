@@ -60,6 +60,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   let hint: string | undefined;
   let retryable: boolean | undefined;
   let staleClaim = false;
+  let noBackendHint = false;
 
   if (LEASE_GONE.test(message) || (rawCode === "UNAUTHORIZED" && LEASE_GONE_REASONS.has(reason))) code = "LEASE_LOST";
   else if (/not one of yours|needs an agent token/i.test(message) || SCOPE_REFUSED.test(reason) || SCOPE_REFUSED.test(message)) code = "FORBIDDEN";
@@ -87,6 +88,11 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     retryable = true;
     hint = STALE_CLAIM_HINT;
     staleClaim = true;
+  } else if (/requires an active app session|Run open first/i.test(message)) {
+    // agent-device's iOS snapshot needs an app session; on the Home Screen there is none (#50).
+    code = "DEVICE_ERROR";
+    hint = "No app is in front (the Home Screen). Launch one with launch_app / `tapdance app launch <id>`, then inspect.";
+    noBackendHint = true;
   } else if (STALE_REF.test(rawCode) || STALE_REF.test(reason) || STALE_REF.test(message)) {
     code = "ELEMENT_NOT_FOUND";
     hint = STALE_REF_HINT;
@@ -104,7 +110,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     if (candidates.length > 0) details["candidates"] = candidates;
   }
   // agent-device's own fix for a stale claim names a command only the worker machine can run.
-  const backendHint = staleClaim ? undefined : extractHint(e.details);
+  const backendHint = staleClaim || noBackendHint ? undefined : extractHint(e.details);
   const ownHint = hint ?? HINTS[code];
   const joined = [ownHint, backendHint === ownHint ? undefined : backendHint].filter(Boolean).join(" ");
   return new TapdanceError(code, `${action} failed: ${firstLine(message)}`, {

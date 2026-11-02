@@ -15,7 +15,7 @@ export type Route =
   | { kind: "identity" }
   | { kind: "status" }
   | { kind: "catalog" }
-  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" }
+  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" }
   | { kind: "rpc" }
   | { kind: "agent-device-health" }
   | { kind: "upload"; path: string }
@@ -31,7 +31,7 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
   if (method === "GET" && path === "/v1/identity") return { ok: true, value: { kind: "identity" } };
   if (method === "GET" && path === "/v1/status") return { ok: true, value: { kind: "status" } };
   if (method === "GET" && path === "/v1/catalog") return { ok: true, value: { kind: "catalog" } };
-  const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files))?$/.exec(path);
+  const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files|build))?$/.exec(path);
   if (lease) {
     const leaseId = lease[1]!;
     if (!LEASE.test(leaseId)) return deny("unknown lease id format");
@@ -43,6 +43,7 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
     if (sub === "input" && method === "GET") return { ok: true, value: { kind: "lease", leaseId, action: "input" } };
     if (sub === "files" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "files-put" } };
     if (sub === "files" && method === "GET") return { ok: true, value: { kind: "lease", leaseId, action: "files-get" } };
+    if (sub === "build" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "build" } };
     return deny("lease route not allowed");
   }
   if (path === "/v1/agent-device/rpc" && method === "POST") return { ok: true, value: { kind: "rpc" } };
@@ -104,7 +105,12 @@ export interface RpcCall {
   ttlMs?: number;
 }
 
-export function rpcOf(body: unknown, policy: GuardPolicy): Decision<RpcCall> {
+/** Why a policy switch refused something, with where the host's owner turns it on. */
+export function policyOff(area: string, what = area): string {
+  return `${what} is disabled by the local policy (${area}); the host owner can set allow.${area}: true in ~/.tapdance/worker/policy.json`;
+}
+
+export function rpcOf(body: unknown, policy: GuardPolicy, isPhysical: (leaseId: string) => boolean = () => false): Decision<RpcCall> {
   if (body === null || typeof body !== "object" || Array.isArray(body)) return deny("malformed request");
   const b = body as { method?: unknown; params?: unknown };
   const method = typeof b.method === "string" ? b.method.replace(/^agent_device\./, "") : "";
@@ -119,17 +125,20 @@ export function rpcOf(body: unknown, policy: GuardPolicy): Decision<RpcCall> {
     if (!leaseId || !LEASE.test(leaseId)) return deny("lease calls need a 32-hex lease id");
     const physical = (v: unknown) => v === true || v === "true";
     if (method === "lease.allocate" && (physical(params["physical"]) || physical(sub("flags")["physical"])) && !policy.allow.physicalDevices) {
-      return deny("physical devices are disabled by the local policy");
+      return deny(policyOff("physicalDevices", "physical devices"));
     }
     const ttl = typeof params["ttlMs"] === "number" ? params["ttlMs"] : typeof sub("flags")["ttlMs"] === "number" ? (sub("flags")["ttlMs"] as number) : undefined;
     return { ok: true, value: { method, leaseId, ...(ttl !== undefined ? { ttlMs: ttl } : {}) } };
   }
   if (method !== "command") return deny(`RPC method ${method || "(none)"} is not allowed`);
   const command = typeof params["command"] === "string" ? params["command"].toLowerCase() : "";
-  const area = COMMANDS[command];
+  let area = COMMANDS[command];
   if (!area) return deny(`agent-device command "${command || "(none)"}" is not part of the device API`);
-  if (area !== "session" && !policy.allow[area]) return deny(`"${command}" is disabled by the local policy (${area})`);
   if (!leaseId || !LEASE.test(leaseId)) return deny("commands must name their lease");
+  // A push to a simulator or emulator holds no one's private data; to a physical phone it needs the
+  // notifications switch (#49).
+  if (command === "push" && !isPhysical(leaseId)) area = "interaction";
+  if (area !== "session" && !policy.allow[area]) return deny(policyOff(area, `"${command}"`));
   const narrowed = narrow(command, params);
   if (narrowed) return deny(narrowed);
   return { ok: true, value: { method: "command", command, leaseId } };
@@ -144,17 +153,21 @@ const PHOTO = /\.(png|jpe?g|heic|gif|mov|mp4|m4v)$/i;
 export type FileRequest =
   | { op: "put"; destination: "photos"; name: string }
   | { op: "put"; destination: "documents"; appId: string; name: string }
-  | { op: "get"; appId: string; path: string };
+  /** The Files app's "On My iPhone" (File Provider local storage). */
+  | { op: "put"; destination: "files"; name: string }
+  | { op: "get"; appId: string; path: string }
+  | { op: "get"; area: "files"; path: string };
 
 /**
  * Files for a leased iOS simulator: the caller names a destination kind, an app and a plain file name,
  * never a path on the Mac. The guard itself resolves where that is (simctl, through Simlock).
  */
 export function filesOf(method: "PUT" | "GET", query: URLSearchParams, policy: GuardPolicy): Decision<FileRequest> {
-  if (!policy.allow.files) return deny("files is disabled by the local policy");
+  if (!policy.allow.files) return deny(policyOff("files"));
   const app = query.get("app") ?? "";
   if (method === "GET") {
     const path = query.get("path") ?? "";
+    if (query.get("area") === "files") return FILE_NAME.test(path) ? { ok: true, value: { op: "get", area: "files", path } } : deny("path must be a plain file name in On My iPhone");
     if (!APP_ID.test(app)) return deny("app must be an app id");
     if (!CONTAINER_PATH.test(path)) return deny("path must be inside the app's Documents, Library or tmp folder");
     return { ok: true, value: { op: "get", appId: app, path } };
@@ -164,7 +177,8 @@ export function filesOf(method: "PUT" | "GET", query: URLSearchParams, policy: G
   const destination = query.get("destination");
   if (destination === "photos") return PHOTO.test(name) ? { ok: true, value: { op: "put", destination, name } } : deny("Photos takes images and videos");
   if (destination === "documents") return APP_ID.test(app) ? { ok: true, value: { op: "put", destination, appId: app, name } } : deny("documents needs app");
-  return deny("destination must be photos or documents");
+  if (destination === "files") return { ok: true, value: { op: "put", destination, name } };
+  return deny("destination must be photos, files or documents");
 }
 
 /** Settings that change the leased device only. macOS host permissions (TCC) are never reachable. */
@@ -185,8 +199,9 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
   switch (command) {
     case "perf":
       if (pathFlag) return `perf --${pathFlag} is not allowed: profiles write files on the worker`;
-      if (pos[0] === "frames" && pos.length === 1) return undefined;
-      if (pos[0] === "memory" && pos[1] === "sample" && pos.length === 2) return undefined;
+      // agent-device sends `memory` alone when "sample" is meant (its default) (#49).
+      if (pos[0] === "frames" && (pos.length === 1 || (pos.length === 2 && pos[1] === "sample"))) return undefined;
+      if (pos[0] === "memory" && (pos.length === 1 || (pos.length === 2 && pos[1] === "sample"))) return undefined;
       return "only `perf frames` and `perf memory sample` are allowed";
     case "settings":
       if (!DEVICE_SETTINGS.has(pos[0] ?? "")) return `setting "${pos[0] ?? ""}" is not allowed`;
@@ -254,7 +269,7 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if ((tool !== "adb" && tool !== "simctl") || !Array.isArray(args) || !args.every((a) => typeof a === "string")) return deny("exec needs tool adb|simctl and string args");
   if (stdin !== undefined && typeof stdin !== "string") return deny("stdin must be a string");
   const a = args as string[];
-  const gate = (area: Area, v: ExecValue): Decision<ExecValue> => (policy.allow[area] ? { ok: true, value: v } : deny(`${area} is disabled by the local policy`));
+  const gate = (area: Area, v: ExecValue): Decision<ExecValue> => (policy.allow[area] ? { ok: true, value: v } : deny(policyOff(area)));
   const plain = (area: Area) => (stdin !== undefined ? deny("stdin is not allowed for this command") : gate(area, { tool: tool as "adb" | "simctl", args: a }));
   if (tool === "simctl") {
     if (a.length === 2 && a[0] === "terminate" && APP_ID.test(a[1]!)) return plain("interaction");
@@ -269,6 +284,8 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
     }
     if (a.length === 4 && a[0] === "status_bar" && a[1] === "override" && a[2] === "--time" && CLOCK.test(a[3]!)) return plain("settings");
     if (a.length === 2 && a[0] === "status_bar" && a[1] === "clear") return plain("settings");
+    if (a.length === 2 && a[0] === "status_bar" && a[1] === "list") return plain("inspection");
+    if (a.length === 1 && a[0] === "listapps") return plain("inspection");
     return deny(`simctl ${String(a[0] ?? "")} is not part of the device API`);
   }
   if (a.length === 4 && a[0] === "shell" && a[1] === "am" && a[2] === "force-stop" && APP_ID.test(a[3]!)) return plain("interaction");
@@ -283,6 +300,8 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
   // The system's view of every window (ui inspect --system).
   if (s.length === 3 && s[0] === "uiautomator" && s[1] === "dump" && s[2] === "/dev/tty") return plain("inspection");
+  // One app's language (Android 13+).
+  if (s.length === 6 && s[0] === "cmd" && s[1] === "locale" && s[2] === "set-app-locales" && APP_ID.test(s[3]!) && s[4] === "--locales" && deviceCommands.LOCALE.test(s[5]!)) return plain("settings");
   // Chrome without its first-run screens (a setting).
   if (s.length === 1 && s[0] === `echo '${deviceCommands.CHROME_FLAGS}' > /data/local/tmp/chrome-command-line`) return plain("settings");
   if (s.length === 4 && s[0] === "am" && s[1] === "set-debug-app" && s[2] === "--persistent" && s[3] === "com.android.chrome") return plain("settings");
@@ -297,7 +316,7 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   // messages, so reading it (and posting anywhere) needs `notifications`.
   if (s.length === 3 && s[0] === "dumpsys" && s[1] === "notification" && s[2] === "--noredact") return plain(lease.physical ? "notifications" : "inspection");
   if (s.length === 3 && s[0] === "cmd" && s[1] === "statusbar" && (s[2] === "expand-notifications" || s[2] === "collapse")) return plain("interaction");
-  if (s.length === 7 && s[0] === "cmd" && s[1] === "notification" && s[2] === "post" && s[3] === "-t" && value(s[4]) && s[5] === "tapdance" && value(s[6])) return plain("notifications");
+  if (s.length === 7 && s[0] === "cmd" && s[1] === "notification" && s[2] === "post" && s[3] === "-t" && value(s[4]) && s[5] === "tapdance" && value(s[6])) return plain(lease.physical ? "notifications" : "interaction");
   // Files: shared storage and a debuggable app's own sandbox, contents base64 on stdin or stdout.
   const pushShared = s.length === 1 ? /^base64 -d > '(.+)'$/.exec(s[0]!) : null;
   if (pushShared && SHARED_PATH.test(pushShared[1]!)) return withFile(stdin, a, policy);
@@ -314,7 +333,7 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   // Anything else in the emulator's own shell: it runs inside the emulator's VM, not on this Mac. Host
   // reach (push/pull of Mac paths, port forwarding, emulator console) is not `adb shell` and stays refused.
   if (s.length >= 1 && s.join("").trim() !== "") {
-    if (!policy.allow.deviceShell) return deny("deviceShell is disabled by the local policy");
+    if (!policy.allow.deviceShell) return deny(policyOff("deviceShell"));
     if (lease.physical) return deny("device shell is refused on physical devices");
     if (stdin !== undefined && stdin.length > Math.min(24, policy.limits.maxUploadMB) * 1024 * 1024 * 1.4) return deny("stdin too large");
     return { ok: true, value: { tool: "adb", args: a, ...(stdin !== undefined ? { stdin } : {}) } };
@@ -323,7 +342,7 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
 }
 
 function withFile(stdin: string | undefined, args: string[], policy: GuardPolicy): Decision<ExecValue> {
-  if (!policy.allow.files) return deny("files is disabled by the local policy");
+  if (!policy.allow.files) return deny(policyOff("files"));
   if (stdin === undefined || !/^[A-Za-z0-9+/=\s]*$/.test(stdin)) return deny("file contents must be base64 on stdin");
   if ((stdin.length * 3) / 4 > Math.min(MAX_PUSH_BYTES, policy.limits.maxUploadMB * 1024 * 1024)) return deny("file too large");
   return { ok: true, value: { tool: "adb", args, stdin } };

@@ -209,6 +209,18 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
 
   device
+    .command("clipboard <action> [text]")
+    .description("Read (get) or write (set <text>) the device clipboard: paste flows, checking what a Copy button copied")
+    .action(async (action: string, text: string | undefined) =>
+      run(globals(), async (t, out) => {
+        if (action !== "get" && action !== "set") throw new TapdanceError("USAGE", "clipboard takes get or set <text>");
+        if (action === "set" && text === undefined) throw new TapdanceError("USAGE", "clipboard set needs the text");
+        const r = await t.device(action === "get" ? { kind: "clipboard", action: "get" } : { kind: "clipboard", action: "set", text: text! });
+        out.result(r, () => (action === "get" ? String((r.data as { text?: string } | undefined)?.text ?? "") : r.message));
+      }),
+    );
+
+  device
     .command("done")
     .description("Tell the agent you finished what it asked for (request_human), e.g. after signing in")
     .action(async () =>
@@ -348,13 +360,13 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
   device
     .command("push <path>")
-    .description("Copy a file onto the device (Android shared storage or a debuggable app's sandbox; iOS Photos or an app's Documents)")
-    .requiredOption("--to <destination>", "downloads, pictures, documents or app_sandbox")
+    .description("Copy a file onto the device (Android shared storage or a debuggable app's sandbox; iOS Photos, the Files app, or an app's Documents)")
+    .requiredOption("--to <destination>", "downloads, pictures, documents, app_sandbox, or files (iOS: Files › On My iPhone, seen by document pickers)")
     .option("--app <appId>", "app for app_sandbox (and iOS documents)")
     .option("--name <name>", "file name on the device")
     .action(async (path: string, o: { to: string; app?: string; name?: string }) =>
       run(globals(), async (t, out) => {
-        if (!["downloads", "pictures", "documents", "app_sandbox"].includes(o.to)) throw new TapdanceError("USAGE", "--to must be downloads, pictures, documents or app_sandbox");
+        if (!["downloads", "pictures", "documents", "app_sandbox", "files"].includes(o.to)) throw new TapdanceError("USAGE", "--to must be downloads, pictures, documents, app_sandbox or files");
         const r = await t.device({ kind: "push-file", localPath: path, destination: o.to as "downloads", ...(o.app ? { appId: o.app } : {}), ...(o.name ? { name: o.name } : {}) });
         out.result(r, () => r.message);
       }),
@@ -364,10 +376,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .description("Copy a file from the device into this session's artifacts")
     .option("--app <appId>", "read from this app's sandbox/container")
     .option("--path <relativePath>", "with --app: path inside it, e.g. files/export.json or Documents/export.json")
+    .option("--files <name>", "iOS: a file in Files › On My iPhone")
     .option("-o, --out <file>", "write here instead of the artifacts directory")
-    .action(async (devicePath: string | undefined, o: { app?: string; path?: string; out?: string }) =>
+    .action(async (devicePath: string | undefined, o: { app?: string; path?: string; files?: string; out?: string }) =>
       run(globals(), async (t, out) => {
-        const r = await t.device({ kind: "pull-file", outPath: o.out ?? "", ...(devicePath ? { devicePath } : {}), ...(o.app ? { appId: o.app } : {}), ...(o.path ? { relativePath: o.path } : {}) });
+        const r = await t.device({ kind: "pull-file", outPath: o.out ?? "", ...(devicePath ? { devicePath } : {}), ...(o.app ? { appId: o.app } : {}), ...(o.path ? { relativePath: o.path } : {}), ...(o.files ? { filesName: o.files } : {}) });
         out.result(r, () => r.path ?? r.message);
       }),
     );
@@ -454,7 +467,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--intent-data <uri>", "Android: intent data URI")
     .option("--intent-component <component>", "Android: component, e.g. com.example/.MainActivity")
     .option("--intent-extra <key=value>", "Android: string extra (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
-    .action(async (appId: string, o: { relaunch?: boolean; url?: string; arg?: string[]; intentAction?: string; intentData?: string; intentComponent?: string; intentExtra?: string[] }) =>
+    .option("--locale <locale>", "run the app in this language, e.g. de-DE (iOS: launch arguments; Android 13+: the app's own locale)")
+    .action(async (appId: string, o: { relaunch?: boolean; url?: string; arg?: string[]; intentAction?: string; intentData?: string; intentComponent?: string; intentExtra?: string[]; locale?: string }) =>
       run(globals(), async (t, out) => {
         if (o.intentAction || o.intentData || o.intentComponent) {
           const extras = Object.fromEntries((o.intentExtra ?? []).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
@@ -465,7 +479,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           out.result(r, () => r.message);
           return;
         }
-        const r = await t.launchApp(appId, { ...(o.relaunch ? { relaunch: true } : {}), ...(o.url ? { url: o.url } : {}), ...(o.arg?.length ? { args: o.arg } : {}) });
+        const r = await t.launchApp(appId, { ...(o.relaunch ? { relaunch: true } : {}), ...(o.url ? { url: o.url } : {}), ...(o.arg?.length ? { args: o.arg } : {}), ...(o.locale ? { locale: o.locale } : {}) });
         out.result(r, () => r.message);
       }),
     );
@@ -483,6 +497,32 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       const r = await t.device({ kind: "clear-app-data", appId });
       out.result(r, () => r.message);
     }));
+  app
+    .command("build")
+    .description("Build the app on the machine that runs the leased device, from a git repository its owner allow-listed, and install it there (an agent without Xcode can test iOS)")
+    .requiredOption("--git <url>", "repository URL (must be on the host's build allow-list)")
+    .requiredOption("--ref <ref>", "branch, tag or commit sha; the reply names the exact commit built")
+    .option("--project <path>", "iOS: .xcodeproj or .xcworkspace inside the repository (found when there is only one)")
+    .option("--scheme <name>", "iOS: Xcode scheme (default: the project's name)")
+    .option("--configuration <name>", "iOS: build configuration", "Debug")
+    .option("--gradle-task <task>", "Android: Gradle task", "assembleDebug")
+    .option("--dir <path>", "Android: folder with gradlew inside the repository")
+    .option("--launch <appId>", "launch this app once it is installed")
+    .action(async (o: { git: string; ref: string; project?: string; scheme?: string; configuration: string; gradleTask: string; dir?: string; launch?: string }) =>
+      run(globals(), async (t, out) => {
+        const r = await t.buildApp({
+          repo: o.git,
+          ref: o.ref,
+          ...(o.project ? { project: o.project } : {}),
+          ...(o.scheme ? { scheme: o.scheme } : {}),
+          configuration: o.configuration,
+          gradleTask: o.gradleTask,
+          ...(o.dir ? { dir: o.dir } : {}),
+        });
+        if (o.launch) await t.launchApp(o.launch, { relaunch: true });
+        out.result(r, () => `Built ${r.artifact} from ${r.sha.slice(0, 12)} in ${r.seconds} s and installed it${o.launch ? `; launched ${o.launch}` : ""}`);
+      }),
+    );
   app
     .command("kill <appId>")
     .description("End an app the way a user does (Home, then gone; alarms and jobs kept, unlike stop) and check its process is gone")

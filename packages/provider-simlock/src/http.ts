@@ -188,6 +188,42 @@ export class SimlockHttp {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  /**
+   * A worker guard's build route: builds on the host and installs on the lease, streaming log lines
+   * to `onLine`. Answers the result, or throws the build's error.
+   */
+  async build(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 4 * 3_600_000): Promise<{ sha: string; seconds: number; artifact: string; installed: boolean }> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/build`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      timeoutMs,
+    });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) {
+      throw new TapdanceError("NOT_SUPPORTED", "This endpoint cannot build apps", { hint: "Builds run on a worker in device-only mode (tapdance worker guard) whose owner turned them on: tapdance host builds enable." });
+    }
+    if (!response.ok || !response.body) throw await toError(response, "/v1/leases/{id}/build");
+    let buffer = "";
+    let result: { sha: string; seconds: number; artifact: string; installed: boolean } | undefined;
+    const decoder = new TextDecoder();
+    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+      buffer += decoder.decode(chunk, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const raw of lines) {
+        if (!raw.trim()) continue;
+        const msg = JSON.parse(raw) as { log?: string; result?: typeof result; error?: { code: string; message: string; hint?: string; tail?: string } };
+        if (msg.log !== undefined) onLine(msg.log);
+        if (msg.result) result = msg.result;
+        if (msg.error) {
+          throw new TapdanceError(msg.error.code as never, msg.error.message, { ...(msg.error.hint ? { hint: msg.error.hint } : {}), ...(msg.error.tail ? { details: { tail: msg.error.tail } } : {}) });
+        }
+      }
+    }
+    if (!result) throw new TapdanceError("PROVIDER_UNREACHABLE", "The build stream ended without a result");
+    return result;
+  }
+
   async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000, stdin?: string): Promise<ExecResult> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/exec`, {
       method: "POST",

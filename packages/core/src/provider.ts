@@ -18,6 +18,8 @@ import type {
   AlertResult,
   DeviceOperation,
   DeviceOperationResult,
+  AppBuildRequest,
+  AppBuildResult,
 } from "./types.js";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -73,6 +75,8 @@ export interface DeviceProvider {
 
   /** `system` (Android): every window from the system's own view of the screen, e.g. a Chrome Custom Tab or a system picker. */
   inspect(handle: LeaseHandle, options?: { interactiveOnly?: boolean; system?: boolean }): Promise<ScreenInspection>;
+  /** Builds an app on the machine that runs the device (a worker guard's allow-listed repositories) and installs it on the lease. */
+  buildApp?(handle: LeaseHandle, request: AppBuildRequest, onLine: (line: string) => void): Promise<AppBuildResult>;
   /** `inject` taps through Android's input service (`adb shell input tap`) instead of the automation helper. */
   tap(handle: LeaseHandle, target: ElementTarget, options?: { settle?: boolean; inject?: boolean }): Promise<ActionResult>;
   swipe(

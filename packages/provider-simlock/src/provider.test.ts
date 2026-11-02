@@ -615,3 +615,39 @@ describe("tap sequence (#42)", () => {
     expect((r.data as { steps: Array<{ actualMs: number; driftMs: number }> }).steps.map((s) => s.driftMs)).toEqual([1.2, 1.5]);
   });
 });
+
+describe("iOS gaps (#48-#50)", () => {
+  it("parses simctl listapps", async () => {
+    const { parseSimctlApps } = await import("./provider.js");
+    const plist = `{
+    "com.apple.Maps" =     {
+        ApplicationType = System;
+        CFBundleDisplayName = Maps;
+        CFBundleIdentifier = "com.apple.Maps";
+    };
+    "com.measify.pianolune" =     {
+        ApplicationType = User;
+        CFBundleDisplayName = Pianolune;
+        CFBundleIdentifier = "com.measify.pianolune";
+    };
+}`;
+    expect(parseSimctlApps(plist)).toEqual([
+      { bundleId: "com.apple.Maps", name: "Maps", user: false },
+      { bundleId: "com.measify.pianolune", name: "Pianolune", user: true },
+    ]);
+  });
+  it("refuses iOS wifi/airplane changes instead of faking them, and reads the status bar time", async () => {
+    const { runDeviceOperation } = await import("./device-operations.js");
+    const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "ios", deviceId: "U" } as never;
+    const exec = async () => ({ exitCode: 0, stdout: "Current Status Bar Overrides:\n  Time: 09:41\n", stderr: "" });
+    const ctx = { client: {} as never, scope: {}, exec: exec as never, local: true };
+    await expect(runDeviceOperation(ctx, handle, { kind: "setting", change: { name: "airplane", value: "on" } })).rejects.toThrow(/cannot go offline/);
+    expect(await runDeviceOperation(ctx, handle, { kind: "setting", change: { name: "status-bar-time" } })).toMatchObject({ data: { time: "09:41" } });
+    await expect(runDeviceOperation(ctx, handle, { kind: "uninstall", appId: "com.apple.Maps" })).rejects.toThrow(/system app/);
+  });
+  it("maps the Home Screen snapshot refusal to a launch hint", () => {
+    const e = fromAgentDeviceError({ message: "iOS snapshot requires an active app session for this device. Run open first.", details: { hint: "agent-device open <app>" } }, "inspect");
+    expect(e.hint).toMatch(/Home Screen/);
+    expect(e.hint).not.toMatch(/agent-device open/);
+  });
+});

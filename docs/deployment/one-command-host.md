@@ -154,6 +154,51 @@ otherwise they apply at the next `tapdance worker restart` (or right away with `
 running lease). `host up --warm …` sets them too, but re-runs every setup step: do not use it during a
 test.
 
+## Builds on the host
+
+An agent on a machine without Xcode (a Linux VPS) cannot produce an iOS simulator app. The host can
+build it: the agent names a git repository and a ref, the host fetches and builds it, and installs the
+result on the agent's lease (issue #45). **Off by default.**
+
+```bash
+# on the host, once per repository
+tapdance host builds enable --repo https://github.com/acme/app --git-auth gh --protected-ref main
+```
+
+```bash
+# on the agent's machine, with a lease
+tapdance app build --git https://github.com/acme/app --ref main --launch com.acme.app
+```
+
+- **Source:** git only for now. The host clones the repository once into
+  `~/.tapdance/worker/builds/<repo>/` and fetches only what changed on later builds; DerivedData and the
+  Gradle caches stay there, so rebuilds are incremental. `host builds status` shows the cache path.
+- **Access:** credentials stay on the host. `--git-auth gh` uses the host's `gh auth`; `--git-auth
+  deploy-key` uses a read-only key from `tapdance host builds key` (add its public half to the
+  repository; use ssh URLs); `none` for public repositories.
+- **Which code:** only repositories on the allow-list. With `--protected-ref main` the host builds only
+  commits already on `main` of the remote, so a compromised agent with push rights cannot get an
+  unreviewed branch built. The reply and the audit log name the exact commit.
+- **iOS:** `xcodebuild -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'` with
+  `CODE_SIGNING_ALLOWED=NO`; `--project` and `--scheme` when the repository has more than one Xcode
+  project. Kotlin Multiplatform apps call Gradle from a run-script phase, so the host needs a JDK on the
+  guard's `PATH` or `JAVA_HOME`; `host builds enable` checks git, Xcode, Java and `gh`.
+- **Android:** `./gradlew assembleDebug` (`--gradle-task`, `--dir` for the folder with `gradlew`); the
+  newest APK under `build/outputs/apk` is installed.
+- **Limits:** one build at a time, `--timeout-minutes` (45 by default), the build log streams to the
+  agent with secrets redacted.
+- **Trust:** a build runs the repository's own scripts (Xcode run-script phases, Gradle) on the host as
+  the hosting account: code execution by design. Allow only repositories you trust, prefer protected
+  refs, and host from a dedicated standard account; `host builds enable` refuses an administrator
+  account without `--allow-admin-account`. A token without the `builds` scope cannot build. See the
+  [threat model](../security/threat-model.md). The guard reads the policy when it starts:
+  `host builds enable`/`disable` restart it when no lease is running, and say so otherwise.
+
+Not built yet: uploading the agent's working tree (`--source`) and building from a folder already on
+the host (`--host-path`).
+
+**Not yet run on a real repository.** The steps are unit-tested with a fake git, Xcode and Gradle.
+
 ## Starting from nothing: `scripts/host-setup.sh`
 
 On a Mac or Linux machine with nothing installed:

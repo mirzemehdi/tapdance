@@ -37,6 +37,10 @@ interface FakeOptions {
   leasePlatform?: string;
   /** What `simctl get_app_container … data` prints (an app's data container on the "Mac"). */
   container?: string;
+  /** Runs the guard's build commands (#45). */
+  buildRunner?: import("@tapdance/provider-simlock").CommandRunner;
+  /** The Files app's local-storage group container (`get_app_container com.apple.DocumentsApp groups`). */
+  filesGroup?: string;
 }
 
 async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
@@ -71,7 +75,15 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
     }
     if (lease && req.url!.endsWith("/exec")) {
       const args = (JSON.parse(body || "{}") as { args?: string[] }).args ?? [];
-      const out = args[0] === "get_app_container" && options.container ? `event: output\ndata: ${JSON.stringify({ stream: "stdout", chunk: `${options.container}\n` })}\n\n` : "";
+      const printed =
+        args[0] === "get_app_container" && args.at(-1) === "groups"
+          ? options.filesGroup
+            ? `group.com.apple.FileProvider.LocalStorage\t${options.filesGroup}\ngroup.com.apple.other\t/tmp/other\n`
+            : undefined
+          : args[0] === "get_app_container" && options.container
+            ? `${options.container}\n`
+            : undefined;
+      const out = printed ? `event: output\ndata: ${JSON.stringify({ stream: "stdout", chunk: printed })}\n\n` : "";
       res.writeHead(200, { "content-type": "text/event-stream" }).end(`${out}event: exit\ndata: {"exitCode":0}\n\n`);
       return;
     }
@@ -104,6 +116,7 @@ async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {
     upstream: { kind: "local", baseUrl: upstream.url, token: "slk_LOCALONLYSECRET", tenant: "local", runId: "r", clientId: "c", source: "test" },
     policy,
     env,
+    ...(fake.buildRunner ? { buildRunner: fake.buildRunner } : {}),
   });
   cleanups.push(guard.close, () => new Promise((r) => upstream.server.close(() => r())));
   const tokens = new GuardTokens(env);
@@ -243,6 +256,8 @@ describe("worker guard vs a malicious remote client", () => {
     const rpc = (command: string, positionals: string[], extra: Record<string, unknown> = {}) => t.rpc(t.alice.secret, "agent_device.command", { command, leaseId: A, positionals, ...extra });
     expect((await rpc("perf", ["frames"])).status).toBe(200);
     expect((await rpc("perf", ["memory", "sample"])).status).toBe(200);
+    expect((await rpc("perf", ["memory"])).status).toBe(200);
+    expect((await rpc("perf", ["memory", "snapshot"])).status).toBe(403);
     expect((await rpc("perf", ["cpu", "profile", "start"], { flags: { leaseId: A, kind: "xctrace", out: "/Users/owner/x.trace" } })).status).toBe(403);
     expect((await rpc("settings", ["appearance", "dark"])).status).toBe(200);
     expect((await rpc("settings", ["permission", "grant", "screen-recording"])).status).toBe(403);
@@ -490,17 +505,85 @@ describe("worker guard: hardening", () => {
     for (const args of [["forward", "tcp:1", "tcp:2"], ["reverse", "tcp:1", "tcp:2"], ["emu", "screenrecord", "start", "/Users/owner/x.webm"], ["install", "/Users/owner/x.apk"], ["shell"], ["shell", "  "]]) {
       expect(execOf({ tool: "adb", args }, all).ok, args.join(" ")).toBe(false);
     }
-    // Reading an emulator's notifications is inspection (#35); a phone's stays behind `notifications`,
-    // and so does posting. Files can be turned off.
+    // On an emulator, reading notifications is inspection (#35) and posting is interaction (#49); a
+    // phone's stay behind `notifications`. Files can be turned off.
     const defaults = GuardPolicySchema.parse({ allow: { deviceShell: false } });
     expect(execOf(dc.android.notifications(), defaults).ok).toBe(true);
     expect(execOf(dc.android.notifications(), defaults, { physical: true }).ok).toBe(false);
-    expect(execOf(dc.android.postNotification("a", "b"), defaults).ok).toBe(false);
+    expect(execOf(dc.android.postNotification("a", "b"), defaults).ok).toBe(true);
+    expect(execOf(dc.android.postNotification("a", "b"), defaults, { physical: true }).ok).toBe(false);
     expect(execOf({ tool: "adb", args: ["shell", "input", "tap", "1", "2; reboot"] }, defaults).ok).toBe(false);
     expect(execOf(dc.android.pushShared("/sdcard/Download/a.txt", "YQ=="), GuardPolicySchema.parse({ allow: { files: false, deviceShell: false } })).ok).toBe(false);
     // The builders refuse what they cannot quote.
     expect(() => dc.android.startIntent({ data: "it's" })).toThrow(/single quote/);
     expect(() => dc.android.pushShared("/sdcard/Download/../x", "")).toThrow();
+  });
+
+  it("16d. builds: off by default, allow-listed repos only, streamed log, installed on the lease (#45)", async () => {
+    const { mkdir: mk } = await import("node:fs/promises");
+    const off = await setup();
+    await off.allocate(off.alice.secret, A);
+    const body = { repo: "https://github.com/acme/app", ref: "main" };
+    expect((await off.call(off.alice.secret, "POST", `/v1/leases/${A}/build`, body)).status).toBe(403);
+
+    const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args, o) => {
+      if (command === "git" && args[0] === "clone") await mk(join(args.at(-1)!, "App.xcodeproj"), { recursive: true });
+      if (command === "git" && args.includes("rev-parse")) return { code: 0, output: `${"b".repeat(40)}\n` };
+      if (command === "xcodebuild") {
+        await mk(join(args[args.indexOf("-derivedDataPath") + 1]!, "Build", "Products", "Debug-iphonesimulator", "App.app"), { recursive: true });
+        o.onLine("** BUILD SUCCEEDED ** token=slk_SHOULDNOTLEAK123456");
+      }
+      return { code: 0, output: "" };
+    };
+    const t = await setup(
+      { allow: { ...GuardPolicySchema.parse({}).allow, builds: true }, builds: { repos: ["https://github.com/acme/app"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 } },
+      { buildRunner: runner },
+    );
+    await t.allocate(t.alice.secret, A);
+    expect((await t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, { ...body, repo: "https://github.com/evil/app" })).status).toBe(403);
+    expect((await t.call(t.mallory.secret, "POST", `/v1/leases/${A}/build`, body)).status).toBe(404);
+    const r = await t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, body);
+    expect(r.status).toBe(200);
+    const lines = (await r.text()).trim().split("\n").map((l) => JSON.parse(l) as { log?: string; result?: { sha: string; installed: boolean } });
+    expect(lines.at(-1)!.result).toMatchObject({ sha: "b".repeat(40), installed: true });
+    expect(lines.some((l) => l.log?.includes("BUILD SUCCEEDED"))).toBe(true);
+    expect(lines.some((l) => l.log?.includes("slk_SHOULDNOTLEAK"))).toBe(false);
+    const install = t.upstream.seen.find((x) => x.path.endsWith("/exec") && x.body.includes('"install"'));
+    expect(install?.body).toContain("App.app");
+  });
+
+  it("16c. a scoped token gets only its areas, never more than the policy (#46)", async () => {
+    const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 512, tokenDays: 7 } });
+    const viewer = await t.tokens.issue("ci-readonly", 7, ["interaction", "inspection", "screenshots"]);
+    await t.allocate(viewer.secret, A);
+    const cmd = (command: string, positionals: string[] = []) => t.rpc(viewer.secret, "agent_device.command", { command, leaseId: A, positionals });
+    expect((await cmd("press", ["@e1"])).status).toBe(200);
+    expect((await cmd("snapshot")).status).toBe(200);
+    // install, files, recording, device shell: outside its scopes.
+    const upload = await t.call(viewer.secret, "POST", "/v1/agent-device/upload", "APK", { "content-type": "application/octet-stream", "x-agent-device-lease-id": A });
+    expect(upload.status).toBe(403);
+    expect((await cmd("record", ["start"])).status).toBe(403);
+    expect((await t.exec(viewer.secret, A, "adb", ["shell", "id"])).status).toBe(403);
+    const refused = await (await cmd("record", ["start"])).text();
+    expect(refused).toContain("allow.recording");
+    // The unscoped token still gets everything the policy allows.
+    await t.allocate(t.alice.secret, B);
+    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "record", leaseId: B, positionals: ["start"] })).status).toBe(200);
+  });
+
+  it("16b. files can go to the Files app's On My iPhone and come back (#47)", async () => {
+    const { mkdtemp: mt, readFile: rf, realpath: rp } = await import("node:fs/promises");
+    const group = await rp(await mt(join(tmpdir(), "td-files-")));
+    const t = await setup({}, { filesGroup: group });
+    await t.allocate(t.alice.secret, A);
+    const put = await t.call(t.alice.secret, "POST", `/v1/leases/${A}/files?destination=files&name=tones.mid`, "MThd", { "content-type": "application/octet-stream" });
+    expect(put.status).toBe(200);
+    expect(await rf(join(group, "File Provider Storage", "tones.mid"), "utf8")).toBe("MThd");
+    const got = await t.call(t.alice.secret, "GET", `/v1/leases/${A}/files?area=files&path=tones.mid`);
+    expect(got.status).toBe(200);
+    expect(await got.text()).toBe("MThd");
+    expect((await t.call(t.alice.secret, "GET", `/v1/leases/${A}/files?area=files&path=${encodeURIComponent("../x")}`)).status).not.toBe(200);
+    expect((await t.call(t.alice.secret, "POST", `/v1/leases/${A}/files?destination=files&name=.hidden`, "x", { "content-type": "application/octet-stream" })).status).toBe(403);
   });
 
   it("15. the device shell reaches leased emulators only, never phones", async () => {

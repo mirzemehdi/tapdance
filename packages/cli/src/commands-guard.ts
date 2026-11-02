@@ -8,7 +8,7 @@ import { TapdanceError, defaultProfilePath, findAndroidSdk, isPrivateHost, readL
 import { releaseStaleDeviceClaims } from "@tapdance/provider-simlock";
 import { CLI_ENTRY, output, type GlobalOptions } from "./context.js";
 import { bold, dim, red, table, yellow } from "./output.js";
-import { GuardTokens, guardDir, loadPolicy, type GuardToken } from "./guard/policy.js";
+import { GuardTokens, guardDir, loadPolicy, scopeNames, type GuardToken } from "./guard/policy.js";
 import { startGuard } from "./guard/server.js";
 import {
   guardServiceEnvironment,
@@ -62,10 +62,22 @@ export function assertGuardHostSafe(allowAdminAccount: boolean, adminHint?: stri
 }
 
 /** Issues a guard token for a control machine, capped at the policy's lifetime. */
-export async function issuePairing(label: string, days?: string | number): Promise<{ secret: string; token: GuardToken }> {
+export async function issuePairing(label: string, days?: string | number, scopes?: string[]): Promise<{ secret: string; token: GuardToken }> {
   const { policy } = await loadPolicy();
   const n = Math.min(Number(days ?? policy.limits.tokenDays), policy.limits.tokenDays);
-  return new GuardTokens().issue(label, n);
+  return new GuardTokens().issue(label, n, scopes);
+}
+
+/** `--scope interaction,inspection,screenshots`: checked against the policy's area names. */
+export function parseScopes(spec: string | undefined): string[] | undefined {
+  if (spec === undefined) return undefined;
+  const names = scopeNames();
+  const scopes = spec.split(",").map((s) => s.trim()).filter(Boolean);
+  const unknown = scopes.filter((s) => !names.includes(s));
+  if (unknown.length || scopes.length === 0) {
+    throw new TapdanceError("USAGE", `Unknown scope${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ") || "(none)"}`, { hint: `Scopes: ${names.join(", ")}.` });
+  }
+  return [...new Set(scopes)];
 }
 
 /** The service manager on this OS, or NOT_SUPPORTED. */
@@ -200,13 +212,14 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
     .description("Approve a control machine locally: prints a revocable device-only token once")
     .requiredOption("--label <name>", "who it is for, e.g. hetzner-vps")
     .option("--days <n>", "lifetime in days (policy maximum applies)")
-    .action(async (o: { label: string; days?: string }) => {
+    .option("--scope <areas>", "limit this token to these policy areas, e.g. interaction,inspection,screenshots (default: everything the policy allows)")
+    .action(async (o: { label: string; days?: string; scope?: string }) => {
       const out = output(globals());
       try {
         if (!process.stdin.isTTY && !process.env["TAPDANCE_GUARD_PAIR_NONINTERACTIVE"]) {
           throw new TapdanceError("FORBIDDEN", "Pairing must be approved at this machine's terminal", { hint: "Run it in a local terminal (not over a pipe)." });
         }
-        const { secret, token } = await issuePairing(o.label, o.days);
+        const { secret, token } = await issuePairing(o.label, o.days, parseScopes(o.scope));
         out.secretResult({ id: token.id, label: token.label, expiresAt: token.expiresAt, secret }, () =>
           [
             bold(`Paired "${token.label}" (${token.id}), expires ${token.expiresAt}`),
@@ -229,7 +242,10 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
       try {
         const all = await new GuardTokens().all();
         out.result({ tokens: all.map(({ hash: _h, ...t }) => t) }, () =>
-          table([["ID", "LABEL", "CREATED", "EXPIRES", "STATE"], ...all.map((t) => [t.id, t.label, t.createdAt, t.expiresAt, t.revokedAt ? red("revoked") : Date.parse(t.expiresAt) < Date.now() ? yellow("expired") : "active"])]),
+          table([
+            ["ID", "LABEL", "CREATED", "EXPIRES", "STATE", "SCOPES"],
+            ...all.map((t) => [t.id, t.label, t.createdAt, t.expiresAt, t.revokedAt ? red("revoked") : Date.parse(t.expiresAt) < Date.now() ? yellow("expired") : "active", t.scopes ? t.scopes.join(",") : "all the policy allows"]),
+          ]),
         );
       } catch (error) {
         process.exitCode = out.error(error);

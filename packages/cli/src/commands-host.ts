@@ -20,9 +20,9 @@ import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
 import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, workerRunning, workerServiceInstalled } from "./commands-worker.js";
-import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, servicePlatform } from "./commands-guard.js";
-import { GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
-import { commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
+import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
+import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
+import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
 import {
   assertHostPlatform,
   cloudCheck,
@@ -155,7 +155,7 @@ interface PausedState {
   workerService: boolean;
 }
 
-async function pairings(): Promise<Array<{ label: string; path: string; state: "active" | "expired or revoked" }>> {
+async function pairings(): Promise<Array<{ label: string; path: string; state: "active" | "expired or revoked"; createdAt?: string; expiresAt?: string; scopes?: string[] }>> {
   const dir = guardDir();
   const names = await readdir(dir).catch(() => [] as string[]);
   const tokens = new GuardTokens();
@@ -164,7 +164,12 @@ async function pairings(): Promise<Array<{ label: string; path: string; state: "
     const path = join(dir, name);
     const secret = (await readFile(path, "utf8").catch(() => "")).trim();
     const token = secret ? await tokens.verify(secret) : undefined;
-    found.push({ label: name.slice("pairing-".length, -".token".length), path, state: token ? ("active" as const) : ("expired or revoked" as const) });
+    found.push({
+      label: name.slice("pairing-".length, -".token".length),
+      path,
+      state: token ? ("active" as const) : ("expired or revoked" as const),
+      ...(token ? { createdAt: token.createdAt, expiresAt: token.expiresAt, ...(token.scopes ? { scopes: token.scopes } : {}) } : {}),
+    });
   }
   return found;
 }
@@ -181,6 +186,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .option("--keep-awake", "macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline")
     .option("--repair", "revoke the existing pairing with this label and issue a new token")
     .option("--skip-self-test", "do not lease a device through the guard at the end")
+    .option("--scope <areas>", "limit the pairing token to these policy areas, e.g. interaction,inspection,screenshots,streaming,input (no install: it cannot put apps on the devices)")
     .option("--warm <counts>", "booted spare devices kept ready for fast leases, per platform, e.g. android=1,ios=0 (0 frees the memory; default: Simlock keeps one per device kind used)")
     .option("-y, --yes", "approve pairing without a prompt (you are at this machine)")
     .action(async (o: HostUpOptions) => {
@@ -267,7 +273,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             }
           }
           for (const t of active) await tokens.revoke(t.id);
-          const { secret: issued, token } = await issuePairing(label);
+          const { secret: issued, token } = await issuePairing(label, undefined, parseScopes(o.scope));
           await writeFile(tokenPath, `${issued}\n`, { mode: 0o600 });
           await chmod(tokenPath, 0o600);
           out.progress(`Paired "${label}" (${token.id}), expires ${token.expiresAt}; token written to ${tokenPath}`);
@@ -344,6 +350,17 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           [
             renderReadyBlock(block),
             dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host warm android=0,ios=0. Stop everything: tapdance host pause.`),
+            "",
+            yellow(
+              `Security: whoever holds this token can drive the devices${o.scope ? ` (scopes: ${o.scope})` : ", install apps"} and run a shell inside the emulators. An iOS simulator app is not sandboxed from this Mac: installing one runs code as ${userInfo().username}, with this account's files. Prefer a dedicated standard account for hosting, or a token without install (--scope interaction,inspection,screenshots,streaming,input). See docs/security/threat-model.md.`,
+            ),
+            ...(endpoint.includes(".ts.net")
+              ? [
+                  dim(
+                    `Tailscale ACL (recommended): let only the agent's machine reach this port, e.g. {"action": "accept", "src": ["<agent machine's 100.x address or tag>"], "dst": ["<this Mac's 100.x address or tag>:${new URL(endpoint).port || 4720}"]} in https://login.tailscale.com/admin/acls (\`tailscale ip -4\` prints the address).`,
+                  ),
+                ]
+              : []),
             ...(endpoint.startsWith("http://127.0.0.1")
               ? ["", yellow("The endpoint is loopback only: an agent on another machine cannot reach it until Tailscale is set up (then run this command again).")]
               : []),
@@ -482,6 +499,117 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       }
     });
 
+  // ------------------------------------------------------------------ builds (#45)
+  const builds = host.command("builds").description("Let the agent build apps on this machine from allow-listed git repositories (off by default)");
+  builds
+    .command("enable")
+    .description("Allow builds from these repositories (git mode): the agent sends a repo and ref, this machine fetches and builds it")
+    .requiredOption("--repo <url>", "repository allowed to be built (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`), deploy-key (`host builds key`), or none", "none")
+    .option("--protected-ref <branch>", "only build commits already on this branch of the remote, e.g. main (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--timeout-minutes <n>", "longest build", "45")
+    .option("--allow-admin-account", "accept the risk of building on an administrator account")
+    .action(async (o: { repo: string[]; gitAuth: string; protectedRef?: string[]; timeoutMinutes: string; allowAdminAccount?: boolean }) => {
+      const out = output(globals());
+      try {
+        if (!["none", "gh", "deploy-key"].includes(o.gitAuth)) throw new TapdanceError("USAGE", "--git-auth must be gh, deploy-key or none");
+        for (const repo of o.repo) if (!/^(https:\/\/|ssh:\/\/|git@)/.test(repo)) throw new TapdanceError("USAGE", `${repo} is not an https:// or ssh git URL`);
+        if (osPlatform() === "darwin" && (await isMacAdmin()) && !o.allowAdminAccount) {
+          throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
+            hint: "A build runs the project's scripts as this account, and an administrator can become root. Build from a dedicated standard account, or accept the risk: add --allow-admin-account.",
+          });
+        }
+        const { path } = await loadPolicy();
+        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        raw["allow"] = { ...(raw["allow"] ?? {}), builds: true };
+        const current = (raw["builds"] ?? {}) as { repos?: string[] };
+        raw["builds"] = {
+          ...current,
+          repos: [...new Set([...(current.repos ?? []), ...o.repo])],
+          gitAuth: o.gitAuth,
+          ...(o.protectedRef?.length ? { protectedRefs: o.protectedRef } : {}),
+          timeoutMinutes: Number(o.timeoutMinutes),
+        };
+        const policy = GuardPolicySchema.parse(raw);
+        await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+        const notes = await buildPrerequisites(o.gitAuth);
+        const restarted = await restartGuardIfIdle(out);
+        out.result({ builds: policy.builds, restarted, notes }, () =>
+          [
+            `Builds allowed from: ${policy.builds.repos.join(", ")} (git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; only commits on ${policy.builds.protectedRefs.join(", ")}` : ""})`,
+            ...notes.map((n) => yellow(n)),
+            yellow("A build runs the repository's own scripts (Xcode run-script phases, Gradle) on this machine as this account. Allow only repositories you trust, and prefer --protected-ref main."),
+            restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running: tapdance host builds enable … again then, or `tapdance worker guard install` after `tapdance worker guard uninstall`.",
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  builds
+    .command("disable")
+    .description("Turn builds off (the allow-list is kept)")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const { path } = await loadPolicy();
+        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        raw["allow"] = { ...(raw["allow"] ?? {}), builds: false };
+        await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
+        const restarted = await restartGuardIfIdle(out);
+        out.result({ builds: false, restarted }, () => `Builds are off${restarted ? "; the guard restarted" : ". Restart the guard to apply it when no test is running"}.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  builds
+    .command("status")
+    .description("Show whether builds are on, the allowed repositories and the build cache size")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const { policy } = await loadPolicy();
+        const cache = join(guardDir(), "builds");
+        out.result({ enabled: policy.allow.builds, ...policy.builds, cache }, () =>
+          [
+            `Builds: ${policy.allow.builds ? green("on") : "off"}`,
+            `Repositories: ${policy.builds.repos.join(", ") || "none"}`,
+            `Git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; protected refs: ${policy.builds.protectedRefs.join(", ")}` : ""}; timeout ${policy.builds.timeoutMinutes} min`,
+            `Cache: ${cache} (delete it to free disk; the next build clones again)`,
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  builds
+    .command("key")
+    .description("Create a read-only deploy key for --git-auth deploy-key and print its public half to add to the repository")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const dir = join(guardDir(), "builds");
+        await mkdir(dir, { recursive: true, mode: 0o700 });
+        const key = join(dir, "deploy_key");
+        if (!existsSync(key)) {
+          const r = await runCommand("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", `tapdance-builds@${hostname()}`, "-f", key]);
+          if (!r.ok) throw commandFailed(["ssh-keygen"], r.out, "ssh-keygen could not create the deploy key");
+        }
+        const pub = (await readFile(`${key}.pub`, "utf8")).trim();
+        out.result({ publicKey: pub, privateKey: key }, () =>
+          [
+            "Add this as a read-only deploy key in each repository (GitHub: Settings › Deploy keys › Add, leave write access off):",
+            "",
+            pub,
+            "",
+            `The private key stays here: ${key}. Use ssh URLs (git@github.com:owner/repo.git) with --git-auth deploy-key.`,
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
   host
     .command("token")
     .description("Hand a pairing token to the agent: copy it to the clipboard (default) or show it once")
@@ -537,7 +665,15 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const answering = port !== 0 && (await waitForGuard(localUrl, 0));
         rows.push({ step: "guard service", ok: service.installed && answering, detail: `${service.installed ? "installed" : "not installed"}, ${service.detail}; ${answering ? `answers on ${localUrl}` : "not answering"}` });
         const paired = await pairings();
-        rows.push({ step: "pairing", ok: paired.some((p) => p.state === "active"), detail: paired.map((p) => `${p.label}: ${p.state}`).join(", ") || "none" });
+        const age = (iso: string) => `${Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 86_400_000))} d old`;
+        rows.push({
+          step: "pairing",
+          ok: paired.some((p) => p.state === "active"),
+          detail:
+            paired
+              .map((p) => `${p.label}: ${p.state}${p.createdAt ? `, ${age(p.createdAt)}, expires ${p.expiresAt}` : ""}${p.scopes ? `, scopes ${p.scopes.join(",")}` : ""}`)
+              .join("; ") || "none",
+        });
         let endpoint = hostEndpoint(undefined, port);
         const bin = findTailscale();
         if (bin) {
@@ -682,4 +818,33 @@ async function probeEndpoint(endpoint: string, out: ReturnType<typeof output>): 
   throw new TapdanceError("PROVIDER_UNREACHABLE", `Nothing saved: ${endpoint} did not answer (${reason})`, {
     hint: "Check the address `host up` printed (its scheme too: http:// or https://), that both machines are on the same tailnet (`tailscale status`), and that the guard runs (`tapdance host status` on the host).",
   });
+}
+
+/** What a build on this machine still needs: git, Xcode for iOS, a JDK for Gradle (KMP), gh for gh auth. */
+async function buildPrerequisites(gitAuth: string): Promise<string[]> {
+  const notes: string[] = [];
+  if (!(await runCommand("git", ["--version"])).ok) notes.push("git is not installed: builds cannot fetch anything.");
+  if (osPlatform() === "darwin" && !(await runCommand("xcodebuild", ["-version"])).ok) notes.push("xcodebuild is not available: iOS builds need Xcode.");
+  if (!(await runCommand("java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
+  if (gitAuth === "gh" && !(await runCommand("gh", ["auth", "status"])).ok) notes.push("`gh auth status` fails: run `gh auth login` on this machine.");
+  if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) notes.push("No deploy key yet: run `tapdance host builds key` and add it to the repository.");
+  return notes;
+}
+
+/**
+ * The guard reads its policy when it starts. Restart its service now unless a lease is running (a
+ * restart forgets which client owns which lease).
+ */
+async function restartGuardIfIdle(out: ReturnType<typeof output>): Promise<boolean> {
+  const status = (await localWorkerStatus().catch(() => undefined)) as { leases?: unknown[] } | undefined;
+  if (Array.isArray(status?.leases) && status.leases.length > 0) {
+    out.warn(`${status.leases.length} lease(s) are running, so the guard was not restarted.`);
+    return false;
+  }
+  const uid = process.getuid?.() ?? 0;
+  const r =
+    osPlatform() === "darwin"
+      ? await runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${GUARD_LAUNCHD_LABEL}`])
+      : await runCommand("systemctl", ["--user", "restart", GUARD_SYSTEMD_UNIT]);
+  return r.ok;
 }

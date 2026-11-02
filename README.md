@@ -252,7 +252,11 @@ runs the worker daemon, and a worker joined to a gateway gives that gateway the 
 machines. **On a personal Mac use device-only mode**: `tapdance worker guard` is the only endpoint the
 remote side reaches; it enforces a local policy, its own revocable tokens approved at the Mac, an
 allowlisted device API, limits and an audit log
-([docs/security/personal-mac.md](docs/security/personal-mac.md)). Use TLS or a private network such as
+([docs/security/personal-mac.md](docs/security/personal-mac.md)). Even through the guard, **installing
+an iOS simulator app runs code on the Mac** as the account that hosts it (simulator apps are not
+sandboxed from macOS): host from a dedicated standard account, or give the agent a token without
+install (`host up --scope …`). What each area allows, per platform:
+[docs/security/threat-model.md](docs/security/threat-model.md). Use TLS or a private network such as
 Tailscale for anything beyond one machine; Tapdance refuses `ws://` to public hosts. Never commit
 tokens: Tapdance refuses to load a config file that contains one. A saved token is sent only to the
 endpoint it was saved for, and a project `tapdance.config.json` cannot change which programs agents may
