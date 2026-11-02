@@ -1,0 +1,20 @@
+diff --git a/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift b/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift
+index 53f4fc18fe0fe961c2d1e871ab67bfa89224a11b..f4922641cfe063f627d5a223a2e37f41cc5c889b 100644
+--- a/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift
++++ b/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift
+@@ -510,7 +510,14 @@ extension RunnerTests {
+ 
+ 
+   func synthesizedRotationFrame(fallback: CGRect, interfaceOrientation: Int) -> CGRect {
+-    soleDisplayFrame(interfaceOrientation: interfaceOrientation) ?? fallback
++    // Tapdance patch (tapdance#56): the runner app can run in a legacy compatibility screen (320 pt
++    // wide on an iPhone 17), so its own UIScreen is smaller than the app's window. Rotating against it
++    // puts landscape taps off-screen (x = 320 - y). Trust the larger frame, the app's own.
++    guard let sole = soleDisplayFrame(interfaceOrientation: interfaceOrientation) else { return fallback }
++    if fallback.width.isFinite, fallback.height.isFinite, fallback.width * fallback.height > sole.width * sole.height {
++      return fallback
++    }
++    return sole
+   }
+ 
+   private func soleDisplayFrame(interfaceOrientation: Int) -> CGRect? {

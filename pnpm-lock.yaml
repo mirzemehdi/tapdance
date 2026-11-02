@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  agent-device@0.21.35:
+    hash: 6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f
+    path: patches/agent-device@0.21.35.patch
+
 importers:
 
   .:
@@ -34,7 +39,7 @@ importers:
         version: link:../sdk
       agent-device:
         specifier: 0.21.35
-        version: 0.21.35
+        version: 0.21.35(patch_hash=6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f)
       commander:
         specifier: 15.0.0
         version: 15.0.0
@@ -83,7 +88,7 @@ importers:
         version: link:../core
       agent-device:
         specifier: 0.21.35
-        version: 0.21.35
+        version: 0.21.35(patch_hash=6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f)
       zod:
         specifier: 4.6.7
         version: 4.6.7
@@ -1297,7 +1302,7 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.1.0
 
-  agent-device@0.21.35: {}
+  agent-device@0.21.35(patch_hash=6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f): {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:

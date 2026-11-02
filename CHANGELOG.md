@@ -155,6 +155,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Added (#58): `ui type --delay-ms` (MCP `delay_ms`), with one automatic retry at 80 ms when a fill
   drops characters; iOS switch rows are tapped at the toggle when a tap on the row changed nothing;
   `dismiss_keyboard` on iOS says why it cannot work (the iPhone keyboard has no hide key) and what to do.
+- Fixed (#56): iOS taps did nothing in landscape. agent-device 0.21.35's runner rotated taps against
+  its own screen, which runs in a 320 pt legacy compatibility size, so a landscape tap at (437, 342)
+  went to (-22, 437). Tapdance ships a pnpm patch (`patches/agent-device@0.21.35.patch`) that rotates
+  against the app's window instead. The cause and a corrected tap were checked on an iPhone 17
+  simulator; the patched runner itself waits for the host update.
 
 ### Not yet proven
 
