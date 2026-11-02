@@ -77,4 +77,14 @@ StoreKit testing needs no Apple account on the simulator. It uses a StoreKit con
 
 Sandbox purchases with a real App Store Connect sandbox account need a sign-in on each new simulator:
 the agent calls `request_human` and you sign in through `tapdance view`. iOS device profiles are not
-built yet.
+built yet. The hand-off, step by step:
+
+1. The agent runs `tapdance device request-human --reason "Sign in a Sandbox Apple ID: Settings › App
+   Store › Sandbox Account" --wait 600`.
+2. You open the viewer link, go to Settings › App Store, scroll to **Sandbox Account**, sign in with a
+   sandbox tester from App Store Connect (Users and Access › Sandbox), and press **Hand back**.
+3. The agent relaunches the app and buys through the sheet; the sandbox account stays signed in until
+   the lease ends.
+
+A StoreKit configuration file is a scheme option, not a build setting, so `app build` cannot attach one
+yet (#15).

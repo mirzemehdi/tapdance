@@ -262,7 +262,11 @@ the device is wiped on release.
 welcome, sign-in, default-browser and notifications screens; through Chrome's command-line file and the
 notification permission, so on emulator images, which allow it). Other Android settings
   (density, locale, time zone, …) go through `device shell`. Without a value it
-  reads the setting where the platform can. A combination a platform cannot do fails with
+  reads the setting where the platform can. The iOS simulator's clock is the Mac's and cannot be
+  changed per lease (test "next day" rules on Android with root, or with a debug date in the app). iOS
+  notification permission is not in `simctl privacy`: to deny it, drive Settings › Apps › <app> ›
+  Notifications (the switch row is tapped at its toggle); for a fresh prompt, `app uninstall` and install
+  again (`app build` reinstalls from the host's cache in seconds). A combination a platform cannot do fails with
   `NOT_SUPPORTED` and says what to do instead. Common Android settings through `device shell` (standard
   Android shell commands, not each one run with Tapdance yet):
 
@@ -918,7 +922,8 @@ Commands:
                                     switches; appearance light|dark|toggle;
                                     orientation
                                     portrait|landscape|landscape-left|landscape-right|portrait-upside-down;
-                                    browser-first-run off
+                                    browser-first-run off. The iOS simulator's
+                                    clock is the Mac's and cannot be set
   push [options] <path>             Copy a file onto the device (Android shared
                                     storage or a debuggable app's sandbox; iOS
                                     Photos, the Files app, or an app's
@@ -1123,7 +1128,7 @@ fingerprint, permission, reset-keychain, orientation, status-bar-time,
 browser-first-run. Values: on|off for the switches; appearance
 light|dark|toggle; orientation
 portrait|landscape|landscape-left|landscape-right|portrait-upside-down;
-browser-first-run off
+browser-first-run off. The iOS simulator's clock is the Mac's and cannot be set
 
 Options:
   --app <appId>              the app a permission or locale applies to

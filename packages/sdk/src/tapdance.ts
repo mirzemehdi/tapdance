@@ -526,7 +526,7 @@ export class Tapdance {
     return this.onDevice(async (handle, provider) => {
       if (!provider.device) throw new TapdanceError("NOT_SUPPORTED", `The ${provider.name} provider has no device-level operations`);
       if (operation.kind !== "pull-file") return provider.device(handle, operation);
-      const name = basename(operation.devicePath ?? operation.relativePath ?? "file");
+      const name = basename(operation.devicePath ?? operation.relativePath ?? operation.filesName ?? "file");
       const outPath = await this.artifacts.allocate(this.session.id, "other", extname(name).slice(1) || "bin", operation.outPath || undefined);
       const result = await provider.device(handle, { ...operation, outPath });
       const artifact = await this.artifacts.record({ kind: "other", path: result.path ?? outPath, sessionId: this.session.id, leaseId: handle.leaseId, note: `pulled ${name}` });

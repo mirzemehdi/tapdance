@@ -335,7 +335,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   device
     .command("setting <name> [value]")
     .description(
-      `Change (or, without a value, read) a device setting: ${DEVICE_SETTINGS.join(", ")}. Values: on|off for the switches; appearance light|dark|toggle; orientation portrait|landscape|landscape-left|landscape-right|portrait-upside-down; browser-first-run off`,
+      `Change (or, without a value, read) a device setting: ${DEVICE_SETTINGS.join(", ")}. Values: on|off for the switches; appearance light|dark|toggle; orientation portrait|landscape|landscape-left|landscape-right|portrait-upside-down; browser-first-run off. The iOS simulator's clock is the Mac's and cannot be set`,
     )
     .option("--app <appId>", "the app a permission or locale applies to")
     .option("--permission <permission>", "for `setting permission <grant|deny|reset>`: camera, microphone, photos, notifications, location…")
