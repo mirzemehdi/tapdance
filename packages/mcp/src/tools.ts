@@ -284,6 +284,22 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "crash_reports",
+    title: "List or read iOS crash reports",
+    description:
+      "iOS simulator: list the crash reports (.ips) the leased simulator wrote since the lease began (newest first), or read one (pull: a name from the list, or \"latest\"). Reading saves the full report as an artifact and returns a summary: the exception and the crashed thread's top frames with symbols, which usually name the failing call. On Android use get_logs with level fault (the crash buffer has the stack trace).",
+    input: z.object({ app_id: appId.optional(), pull: z.string().max(200).optional() }).strict(),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    run: async (t, a) =>
+      json(
+        await t.device(
+          a["pull"]
+            ? { kind: "crash-pull", name: a["pull"] as string, outPath: "", ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) }
+            : { kind: "crash-list", ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) },
+        ),
+      ),
+  },
+  {
     name: "build_app",
     title: "Build and install an app on the device's host",
     description:

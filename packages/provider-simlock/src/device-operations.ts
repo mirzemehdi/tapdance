@@ -178,6 +178,10 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
       const cut = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text);
       return { ok: r.exitCode === 0, message: `exit ${r.exitCode}`, data: { exitCode: r.exitCode, stdout: cut(r.stdout, 32_000), stderr: cut(r.stderr, 8_000), truncated: r.stdout.length > 32_000 || r.stderr.length > 8_000 } };
     }
+    case "crash-list":
+    case "crash-pull":
+      // The provider answers these itself (they read the Mac's DiagnosticReports, not the device).
+      throw notSupported("Crash reports are read by the provider, not as a device command");
     case "perf": {
       const options = op.metric === "frames" ? { area: "frames" } : { area: "memory", subject: "sample" };
       const r = await agentDevice(`perf ${op.metric}`, () => ctx.client.observability.perf({ ...options, ...(op.appId ? { app: op.appId } : {}), ...scope } as never));

@@ -519,12 +519,20 @@ export class Tapdance {
       (operation.kind === "notifications" && operation.action === "list") ||
       operation.kind === "perf" ||
       operation.kind === "pull-file" ||
+      operation.kind === "crash-list" ||
+      operation.kind === "crash-pull" ||
       (operation.kind === "clipboard" && operation.action === "get") ||
       (operation.kind === "setting" && operation.change.value === undefined && operation.change.name !== "reset-keychain");
     if (!readOnly) await this.guardHuman();
     if (operation.kind === "shell" && Buffer.byteLength(operation.stdin ?? "") > 16 * 1024 * 1024) throw new TapdanceError("USAGE", "stdin is limited to 16 MB");
     return this.onDevice(async (handle, provider) => {
       if (!provider.device) throw new TapdanceError("NOT_SUPPORTED", `The ${provider.name} provider has no device-level operations`);
+      if (operation.kind === "crash-pull") {
+        const outPath = await this.artifacts.allocate(this.session.id, "log", "ips", operation.outPath || undefined);
+        const result = await provider.device(handle, { ...operation, outPath });
+        const artifact = await this.artifacts.record({ kind: "log", path: result.path ?? outPath, sessionId: this.session.id, leaseId: handle.leaseId, note: `crash report ${String(result.data?.["name"] ?? operation.name)}` });
+        return { ...result, artifact };
+      }
       if (operation.kind !== "pull-file") return provider.device(handle, operation);
       const name = basename(operation.devicePath ?? operation.relativePath ?? operation.filesName ?? "file");
       const outPath = await this.artifacts.allocate(this.session.id, "other", extname(name).slice(1) || "bin", operation.outPath || undefined);

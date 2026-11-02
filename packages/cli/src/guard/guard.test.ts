@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,6 +18,7 @@ import { startGuard } from "./server.js";
 
 const A = "a".repeat(32);
 const B = "b".repeat(32);
+const SIM_UDID = "2BAC63C2-803F-4A80-AAA5-457DAF09EC13";
 const C = "c".repeat(32);
 
 interface Upstream {
@@ -41,6 +42,8 @@ interface FakeOptions {
   buildRunner?: import("@tapdance/provider-simlock").CommandRunner;
   /** The Files app's local-storage group container (`get_app_container com.apple.DocumentsApp groups`). */
   filesGroup?: string;
+  /** The "Mac's" DiagnosticReports folder (#59). */
+  crashDir?: string;
 }
 
 async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
@@ -66,7 +69,9 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
     }
     if (lease && req.method === "GET" && !req.url!.includes("/stream")) {
       if (options.leaseDelayMs) await new Promise((r) => setTimeout(r, options.leaseDelayMs));
-      res.writeHead(live.has(lease[1]!) ? 200 : 404, { "content-type": "application/json" }).end(JSON.stringify({ lease: { id: lease[1], platform: options.leasePlatform ?? "ios" } }));
+      res.writeHead(live.has(lease[1]!) ? 200 : 404, { "content-type": "application/json" }).end(
+        JSON.stringify({ lease: { id: lease[1], platform: options.leasePlatform ?? "ios", udid: SIM_UDID, createdAt: new Date(Date.now() - 600_000).toISOString() } }),
+      );
       return;
     }
     if (req.url === "/v1/status" && options.status !== undefined) {
@@ -117,6 +122,7 @@ async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {
     policy,
     env,
     ...(fake.buildRunner ? { buildRunner: fake.buildRunner } : {}),
+    ...(fake.crashDir ? { crashReportsDir: fake.crashDir } : {}),
   });
   cleanups.push(guard.close, () => new Promise((r) => upstream.server.close(() => r())));
   const tokens = new GuardTokens(env);
@@ -684,6 +690,26 @@ describe("worker guard: hardening", () => {
       });
     expect((await shot(t.alice.secret)).status).toBe(200);
     expect((await shot(t.mallory.secret)).status).toBe(403);
+  });
+
+  it("20. crash reports: only this lease's simulator, only since the lease began (#59)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "td-crash-"));
+    const ips = (udid: string, app = "Pianolune") =>
+      `${JSON.stringify({ app_name: app, bundleID: `com.measify.${app.toLowerCase()}`, app_version: "1.0.0" })}\n${JSON.stringify({ exception: { type: "EXC_BREAKPOINT", signal: "SIGTRAP" }, procPath: `/Users/x/Library/Developer/CoreSimulator/Devices/${udid}/data/App`, faultingThread: 0, threads: [{ frames: [{ imageIndex: 0, symbol: "main" }] }], usedImages: [{ name: "Pianolune" }] })}`;
+    await writeFile(join(dir, "Pianolune-2026-11-02-225531.ips"), ips(SIM_UDID));
+    await writeFile(join(dir, "Other-2026-11-02-225600.ips"), ips("00000000-0000-0000-0000-000000000000", "Other"));
+    await writeFile(join(dir, "Safari-2026-11-02-225700.ips"), "{}\n{}"); // the Mac's own app
+    const t = await setup({}, { crashDir: dir });
+    await t.allocate(t.alice.secret, A);
+    const list = (await (await t.call(t.alice.secret, "GET", `/v1/leases/${A}/crashes`)).json()) as { reports: Array<{ name: string; exception?: string }> };
+    expect(list.reports.map((r) => r.name)).toEqual(["Pianolune-2026-11-02-225531.ips"]);
+    expect(list.reports[0]!.exception).toBe("EXC_BREAKPOINT (SIGTRAP)");
+    const latest = await t.call(t.alice.secret, "GET", `/v1/leases/${A}/crashes/latest`);
+    expect(latest.status).toBe(200);
+    expect(await latest.text()).toContain(SIM_UDID);
+    expect((await t.call(t.alice.secret, "GET", `/v1/leases/${A}/crashes/Other-2026-11-02-225600.ips`)).status).toBe(404);
+    expect((await t.call(t.alice.secret, "GET", `/v1/leases/${A}/crashes/..%2Fx.ips`)).status).toBe(404);
+    expect((await t.call(t.mallory.secret, "GET", `/v1/leases/${A}/crashes`)).status).toBe(404);
   });
 
   it("19. agent-device's diagnostics for a failed request reach only the session's owner", async () => {

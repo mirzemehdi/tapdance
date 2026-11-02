@@ -7,7 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { checkBuildRequest, parseExecStream, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
+import { checkBuildRequest, crashReportsDir, listCrashReports, parseExecStream, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
 
@@ -25,6 +25,8 @@ import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./
  * to a remote gateway (that would hand the gateway shell-equivalent rights around the guard).
  */
 export interface GuardOptions {
+  /** Where the Mac keeps crash reports (tests pass a temporary folder). */
+  crashReportsDir?: string;
   /** Runs build commands (tests pass a fake; the service uses spawn). */
   buildRunner?: CommandRunner;
   upstream: SimlockConnection;
@@ -493,6 +495,40 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             await decide("allow", { command: `build ${request.platform} ${request.repo}@${request.ref}`, leaseId: r.leaseId });
             await runBuildRoute(res, r.leaseId, request, decide);
+            return;
+          }
+          if (r.action === "crashes") {
+            if (!policy.allow.logs) {
+              await decide("deny", { reason: "logs off", leaseId: r.leaseId, command: "crashes" });
+              return send(res, 403, "FORBIDDEN", policyOff("logs", "Logs and crash reports"));
+            }
+            // Only reports that name this lease's simulator, written since the lease began (#59).
+            const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${r.leaseId}`, { headers: upstreamHeaders });
+            const lease = detail.ok ? ((await detail.json()) as { lease?: { platform?: string; udid?: string; deviceId?: string; createdAt?: string } }).lease : undefined;
+            const udid = lease?.udid ?? lease?.deviceId;
+            if (lease?.platform !== "ios" || !udid || !/^[0-9A-F-]{36}$/i.test(udid)) {
+              await decide("deny", { reason: "crash reports are for iOS simulators", leaseId: r.leaseId });
+              return send(res, 400, "NOT_SUPPORTED", "Crash report files are for iOS simulators; on Android use logs --crash");
+            }
+            const created = lease.createdAt ? Date.parse(lease.createdAt) : Number.NaN;
+            const app = new URL(path, "http://guard").searchParams.get("app") ?? undefined;
+            if (app !== undefined && !/^[A-Za-z][A-Za-z0-9_.-]{0,254}$/.test(app)) return send(res, 400, "USAGE", "app must be a bundle id");
+            const filter = { udid, since: Number.isFinite(created) ? created - 60_000 : Date.now() - 24 * 3_600_000, ...(app ? { bundleId: app } : {}) };
+            const dir = options.crashReportsDir ?? crashReportsDir();
+            await decide("allow", { command: r.crashName ? `crash report ${r.crashName}` : "crash reports", leaseId: r.leaseId });
+            if (!r.crashName) {
+              res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+              res.end(JSON.stringify({ reports: await listCrashReports(dir, filter) }));
+              return;
+            }
+            try {
+              const report = await readCrashReport(dir, r.crashName, filter);
+              res.writeHead(200, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-tapdance-crash-name": encodeURIComponent(report.name) });
+              res.end(report.text);
+            } catch (error) {
+              const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", (error as Error).message);
+              return send(res, 404, e.code, e.message);
+            }
             return;
           }
           if (r.action === "files-put" || r.action === "files-get") {

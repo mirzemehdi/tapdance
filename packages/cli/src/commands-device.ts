@@ -221,6 +221,21 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
 
   device
+    .command("crashes")
+    .description("iOS: list the leased simulator's crash reports (.ips) since the lease began, or pull one with a summary of the crashed thread")
+    .option("--app <appId>", "only this app's reports")
+    .option("--pull <name>", "save this report (a name from the list, or latest)")
+    .option("-o, --output <path>", "where to save the pulled report")
+    .action(async (o: { app?: string; pull?: string; output?: string }) =>
+      run(globals(), async (t, out) => {
+        const r = await t.device(
+          o.pull ? { kind: "crash-pull", name: o.pull, outPath: o.output ?? "", ...(o.app ? { appId: o.app } : {}) } : { kind: "crash-list", ...(o.app ? { appId: o.app } : {}) },
+        );
+        out.result(r, () => r.message);
+      }),
+    );
+
+  device
     .command("done")
     .description("Tell the agent you finished what it asked for (request_human), e.g. after signing in")
     .action(async () =>

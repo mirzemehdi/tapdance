@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { createAgentDeviceClient, type AgentDeviceClient } from "agent-device";
@@ -38,6 +38,7 @@ import {
 import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
 import { releaseStaleDeviceClaims } from "./stale-claims.js";
+import { crashReportsDir, listCrashReports, readCrashReport, summarizeCrash } from "./crash-reports.js";
 import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockWorker } from "./http.js";
@@ -1085,6 +1086,7 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
+    if (operation.kind === "crash-list" || operation.kind === "crash-pull") return this.crashReports(handle, operation);
     return runDeviceOperation(
       {
         client: this.agentClient(handle),
@@ -1096,6 +1098,27 @@ export class SimlockProvider implements DeviceProvider {
       handle,
       operation,
     );
+  }
+
+  /** iOS crash reports of the leased simulator: read on this Mac, or through a worker guard (#59). */
+  private async crashReports(handle: LeaseHandle, operation: Extract<DeviceOperation, { kind: "crash-list" | "crash-pull" }>): Promise<DeviceOperationResult> {
+    if (handle.platform !== "ios") {
+      throw new TapdanceError("NOT_SUPPORTED", "Crash report files are for the iOS simulator", { hint: "On Android, `tapdance logs --crash` reads the crash buffer with the stack trace." });
+    }
+    if (operation.appId !== undefined) checkAppId(operation.appId);
+    const filter = { udid: handle.deviceId, since: Date.parse(handle.createdAt) - 60_000, ...(operation.appId ? { bundleId: operation.appId } : {}) };
+    if (operation.kind === "crash-list") {
+      const reports = this.isLocal() ? await listCrashReports(crashReportsDir(), filter) : await this.http.crashes(handle.leaseId, operation.appId);
+      return {
+        ok: true,
+        message: reports.length === 0 ? "No crash reports from this simulator since the lease began" : reports.map((r) => `${r.name}  ${r.bundleId ?? r.app ?? ""}  ${r.exception ?? ""}  ${r.time}`).join("\n"),
+        data: { reports },
+      };
+    }
+    const report = this.isLocal() ? await readCrashReport(crashReportsDir(), operation.name, filter) : await this.http.crash(handle.leaseId, operation.name, operation.appId);
+    await writeFile(operation.outPath, report.text);
+    const summary = summarizeCrash(report.text);
+    return { ok: true, message: [`Saved ${report.name}`, ...summary].join("\n"), path: operation.outPath, data: { name: report.name, summary } };
   }
 
   async viewer(handle: LeaseHandle): Promise<ViewerEndpoints> {

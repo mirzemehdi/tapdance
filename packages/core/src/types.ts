@@ -310,6 +310,10 @@ export type DeviceOperation =
   | { kind: "notifications"; action: "list" | "open" | "close"; appId?: string }
   | { kind: "post-notification"; title?: string; text?: string; appId?: string; payload?: Record<string, unknown> }
   | { kind: "perf"; metric: "frames" | "memory"; appId?: string }
+  /** iOS: crash reports (.ips) from the leased simulator since the lease began, newest first. */
+  | { kind: "crash-list"; appId?: string }
+  /** iOS: one crash report by name ("latest" for the newest), saved to `outPath`, with a summary. */
+  | { kind: "crash-pull"; name: string; outPath: string; appId?: string }
   /** Android: `adb shell` inside the leased emulator (its own VM, wiped at release); never the host. */
   | { kind: "shell"; command: string; stdin?: string; timeoutMs?: number };
 

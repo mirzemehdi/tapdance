@@ -15,7 +15,7 @@ export type Route =
   | { kind: "identity" }
   | { kind: "status" }
   | { kind: "catalog" }
-  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" }
+  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" | "crashes"; crashName?: string }
   | { kind: "rpc" }
   | { kind: "agent-device-health" }
   | { kind: "upload"; path: string }
@@ -32,6 +32,13 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
   if (method === "GET" && path === "/v1/identity") return { ok: true, value: { kind: "identity" } };
   if (method === "GET" && path === "/v1/status") return { ok: true, value: { kind: "status" } };
   if (method === "GET" && path === "/v1/catalog") return { ok: true, value: { kind: "catalog" } };
+  const crash = /^\/v1\/leases\/([^/]+)\/crashes(?:\/([^/]+))?$/.exec(path);
+  if (crash && method === "GET") {
+    if (!LEASE.test(crash[1]!)) return deny("unknown lease id format");
+    const name = crash[2] === undefined ? undefined : decodeURIComponent(crash[2]);
+    if (name !== undefined && name !== "latest" && !/^[A-Za-z0-9 _.+-]{1,200}\.ips$/.test(name)) return deny("crash report names are plain .ips file names");
+    return { ok: true, value: { kind: "lease", leaseId: crash[1]!, action: "crashes", ...(name !== undefined ? { crashName: name } : {}) } };
+  }
   const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files|build))?$/.exec(path);
   if (lease) {
     const leaseId = lease[1]!;

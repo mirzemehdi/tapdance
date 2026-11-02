@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { TapdanceError, type ErrorCode } from "@tapdance/core";
+import type { CrashReportInfo } from "./crash-reports.js";
 
 /** Status → Tapdance code for Simlock's JSON errors (`{"error":{"code","message"}}`). */
 const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
@@ -193,6 +194,22 @@ export class SimlockHttp {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  /** A worker guard's crash reports for the lease's simulator (#59). */
+  async crashes(leaseId: string, appId?: string): Promise<CrashReportInfo[]> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/crashes${appId ? `?${new URLSearchParams({ app: appId })}` : ""}`, { timeoutMs: 60_000 });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw crashesUnsupported();
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/crashes");
+    return ((await response.json()) as { reports?: CrashReportInfo[] }).reports ?? [];
+  }
+
+  /** One crash report's text through a worker guard; `name` may be "latest". */
+  async crash(leaseId: string, name: string, appId?: string): Promise<{ name: string; text: string }> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/crashes/${encodeURIComponent(name)}${appId ? `?${new URLSearchParams({ app: appId })}` : ""}`, { timeoutMs: 120_000 });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw crashesUnsupported();
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/crashes/{name}");
+    return { name: decodeURIComponent(response.headers.get("x-tapdance-crash-name") ?? name), text: await response.text() };
+  }
+
   /**
    * A worker guard's build route: builds on the host and installs on the lease, streaming log lines
    * to `onLine`. Answers the result, or throws the build's error.
@@ -254,6 +271,12 @@ export class SimlockHttp {
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/exec");
     return parseExecStream(await response.text());
   }
+}
+
+function crashesUnsupported(): TapdanceError {
+  return new TapdanceError("NOT_SUPPORTED", "This endpoint cannot read iOS crash reports", {
+    hint: "Crash reports of a remote simulator come through a worker in device-only mode (tapdance worker guard), or run Tapdance on the Mac itself.",
+  });
 }
 
 function filesUnsupported(): TapdanceError {

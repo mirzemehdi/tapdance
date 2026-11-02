@@ -152,6 +152,7 @@ tapdance device release
 tapdance device request-human --reason <text> [--wait <seconds> | --no-wait]
 tapdance device request-human --cancel
 tapdance device clipboard <get | set <text>>
+tapdance device crashes [--app <id>] [--pull <name|latest>] [-o <file>]
 tapdance device done
 ```
 
@@ -167,6 +168,12 @@ tapdance device done
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
 | `--no-keepalive` | Do not renew in the background. The lease ends after its TTL unless you run `device renew`. |
 | `--hold` | Stay in the foreground, renew, and release on Ctrl-C. |
+
+`device crashes` (iOS) lists the crash reports (`.ips`) the leased simulator wrote since the lease
+began, newest first, with app, exception and time; `--pull <name>` (or `latest`) saves one as an
+artifact and prints the exception and the crashed thread's top frames, with their symbols (a debug
+build's own frames are named). Only reports that name the lease's simulator are shown, never the
+host's own apps' crashes or another lease's; remotely they come through a worker guard (`allow.logs`).
 
 Without `--hold` or `--no-keepalive` (and with `session.keepalive` true), `lease` starts a detached
 keepalive process and returns. The keepalive checks every TTL/6 (between 5 and 60 s), renews when a
@@ -404,8 +411,8 @@ tapdance logs [-n, --lines <n>] [--app <id>] [--crash]
 Recent device logs (Android logcat, iOS simulator unified log), default 200 lines, at most 5000.
 `--app` filters to one app (iOS: its subsystem or its process, the app's executable name). On iOS the
 system log has the app's `os_log`/`NSLog` lines, not `print`/`println` output, which goes to stdout.
-`--crash` shows Android's crash buffer or iOS faults and crash messages from the last 10 minutes; full
-iOS crash reports (`.ips`) stay on the host. Asking for more than 5000 lines says it was capped. The
+`--crash` shows Android's crash buffer or iOS faults and crash messages from the last 10 minutes; for
+the full iOS crash report use `device crashes`. Asking for more than 5000 lines says it was capped. The
 output is also saved as an artifact.
 
 ### `artifacts`
@@ -904,6 +911,10 @@ Commands:
   clipboard <action> [text]         Read (get) or write (set <text>) the device
                                     clipboard: paste flows, checking what a Copy
                                     button copied
+  crashes [options]                 iOS: list the leased simulator's crash
+                                    reports (.ips) since the lease began, or
+                                    pull one with a summary of the crashed
+                                    thread
   done                              Tell the agent you finished what it asked
                                     for (request_human), e.g. after signing in
   profile                           Device profiles: an emulator you set up once
@@ -994,6 +1005,21 @@ what a Copy button copied
 
 Options:
   -h, --help  display help for command
+```
+
+### `tapdance device crashes`
+
+```text
+Usage: tapdance device crashes [options]
+
+iOS: list the leased simulator's crash reports (.ips) since the lease began, or
+pull one with a summary of the crashed thread
+
+Options:
+  --app <appId>        only this app's reports
+  --pull <name>        save this report (a name from the list, or latest)
+  -o, --output <path>  where to save the pulled report
+  -h, --help           display help for command
 ```
 
 ### `tapdance device done`

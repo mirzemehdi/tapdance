@@ -160,6 +160,10 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   went to (-22, 437). Tapdance ships a pnpm patch (`patches/agent-device@0.21.35.patch`) that rotates
   against the app's window instead. The cause and a corrected tap were checked on an iPhone 17
   simulator; the patched runner itself waits for the host update.
+- Added (#59): `device crashes [--app] [--pull <name|latest>]` / MCP `crash_reports`: the leased iOS
+  simulator's crash reports (.ips) since the lease began, pulled as artifacts with a summary of the
+  exception and the crashed thread. Through a worker guard only reports naming the lease's simulator
+  are served.
 
 ### Not yet proven
 
