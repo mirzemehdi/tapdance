@@ -1,6 +1,6 @@
 import { TapdanceError, deviceCommands, redactSecrets } from "@tapdance/sdk";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { dirname, join, sep } from "node:path";
@@ -39,6 +39,59 @@ export interface GuardOptions {
   settleStaleClaims?: () => Promise<{ released: string[]; retained: Array<{ device: string; reason: string }> }>;
 }
 
+/** A Map/Set that calls `changed` after every write. */
+class SavedMap extends Map<string, string> {
+  changed: () => void = () => undefined;
+  override set(key: string, value: string): this {
+    super.set(key, value);
+    this.changed();
+    return this;
+  }
+  override delete(key: string): boolean {
+    const had = super.delete(key);
+    if (had) this.changed();
+    return had;
+  }
+}
+class SavedSet extends Set<string> {
+  changed: () => void = () => undefined;
+  override add(value: string): this {
+    super.add(value);
+    this.changed();
+    return this;
+  }
+  override delete(value: string): boolean {
+    const had = super.delete(value);
+    if (had) this.changed();
+    return had;
+  }
+}
+
+/** The guard's lease ownership, kept in `file` (mode 600) so it outlives a restart. */
+export function loadLeaseBook(file: string): { owners: Map<string, string>; physical: Set<string> } {
+  const owners = new SavedMap();
+  const physical = new SavedSet();
+  try {
+    const saved = JSON.parse(readFileSync(file, "utf8")) as { owners?: Record<string, unknown>; physical?: unknown[] };
+    for (const [lease, token] of Object.entries(saved.owners ?? {})) if (typeof token === "string") owners.set(lease, token);
+    for (const lease of saved.physical ?? []) if (typeof lease === "string") physical.add(lease);
+  } catch {
+    // No file yet, or unreadable: start empty, as before.
+  }
+  const save = () => {
+    try {
+      mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+      writeFileSync(`${file}.tmp`, JSON.stringify({ owners: Object.fromEntries(owners), physical: [...physical] }), { mode: 0o600 });
+      renameSync(`${file}.tmp`, file);
+    } catch {
+      // Ownership still works in memory; only a restart would forget it.
+    }
+  };
+  owners.changed = save;
+  physical.changed = save;
+  return { owners, physical };
+}
+
 export async function startGuard(options: GuardOptions): Promise<{ server: Server; url: string; close: () => Promise<void> }> {
   const { upstream } = options;
   const policy = options.policy;
@@ -46,12 +99,15 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   const env = options.env ?? process.env;
   const doFetch = options.fetchImpl ?? fetch;
   const tokens = new GuardTokens(env);
-  /** leaseId → guard token id. Memory only: after a guard restart, old leases are nobody's and expire. */
-  const owners = new Map<string, string>();
+  // Lease ownership survives a guard restart (an update, a crash), so a running agent keeps its lease;
+  // leases that ended meanwhile are dropped by activeLeases().
+  const book = loadLeaseBook(join(guardDir(env), "leases.json"));
+  /** leaseId → guard token id. */
+  const owners = book.owners;
   /** Lease ids whose allocate is still running: reserved in `owners`, not yet known to Simlock. */
   const allocating = new Set<string>();
   /** Leases of physical phones (allocated with `physical`): no device shell on these. */
-  const physicalLeases = new Set<string>();
+  const physicalLeases = book.physical;
   /** agent-device upload id → guard token id, learned from upload replies. */
   const uploads = new Map<string, string>();
   /** agent-device artifact id → guard token id, learned from the replies to that token's commands. */
@@ -170,7 +226,10 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           const expires = typeof body.lease?.expiresAt === "string" ? Date.parse(body.lease.expiresAt) : Number.NaN;
           ended = Number.isFinite(expires) && expires <= Date.now();
         } else await r.body?.cancel().catch(() => undefined);
-        if (ended && !allocating.has(leaseId)) owners.delete(leaseId);
+        if (ended && !allocating.has(leaseId)) {
+          owners.delete(leaseId);
+          physicalLeases.delete(leaseId);
+        }
       }),
     );
     return owners.size;
@@ -469,7 +528,10 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           }
           await decide("allow", { leaseId: r.leaseId, command: r.action });
           const answer = await forward(req, res);
-          if (r.action === "delete" && answer.ok) owners.delete(r.leaseId);
+          if (r.action === "delete" && answer.ok) {
+            owners.delete(r.leaseId);
+            physicalLeases.delete(r.leaseId);
+          }
           return;
         }
         case "rpc": {
@@ -558,7 +620,10 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           const owner_ = token.id;
           await forward(req, res, Buffer.from(JSON.stringify(parsed)), undefined, (text) => learnIds(text, "artifactId", artifacts, owner_));
           // `close` ends the session; ownership lasts until the lease is released or expires.
-          if (call.method === "lease.release") owners.delete(call.leaseId!);
+          if (call.method === "lease.release") {
+            owners.delete(call.leaseId!);
+            physicalLeases.delete(call.leaseId!);
+          }
           return;
         }
         case "upload": {
@@ -618,6 +683,16 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             return send(res, 404, "NOT_FOUND", "No such artifact for this token");
           }
           await decide("allow", { command: "artifact download" });
+          await forward(req, res);
+          return;
+        }
+        case "diagnostics": {
+          const leaseId = [...owners].find(([id, who]) => who === token!.id && id.startsWith(r.leasePrefix))?.[0];
+          if (!leaseId) {
+            await decide("deny", { reason: "diagnostics of a session this token does not own" });
+            return send(res, 404, "NOT_FOUND", "No such session for this token");
+          }
+          await decide("allow", { command: "diagnostics", leaseId });
           await forward(req, res);
           return;
         }

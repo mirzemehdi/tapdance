@@ -19,7 +19,8 @@ export type Route =
   | { kind: "rpc" }
   | { kind: "agent-device-health" }
   | { kind: "upload"; path: string }
-  | { kind: "artifact"; path: string };
+  | { kind: "artifact"; path: string }
+  | { kind: "diagnostics"; path: string; leasePrefix: string };
 
 const LEASE = /^[0-9a-f]{32}$/;
 
@@ -52,6 +53,10 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
     return { ok: true, value: { kind: "upload", path } };
   }
   if (/^\/v1\/agent-device\/artifacts\/[A-Za-z0-9_.-]+$/.test(path) && method === "GET") return { ok: true, value: { kind: "artifact", path } };
+  // agent-device fetches a failed request's diagnostics; Tapdance's session names end in the lease id's
+  // first 12 characters, which tie the request to a lease (the guard checks the token owns it).
+  const diag = /^\/v1\/agent-device\/sessions\/[A-Za-z0-9_.%:-]{1,300}-([a-f0-9]{12})\/requests\/[A-Za-z0-9_-]{1,100}\/diagnostics$/.exec(path);
+  if (diag && method === "GET") return { ok: true, value: { kind: "diagnostics", path, leasePrefix: diag[1]! } };
   return deny(`${method} ${path} is not part of the device API`);
 }
 

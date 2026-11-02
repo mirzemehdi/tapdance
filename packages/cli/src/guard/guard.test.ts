@@ -665,5 +665,36 @@ describe("worker guard: hardening", () => {
     // The client's credential never reaches Simlock; the guard sends the local one.
     expect(forwarded["authorization"]).toBe("Bearer slk_LOCALONLYSECRET");
   });
+
+  it("18. a restarted guard still knows whose lease is whose (an update must not cut a running agent off)", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    expect((await stat(join(t.home, "worker", "leases.json"))).mode & 0o777).toBe(0o600);
+    const again = await startGuard({
+      upstream: { kind: "local", baseUrl: t.upstream.url, token: "slk_LOCALONLYSECRET", tenant: "local", runId: "r", clientId: "c", source: "test" },
+      policy: t.policy,
+      env: t.env,
+    });
+    cleanups.push(again.close);
+    const shot = (secret: string) =>
+      fetch(`${again.url}/v1/agent-device/rpc`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "agent_device.command", params: { leaseId: A, command: "screenshot" } }),
+      });
+    expect((await shot(t.alice.secret)).status).toBe(200);
+    expect((await shot(t.mallory.secret)).status).toBe(403);
+  });
+
+  it("19. agent-device's diagnostics for a failed request reach only the session's owner", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    const path = (lease: string) => `/v1/agent-device/sessions/tok_c3ffdeb1-118a%3Atd-8e267af7a097-${lease.slice(0, 12)}/requests/152ae64bc4d8b38c/diagnostics`;
+    expect((await t.call(t.alice.secret, "GET", path(A))).status).toBe(200);
+    expect(t.upstream.seen.some((x) => x.path === path(A))).toBe(true);
+    expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(404);
+    expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
+    expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/sessions/other/requests/x/diagnostics")).status).toBe(404);
+  });
 });
 

@@ -209,8 +209,10 @@ reissue it with scopes.
 - **Per-session staging directories and storage quotas on the Mac.** Uploads and artifacts live in
   agent-device's own directories under the worker account; Tapdance caps upload size but not total
   disk use (H-06, H-07). Recording duration is not capped.
-- **Ownership after a restart.** Lease, upload and artifact ownership live in the guard's memory; after
-  a guard restart, earlier leases, uploads and artifacts belong to nobody and are refused.
+- **Ownership after a restart.** Lease ownership (and which leases are physical phones) is kept in
+  `~/.tapdance/worker/leases.json` (mode 600), so a guard restart or update does not cut a running agent
+  off; leases that ended meanwhile are dropped. Upload and artifact ownership live in memory: after a
+  restart, earlier uploads and artifacts belong to nobody and are refused.
 - **OS or virtualization vulnerabilities.** The tests prove the API boundary only. A bug in the
   Simulator, CoreSimulator, agent-device or macOS is outside it; the dedicated account limits the
   damage.

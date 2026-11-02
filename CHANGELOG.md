@@ -142,6 +142,9 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   cause (compiler errors, Gradle's "What went wrong", the failed build commands) instead of a raw tail.
 - Added: `app build --xcode-setting KEY=VALUE` (MCP `xcode_settings`, a short allow-list of keys) and
   `--verbose`; by default the CLI shows only steps, errors and the outcome.
+- Fixed: a guard restart (an update) cut a running agent off its lease ("not this token's lease"); the
+  guard now keeps lease ownership in `~/.tapdance/worker/leases.json`. agent-device's diagnostics for a
+  failed request were refused by the guard; they now reach the session's owner.
 
 ### Not yet proven
 
