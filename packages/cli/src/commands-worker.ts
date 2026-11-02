@@ -14,6 +14,8 @@ import { registerGuardCommands } from "./commands-guard.js";
 import { warmSettings, type WarmCounts } from "./host/plan.js";
 
 const exec = promisify(execFile);
+/** The port Simlock runs its own adb server on (5037 is the developer's). */
+const SIMLOCK_ADB_PORT = 5038;
 
 /** Runs the bundled Simlock CLI. Its output is returned, never printed raw (it can contain secrets). */
 async function simlock(args: string[], timeoutMs = 180_000): Promise<string> {
@@ -153,11 +155,14 @@ export async function stopWorkerCompletely(out: ReturnType<typeof output>, optio
  * outlives the daemon, the next start finds the port "occupied" and Android stays off. Stop it.
  */
 async function killStaleAdbServer(out: ReturnType<typeof output>): Promise<void> {
-  let port: unknown;
+  // A stopped worker removes adb-server.json, but a server can still sit on its port (one Simlock
+  // left behind, or an `adb -P <port>` run by hand starting a new one). Simlock then refuses to
+  // attach and skips Android altogether ("adb server unavailable … occupied").
+  let port: unknown = SIMLOCK_ADB_PORT;
   try {
     port = (JSON.parse(await readFile(join(simlockHome(), "adb-server.json"), "utf8")) as { port?: unknown }).port;
   } catch {
-    return;
+    // No record: try Simlock's default port.
   }
   if (typeof port !== "number" || !Number.isInteger(port) || port === 5037) return;
   const sdk = process.env["ANDROID_HOME"] ?? process.env["ANDROID_SDK_ROOT"] ?? join(homedir(), osPlatform() === "darwin" ? "Library/Android/sdk" : "Android/Sdk");
@@ -307,7 +312,10 @@ export async function setWorkerService(on: boolean): Promise<void> {
 /** Starts the worker after a pause and resets stale device records when nothing is leased. */
 export async function startWorker(out: ReturnType<typeof output>): Promise<void> {
   await ensureSimlockHelpersExecutable(out);
-  if (!(await workerRunning())) await simlock(["--local", "daemon", "start"]).catch(() => "");
+  if (!(await workerRunning())) {
+    await killStaleAdbServer(out);
+    await simlock(["--local", "daemon", "start"]).catch(() => "");
+  }
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline && !(await workerRunning())) await new Promise((r) => setTimeout(r, 1000));
   await reconcileDevices(out);
@@ -438,7 +446,10 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
             out.result({ stopped: true, ...r }, () => `Stopped the worker${r.stoppedDevices.length ? ` and ${r.stoppedDevices.length} device(s): ${r.stoppedDevices.join(", ")}` : ""}.`);
             return;
           }
-          if (name === "start") await ensureSimlockHelpersExecutable(out);
+          if (name === "start") {
+            await ensureSimlockHelpersExecutable(out);
+            if (!(await workerRunning())) await killStaleAdbServer(out);
+          }
           const text = await simlock(["--local", ...args, ...(name === "status" && globals().json ? ["--json"] : [])]);
           if (name === "start") await reconcileDevices(out);
           out.result(safeJson(text) ?? { output: text }, () => text);
