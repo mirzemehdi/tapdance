@@ -55,6 +55,15 @@ describe("tapdance view (MOCKED device)", () => {
     expect((await v.get("/", `evil.example.com:${v.port}`)).status).toBe(403);
   });
 
+  it("accepts allowed names on any port, e.g. behind tailscale serve on 8443 (#40)", async () => {
+    const v = await viewer(["mac.tail1234.ts.net", "other.tail1234.ts.net:8443"]);
+    expect((await v.get("/", "mac.tail1234.ts.net:8443")).status).toBe(200);
+    expect((await v.get("/", "other.tail1234.ts.net")).status).toBe(200);
+    const refused = await v.get("/", "evil.example.com:8443");
+    expect(refused.status).toBe(403);
+    expect(refused.body.toString()).toContain("evil.example.com");
+  });
+
   it("serves screenshot frames for pages that cannot decode video, only with the key", async () => {
     const v = await viewer();
     expect((await v.get("/api/frame", `127.0.0.1:${v.port}`)).status).toBe(401);

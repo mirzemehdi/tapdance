@@ -617,7 +617,14 @@ export class SimlockProvider implements DeviceProvider {
 
   // ---------------------------------------------------------------- UI
 
-  async inspect(handle: LeaseHandle, options: { interactiveOnly?: boolean } = {}): Promise<ScreenInspection> {
+  async inspect(handle: LeaseHandle, options: { interactiveOnly?: boolean; system?: boolean } = {}): Promise<ScreenInspection> {
+    if (options.system) {
+      if (handle.platform !== "android") throw new TapdanceError("NOT_SUPPORTED", "The system view is Android only", { hint: "On iOS, inspect_screen already sees system sheets." });
+      const cmd = deviceCommands.android.uiautomatorDump();
+      const r = await this.execOn(handle, "adb", cmd.args, 30_000);
+      if (!r.stdout.includes("<hierarchy")) throw new TapdanceError("DEVICE_ERROR", `uiautomator dump failed: ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
+      return parseUiautomator(r.stdout, options.interactiveOnly ?? true);
+    }
     const axe = this.axeFor(handle);
     if (axe) return axe.inspect(handle.deviceId, options.interactiveOnly ?? true);
     try {
@@ -1323,4 +1330,42 @@ function notOfferedFix(platform: Platform): string {
   return platform === "android"
     ? "On the worker machine: `tapdance worker restart` (it also stops a stray adb server on Simlock's port), then check `tapdance simlock -- --local daemon logs` for \"Skipped Android driver\"; install an image with `tapdance devices install android 34`."
     : "On the worker machine: check Xcode and a simulator runtime (`tapdance worker check`), then `tapdance worker restart`.";
+}
+
+/**
+ * Elements from `uiautomator dump`: every window, including ones agent-device's snapshot leaves out
+ * (a Chrome Custom Tab, a system picker). Refs are `@u<n>` and cannot be passed to tap --ref; tap by
+ * coordinates (the centre of `rect`) or by text with inject.
+ */
+export function parseUiautomator(xml: string, interactiveOnly: boolean): ScreenInspection {
+  const elements: UiElement[] = [];
+  const packages = new Set<string>();
+  const warnings: string[] = ["System view (uiautomator): refs are @u<n> and cannot be used with --ref; tap with --x/--y at the centre of an element's bounds, or --text with --inject."];
+  const unescape = (v: string) => v.replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&#10;/g, "\n").replace(/&amp;/g, "&");
+  let n = 0;
+  for (const m of xml.matchAll(/<node\s([^>]*?)\/?>/g)) {
+    const attrs: Record<string, string> = {};
+    for (const a of m[1]!.matchAll(/([\w-]+)="([^"]*)"/g)) attrs[a[1]!] = unescape(a[2]!);
+    if (attrs["package"]) packages.add(attrs["package"]);
+    const label = attrs["text"] || attrs["content-desc"] || undefined;
+    const clickable = attrs["clickable"] === "true" || attrs["checkable"] === "true" || attrs["long-clickable"] === "true";
+    if (interactiveOnly && !clickable && !label) continue;
+    n++;
+    const el: UiElement = { ref: `@u${n}`, role: (attrs["class"] ?? "View").split(".").pop() ?? "View" };
+    if (label) el.label = label;
+    if (attrs["resource-id"]) el.identifier = attrs["resource-id"];
+    if (attrs["enabled"] === "false") el.enabled = false;
+    const states = [
+      ...(attrs["checkable"] === "true" ? [attrs["checked"] === "true" ? "checked" : "unchecked"] : []),
+      ...(attrs["selected"] === "true" ? ["selected"] : []),
+      ...(attrs["focused"] === "true" ? ["focused"] : []),
+    ];
+    if (states.length) el.states = states;
+    const b = /\[(\d+),(\d+)\]\[(\d+),(\d+)\]/.exec(attrs["bounds"] ?? "");
+    if (b) el.rect = { x: Number(b[1]), y: Number(b[2]), width: Number(b[3]) - Number(b[1]), height: Number(b[4]) - Number(b[2]) };
+    elements.push(el);
+    // A browser's address bar: the URL a Custom Tab or Chrome shows.
+    if (/:id\/url_bar$/.test(attrs["resource-id"] ?? "") && label) warnings.push(`browser: ${label}`);
+  }
+  return { ...(packages.size ? { app: [...packages].join(", ") } : {}), elements, truncated: false, warnings };
 }

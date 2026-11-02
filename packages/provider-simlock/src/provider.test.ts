@@ -546,3 +546,72 @@ describe("platform on offer (#39)", () => {
     expect(inventory.notes.some((n) => n.startsWith("android is not available"))).toBe(true);
   });
 });
+
+describe("kill-app (#43)", () => {
+  const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554" } as never;
+  it("goes Home, uses am stop-app, and confirms the pid is gone", async () => {
+    const { runDeviceOperation } = await import("./device-operations.js");
+    const calls: string[] = [];
+    let alive = true;
+    const exec = async (cmd: { args: string[] }) => {
+      calls.push(cmd.args.slice(1).join(" "));
+      if (cmd.args[1] === "pidof") return { exitCode: alive ? 0 : 1, stdout: alive ? "4242\n" : "", stderr: "" };
+      if (cmd.args[2] === "stop-app") alive = false;
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    const r = await runDeviceOperation({ client: {} as never, scope: {}, exec: exec as never, local: true }, handle, { kind: "kill-app", appId: "com.example.app" });
+    expect(r).toMatchObject({ ok: true, data: { method: "am stop-app", pidBefore: "4242" } });
+    expect(calls).toEqual(["pidof com.example.app", "input keyevent 3", "am stop-app com.example.app", "pidof com.example.app"]);
+  });
+  it("falls back to trim + kill on older Android and reports a process that survives", async () => {
+    const { runDeviceOperation } = await import("./device-operations.js");
+    const exec = async (cmd: { args: string[] }) => {
+      if (cmd.args[1] === "pidof") return { exitCode: 0, stdout: "4242\n", stderr: "" };
+      if (cmd.args[2] === "stop-app") return { exitCode: 255, stdout: "Unknown command: stop-app", stderr: "" };
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    const r = await runDeviceOperation({ client: {} as never, scope: {}, exec: exec as never, local: true }, handle, { kind: "kill-app", appId: "com.example.app" });
+    expect(r).toMatchObject({ ok: false, data: { method: "am send-trim-memory + am kill", pidAfter: "4242" } });
+  }, 10_000);
+});
+
+describe("system inspect (#44)", () => {
+  it("reads every window from uiautomator, with bounds, states and a Custom Tab's URL", async () => {
+    const { parseUiautomator } = await import("./provider.js");
+    const xml = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><hierarchy rotation="0">
+<node index="0" text="" resource-id="com.android.chrome:id/url_bar" class="android.widget.TextView" package="com.android.chrome" content-desc="pianolune.com/terms" checkable="false" checked="false" clickable="true" enabled="true" focusable="true" focused="false" selected="false" bounds="[160,120][900,200]" />
+<node index="1" text="Accept &amp; continue" resource-id="" class="android.widget.Button" package="com.android.chrome" content-desc="" checkable="false" checked="false" clickable="true" enabled="true" bounds="[100,2000][980,2120]" />
+<node index="2" text="" resource-id="" class="android.widget.FrameLayout" package="com.measify.pianolune" content-desc="" clickable="false" bounds="[0,0][1080,2400]" />
+<node index="3" text="Reminders" resource-id="com.measify.pianolune:id/toggle" class="android.widget.Switch" package="com.measify.pianolune" checkable="true" checked="true" clickable="true" bounds="[0,300][1080,400]" /></hierarchy>
+UI hierchary dumped to: /dev/tty`;
+    const s = parseUiautomator(xml, true);
+    expect(s.elements.map((e) => e.label)).toEqual(["pianolune.com/terms", "Accept & continue", "Reminders"]);
+    expect(s.elements[1]!.rect).toEqual({ x: 100, y: 2000, width: 880, height: 120 });
+    expect(s.elements[2]!.states).toEqual(["checked"]);
+    expect(s.warnings).toContain("browser: pianolune.com/terms");
+    expect(s.app).toBe("com.android.chrome, com.measify.pianolune");
+    expect(parseUiautomator(xml, false).elements).toHaveLength(4);
+  });
+});
+
+describe("tap sequence (#42)", () => {
+  it("builds one device script from whole numbers only, in time order", async () => {
+    const { android } = await import("./device-commands.js");
+    const cmd = android.tapSequence([{ t: 0, x: 120, y: 900 }, { t: 480, x: 240, y: 900, hold: 200 }]);
+    expect(cmd.args[0]).toBe("shell");
+    expect(cmd.args[1]).toContain("input tap 120 900 &");
+    expect(cmd.args[1]).toContain("input swipe 240 900 240 900 200 &");
+    expect(cmd.args[1]).toContain("+ 480000000 -");
+    expect(() => android.tapSequence([{ t: 100, x: 1, y: 1 }, { t: 50, x: 1, y: 1 }])).toThrow(/time order/);
+    expect(() => android.tapSequence([{ t: 0, x: "1; reboot" as never, y: 1 }])).toThrow(/whole number/);
+    expect(() => android.tapSequence([])).toThrow(/1 to 500/);
+  });
+  it("reports when each tap started and the drift", async () => {
+    const { runDeviceOperation } = await import("./device-operations.js");
+    const exec = async () => ({ exitCode: 0, stdout: "0 1200\n1 481500\n", stderr: "" });
+    const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "e" } as never;
+    const r = await runDeviceOperation({ client: {} as never, scope: {}, exec: exec as never, local: true }, handle, { kind: "tap-sequence", steps: [{ t: 0, x: 1, y: 1 }, { t: 480, x: 2, y: 2 }] });
+    expect(r.ok).toBe(true);
+    expect((r.data as { steps: Array<{ actualMs: number; driftMs: number }> }).steps.map((s) => s.driftMs)).toEqual([1.2, 1.5]);
+  });
+});

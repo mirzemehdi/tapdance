@@ -27,6 +27,8 @@ export const ERROR_CODES = {
   ASSERTION_FAILED: 12,
   /** `tapdance run`: the scenario ran and at least one step failed. */
   SCENARIO_FAILED: 12,
+  /** A wait ended because someone cancelled it (`device request-human --cancel`). */
+  CANCELLED: 13,
   INTERNAL: 1,
 } as const;
 

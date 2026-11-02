@@ -235,6 +235,7 @@ export const DEVICE_SETTINGS = [
   "reset-keychain",
   "orientation",
   "status-bar-time",
+  "browser-first-run",
 ] as const;
 export type DeviceSettingName = (typeof DEVICE_SETTINGS)[number];
 
@@ -260,9 +261,21 @@ export interface DeviceNotification {
 }
 
 /** Device-level operations beyond UI driving. Optional for providers; absent means NOT_SUPPORTED. */
+/** One tap of a timed sequence: `t` ms after the start, at (x, y); `hold` ms makes it a long press. */
+export interface TimedTap {
+  t: number;
+  x: number;
+  y: number;
+  hold?: number;
+}
+
 export type DeviceOperation =
   | { kind: "uninstall"; appId: string }
   | { kind: "clear-app-data"; appId: string }
+  /** Android: taps (or holds) at set times, run as one script inside the emulator so the network adds no delay between them. */
+  | { kind: "tap-sequence"; steps: TimedTap[] }
+  /** End an app the way a user does (to the background, then gone), keeping its alarms and jobs: unlike a force-stop. */
+  | { kind: "kill-app"; appId: string }
   | { kind: "setting"; change: DeviceSettingChange }
   | { kind: "intent"; intent: IntentSpec }
   | { kind: "push-file"; localPath: string; destination: FileDestination; appId?: string; name?: string }

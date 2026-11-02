@@ -90,6 +90,31 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
         ...(isAndroid ? {} : { data: { note: "The iOS keychain is shared by every app on the simulator; reset it with set_device_setting reset-keychain for a signed-out first run." } }),
       };
     }
+    case "kill-app":
+      return killApp(ctx, handle, op.appId);
+    case "tap-sequence": {
+      if (!isAndroid) throw notSupported("Timed tap sequences are Android only", "On iOS, tap one at a time.");
+      const cmd = android.tapSequence(op.steps);
+      const last = op.steps.at(-1)!;
+      const r = await run(ctx, cmd, "tap sequence", last.t + (last.hold ?? 0) + 20_000);
+      // Lines "<index> <µs since start>": when each tap was started on the device.
+      const started = new Map<number, number>();
+      for (const line of r.stdout.split("\n")) {
+        const m = /^(\d+) (-?\d+)$/.exec(line.trim());
+        if (m) started.set(Number(m[1]), Number(m[2]) / 1000);
+      }
+      const steps = op.steps.map((s, i) => ({ ...s, ...(started.has(i) ? { actualMs: Math.round(started.get(i)! * 10) / 10, driftMs: Math.round((started.get(i)! - s.t) * 10) / 10 } : {}) }));
+      const drifts = steps.map((s) => Math.abs(s.driftMs ?? 0));
+      return {
+        ok: started.size === op.steps.length,
+        message: `Ran ${started.size}/${op.steps.length} taps on the device; largest start drift ${Math.max(0, ...drifts).toFixed(1)} ms`,
+        data: {
+          steps,
+          maxDriftMs: Math.max(0, ...drifts),
+          note: "actualMs is when each tap was started inside the emulator; Android's input command then takes a few tens of ms to deliver it.",
+        },
+      };
+    }
     case "setting":
       return setting(ctx, handle, op.change);
     case "intent": {
@@ -146,7 +171,8 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
 
 async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change: { name: string; value?: string; appId?: string; permission?: string; latitude?: number; longitude?: number }): Promise<DeviceOperationResult> {
   const isAndroid = handle.platform === "android";
-  const { name, value } = change;
+  const { name } = change;
+  let value = change.value;
   const scope = ctx.scope;
   const update = (options: Record<string, unknown>) => agentDevice(`setting ${name}`, () => ctx.client.settings.update({ ...options, ...scope } as never));
   if (AGENT_DEVICE_SETTINGS.has(name)) {
@@ -168,7 +194,8 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       await update({ setting: "reset-keychain", state: "clear" });
       return { ok: true, message: "Reset the simulator keychain (every app)" };
     case "orientation": {
-      if (!value) throw new TapdanceError("USAGE", "orientation needs a value: portrait, landscape-left, landscape-right or portrait-upside-down");
+      if (!value) throw new TapdanceError("USAGE", "orientation needs a value: portrait, landscape (= landscape-left), landscape-left, landscape-right or portrait-upside-down");
+      if (value === "landscape") value = "landscape-left";
       const command = ctx.client.command as unknown as { orientation: (o: unknown) => Promise<unknown> };
       // agent-device confirms the rotation within a short budget that a busy emulator can miss once.
       await agentDevice("orientation", () => command.orientation({ orientation: value, ...scope })).catch(async (error: unknown) => {
@@ -177,6 +204,14 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
         await agentDevice("orientation", () => command.orientation({ orientation: value, ...scope }));
       });
       return { ok: true, message: `Rotated to ${value}` };
+    }
+    case "browser-first-run": {
+      if (!isAndroid) throw notSupported("browser-first-run is Android only (Safari has no first-run screens on the simulator)");
+      if (value !== "off") throw new TapdanceError("USAGE", "browser-first-run takes off (Chrome skips its welcome, sign-in and default-browser screens)");
+      await run(ctx, android.chromeFlags(), "write Chrome's command line");
+      await run(ctx, android.chromeDebugApp(), "let Chrome read its command line");
+      await ctx.exec({ tool: "adb", args: ["shell", "am", "force-stop", "com.android.chrome"] });
+      return { ok: true, message: "Chrome now starts without its first-run screens (until the lease ends)" };
     }
     case "status-bar-time":
       if (isAndroid) throw notSupported("status-bar-time is iOS only");
@@ -255,4 +290,44 @@ async function appContainer(ctx: DeviceOperationContext, appId: string): Promise
   const path = r.stdout.trim().split("\n").pop() ?? "";
   if (!path.startsWith("/")) throw new TapdanceError("APP_NOT_INSTALLED", `${appId} has no data container on this simulator`);
   return resolve(path);
+}
+
+/**
+ * Ends an app the way a user does, then checks its process is gone. Android: Home, then `am stop-app`
+ * (Android 14+; keeps alarms and jobs, unlike force-stop), else a memory trim and `am kill` of the now
+ * cached process. A process that survives (a foreground service) is reported, not hidden. iOS: the
+ * simulator's terminate is what swiping an app away does.
+ */
+async function killApp(ctx: DeviceOperationContext, handle: LeaseHandle, appId: string): Promise<DeviceOperationResult> {
+  if (handle.platform !== "android") {
+    await run(ctx, { tool: "simctl", args: ["terminate", appId] }, `end ${appId}`).catch((error: unknown) => {
+      // simctl answers an error when the app was not running.
+      if (!/found nothing to terminate|not running/i.test((error as Error).message)) throw error;
+    });
+    return { ok: true, message: `Ended ${appId}`, data: { method: "simctl terminate" } };
+  }
+  const pid = async () => (await ctx.exec(android.pidOf(appId))).stdout.trim() || undefined;
+  const before = await pid();
+  if (!before) return { ok: true, message: `${appId} was not running`, data: { running: false } };
+  await run(ctx, android.home(), "press Home");
+  let method = "am stop-app";
+  const stop = await ctx.exec(android.stopApp(appId));
+  if (stop.exitCode !== 0 || /Unknown command|Error/i.test(`${stop.stdout}${stop.stderr}`)) {
+    method = "am send-trim-memory + am kill";
+    await ctx.exec(android.trimMemory(appId));
+    await ctx.exec(android.killBackground(appId));
+  }
+  let after = await pid();
+  for (let i = 0; i < 6 && after; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    after = await pid();
+  }
+  if (after) {
+    return {
+      ok: false,
+      message: `${appId} is still running (pid ${after}) after ${method}; something keeps it alive (a foreground service?)`,
+      data: { method, pidBefore: before, pidAfter: after, hint: "`app stop` force-stops it, which also cancels its alarms and jobs." },
+    };
+  }
+  return { ok: true, message: `Ended ${appId} like a user (pid ${before} gone; alarms and jobs kept)`, data: { method, pidBefore: before } };
 }

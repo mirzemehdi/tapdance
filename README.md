@@ -209,7 +209,7 @@ Run `tapdance <command> --help` for every option. Global flags: `--json`, `--con
 
 Results go to stdout and progress to stderr. Exit codes: 2 usage or config, 3 lease, 4 provider or
 worker, 5 auth, 6 capacity, 7 device or element, 8 not supported, 9 timeout, 10 host check,
-11 a person is holding the device in the viewer.
+11 a person is holding the device in the viewer, 12 scenario failed, 13 cancelled.
 
 ## What works today, and what is not proven yet
 

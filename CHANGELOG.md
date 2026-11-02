@@ -105,6 +105,16 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Changed: an emulator's notification list is readable through a worker guard by default
   (`allow.inspection`); posting, and reading a physical phone's, still need `allow.notifications`.
 
+### After field run 3 (issues #39–#44)
+
+- `host warm`, `app kill` (MCP `kill_app`), `ui sequence` (MCP `tap_sequence`), `ui inspect --system`
+  (MCP `inspect_screen` `system`), `device setting browser-first-run off`, `device request-human
+  --no-wait` / `--cancel` (exit 13 `CANCELLED`), `devices install --image-tag` (Play Store and ATD images).
+- Changed: `ui wait` / `wait_for` up to 10 minutes; `orientation landscape` means `landscape-left`;
+  the viewer accepts its allowed names on any port; `view --tailscale` tries `sudo -n tailscale serve`.
+- Fixed: Android missing when a stray adb server sat on Simlock's port (`worker start/restart` stop it;
+  `doctor` and `devices` say so); `host up`'s run-again hint dropping `--warm`.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

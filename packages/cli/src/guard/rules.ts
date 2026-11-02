@@ -281,6 +281,15 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   const s = a.slice(1);
   // Launch with an explicit intent.
   if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
+  // The system's view of every window (ui inspect --system).
+  if (s.length === 3 && s[0] === "uiautomator" && s[1] === "dump" && s[2] === "/dev/tty") return plain("inspection");
+  // Chrome without its first-run screens (a setting).
+  if (s.length === 1 && s[0] === `echo '${deviceCommands.CHROME_FLAGS}' > /data/local/tmp/chrome-command-line`) return plain("settings");
+  if (s.length === 4 && s[0] === "am" && s[1] === "set-debug-app" && s[2] === "--persistent" && s[3] === "com.android.chrome") return plain("settings");
+  // Ending an app like a user: Home, then stop-app (Android 14+) or trim + kill of the cached process.
+  if (s.length === 3 && s[0] === "input" && s[1] === "keyevent" && s[2] === "3") return plain("interaction");
+  if (s.length === 3 && s[0] === "am" && (s[1] === "stop-app" || s[1] === "kill") && APP_ID.test(s[2]!)) return plain("interaction");
+  if (s.length === 4 && s[0] === "am" && s[1] === "send-trim-memory" && APP_ID.test(s[2]!) && s[3] === "COMPLETE") return plain("interaction");
   // Raw taps (system pickers ignore the automation helper) and which window is in front.
   if (s.length === 4 && s[0] === "input" && s[1] === "tap" && /^\d{1,5}$/.test(s[2]!) && /^\d{1,5}$/.test(s[3]!)) return plain("interaction");
   if (s.length === 3 && s[0] === "dumpsys" && s[1] === "window" && s[2] === "displays") return plain("inspection");

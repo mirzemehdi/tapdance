@@ -423,6 +423,24 @@ describe("device profiles and requests for a person", () => {
     expect(await t.completeHumanRequest("late")).toBe(false);
   });
 
+  it("request_human can be cancelled from another call, or opened without waiting (#41)", async () => {
+    const { t } = await setup("h2");
+    await t.lease({ platform: "android" });
+    const waiting = t.requestHuman("Sign in", 10_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(await t.cancelHumanRequest("agent changed plans")).toBe(true);
+    expect(await waiting).toMatchObject({ completed: false, cancelled: true, how: "agent changed plans" });
+    expect(await t.pendingHumanRequest()).toBeUndefined();
+
+    const opened = await t.openHumanRequest("Approve the purchase");
+    expect((await t.pendingHumanRequest())?.reason).toBe("Approve the purchase");
+    expect((await t.humanRequestState())?.doneAt).toBeUndefined();
+    expect(await t.completeHumanRequest("viewer hand back")).toBe(true);
+    const state = await t.humanRequestState();
+    expect(state).toMatchObject({ reason: opened.reason, doneBy: "viewer hand back" });
+    expect(state?.cancelled).toBeUndefined();
+  });
+
   it("device operations need a provider that has them", async () => {
     const { t } = await setup("d1");
     await t.lease({ platform: "android" });

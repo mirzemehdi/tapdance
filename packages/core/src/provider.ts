@@ -71,7 +71,8 @@ export interface DeviceProvider {
   stopApp(handle: LeaseHandle, appId: string): Promise<ActionResult>;
   listApps(handle: LeaseHandle): Promise<string[]>;
 
-  inspect(handle: LeaseHandle, options?: { interactiveOnly?: boolean }): Promise<ScreenInspection>;
+  /** `system` (Android): every window from the system's own view of the screen, e.g. a Chrome Custom Tab or a system picker. */
+  inspect(handle: LeaseHandle, options?: { interactiveOnly?: boolean; system?: boolean }): Promise<ScreenInspection>;
   /** `inject` taps through Android's input service (`adb shell input tap`) instead of the automation helper. */
   tap(handle: LeaseHandle, target: ElementTarget, options?: { settle?: boolean; inject?: boolean }): Promise<ActionResult>;
   swipe(

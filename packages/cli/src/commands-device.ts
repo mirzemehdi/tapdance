@@ -170,20 +170,39 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
 
   device
     .command("request-human")
-    .description("Ask a person to do something on the device (sign in, approve a purchase, solve a check) and wait until they hand back")
-    .requiredOption("--reason <text>", "what the person should do; shown in the viewer")
+    .description("Ask a person to do something on the device (sign in, approve a purchase, solve a check); waits until they hand back, or returns at once with --no-wait")
+    .option("--reason <text>", "what the person should do; shown in the viewer")
     .option("--wait <seconds>", "how long to wait (10-1800)", "600")
-    .action(async (opts: { reason: string; wait: string }) =>
+    .option("--no-wait", "open the request and return; `device status` shows whether it was handed back")
+    .option("--cancel", "withdraw the open request (a waiting request-human exits 13)")
+    .action(async (opts: { reason?: string; wait: string | boolean; cancel?: boolean }) =>
       run(globals(), async (t, out) => {
+        if (opts.cancel) {
+          const pending = await t.pendingHumanRequest();
+          const cancelled = await t.cancelHumanRequest("tapdance device request-human --cancel");
+          out.result({ cancelled, ...(pending ? { request: pending } : {}) }, () => (cancelled ? `Cancelled: ${pending?.reason ?? ""}` : "No request was open"));
+          return;
+        }
+        if (!opts.reason || opts.reason.trim().length < 3) throw new TapdanceError("USAGE", "--reason needs a few words (what the person should do)");
+        if (opts.wait === false) {
+          const request = await t.openHumanRequest(opts.reason);
+          out.result({ request }, () => `Asked: ${request.reason}. \`tapdance device status\` shows when it is handed back; \`device request-human --cancel\` withdraws it.`);
+          return;
+        }
         const seconds = Number(opts.wait);
         if (!Number.isInteger(seconds) || seconds < 10 || seconds > 1800) throw new TapdanceError("USAGE", "--wait takes whole seconds from 10 to 1800");
-        if (opts.reason.trim().length < 3) throw new TapdanceError("USAGE", "--reason needs a few words");
         // Ctrl-C ends the wait cleanly, so the viewer stops showing the request.
         const stop = new AbortController();
         const onInt = () => stop.abort();
         process.once("SIGINT", onInt);
-        const r = await t.requestHuman(opts.reason, seconds * 1000, stop.signal).finally(() => process.off("SIGINT", onInt));
-        if (stop.signal.aborted) throw new TapdanceError("USAGE", "Stopped waiting (interrupted)");
+        process.once("SIGTERM", onInt);
+        // A short counter once a minute; the reason was printed once at the start.
+        const r = await t.requestHuman(opts.reason, seconds * 1000, stop.signal, { noteEveryMs: 60_000 }).finally(() => {
+          process.off("SIGINT", onInt);
+          process.off("SIGTERM", onInt);
+        });
+        if (stop.signal.aborted) throw new TapdanceError("CANCELLED", "Stopped waiting (interrupted); the request was withdrawn");
+        if (r.cancelled) throw new TapdanceError("CANCELLED", `The request was cancelled (${r.how ?? "cancel"}) after ${Math.round(r.waitedMs / 1000)} s`);
         if (!r.completed) throw new TapdanceError("TIMEOUT", `Nobody handed back within ${seconds} s`, { ...(r.hint ? { hint: r.hint } : {}), details: { waitedMs: r.waitedMs } });
         out.result(r, () => `Handed back after ${Math.round(r.waitedMs / 1000)} s (${r.how ?? "done"})`);
       }),
@@ -258,7 +277,15 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .action(async () =>
       run(globals(), async (t, out) => {
         const d = await t.status();
-        out.result({ device: d }, () => renderDevice(d));
+        const human = await t.humanRequestState();
+        const asked = human
+          ? human.cancelled
+            ? `cancelled at ${human.doneAt}: ${human.reason}`
+            : human.doneAt
+              ? `handed back at ${human.doneAt} (${human.doneBy ?? "done"}): ${human.reason}`
+              : `waiting for a person since ${human.requestedAt}: ${human.reason}`
+          : undefined;
+        out.result({ device: d, ...(human ? { humanRequest: human } : {}) }, () => renderDevice(d, asked ? [["person", asked]] : []));
       }),
     );
 
@@ -295,7 +322,9 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
 
   device
     .command("setting <name> [value]")
-    .description(`Change (or, without a value, read) a device setting: ${DEVICE_SETTINGS.join(", ")}`)
+    .description(
+      `Change (or, without a value, read) a device setting: ${DEVICE_SETTINGS.join(", ")}. Values: on|off for the switches; appearance light|dark|toggle; orientation portrait|landscape|landscape-left|landscape-right|portrait-upside-down; browser-first-run off`,
+    )
     .option("--app <appId>", "the app a permission or locale applies to")
     .option("--permission <permission>", "for `setting permission <grant|deny|reset>`: camera, microphone, photos, notifications, location…")
     .option("--lat <latitude>", "for `setting location`: move the device here", Number)
@@ -455,8 +484,16 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       out.result(r, () => r.message);
     }));
   app
+    .command("kill <appId>")
+    .description("End an app the way a user does (Home, then gone; alarms and jobs kept, unlike stop) and check its process is gone")
+    .action(async (appId: string) => run(globals(), async (t, out) => {
+      const r = await t.device({ kind: "kill-app", appId });
+      out.result(r, () => (r.ok ? r.message : yellow(r.message)));
+      if (!r.ok) process.exitCode = 7;
+    }));
+  app
     .command("stop <appId>")
-    .description("Force-stop an app")
+    .description("Force-stop an app (also cancels its alarms and jobs on Android; `app kill` ends it like a user)")
     .action(async (appId: string) => run(globals(), async (t, out) => out.result(await t.stopApp(appId), () => `Stopped ${appId}`)));
   app
     .command("list")
@@ -470,9 +507,10 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--all", "include non-interactive elements")
     .option("--compact", "leave out unlabelled containers (useful with --all on Compose or SwiftUI screens)")
     .option("--bounds", "show each element's position and size in pixels (x,y w×h); --json always includes them as rect")
-    .action(async (o: { all?: boolean; compact?: boolean; bounds?: boolean }) =>
+    .option("--system", "Android: every window as the system sees it (uiautomator), e.g. a Chrome Custom Tab and its URL, or a system picker; refs are not tappable")
+    .action(async (o: { all?: boolean; compact?: boolean; bounds?: boolean; system?: boolean }) =>
       run(globals(), async (t, out) => {
-        const s = await t.inspect({ interactiveOnly: !o.all, ...(o.compact ? { compact: true } : {}) });
+        const s = await t.inspect({ interactiveOnly: !o.all, ...(o.compact ? { compact: true } : {}), ...(o.system ? { system: true } : {}) });
         out.result(s, () =>
           [
             dim(`${s.app ?? "unknown app"}${s.viewport ? ` · ${s.viewport.width}×${s.viewport.height}` : ""} · ${s.elements.length} elements${s.truncated ? " (truncated)" : ""}`),
@@ -555,13 +593,13 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--text <text>")
     .option("--absent <text>")
     .option("--stable")
-    .option("--timeout <ms>", "at most 30000", "10000")
+    .option("--timeout <ms>", "milliseconds, at most 600000 (10 minutes)", "10000")
     .action(async (o: { text?: string; absent?: string; stable?: boolean; timeout: string }) =>
       run(globals(), async (t, out) => {
         const given = [o.text, o.absent, o.stable].filter((v) => v !== undefined && v !== false).length;
         if (given !== 1) throw new TapdanceError("USAGE", "Give exactly one of --text, --absent, --stable");
         const condition = o.text ? { kind: "text" as const, text: o.text } : o.absent ? { kind: "absent" as const, text: o.absent } : { kind: "stable" as const };
-        const r = await t.waitFor(condition, intArg("--timeout", o.timeout, 100, 30_000));
+        const r = await t.waitFor(condition, intArg("--timeout", o.timeout, 100, 600_000));
         out.result(r, () => (r.found ? `Found after ${r.waitedMs} ms` : `Not found within ${r.waitedMs} ms`));
         if (!r.found) process.exitCode = 1;
       }),
@@ -574,6 +612,30 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         if (!["get", "accept", "dismiss"].includes(action)) throw new TapdanceError("USAGE", "action must be get, accept or dismiss");
         const r = await t.alert(action as "get");
         out.result(r, () => (r.present ? [r.title, r.message, r.buttons ? `buttons: ${r.buttons.join(", ")}` : undefined, r.acted ? `pressed: ${r.acted}` : undefined].filter(Boolean).join("\n") : "No alert"));
+      }),
+    );
+
+  ui.command("sequence <file>")
+    .description("Android: run timed taps inside the emulator (rhythm and timing games): a JSON list of {t, x, y, hold?} with t in ms from the start")
+    .option("--start-on-text <text>", "wait for this text first, then start")
+    .option("--offset-ms <ms>", "start this long after the text appeared (or after now)", "0")
+    .option("--wait <seconds>", "how long to wait for --start-on-text", "60")
+    .action(async (file: string, o: { startOnText?: string; offsetMs: string; wait: string }) =>
+      run(globals(), async (t, out) => {
+        let steps: unknown;
+        try {
+          steps = JSON.parse(await readFile(file, "utf8"));
+        } catch (error) {
+          throw new TapdanceError("USAGE", `${file} is not a JSON list of taps: ${(error as Error).message}`);
+        }
+        if (!Array.isArray(steps)) throw new TapdanceError("USAGE", `${file} must hold a JSON list such as [{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`);
+        const r = await t.tapSequence(steps as never, {
+          ...(o.startOnText ? { startOnText: o.startOnText } : {}),
+          offsetMs: intArg("--offset-ms", o.offsetMs, 0, 60_000)!,
+          waitMs: intArg("--wait", o.wait, 1, 600)! * 1000,
+        });
+        out.result(r, () => r.message);
+        if (!r.ok) process.exitCode = 7;
       }),
     );
 

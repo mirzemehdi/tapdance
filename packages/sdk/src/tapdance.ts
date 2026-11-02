@@ -34,8 +34,7 @@ import {
   type AlertAction,
   type AlertResult,
   type DeviceOperation,
-  type DeviceOperationResult,
-} from "@tapdance/core";
+  type DeviceOperationResult, type TimedTap } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
 import { PROFILE_PROVIDER, ProfileProvider } from "@tapdance/provider-simlock";
 import { hostChecks } from "./host-checks.js";
@@ -62,12 +61,17 @@ export interface TapdanceOptions {
   fleet?: boolean;
 }
 
+/** The longest `waitFor` (10 minutes): an audio preview, a slow sync. */
+export const MAX_WAIT_MS = 600_000;
+
 export interface HumanRequest {
   reason: string;
   requestedAt: string;
   leaseId: string;
   doneAt?: string;
   doneBy?: string;
+  /** Ended by `cancelHumanRequest`, not by the person. */
+  cancelled?: boolean;
 }
 
 export interface LeaseOptions {
@@ -488,6 +492,28 @@ export class Tapdance {
    * Device-level operations: reset, settings, files, notifications, intents, perf, audio. A pulled
    * file becomes a session artifact. Mutations wait for a person holding the device to hand it back.
    */
+  /**
+   * Taps at set times, run inside the emulator (Android) so the network adds no delay between taps:
+   * rhythm and timing games. With `startOnText`, waits for that text first (up to `waitMs`), then starts
+   * `offsetMs` later; the wait itself costs one round trip.
+   */
+  async tapSequence(
+    steps: TimedTap[],
+    options: { startOnText?: string; offsetMs?: number; waitMs?: number } = {},
+  ): Promise<DeviceOperationResult & { startedAfterMs?: number }> {
+    const offset = options.offsetMs ?? 0;
+    if (!Number.isInteger(offset) || offset < 0 || offset > 60_000) throw new TapdanceError("USAGE", "offsetMs must be whole milliseconds from 0 to 60000");
+    const shifted = steps.map((s) => ({ ...s, t: s.t + offset }));
+    let startedAfterMs: number | undefined;
+    if (options.startOnText) {
+      const wait = await this.waitFor({ kind: "text", text: options.startOnText }, options.waitMs ?? 60_000);
+      if (!wait.found) throw new TapdanceError("TIMEOUT", `"${options.startOnText}" did not appear within ${Math.round(wait.waitedMs / 1000)} s; no tap was sent`);
+      startedAfterMs = wait.waitedMs;
+    }
+    const result = await this.device({ kind: "tap-sequence", steps: shifted });
+    return { ...result, ...(startedAfterMs !== undefined ? { startedAfterMs } : {}) };
+  }
+
   async device(operation: DeviceOperation): Promise<DeviceOperationResult & { artifact?: ArtifactRef }> {
     const readOnly =
       (operation.kind === "notifications" && operation.action === "list") ||
@@ -523,8 +549,10 @@ export class Tapdance {
 
   // ------------------------------------------------------------ UI
 
-  async inspect(options: { interactiveOnly?: boolean; compact?: boolean } = {}): Promise<ScreenInspection> {
-    const screen = await this.onDevice((handle, provider) => provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}) }));
+  async inspect(options: { interactiveOnly?: boolean; compact?: boolean; system?: boolean } = {}): Promise<ScreenInspection> {
+    const screen = await this.onDevice((handle, provider) =>
+      provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}), ...(options.system ? { system: true } : {}) }),
+    );
     return options.compact ? { ...screen, elements: compactElements(screen.elements) } : screen;
   }
 
@@ -555,10 +583,20 @@ export class Tapdance {
     return this.onDevice((handle, provider) => provider.swipe(handle, gesture));
   }
 
-  /** Waits for text to appear or go away, or for the UI to settle. A timeout answers found:false. */
+  /**
+   * Waits for text to appear or go away, or for the UI to settle, for up to 10 minutes. A timeout
+   * answers found:false. Long waits run as 30 s waits in a row, so no single backend call runs long.
+   */
   async waitFor(condition: WaitCondition, timeoutMs = 10_000): Promise<WaitResult> {
-    const clamped = Math.min(Math.max(timeoutMs, 0), 30_000);
-    return this.onDevice((handle, provider) => provider.waitFor(handle, condition, clamped));
+    const total = Math.min(Math.max(timeoutMs, 0), MAX_WAIT_MS);
+    const started = Date.now();
+    let last: WaitResult = { found: false, waitedMs: 0 };
+    do {
+      const slice = Math.min(30_000, Math.max(total - (Date.now() - started), 0));
+      last = await this.onDevice((handle, provider) => provider.waitFor(handle, condition, slice));
+      if (last.found) return { ...last, waitedMs: Date.now() - started };
+    } while (Date.now() - started < total);
+    return { ...last, waitedMs: Date.now() - started };
   }
 
   async alert(action: AlertAction): Promise<AlertResult> {
@@ -793,34 +831,78 @@ export class Tapdance {
     return true;
   }
 
+  /** Withdraws the open request (plans changed); a waiter returns `cancelled: true`. */
+  async cancelHumanRequest(by: string): Promise<boolean> {
+    const pending = await this.pendingHumanRequest();
+    if (!pending) return false;
+    await writeFile(this.humanRequestPath(), JSON.stringify({ ...pending, doneAt: new Date().toISOString(), doneBy: by, cancelled: true }), { mode: 0o600 });
+    return true;
+  }
+
+  /** The latest request for a person, open or answered, if any (for `device status`). */
+  async humanRequestState(): Promise<HumanRequest | undefined> {
+    try {
+      return JSON.parse(await readFile(this.humanRequestPath(), "utf8")) as HumanRequest;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Opens a request for a person without waiting: the viewer shows it until they hand back. Check it
+   * with `humanRequestState()`; `requestHuman` is the blocking form.
+   */
+  async openHumanRequest(reason: string): Promise<HumanRequest> {
+    const { record } = await this.active();
+    const request: HumanRequest = { reason: reason.slice(0, 500), requestedAt: new Date().toISOString(), leaseId: record.handle.leaseId };
+    await writeFile(this.humanRequestPath(), JSON.stringify(request), { mode: 0o600 });
+    this.progress(`Asked a person: ${request.reason}. ${this.handOverHow(record.handle.provider)}`);
+    return request;
+  }
+
+  private handOverHow(provider: string): string {
+    return provider === PROFILE_PROVIDER
+      ? "Use the emulator window on the machine running it, then run `tapdance device done`."
+      : "Open `tapdance view`, press Take over, do it, then press Hand back (or run `tapdance device done`).";
+  }
+
   /**
    * Asks a person to do something on the device the agent cannot (sign in to a test account, approve
    * a purchase sheet, solve a check) and waits until they say they are done: "Hand back" in the
    * viewer, or `tapdance device done`. A person merely touching the screen does not end the wait.
    */
-  async requestHuman(reason: string, timeoutMs = 10 * 60_000, signal?: AbortSignal): Promise<{ completed: boolean; how?: string; waitedMs: number; hint?: string }> {
+  async requestHuman(
+    reason: string,
+    timeoutMs = 10 * 60_000,
+    signal?: AbortSignal,
+    options: { noteEveryMs?: number } = {},
+  ): Promise<{ completed: boolean; cancelled?: boolean; how?: string; waitedMs: number; hint?: string }> {
     const { record } = await this.active();
     const started = Date.now();
     const request: HumanRequest = { reason: reason.slice(0, 500), requestedAt: new Date(started).toISOString(), leaseId: record.handle.leaseId };
     await writeFile(this.humanRequestPath(), JSON.stringify(request), { mode: 0o600 });
-    const how =
-      record.handle.provider === PROFILE_PROVIDER
-        ? "Use the emulator window on the machine running it, then run `tapdance device done`."
-        : "Open `tapdance view`, press Take over, do it, then press Hand back (or run `tapdance device done`).";
+    const how = this.handOverHow(record.handle.provider);
     this.progress(`Waiting for a person: ${request.reason}. ${how}`);
+    const noteEvery = options.noteEveryMs ?? 15_000;
     let lastNote = Date.now();
+    let lastTouch = Date.now();
     try {
       while (Date.now() - started < timeoutMs && !signal?.aborted) {
         const current = JSON.parse(await readFile(this.humanRequestPath(), "utf8").catch(() => "{}")) as Partial<HumanRequest>;
         if (current.doneAt) {
           await this.touch(record.handle.leaseId);
+          if (current.cancelled) return { completed: false, cancelled: true, how: current.doneBy ?? "cancelled", waitedMs: Date.now() - started };
           return { completed: true, how: current.doneBy ?? "done", waitedMs: Date.now() - started };
         }
-        if (Date.now() - lastNote > 15_000) {
-          // Progress keeps MCP clients that reset their timeout on progress from giving up.
-          this.progress(`Still waiting for a person (${Math.round((Date.now() - started) / 1000)} s): ${request.reason}`);
+        if (Date.now() - lastNote > noteEvery) {
+          // Progress keeps MCP clients that reset their timeout on progress from giving up. The reason
+          // was printed once at the start; repeating it only adds noise.
+          this.progress(`Still waiting for a person (${Math.round((Date.now() - started) / 1000)} s)`);
           lastNote = Date.now();
+        }
+        if (Date.now() - lastTouch > 15_000) {
           await this.touch(record.handle.leaseId);
+          lastTouch = Date.now();
         }
         await new Promise((r) => setTimeout(r, 1000));
       }

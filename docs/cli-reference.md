@@ -149,7 +149,8 @@ tapdance device lease -p <android|ios> [-d <model>] [--os <version>] [--image-ta
 tapdance device status
 tapdance device renew [--ttl <minutes>]
 tapdance device release
-tapdance device request-human --reason <text> [--wait <seconds>]
+tapdance device request-human --reason <text> [--wait <seconds> | --no-wait]
+tapdance device request-human --cancel
 tapdance device done
 ```
 
@@ -185,8 +186,12 @@ be reached, `release` says so, exits 4 and keeps the lease record: run it again 
 
 `device request-human` is the CLI form of the MCP tool `request_human`: it shows `--reason` in the
 viewer's banner (and on stderr), then waits until the person presses **Hand back** in `tapdance view` or
-runs `tapdance device done`. Default wait 600 s (10–1800). Exit 0 when handed back, 9 (`TIMEOUT`) when
-nobody did; Ctrl-C stops waiting and clears the request. Use it for a Google sign-in, a password sheet
+runs `tapdance device done`. Default wait 600 s (10–1800). It prints the reason once, then a short
+counter once a minute. Exit 0 when handed back, 9 (`TIMEOUT`) when nobody did, 13 (`CANCELLED`) when
+the request was cancelled; Ctrl-C (or SIGTERM) stops waiting and withdraws the request. `--no-wait`
+opens the request and returns at once: `device status` then shows "waiting for a person" or "handed
+back at …", so an agent can keep working. `--cancel` withdraws the open request (plans changed); a
+waiting `request-human` in another process then exits 13. Use it for a Google sign-in, a password sheet
 or a CAPTCHA: the person types secrets on the device, never in chat.
 
 `device done` tells the agent you finished what it asked for with `request_human` (for example
@@ -245,7 +250,10 @@ the device is wiped on release.
 - `setting`: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`), `location`
   (`on`/`off`, or `--lat`/`--lon`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid`
   (iOS), `fingerprint` (Android), `permission <grant|deny|reset> --permission <p> --app <id>`,
-  `reset-keychain` (iOS), `orientation`, `status-bar-time <HH:MM|clear>` (iOS). Other Android settings
+  `reset-keychain` (iOS), `orientation` (`portrait`, `landscape` = `landscape-left`, `landscape-right`,
+`portrait-upside-down`), `status-bar-time <HH:MM|clear>` (iOS), `browser-first-run off` (Android: Chrome
+opens links without its welcome, sign-in and default-browser screens; through Chrome's command-line
+file, so on emulator images, which allow it). Other Android settings
   (density, locale, time zone, …) go through `device shell`. Without a value it
   reads the setting where the platform can. A combination a platform cannot do fails with
   `NOT_SUPPORTED` and says what to do instead. Common Android settings through `device shell` (standard
@@ -283,6 +291,7 @@ tapdance app install <path> [--app-id <id>]
 tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]...
                      [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
+tapdance app kill <appId>
 tapdance app uninstall <appId>
 tapdance app clear <appId>
 tapdance app list
@@ -297,7 +306,11 @@ package or bundle id when the backend needs it.
 
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
 opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
-explicit Android intent instead. `stop` force-stops it. `uninstall` removes it. `clear` clears its data
+explicit Android intent instead. `stop` force-stops it (on Android that also cancels its alarms and
+jobs). `kill` ends it the way a user does by swiping it away: Home, then `am stop-app` (Android 14+) or
+a memory trim and `am kill`, keeping its alarms and jobs; it then checks the process is gone and exits 7
+with the surviving pid when something (a foreground service) keeps it alive. On iOS both use the
+simulator's terminate. `uninstall` removes it. `clear` clears its data
 (first-launch state); on iOS the keychain is shared, see `device setting reset-keychain`. `list` lists
 the apps the automation backend sees.
 
@@ -306,11 +319,12 @@ the apps the automation backend sees.
 ### `ui`
 
 ```text
-tapdance ui inspect [--all] [--compact] [--bounds]
+tapdance ui inspect [--all] [--compact] [--bounds] [--system]
 tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>] [--inject]
 tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
 tapdance ui wait  (--text <text> | --absent <text> | --stable) [--timeout <ms>]
+tapdance ui sequence <file.json> [--start-on-text <text>] [--offset-ms <ms>] [--wait <seconds>]
 tapdance ui alert <get|accept|dismiss>
 tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 ```
@@ -323,11 +337,12 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 
 | Command | Notes |
 | --- | --- |
-| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). |
+| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
 | `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
-| `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 30000. Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
+| `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
+| `ui sequence` | Android: runs timed taps **inside the emulator** as one shell script, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). Each tap starts in the background at its time; the reply gives every tap's `actualMs` and `driftMs` (when it started on the device; Android's `input` then takes a few tens of ms to deliver it). `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. Through a worker guard it needs `allow.deviceShell`. Not yet run on a device. |
 | `ui alert` | `get` shows a system alert's title, message and buttons; `accept` presses the allowing button, `dismiss` the declining one. Not available with the AXe backend. |
 | `ui key` | `back` is Android back or iOS in-app back. |
 
@@ -423,7 +438,12 @@ exposes it on this machine's tailnet name, and the printed link is `https://<nam
 (live video). It fetches the page once first, so the certificate is issued before you open it, and
 removes the serve entry on Ctrl-C. It needs MagicDNS and **HTTPS Certificates** on the tailnet
 (<https://login.tailscale.com/admin/dns>); without them it says so. If `tailscale serve` is refused for
-your user, run `sudo tailscale set --operator=$USER` once. Not yet tested on a real tailnet.
+your user, it tries `sudo -n tailscale serve` (passwordless sudo) and prints the command it ran;
+otherwise run `sudo tailscale set --operator=$USER` once.
+
+Behind a `tailscale serve` (or another proxy) you set up yourself on another port, the page answers
+to this machine's tailnet names on any port; `--allow-host` names are compared without a port too. A
+refused name gets `403` with the `Host` it saw and the `--allow-host` to add.
 
 ## Workers and gateways
 
@@ -602,6 +622,7 @@ From `packages/core/src/errors.ts`:
 | 9 | `TIMEOUT` | No device granted in time, another Tapdance process busy with the session. |
 | 10 | `HOST_CHECK_FAILED` | `doctor` found a failing check, or `worker check` found a KVM failure. (The code itself is defined; these commands set exit 10 directly.) |
 | 11 | `HUMAN_HELD` | A person is controlling the device in the viewer. Retry after `retryAfterMs`. |
+| 13 | `CANCELLED` | `device request-human` was cancelled (`--cancel` from another call, or Ctrl-C). |
 | 12 | `SCENARIO_FAILED`, `ASSERTION_FAILED` | `run`: the scenario ran and a step failed. (`ASSERTION_FAILED` appears on a failed expectation inside the report, not as a command error.) |
 
 Pass-through commands (`tool`, `asc`, `android`, `simlock`, `devices install`) exit with the wrapped
@@ -842,8 +863,9 @@ Commands:
   lease [options]                   Lease one emulator or simulator for this
                                     session
   request-human [options]           Ask a person to do something on the device
-                                    (sign in, approve a purchase, solve a check)
-                                    and wait until they hand back
+                                    (sign in, approve a purchase, solve a
+                                    check); waits until they hand back, or
+                                    returns at once with --no-wait
   done                              Tell the agent you finished what it asked
                                     for (request_human), e.g. after signing in
   profile                           Device profiles: an emulator you set up once
@@ -857,7 +879,12 @@ Commands:
                                     mobile-data, location, animations,
                                     appearance, text-size, faceid, touchid,
                                     fingerprint, permission, reset-keychain,
-                                    orientation, status-bar-time
+                                    orientation, status-bar-time,
+                                    browser-first-run. Values: on|off for the
+                                    switches; appearance light|dark|toggle;
+                                    orientation
+                                    portrait|landscape|landscape-left|landscape-right|portrait-upside-down;
+                                    browser-first-run off
   push [options] <path>             Copy a file onto the device (Android shared
                                     storage or a debuggable app's sandbox; iOS
                                     Photos or an app's Documents)
@@ -906,11 +933,14 @@ Options:
 Usage: tapdance device request-human [options]
 
 Ask a person to do something on the device (sign in, approve a purchase, solve a
-check) and wait until they hand back
+check); waits until they hand back, or returns at once with --no-wait
 
 Options:
   --reason <text>   what the person should do; shown in the viewer
   --wait <seconds>  how long to wait (10-1800) (default: "600")
+  --no-wait         open the request and return; `device status` shows whether
+                    it was handed back
+  --cancel          withdraw the open request (a waiting request-human exits 13)
   -h, --help        display help for command
 ```
 
@@ -1042,7 +1072,11 @@ Usage: tapdance device setting [options] <name> [value]
 
 Change (or, without a value, read) a device setting: wifi, bluetooth, airplane,
 mobile-data, location, animations, appearance, text-size, faceid, touchid,
-fingerprint, permission, reset-keychain, orientation, status-bar-time
+fingerprint, permission, reset-keychain, orientation, status-bar-time,
+browser-first-run. Values: on|off for the switches; appearance
+light|dark|toggle; orientation
+portrait|landscape|landscape-left|landscape-right|portrait-upside-down;
+browser-first-run off
 
 Options:
   --app <appId>              the app a permission or locale applies to
@@ -1143,7 +1177,11 @@ Commands:
   uninstall <appId>         Remove an installed app
   clear <appId>             Clear an app's data (first-launch state); iOS also:
                             device setting reset-keychain
-  stop <appId>              Force-stop an app
+  kill <appId>              End an app the way a user does (Home, then gone;
+                            alarms and jobs kept, unlike stop) and check its
+                            process is gone
+  stop <appId>              Force-stop an app (also cancels its alarms and jobs
+                            on Android; `app kill` ends it like a user)
   list                      List apps the automation backend sees
   help [command]            display help for command
 ```
@@ -1204,12 +1242,25 @@ Options:
   -h, --help  display help for command
 ```
 
+### `tapdance app kill`
+
+```text
+Usage: tapdance app kill [options] <appId>
+
+End an app the way a user does (Home, then gone; alarms and jobs kept, unlike
+stop) and check its process is gone
+
+Options:
+  -h, --help  display help for command
+```
+
 ### `tapdance app stop`
 
 ```text
 Usage: tapdance app stop [options] <appId>
 
-Force-stop an app
+Force-stop an app (also cancels its alarms and jobs on Android; `app kill` ends
+it like a user)
 
 Options:
   -h, --help  display help for command
@@ -1234,20 +1285,25 @@ Usage: tapdance ui [options] [command]
 Inspect and drive the leased device's UI
 
 Options:
-  -h, --help             display help for command
+  -h, --help                 display help for command
 
 Commands:
-  inspect [options]      List on-screen elements with refs, roles and labels
-  tap [options]          Tap one element
-  swipe [options]        Swipe by finger direction (up scrolls content down) or
-                         between two points
-  type [options] <text>  Type text; with a target, replace that field's content
-  wait [options]         Wait for text to appear (--text), disappear (--absent),
-                         or the UI to settle (--stable)
-  alert <action>         Read (get) or answer (accept, dismiss) a system alert
-  key <key>              Press back, home, enter, dismiss_keyboard or
-                         app_switcher
-  help [command]         display help for command
+  inspect [options]          List on-screen elements with refs, roles and labels
+  tap [options]              Tap one element
+  swipe [options]            Swipe by finger direction (up scrolls content down)
+                             or between two points
+  type [options] <text>      Type text; with a target, replace that field's
+                             content
+  wait [options]             Wait for text to appear (--text), disappear
+                             (--absent), or the UI to settle (--stable)
+  alert <action>             Read (get) or answer (accept, dismiss) a system
+                             alert
+  sequence [options] <file>  Android: run timed taps inside the emulator (rhythm
+                             and timing games): a JSON list of {t, x, y, hold?}
+                             with t in ms from the start
+  key <key>                  Press back, home, enter, dismiss_keyboard or
+                             app_switcher
+  help [command]             display help for command
 ```
 
 ### `tapdance ui inspect`
@@ -1263,6 +1319,9 @@ Options:
               SwiftUI screens)
   --bounds    show each element's position and size in pixels (x,y w×h); --json
               always includes them as rect
+  --system    Android: every window as the system sees it (uiautomator), e.g. a
+              Chrome Custom Tab and its URL, or a system picker; refs are not
+              tappable
   -h, --help  display help for command
 ```
 
@@ -1336,7 +1395,7 @@ Options:
   --text <text>
   --absent <text>
   --stable
-  --timeout <ms>   at most 30000 (default: "10000")
+  --timeout <ms>   milliseconds, at most 600000 (10 minutes) (default: "10000")
   -h, --help       display help for command
 ```
 
@@ -1349,6 +1408,22 @@ Read (get) or answer (accept, dismiss) a system alert
 
 Options:
   -h, --help  display help for command
+```
+
+### `tapdance ui sequence`
+
+```text
+Usage: tapdance ui sequence [options] <file>
+
+Android: run timed taps inside the emulator (rhythm and timing games): a JSON
+list of {t, x, y, hold?} with t in ms from the start
+
+Options:
+  --start-on-text <text>  wait for this text first, then start
+  --offset-ms <ms>        start this long after the text appeared (or after now)
+                          (default: "0")
+  --wait <seconds>        how long to wait for --start-on-text (default: "60")
+  -h, --help              display help for command
 ```
 
 ### `tapdance ui key`

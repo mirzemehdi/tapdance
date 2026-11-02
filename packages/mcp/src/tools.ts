@@ -271,6 +271,15 @@ export const TOOLS: ToolDefinition[] = [
     run: async (t, a) => json(await t.device({ kind: "uninstall", appId: a["app_id"] as string })),
   },
   {
+    name: "kill_app",
+    title: "End an app like a user",
+    description:
+      "End an app the way a user does by swiping it away: it goes to the background, then its process ends, keeping its scheduled alarms and jobs (stop_app force-stops, which cancels them). Android: Home, then am stop-app (Android 14+) or a memory trim and am kill; the reply says whether the process is really gone (ok: false and pidAfter when something such as a foreground service keeps it alive). iOS: the simulator's terminate. Relaunch with launch_app.",
+    input: z.object({ app_id: appId }).strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: async (t, a) => json(await t.device({ kind: "kill-app", appId: a["app_id"] as string })),
+  },
+  {
     name: "clear_app_data",
     title: "Clear an app's data",
     description:
@@ -288,7 +297,8 @@ export const TOOLS: ToolDefinition[] = [
       "location: on|off, or latitude+longitude to move the device. appearance: light|dark|toggle. text-size: extra-small … accessibility-extra-extra-extra-large.",
       "permission: value grant|deny|reset, permission camera|microphone|photos|contacts|notifications|location|calendar|…, app_id.",
       "faceid|touchid: match|nonmatch|enroll|unenroll (iOS). fingerprint: match|nonmatch (Android). reset-keychain (iOS, every app).",
-      "orientation: portrait|landscape-left|landscape-right|portrait-upside-down. status-bar-time: HH:MM or clear (iOS, for screenshots).",
+      "orientation: portrait|landscape (= landscape-left)|landscape-left|landscape-right|portrait-upside-down. status-bar-time: HH:MM or clear (iOS, for screenshots).",
+      "browser-first-run: off (Android: Chrome opens links without its welcome, sign-in and default-browser screens; set it before a test that opens links).",
       "Anything else on Android (density, locale, time zone, …): device_shell, e.g. `wm density 320`. iOS language: launch_app args [\"-AppleLanguages\", \"(de)\"].",
     ].join(" "),
     input: z
@@ -471,10 +481,14 @@ export const TOOLS: ToolDefinition[] = [
       .object({
         all: z.boolean().optional().describe("Include non-interactive elements (more tokens)."),
         compact: z.boolean().optional().describe("Leave out unlabelled containers (fewer tokens on Compose/SwiftUI screens)."),
+        system: z
+          .boolean()
+          .optional()
+          .describe("Android: every window as the system sees it (uiautomator), when the normal view misses what is in front: a Chrome Custom Tab (warnings then include 'browser: <url>') or a system picker. Its refs (@u…) cannot be tapped; tap x/y at the centre of rect, or text with inject."),
       })
       .strict(),
     annotations: { readOnlyHint: true },
-    run: async (t, a) => json(await t.inspect({ interactiveOnly: a["all"] !== true, ...(a["compact"] ? { compact: true } : {}) })),
+    run: async (t, a) => json(await t.inspect({ interactiveOnly: a["all"] !== true, ...(a["compact"] ? { compact: true } : {}), ...(a["system"] ? { system: true } : {}) })),
   },
   {
     name: "tap",
@@ -536,7 +550,7 @@ export const TOOLS: ToolDefinition[] = [
         text: z.string().min(1).max(500).optional().describe("Wait until this text is visible."),
         absent: z.string().min(1).max(500).optional().describe("Wait until this text is gone (a spinner, a dialog)."),
         stable: z.boolean().optional().describe("Wait until the UI stops changing."),
-        timeout_ms: z.number().int().min(100).max(30_000).optional().describe("Default 10000, at most 30000."),
+        timeout_ms: z.number().int().min(100).max(600_000).optional().describe("Default 10000, at most 600000 (10 minutes). Long waits send progress; if your client times out sooner, wait in shorter steps."),
       })
       .strict(),
     annotations: { readOnlyHint: true },
@@ -574,6 +588,30 @@ export const TOOLS: ToolDefinition[] = [
       const target = targetFrom({ ref: a["into_ref"], text: a["into_text"], id: a["into_id"] } as Record<string, unknown>);
       return json(await t.typeText(a["text"] as string, target));
     },
+  },
+  {
+    name: "tap_sequence",
+    title: "Tap at set times",
+    description:
+      "Android: run a list of taps at set times inside the emulator, so network latency does not delay them (rhythm games, timing-graded input, double taps at an exact interval). steps: [{t, x, y, hold?}], t in ms from the start, ascending; hold ms makes a long press. start_on_text waits for that text first and starts offset_ms after it appeared (that wait costs one round trip). Returns each tap's actualMs and driftMs (when it was started on the device; Android's input then takes a few tens of ms to deliver it).",
+    input: z
+      .object({
+        steps: z
+          .array(z.object({ t: z.number().int().min(0).max(600_000), x: z.number().int().min(0).max(10_000), y: z.number().int().min(0).max(10_000), hold: z.number().int().min(0).max(10_000).optional() }).strict())
+          .min(1)
+          .max(500),
+        start_on_text: z.string().min(1).max(200).optional(),
+        offset_ms: z.number().int().min(0).max(60_000).optional(),
+      })
+      .strict(),
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    run: async (t, a) =>
+      json(
+        await t.tapSequence(a["steps"] as never, {
+          ...(a["start_on_text"] ? { startOnText: a["start_on_text"] as string } : {}),
+          ...(a["offset_ms"] !== undefined ? { offsetMs: a["offset_ms"] as number } : {}),
+        }),
+      ),
   },
   {
     name: "press_key",

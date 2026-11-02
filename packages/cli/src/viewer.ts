@@ -42,7 +42,9 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
         const loopback = ["127.0.0.1", "localhost", "::1"].includes(host);
         // Names this machine answers to on its tailnet (MagicDNS, its 100.x addresses), so the link can
         // use the name and a browser opening it by name is not refused as DNS rebinding.
-        const tailnet = loopback && !o.tailscale ? { names: [] as string[] } : await tailnetNames();
+        // Even on loopback: behind a `tailscale serve` set up by hand, the page is opened by this
+        // machine's tailnet name, on whatever port serve uses.
+        const tailnet = await tailnetNames();
         const served = o.tailscale ? await serveOverTailscale(port, out) : undefined;
         const allowedHosts = [...tailnet.names, ...(served ? [served.dnsName] : []), ...(o.allowHost ?? [])];
         const { url, close: closeViewer } = await startViewer(t, { host, port, holdMs: cfg.humanHoldMs, allowedHosts, log: (m) => out.progress(m) }).catch(async (error: unknown) => {
@@ -99,15 +101,33 @@ async function serveOverTailscale(port: number, out: { progress: (m: string) => 
       hint: `Turn on HTTPS Certificates (${TAILSCALE_DNS_ADMIN}), then run this again. Until then: tapdance view --host <this machine's 100.x address> (screenshot mode).`,
     });
   }
-  const serve = await tailscale(tailscaleServeArgs(port, "https"));
+  // Changing serve settings needs Tailscale's operator (or root). Many agent machines allow
+  // passwordless `sudo tailscale` without making the user the operator: try that before giving up.
+  const sudo = (args: string[], timeout = 30_000) =>
+    new Promise<{ ok: boolean; text: string }>((resolve) => {
+      execFile("sudo", ["-n", "tailscale", ...args], { timeout }, (error, stdout, stderr) => resolve({ ok: !error, text: `${stdout}${stderr}`.trim() || (error?.message ?? "") }));
+    });
+  const args = tailscaleServeArgs(port, "https");
+  let run = tailscale;
+  let serve = await tailscale(args);
+  const denied = (text: string) => /access denied|permission|operator|must be root|use 'sudo/i.test(text);
+  if (!serve.ok && denied(serve.text)) {
+    const viaSudo = await sudo(args);
+    if (viaSudo.ok) {
+      run = sudo;
+      serve = viaSudo;
+      out.progress(`Ran: sudo -n tailscale ${args.join(" ")}`);
+    }
+  }
   if (!serve.ok) {
-    const denied = /access denied|permission|operator|must be root/i.test(serve.text);
     throw new TapdanceError("PROVIDER_UNAVAILABLE", `tailscale serve failed: ${serve.text.split("\n").slice(-2).join(" ")}`, {
-      hint: denied ? "Allow your user to change serve settings once: sudo tailscale set --operator=$USER" : "Check `tailscale serve status`.",
+      hint: denied(serve.text)
+        ? `Neither \`tailscale ${args.join(" ")}\` nor \`sudo -n tailscale …\` (passwordless sudo) was allowed. Allow your user once: sudo tailscale set --operator=$USER`
+        : "Check `tailscale serve status`.",
     });
   }
   out.progress(`Serving the viewer at https://${state.dnsName}:${port} (tailscale serve)`);
-  return { dnsName: state.dnsName, stop: async () => void (await tailscale(tailscaleServeOffArgs(port, "https"))) };
+  return { dnsName: state.dnsName, stop: async () => void (await run(tailscaleServeOffArgs(port, "https"))) };
 }
 
 /** Requests the page once so the first open does not wait for the certificate to be issued. */
@@ -130,11 +150,10 @@ export async function startViewer(
   };
   // DNS rebinding guard: only loopback names, the address we were told to bind, and names this
   // machine has on its tailnet (or `--allow-host`) may appear in Host.
-  const allowed = new Set(["127.0.0.1", "localhost", "::1", options.host, ...(options.allowedHosts ?? [])].map((h) => h.toLowerCase()));
-  const hostOk = (req: IncomingMessage): boolean => {
-    const host = (req.headers.host ?? "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
-    return allowed.has(host);
-  };
+  // Names are compared without a port (a proxy such as `tailscale serve` may use any port).
+  const bare = (h: string) => h.trim().replace(/:\d+$/, "").replace(/^\[|\]$/g, "").toLowerCase();
+  const allowed = new Set(["127.0.0.1", "localhost", "::1", options.host, ...(options.allowedHosts ?? [])].map(bare));
+  const hostOk = (req: IncomingMessage): boolean => allowed.has(bare(req.headers.host ?? ""));
   // Fallback frames (pages that cannot decode video): one screenshot at a time, reused for 400 ms.
   let lastFrame: { at: number; png: Buffer } | undefined;
   let pendingFrame: Promise<Buffer> | undefined;
@@ -165,7 +184,10 @@ export async function startViewer(
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://viewer");
     try {
-      if (!hostOk(req)) return send(res, 403, { error: "unexpected Host header" });
+      if (!hostOk(req)) {
+        const got = bare(req.headers.host ?? "");
+        return send(res, 403, { error: "unexpected Host header", host: got, hint: `Restart the viewer with --allow-host ${got || "<name>"} if that name is yours.` });
+      }
       if (url.pathname === "/favicon.ico") {
         res.writeHead(204).end();
         return;

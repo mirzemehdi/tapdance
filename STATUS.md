@@ -322,6 +322,11 @@ paths below were exercised only by unit tests.
 | `ui inspect --bounds`; `ui swipe --until` matches part of a label and stops at the end of a list; emulator notification lists readable through the guard by default (#35) | Y-04, H-06 | 🧪 | `guard.test.ts` 14 |
 | `device release` reports an unreachable worker (exit 4) and keeps the record to retry | C-04 | 🧪 | build |
 | `doctor` fails, `devices` notes and `host up` warns when a platform has capacity but no device on offer; `worker start/restart` stop a stray adb server on Simlock's port even without `adb-server.json`. Restart verified on the field-test Mac 2026-11-02 (Android back in the catalog) (#39) | W-04 | ✅ / 🧪 | `provider.test.ts` "platform on offer" |
+| Viewer: allowed names match on any port (behind `tailscale serve` on another port), 403 names the Host; `view --tailscale` falls back to `sudo -n tailscale serve` (#40) | V-01 | 🧪 | `viewer.test.ts` |
+| `device request-human`: reason printed once, a counter once a minute, `--no-wait` + `device status`, `--cancel` (exit 13 `CANCELLED`) (#41) | U-13 | 🧪 | `tapdance.test.ts` |
+| `app kill` / MCP `kill_app`: Home, `am stop-app` or trim + kill, pid check (#43) | Y-04 | 🧪 | `provider.test.ts`, guard test 14; not yet run on a device |
+| `ui sequence` / MCP `tap_sequence`: timed taps as one script inside the emulator, with start times and drift (#42) | Y-04 | 🧪 | `provider.test.ts`; not yet run on a device |
+| `ui wait` up to 10 min; `orientation landscape`; `device setting browser-first-run off`; `ui inspect --system` (uiautomator, Custom Tab URL) (#44) | Y-04 | 🧪 | `provider.test.ts`; not yet run on a device |
 | Android image tiers: agents told to lease `google_apis_playstore` only when a test needs the Play Store; `devices install --image-tag google_atd` (ATD test images). Leasing an ATD image is untested. | R-06 | 🧪 | build + `--help` |
 | `host-setup.sh` on Linux without `/dev/kvm` skips the emulator and system image and stops before `host up` (#19) | W-07 | 🧪 | `bash -n` only |
 
