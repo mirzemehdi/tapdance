@@ -238,8 +238,8 @@ anyone who can lease the profile acts as that account.
 
 ```text
 tapdance device setting <name> [value] [--app <id>] [--permission <p>] [--lat <n> --lon <n>]
-tapdance device push <path> --to <downloads|pictures|documents|app_sandbox> [--app <id>] [--name <n>]
-tapdance device pull [devicePath] [--app <id> --path <relative>] [-o <file>]
+tapdance device push <path> --to <downloads|pictures|documents|app_sandbox|files> [--app <id>] [--name <n>]
+tapdance device pull [devicePath] [--app <id> --path <relative>] [--files <name>] [-o <file>]
 tapdance device notifications <list|open|close|post> [--app <id>] [--title <t>] [--text <t>] [--payload <json>]
 tapdance device perf <frames|memory> [--app <id>]
 tapdance device shell [--stdin <file>] [--timeout <seconds>] -- <command…>
