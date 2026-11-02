@@ -110,7 +110,7 @@ describe("guard service files (pure)", () => {
     // Builds need the JDK the owner uses (Kotlin Multiplatform runs Gradle from Xcode).
     const withJava = guardServiceEnvironment({ JAVA_HOME: "/jdk17" }, "/usr/bin/node");
     expect(withJava["JAVA_HOME"]).toBe("/jdk17");
-    expect(withJava["PATH"]!.split(":")[0]).toBe("/jdk17/bin");
+    expect(withJava["PATH"]!.split(":").slice(0, 2)).toEqual(["/usr/bin", "/jdk17/bin"]);
   });
 });
 
