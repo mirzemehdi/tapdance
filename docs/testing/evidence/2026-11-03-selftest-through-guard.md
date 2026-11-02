@@ -39,6 +39,7 @@ agent uses (only the network hop differs).
 | B8 | Notifications through the guard | Pass | Post, `list` ("com.android.shell: Practice — Time to play"), open and close the shade, permission reset for Chrome. |
 | B9 | TalkBack | Not on this image | The `google_apis` image has no TalkBack package (the Play image has Google's accessibility suite). Labels come from `ui inspect`. |
 | C1 | Worker restart during a lease | Pass (after a fix) | It happened for real: the owner's `worker restart` ran 13 s after a lease was granted. The lease record lived on but agent-device lost its device, so every command failed with "refused: simlock picks the device" (as USAGE), and the restart printed "no lease was active". Now the client reports LEASE_LOST with "release and lease again", clears its session (`device status` and `doctor`: no lease), and `worker restart` refuses while leases run unless `--force`. |
+| C5 (#46) | Token scoped to `interaction,screenshots` | Pass (after fixes) | Tap and screenshot work (the first tap on a fresh lease took 35 s while agent-device's runner started; one such first call timed out after about 90 s). Install, build and inspect are refused. Fixed on the way: the refusals told the owner to set `allow.<area>: true` although the policy already allowed it (now: "this token is limited to …", with the `--scope` pairing that would allow it); the install refusal came as DEVICE_ERROR (now FORBIDDEN); a release during a guard restart printed "Released" while the guard kept the lease, blocking the next lease on the session limit (now kept and retried). |
 | C2 | Two sessions at once | Blocked by policy | The guard allows one session (`limits.maxSessions` 1); the refusal now says which setting to raise. |
 | C3 | Lease an Android version that is not installed | Pass | Refused in 1.3 s ("Runtime missing for android 28"); nothing leased or booted afterwards. |
 | C4 | Idle host | Pass | With warm spares at 0, both platforms showed 0 running about a minute after release. |
@@ -49,5 +50,4 @@ agent uses (only the network hop differs).
   done per simulator, because the simulator uses the Mac's clock and network.
 - B1, B2, B5, B6: the host has no CMake 3.31.6, so the Android build stops.
 - B10: needs a person to sign in a license tester.
-- C5 (scoped token): needs the owner to pair a scoped token.
 
