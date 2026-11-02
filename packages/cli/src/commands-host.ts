@@ -313,6 +313,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           try {
             const inventory = await t.devices();
             const devices = describeCatalog(inventory.catalog);
+            // A platform with room but nothing on offer would make the self-test quietly fall back (#39).
+            for (const note of inventory.notes) if (/ is not available right now/.test(note)) out.warn(note);
             if (o.skipSelfTest) return { devices, selfTest: "SKIPPED (--skip-self-test)" };
             const has = (p: Platform) => inventory.catalog.some((e) => e.platform === p && (e.osVersions.length > 0 || e.defaultOsVersion));
             const platformToTest: Platform | undefined = has("android") ? "android" : has("ios") ? "ios" : undefined;

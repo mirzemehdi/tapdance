@@ -180,10 +180,27 @@ export class SimlockProvider implements DeviceProvider {
             : { fix: `\`tapdance worker install\` (or \`tapdance simlock -- --local config set capabilities.${name}.enabled true\`), then \`tapdance worker restart\`.` }),
         });
       }
+      // Capacity is configured per platform, but the worker refuses a platform whose driver is off (an
+      // adb server Simlock did not start sits on its port, no SDK found at start): then the catalog has
+      // no entry for it (#39).
+      const offered = await this.http
+        .catalog()
+        .then((c) => new Set(c.platforms.filter((p) => (p.models?.length ?? 0) > 0 || (p.runtimes?.length ?? 0) > 0 || (p.osVersions?.length ?? 0) > 0).map((p) => p.platform)))
+        .catch(() => undefined);
       for (const platform of ["android", "ios"] as const) {
         const cap = status.capacity?.[platform];
         const limit = cap?.limit ?? 0;
         const tool = status.host?.tools?.find((t) => t.platform === platform);
+        if (limit > 0 && offered && !offered.has(platform)) {
+          checks.push({
+            id: `simlock.capacity.${platform}`,
+            title: `${platform === "ios" ? "iOS simulators" : "Android emulators"} available`,
+            status: "fail",
+            detail: `the worker has room for ${limit} but offers no ${platform} device: its ${platform} driver is off or nothing is installed, so leases are refused`,
+            fix: notOfferedFix(platform),
+          });
+          continue;
+        }
         checks.push({
           id: `simlock.capacity.${platform}`,
           title: `${platform === "ios" ? "iOS simulators" : "Android emulators"} available`,
@@ -302,6 +319,9 @@ export class SimlockProvider implements DeviceProvider {
     const notes: string[] = [];
     for (const c of capacity) {
       if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
+      else if (!entries.some((e) => e.platform === c.platform && (e.models.length > 0 || e.osVersions.length > 0))) {
+        notes.push(`${c.platform} is not available right now: the worker offers no ${c.platform} device, so leases are refused. ${notOfferedFix(c.platform)}`);
+      }
     }
     notes.push("Leasing any listed model creates or reuses a clean device; your own AVDs and simulators are never handed out.");
     return { catalog: entries, capacity, devices, queueDepth: status.queueDepth ?? 0, notes };
@@ -1296,4 +1316,11 @@ export function matchesTarget(el: UiElement, target: Exclude<ElementTarget, { ki
       return m[1] === "id" ? el.identifier === v : m[1] === "role" ? el.role === v : el.label === v || el.value === v;
     }
   }
+}
+
+/** What the worker's owner can do when a platform has capacity but no device on offer. */
+function notOfferedFix(platform: Platform): string {
+  return platform === "android"
+    ? "On the worker machine: `tapdance worker restart` (it also stops a stray adb server on Simlock's port), then check `tapdance simlock -- --local daemon logs` for \"Skipped Android driver\"; install an image with `tapdance devices install android 34`."
+    : "On the worker machine: check Xcode and a simulator runtime (`tapdance worker check`), then `tapdance worker restart`.";
 }

@@ -75,7 +75,8 @@ and its packages, system images, KVM on Linux, Xcode and simulator runtimes; Win
 a worker), whether the Simlock worker or gateway answers `/v1/healthz` (two tries of 15 s, since a first
 connection through `tailscale serve` can be slow; the time is shown, and an `http://` endpoint that now
 serves HTTPS is named as such), the token's role, whether
-agent-device, streaming and input are available, capacity per platform, the Simlock version (warns if
+agent-device, streaming and input are available, capacity per platform (a platform with room but no device on offer fails: the worker skipped that
+driver, so leases would be refused), the Simlock version (warns if
 it is not 0.4.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored),
 and this session's lease.
 
