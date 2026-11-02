@@ -6,6 +6,7 @@ import {
   LocalArtifactStore,
   SessionStore,
   TapdanceError,
+  compactElements,
   loadConfig,
   resolveSessionIdentity,
   type ActionResult,
@@ -124,6 +125,11 @@ export function summarize(record: SessionRecord, status?: LeaseStatus, holdUntil
  * The programmatic Tapdance API. Every device method acts on the active lease of this instance's
  * session and nothing else: there is no way to pass a device or lease id in.
  */
+/** The screen's content without positions (see SimlockProvider's stable wait). */
+function fingerprintOf(elements: Array<{ role: string; label?: string; value?: string; identifier?: string; states?: string[] }>): string {
+  return elements.map((e) => [e.role, e.label ?? "", e.value ?? "", e.identifier ?? "", (e.states ?? []).join(",")].join("|")).join("\n");
+}
+
 export class Tapdance {
   readonly store: SessionStore;
   readonly artifacts: LocalArtifactStore;
@@ -230,9 +236,26 @@ export class Tapdance {
     return this.store.get(this.session.id);
   }
 
+  private endedPath(): string {
+    return `${this.store.path(this.session.id)}.ended.json`;
+  }
+
+  /** Remembers why the session's lease ended, so the next command can say so instead of "no device". */
+  private async noteEnded(handle: LeaseHandle, reason: string): Promise<void> {
+    const note = { model: handle.model, platform: handle.platform, leaseId: handle.leaseId, endedAt: new Date().toISOString(), reason };
+    await writeFile(this.endedPath(), JSON.stringify(note), { mode: 0o600 }).catch(() => undefined);
+  }
+
   private async active(): Promise<{ record: SessionRecord; provider: DeviceProvider }> {
     const record = await this.store.get(this.session.id);
     if (record === undefined) {
+      const ended = JSON.parse(await readFile(this.endedPath(), "utf8").catch(() => "{}")) as { model?: string; endedAt?: string; reason?: string; leaseId?: string };
+      if (ended.endedAt) {
+        throw new TapdanceError("LEASE_LOST", `The lease on ${ended.model ?? "the device"} ended at ${ended.endedAt}: ${ended.reason ?? "unknown reason"}`, {
+          hint: "Lease a new device (anything installed on the old one was wiped).",
+          details: { sessionId: this.session.id, ...ended },
+        });
+      }
       throw new TapdanceError("NO_ACTIVE_LEASE", "This session holds no device", {
         hint: "Lease one first: `tapdance device lease --platform android` (MCP: lease_device).",
         details: { sessionId: this.session.id },
@@ -255,6 +278,22 @@ export class Tapdance {
         // End it on the provider too: a lease misjudged as lost must not stay booked until its TTL.
         await provider.release(record.handle).catch(() => undefined);
         await this.store.delete(this.session.id, record.handle.leaseId);
+        await this.noteEnded(record.handle, error.message);
+        throw error;
+      }
+      // An unexpected failure may really be a lease that ended underneath the call (expired, released
+      // by the host, worker restarted): ask the provider, and say that instead of an internal error.
+      if (!(error instanceof TapdanceError) || ["INTERNAL", "DEVICE_ERROR", "PROVIDER_UNREACHABLE", "TIMEOUT"].includes(error.code)) {
+        const status = await provider.status(record.handle).catch(() => undefined);
+        if (status?.state === "ended") {
+          const reason = status.endReason ?? "the lease ended on the worker";
+          await this.store.delete(this.session.id, record.handle.leaseId);
+          await this.noteEnded(record.handle, reason);
+          throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} ended: ${reason}`, {
+            hint: "Lease a new device (anything installed on the old one was wiped).",
+            cause: error,
+          });
+        }
       }
       throw error;
     }
@@ -281,7 +320,7 @@ export class Tapdance {
     }
   }
 
-  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean }> {
+  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean; ttlCappedMinutes?: number }> {
     const { config } = this.resolved;
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
@@ -328,7 +367,16 @@ export class Tapdance {
         lastUsedAt: now,
         updatedAt: now,
       });
-      return { record, summary: summarize(record, { state: "active", handle, expiresAt: handle.expiresAt }), reused: false };
+      await rm(this.endedPath(), { force: true });
+      // A worker may grant less time than asked (the worker guard's maxLeaseMinutes): say so.
+      const grantedMin = Math.round((Date.parse(handle.expiresAt) - Date.now()) / 60_000);
+      const ttlCappedMinutes = grantedMin > 0 && grantedMin < ttlMinutes - 1 ? grantedMin : undefined;
+      return {
+        record,
+        summary: summarize(record, { state: "active", handle, expiresAt: handle.expiresAt }),
+        reused: false,
+        ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}),
+      };
     });
   }
 
@@ -337,7 +385,8 @@ export class Tapdance {
     const status = await provider.status(record.handle);
     if (status.state === "ended") {
       await this.store.delete(this.session.id, record.handle.leaseId);
-      throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} has ended`, {
+      await this.noteEnded(record.handle, status.endReason ?? "the lease ended on the worker");
+      throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} has ended${status.endReason ? `: ${status.endReason}` : ""}`, {
         hint: "Lease a new device. Anything installed on the old one was wiped.",
         details: { reason: status.endReason },
       });
@@ -352,7 +401,8 @@ export class Tapdance {
       const status = await provider.renew(record.handle, ttlMinutes === undefined ? record.handle.ttlMs : ttlMinutes * 60_000);
       if (status.state === "ended") {
         await this.store.delete(this.session.id, record.handle.leaseId);
-        throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} has ended`, {
+        await this.noteEnded(record.handle, status.endReason ?? "the lease ended on the worker");
+        throw new TapdanceError("LEASE_LOST", `The lease on ${record.handle.model} has ended${status.endReason ? `: ${status.endReason}` : ""}`, {
           hint: "Lease a new device. Anything installed on the old one was wiped.",
           details: { reason: status.endReason },
         });
@@ -364,7 +414,10 @@ export class Tapdance {
       );
       return summarize(updated ?? record, status);
     } catch (error) {
-      if (error instanceof TapdanceError && error.code === "LEASE_LOST") await this.store.delete(this.session.id, record.handle.leaseId);
+      if (error instanceof TapdanceError && error.code === "LEASE_LOST") {
+        await this.store.delete(this.session.id, record.handle.leaseId);
+        await this.noteEnded(record.handle, error.message);
+      }
       throw error;
     }
   }
@@ -394,6 +447,7 @@ export class Tapdance {
     }
     const result = await provider.release(record.handle).catch(() => ({ released: false }));
     await this.store.delete(this.session.id, record.handle.leaseId);
+    await rm(this.endedPath(), { force: true });
     if (record.keepalivePid && record.keepalivePid !== process.pid && (await isKeepaliveProcess(record.keepalivePid))) {
       try {
         process.kill(record.keepalivePid, "SIGTERM");
@@ -461,13 +515,26 @@ export class Tapdance {
 
   // ------------------------------------------------------------ UI
 
-  async inspect(options: { interactiveOnly?: boolean } = {}): Promise<ScreenInspection> {
-    return this.onDevice((handle, provider) => provider.inspect(handle, options));
+  async inspect(options: { interactiveOnly?: boolean; compact?: boolean } = {}): Promise<ScreenInspection> {
+    const screen = await this.onDevice((handle, provider) => provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}) }));
+    return options.compact ? { ...screen, elements: compactElements(screen.elements) } : screen;
   }
 
-  async tap(target: ElementTarget, options: { settle?: boolean } = {}): Promise<ActionResult> {
+  /**
+   * Taps; with `settleMs`, also waits up to that long for the UI to come to rest (a tap that advances to
+   * the next screen after an animation) and says whether the screen's content changed, with its first
+   * labels, so the agent does not have to inspect again to learn that.
+   */
+  async tap(target: ElementTarget, options: { settle?: boolean; settleMs?: number } = {}): Promise<ActionResult & { screen?: string[] }> {
     await this.guardHuman();
-    return this.onDevice((handle, provider) => provider.tap(handle, target, options));
+    if (!options.settleMs) return this.onDevice((handle, provider) => provider.tap(handle, target, { ...(options.settle !== undefined ? { settle: options.settle } : {}) }));
+    const before = fingerprintOf((await this.inspect({ interactiveOnly: false })).elements);
+    const result = await this.onDevice((handle, provider) => provider.tap(handle, target, { ...(options.settle !== undefined ? { settle: options.settle } : {}) }));
+    await this.waitFor({ kind: "stable" }, Math.min(options.settleMs, 30_000)).catch(() => undefined);
+    const after = await this.inspect({ interactiveOnly: false });
+    const changed = fingerprintOf(after.elements) !== before;
+    const screen = after.elements.filter((e) => e.label).slice(0, 5).map((e) => e.label!);
+    return { ...result, screenChanged: changed || result.screenChanged === true, screen };
   }
 
   async swipe(
@@ -543,7 +610,13 @@ export class Tapdance {
       this.progress("Stopping the recording and downloading the video");
       let stopped: Awaited<ReturnType<DeviceProvider["stopRecording"]>>;
       try {
-        stopped = await provider.stopRecording(handle, record.recording.token);
+        // Bounded: a stop that hangs (a lost lease, a worker restarting) must come back with a reason.
+        stopped = await Promise.race([
+          provider.stopRecording(handle, record.recording.token),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new TapdanceError("TIMEOUT", "Stopping the recording took longer than 120 s", { hint: "Check `tapdance device status`; long recordings take longer to download, so prefer several shorter ones." })), 120_000).unref(),
+          ),
+        ]);
       } catch (error) {
         if (error instanceof TapdanceError && error.code === "LEASE_LOST") throw error;
         // Forget the recording, or start_recording would be refused for the rest of the lease.

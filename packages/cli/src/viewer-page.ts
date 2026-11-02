@@ -127,7 +127,7 @@ async function stream() {
 
 // Without WebCodecs (browsers allow it only on https or localhost), show refreshed screenshots.
 let framesMode = false;
-async function frames() {
+async function screenshotLoop() {
   framesMode = true;
   for (;;) {
     try {
@@ -215,7 +215,7 @@ async function start() {
   const probe = await fetch("/api/status");
   if (probe.status === 401) { setBanner("Open the link \"tapdance view\" printed (it carries the key).", "human"); return; }
   if (!window.isSecureContext || typeof VideoDecoder === "undefined") {
-    frames();
+    screenshotLoop();
   } else {
     stream().catch((e) => setBanner("Stream failed: " + e.message, "human"));
   }

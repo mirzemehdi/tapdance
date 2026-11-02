@@ -421,3 +421,50 @@ describe("Android notifications", () => {
     expect(list[1]).toMatchObject({ package: "dev.tapdance.demo", title: "Practice time" });
   });
 });
+
+describe("ui wait --stable and element states (#26, #28)", () => {
+  const handle = { provider: "simlock", leaseId: "l1", sessionId: "s", platform: "android", model: "Pixel 7", osVersion: "34", physical: false, deviceId: "emulator-5554", location: { kind: "local", endpoint: "x" }, ttlMs: 60_000, createdAt: "", expiresAt: "", providerData: {} } as const;
+
+  async function providerWithScreens(screens: Array<Array<{ role: string; label?: string; rect?: { x: number; y: number; width: number; height: number } }>>) {
+    const { SimlockProvider } = await import("./provider.js");
+    const p = new SimlockProvider({ kind: "local", baseUrl: "http://127.0.0.1:1", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+    let i = 0;
+    // MOCKED: inspect returns a scripted sequence of screens.
+    (p as unknown as { inspect: () => Promise<unknown> }).inspect = async () => ({ elements: screens[Math.min(i++, screens.length - 1)]!.map((e, n) => ({ ref: `@e${n}`, ...e })), truncated: false, warnings: [] });
+    return p;
+  }
+
+  it("is stable once the content stops changing, even while things move", async () => {
+    const moving = (x: number) => [{ role: "image", rect: { x, y: 0, width: 10, height: 10 } }, { role: "text", label: "Question 2" }];
+    const p = await providerWithScreens([[{ role: "text", label: "Question 1" }], moving(0), moving(5), moving(10), moving(15), moving(20), moving(25)]);
+    const r = await p.waitFor(handle as never, { kind: "stable" }, 5000);
+    expect(r.found).toBe(true);
+    expect(r.waitedMs).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("says the UI is still changing on timeout, instead of 'not found'", async () => {
+    const screens = Array.from({ length: 40 }, (_, n) => [{ role: "text", label: `Tick ${n}` }]);
+    const p = await providerWithScreens(screens);
+    const r = await p.waitFor(handle as never, { kind: "stable" }, 1200);
+    expect(r.found).toBe(false);
+    expect(r.hint).toMatch(/still changing/);
+  });
+
+  it("keeps checked, selected and focused states from the backend", async () => {
+    expect(toUiElement({ ref: "e5", kind: "radiobutton", label: "Yes", checked: true }).states).toEqual(["checked"]);
+    expect(toUiElement({ ref: "e6", kind: "radiobutton", label: "No", checked: false, focused: true }).states).toEqual(["unchecked", "focused"]);
+    expect(toUiElement({ ref: "e7", kind: "tab", label: "Home", selected: true }).states).toEqual(["selected"]);
+    expect(toUiElement({ ref: "e8", kind: "text", label: "Hi" }).states).toBeUndefined();
+  });
+
+  it("folds unlabelled containers in the compact view", async () => {
+    const { compactElements } = await import("@tapdance/core");
+    const els = [
+      { ref: "@e1", role: "group" },
+      { ref: "@e2", role: "group", label: "Answers" },
+      { ref: "@e3", role: "radiobutton", states: ["checked"] },
+      { ref: "@e4", role: "text", label: "It was too much at once" },
+    ];
+    expect(compactElements(els).map((e) => e.ref)).toEqual(["@e2", "@e3", "@e4"]);
+  });
+});

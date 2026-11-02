@@ -111,6 +111,10 @@ export async function startViewer(
     const url = new URL(req.url ?? "/", "http://viewer");
     try {
       if (!hostOk(req)) return send(res, 403, { error: "unexpected Host header" });
+      if (url.pathname === "/favicon.ico") {
+        res.writeHead(204).end();
+        return;
+      }
       if (req.method === "POST" && !originOk(req)) return send(res, 403, { error: "cross-origin" });
       // The page carries no secret; the one-time key travels in the URL fragment, which browsers never
       // send, and is exchanged here for an HttpOnly cookie.

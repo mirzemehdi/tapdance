@@ -429,3 +429,22 @@ describe("device profiles and requests for a person", () => {
     await expect(t.device({ kind: "uninstall", appId: "com.example" })).rejects.toMatchObject({ code: "NOT_SUPPORTED" });
   });
 });
+
+describe("lease loss and TTL caps (#27)", () => {
+  it("names when and why the lease ended on the next command, instead of 'no device'", async () => {
+    const { t, provider } = await setup("lost1");
+    await t.lease({ platform: "android" });
+    // MOCKED: the worker ends the lease underneath us (a host restart) and the next call fails oddly.
+    provider.active.clear();
+    const original = provider.tap.bind(provider);
+    provider.tap = async () => {
+      throw new TapdanceError("DEVICE_ERROR", "Unexpected internal error");
+    };
+    await expect(t.tap({ kind: "text", text: "Next" })).rejects.toMatchObject({ code: "LEASE_LOST" });
+    provider.tap = original;
+    await expect(t.screenshot()).rejects.toMatchObject({ code: "LEASE_LOST", message: expect.stringMatching(/ended at .*: /) });
+    // A new lease clears the note.
+    await t.lease({ platform: "android" });
+    await expect(t.inspect()).resolves.toBeDefined();
+  });
+});

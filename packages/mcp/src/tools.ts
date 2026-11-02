@@ -179,7 +179,7 @@ export const TOOLS: ToolDefinition[] = [
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: async (t, a) => {
-      const { summary, reused } = await t.lease({
+      const { summary, reused, ttlCappedMinutes } = await t.lease({
         reuse: true,
         platform: a["platform"] as "android" | "ios",
         ...(a["device"] ? { device: a["device"] as string } : {}),
@@ -188,7 +188,7 @@ export const TOOLS: ToolDefinition[] = [
         ...(a["profile"] ? { profile: a["profile"] as string } : {}),
         ...(a["ttl_minutes"] ? { ttlMinutes: a["ttl_minutes"] as number } : {}),
       });
-      return json({ device: summary, reused, next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
+      return json({ device: summary, reused, ...(ttlCappedMinutes ? { ttlCappedMinutes, note: `The worker granted ${ttlCappedMinutes} min (its policy caps leases); the server renews it while connected.` } : {}), next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
     },
   },
   {
@@ -467,17 +467,23 @@ export const TOOLS: ToolDefinition[] = [
     title: "Inspect the screen",
     description:
       "The current screen as accessibility elements: ref, role, label, value, id and bounds. Prefer tapping by ref or text from this list over coordinates. Refs change after the screen changes; inspect again when unsure. Refs may carry a ~sN suffix; pass them unchanged. A ref from an older screen is refused: inspect again.",
-    input: z.object({ all: z.boolean().optional().describe("Include non-interactive elements (more tokens).") }).strict(),
+    input: z
+      .object({
+        all: z.boolean().optional().describe("Include non-interactive elements (more tokens)."),
+        compact: z.boolean().optional().describe("Leave out unlabelled containers (fewer tokens on Compose/SwiftUI screens)."),
+      })
+      .strict(),
     annotations: { readOnlyHint: true },
-    run: async (t, a) => json(await t.inspect({ interactiveOnly: a["all"] !== true })),
+    run: async (t, a) => json(await t.inspect({ interactiveOnly: a["all"] !== true, ...(a["compact"] ? { compact: true } : {}) })),
   },
   {
     name: "tap",
     title: "Tap an element",
-    description: "Tap one element named by exactly one of: ref, text, id, selector — or x and y as a last resort. Waits for the UI to settle and reports what changed.",
-    input: z.object(targetShape).strict(),
+    description:
+      "Tap one element named by exactly one of: ref, text, id, selector — or x and y as a last resort. Waits for the UI to settle and reports what changed. With settle_ms, also waits up to that long for the UI to come to rest (a tap that auto-advances after an animation) and returns screenChanged plus the new screen's first labels.",
+    input: z.object({ ...targetShape, settle_ms: z.number().int().min(100).max(30_000).optional() }).strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    run: async (t, a) => json(await t.tap(targetFrom(a) ?? parseTarget({}))),
+    run: async (t, a) => json(await t.tap(targetFrom(a) ?? parseTarget({}), { ...(a["settle_ms"] ? { settleMs: a["settle_ms"] as number } : {}) })),
   },
   {
     name: "swipe",

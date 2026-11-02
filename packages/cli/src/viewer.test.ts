@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Tapdance } from "@tapdance/sdk";
 import { FakeProvider } from "../../sdk/src/testing.js";
+import { Script } from "node:vm";
 import { parseTailnetNames, startViewer } from "./viewer.js";
+import { VIEWER_PAGE } from "./viewer-page.js";
 
 /** MOCKED provider (FakeProvider): proves the viewer's own HTTP rules, not a real device stream. */
 const closers: Array<() => Promise<void>> = [];
@@ -38,6 +40,13 @@ async function viewer(allowedHosts: string[] = []) {
 }
 
 describe("tapdance view (MOCKED device)", () => {
+  it("ships a page script that compiles (#29: a duplicate declaration killed the whole page)", () => {
+    const scripts = [...VIEWER_PAGE.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!);
+    expect(scripts.length).toBeGreaterThan(0);
+    // Parsing is enough to catch early errors such as redeclared identifiers or syntax mistakes.
+    for (const code of scripts) expect(() => new Script(code)).not.toThrow();
+  });
+
   it("accepts this machine's tailnet names and refuses other Host headers (#24)", async () => {
     const v = await viewer(["my-vps.tail1234.ts.net", "my-vps", "100.74.77.19"]);
     expect((await v.get("/", `my-vps.tail1234.ts.net:${v.port}`)).status).toBe(200);

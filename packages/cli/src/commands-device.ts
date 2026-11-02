@@ -113,7 +113,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       run(globals(), async (t, out) => {
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
-        const { summary } = await t.lease({
+        const { summary, ttlCappedMinutes } = await t.lease({
           platform: platformArg(o.platform),
           ...(o.device ? { device: o.device } : {}),
           ...(o.os ? { osVersion: o.os } : {}),
@@ -134,7 +134,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         } else {
           keepalive = "off — renew with `tapdance device renew`";
         }
-        out.result({ device: summary, keepalive }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
+        if (ttlCappedMinutes) out.warn(`The worker granted ${ttlCappedMinutes} min, less than the ${ttl ?? t.resolved.config.session.defaultTtlMinutes} min asked (its policy caps leases; the keepalive renews it).`);
+        out.result({ device: summary, keepalive, ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}) }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
         if (o.hold) {
           const controller = new AbortController();
           const stop = () => controller.abort();
@@ -417,13 +418,14 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   ui.command("inspect")
     .description("List on-screen elements with refs, roles and labels")
     .option("--all", "include non-interactive elements")
-    .action(async (o: { all?: boolean }) =>
+    .option("--compact", "leave out unlabelled containers (useful with --all on Compose or SwiftUI screens)")
+    .action(async (o: { all?: boolean; compact?: boolean }) =>
       run(globals(), async (t, out) => {
-        const s = await t.inspect({ interactiveOnly: !o.all });
+        const s = await t.inspect({ interactiveOnly: !o.all, ...(o.compact ? { compact: true } : {}) });
         out.result(s, () =>
           [
             dim(`${s.app ?? "unknown app"}${s.viewport ? ` · ${s.viewport.width}×${s.viewport.height}` : ""} · ${s.elements.length} elements${s.truncated ? " (truncated)" : ""}`),
-            ...s.elements.map((e) => `${"  ".repeat(Math.min(e.depth ?? 0, 6))}${bold(e.ref)} [${e.role}]${e.label ? ` "${e.label}"` : ""}${e.value ? ` = "${e.value}"` : ""}${e.identifier ? dim(` #${e.identifier}`) : ""}${e.enabled === false ? dim(" (disabled)") : ""}`),
+            ...s.elements.map((e) => `${"  ".repeat(Math.min(e.depth ?? 0, 6))}${bold(e.ref)} [${e.role}]${e.label ? ` "${e.label}"` : ""}${e.value ? ` = "${e.value}"` : ""}${e.identifier ? dim(` #${e.identifier}`) : ""}${(e.states ?? []).map((st) => ` [${st}]`).join("")}${e.enabled === false ? dim(" (disabled)") : ""}`),
             ...s.warnings.map((w) => dim(`note: ${w}`)),
           ].join("\n"),
         );
@@ -441,7 +443,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
 
   targetOptions(ui.command("tap").description("Tap one element"))
     .option("--no-settle", "do not wait for the UI to settle")
-    .action(async (o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean }) =>
+    .option("--settle-ms <ms>", "also wait up to this long for the UI to come to rest and report whether the screen changed (a tap that auto-advances)", Number)
+    .action(async (o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: number }) =>
       run(globals(), async (t, out) => {
         const target = parseTarget({
           ...(o.text !== undefined ? { text: o.text } : {}),
@@ -451,8 +454,14 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(o.x !== undefined ? { x: numArg("--x", o.x)! } : {}),
           ...(o.y !== undefined ? { y: numArg("--y", o.y)! } : {}),
         });
-        const r = await t.tap(target, { settle: o.settle });
-        out.result(r, () => [r.message, ...(r.changes ?? []).map((c) => dim(`  ${c}`))].join("\n"));
+        const r = await t.tap(target, { settle: o.settle, ...(o.settleMs ? { settleMs: o.settleMs } : {}) });
+        out.result(r, () =>
+          [
+            r.message,
+            ...(r.changes ?? []).map((c) => dim(`  ${c}`)),
+            ...(o.settleMs ? [r.screenChanged ? `screen changed: ${(r.screen ?? []).join(" · ") || "(no labels)"}` : "same screen"] : []),
+          ].join("\n"),
+        );
       }),
     );
 

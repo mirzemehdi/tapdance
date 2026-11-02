@@ -280,8 +280,8 @@ the apps the automation backend sees.
 ### `ui`
 
 ```text
-tapdance ui inspect [--all]
-tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle]
+tapdance ui inspect [--all] [--compact]
+tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>]
 tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
 tapdance ui wait  (--text <text> | --absent <text> | --stable) [--timeout <ms>]
@@ -297,11 +297,11 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 
 | Command | Notes |
 | --- | --- |
-| `ui inspect` | Elements with ref, role, label, value and identifier. `--all` includes non-interactive elements. |
-| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. |
+| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree). |
+| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until` keeps scrolling until the text is visible. `--from`/`--to` take points like `120,640`. |
-| `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 30000. Exits 1 on timeout. |
+| `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 30000. Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
 | `ui alert` | `get` shows a system alert's title, message and buttons; `accept` presses the allowing button, `dismiss` the declining one. Not available with the AXe backend. |
 | `ui key` | `back` is Android back or iOS in-app back. |
 
@@ -1201,6 +1201,8 @@ List on-screen elements with refs, roles and labels
 
 Options:
   --all       include non-interactive elements
+  --compact   leave out unlabelled containers (useful with --all on Compose or
+              SwiftUI screens)
   -h, --help  display help for command
 ```
 
@@ -1219,6 +1221,9 @@ Options:
   --x <x>                x coordinate (fallback)
   --y <y>                y coordinate (fallback)
   --no-settle            do not wait for the UI to settle
+  --settle-ms <ms>       also wait up to this long for the UI to come to rest
+                         and report whether the screen changed (a tap that
+                         auto-advances)
   -h, --help             display help for command
 ```
 

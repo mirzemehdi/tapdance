@@ -121,6 +121,8 @@ export interface UiElement {
   placeholder?: string;
   enabled?: boolean;
   editable?: boolean;
+  /** State flags the backend reports: checked / unchecked (checkable controls), selected, focused, expanded. */
+  states?: string[];
   rect?: { x: number; y: number; width: number; height: number };
   depth?: number;
 }
@@ -280,4 +282,11 @@ export interface DeviceOperationResult {
   path?: string;
   /** Where a pushed file landed on the device. */
   devicePath?: string;
+}
+
+const GENERIC_ROLES = /^(group|other|view|layout|frame|container|linearlayout|framelayout|relativelayout|viewgroup|scrollview|window|element|composeview|androidcomposeview)$/i;
+
+/** Drops unlabelled containers (no label, value, id or state), the bulk of a Compose or SwiftUI tree. */
+export function compactElements(elements: UiElement[]): UiElement[] {
+  return elements.filter((e) => !(GENERIC_ROLES.test(e.role) && !e.label && !e.value && !e.identifier && !e.states?.length));
 }

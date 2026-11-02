@@ -646,12 +646,13 @@ export class SimlockProvider implements DeviceProvider {
 
   async waitFor(handle: LeaseHandle, condition: WaitCondition, timeoutMs: number): Promise<WaitResult> {
     const started = Date.now();
+    if (condition.kind === "stable") return this.waitStable(handle, started, timeoutMs);
     const axe = this.axeFor(handle);
     if (axe) {
       // AXe has no wait: poll its tree.
       for (;;) {
         const elements = await axe.describe(handle.deviceId);
-        const seen = condition.kind === "stable" || elements.some((e) => e.label === condition.text || e.value === condition.text);
+        const seen = elements.some((e) => e.label === condition.text || e.value === condition.text);
         const done = condition.kind === "absent" ? !seen : seen;
         if (done) return { found: true, waitedMs: Date.now() - started };
         if (Date.now() - started > timeoutMs) return { found: false, waitedMs: Date.now() - started };
@@ -670,6 +671,29 @@ export class SimlockProvider implements DeviceProvider {
         return { found: false, waitedMs: Date.now() - started };
       }
       throw mapped;
+    }
+  }
+
+  /**
+   * Stable = the screen's content (roles, labels, ids, values, states) did not change for a quiet
+   * window. Positions are left out, so an animated background or a moving shimmer does not count as
+   * change. Implemented here rather than with the backend's own stable wait, which some devices refuse.
+   */
+  private async waitStable(handle: LeaseHandle, started: number, timeoutMs: number, quietMs = 1000): Promise<WaitResult> {
+    let last = "";
+    let sameSince = Date.now();
+    for (;;) {
+      const screen = await this.inspect(handle, { interactiveOnly: false });
+      const fingerprint = screenFingerprint(screen.elements);
+      const now = Date.now();
+      if (fingerprint !== last) {
+        last = fingerprint;
+        sameSince = now;
+      } else if (now - sameSince >= quietMs) {
+        return { found: true, waitedMs: now - started };
+      }
+      if (now - started >= timeoutMs) return { found: false, waitedMs: now - started, hint: `The UI was still changing after ${timeoutMs} ms` };
+      await new Promise((r) => setTimeout(r, 300));
     }
   }
 
@@ -1047,6 +1071,15 @@ export function toUiElement(node: Record<string, unknown>): UiElement {
   if (placeholder && placeholder !== value) el.placeholder = placeholder;
   if (node["enabled"] === false) el.enabled = false;
   if (node["editable"] === true) el.editable = true;
+  const rn = (node["iosValueSemantics"] ?? {}) as { checked?: unknown; expanded?: unknown };
+  const checked = typeof node["checked"] === "boolean" ? node["checked"] : rn.checked;
+  const states = [
+    ...(checked === true ? ["checked"] : checked === false ? ["unchecked"] : checked === "mixed" ? ["mixed"] : []),
+    ...(node["selected"] === true ? ["selected"] : []),
+    ...(node["focused"] === true ? ["focused"] : []),
+    ...(rn.expanded === true ? ["expanded"] : rn.expanded === false ? ["collapsed"] : []),
+  ];
+  if (states.length) el.states = states;
   if (rect && typeof rect.x === "number" && typeof rect.y === "number" && typeof rect.width === "number" && typeof rect.height === "number") {
     el.rect = { x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height) };
   }
@@ -1117,4 +1150,11 @@ function clampLines(lines: number): number {
 function toLogResult(source: string, text: string, lines: number): LogResult {
   const all = text.split("\n").filter((l) => l.length > 0);
   return { source, lines: all.slice(-lines), truncated: all.length > lines };
+}
+
+/** What a screen shows, without positions: equal fingerprints mean nothing visible changed but layout. */
+export function screenFingerprint(elements: UiElement[]): string {
+  return elements
+    .map((e) => [e.role, e.label ?? "", e.value ?? "", e.identifier ?? "", e.enabled === false ? "off" : "", (e.states ?? []).join(",")].join("|"))
+    .join("\n");
 }

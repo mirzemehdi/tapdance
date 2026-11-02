@@ -91,6 +91,14 @@ The messages below are quoted from the code (with paths and names shortened).
 | `WORKER_OFFLINE` (hint: "The machine holding your device is offline; the lease stays yours …") | The worker holding the device dropped off the gateway: asleep, offline or restarting (Simlock `WORKER_UNREACHABLE`, including agent-device's "not connected to the gateway" reply). Retryable; the lease is kept. | Retry the same call in 30–60 s; do not release the device. On a Mac laptop worker, `caffeinate -is` keeps it awake. |
 | `HUMAN_HELD` "A person is controlling the device in the viewer" | Someone touched the screen in `tapdance view`. Retryable. | Wait `retryAfterMs` (default hold 15 s after the last touch) and retry, or press "Hand back" in the viewer. |
 
+## Leases
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `LEASE_LOST` "The lease on … ended at …: …" | The device's lease ended under the session: it expired, the worker restarted or was paused, an operator ended it. The message gives the reason Tapdance saw. | Lease a new device; anything installed on the old one was wiped. |
+| `device lease` warns "The worker granted N min, less than … asked" | A worker in device-only mode caps leases at its `limits.maxLeaseMinutes` (60 by default). | Nothing: the keepalive (or the MCP server) renews it. The owner can raise the cap in `~/.tapdance/worker/policy.json`. |
+| `record stop` fails after 120 s with `TIMEOUT` | The recording could not be fetched (a lost lease, a worker restarting). | Check `tapdance device status`. On remote workers prefer several shorter recordings over one long one. |
+
 ## Apps and UI
 
 | Error | Cause | Fix |
