@@ -174,7 +174,10 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   prints its value ("Text size is large").
 - Added: a Gradle build that stops on an Android SDK package the host lacks (CMake, an NDK, a platform)
   now ends with the exact `sdkmanager` command to run on the host (seen in the self-test: Pianolune's
-  audio engine needs CMake 3.31.6).
+  audio engine needs CMake 3.31.6). The hint says only the host's owner can do it, and how to ask.
+- Fixed (self-test C1): a worker restart during a lease left the lease alive but its device gone, and
+  every command failed with "refused: simlock picks the device" (USAGE). That is now LEASE_LOST with
+  the fix, and the client clears its session. `worker restart` refuses while leases run unless `--force`.
 
 ### Not yet proven
 

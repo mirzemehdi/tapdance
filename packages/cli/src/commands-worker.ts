@@ -514,10 +514,19 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
     });
   worker
     .command("restart")
-    .description("Restart the worker daemon (ends agent-device sessions on it)")
-    .action(async () => {
+    .description("Restart the worker daemon (ends agent-device sessions on it); refuses while leases run unless --force")
+    .option("--force", "restart even while devices are leased (their agents lose them)")
+    .action(async (o: { force?: boolean }) => {
       const out = output(globals());
       try {
+        // A restart drops agent-device's tie between a lease and its device while the lease record
+        // lives on, so a running agent's every command is refused afterwards (self-test C1).
+        const running = (safeJson(await simlock(["--local", "status", "--json"]).catch(() => "{}")) as { leases?: Array<{ id?: string }> } | undefined)?.leases ?? [];
+        if (running.length > 0 && !o.force) {
+          throw new TapdanceError("DEVICE_UNAVAILABLE", `${running.length} lease(s) are running on this worker (${running.map((l) => String(l.id ?? "?").slice(0, 12)).join(", ")}); a restart takes their devices away from the agents using them`, {
+            hint: "Wait until they are released (tapdance worker status), or pass --force.",
+          });
+        }
         await restart(false, out);
         out.result({ restarted: true }, () => "Restarted");
       } catch (error) {

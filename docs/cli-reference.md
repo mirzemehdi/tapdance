@@ -1679,8 +1679,8 @@ Commands:
   cleanup            Release device claims left by agent-device processes that
                      have gone (a worker restart, the machine going offline
                      mid-lease); live owners are never touched
-  restart            Restart the worker daemon (ends agent-device sessions on
-                     it)
+  restart [options]  Restart the worker daemon (ends agent-device sessions on
+                     it); refuses while leases run unless --force
   help [command]     display help for command
 ```
 
@@ -1935,9 +1935,11 @@ Options:
 ```text
 Usage: tapdance worker restart [options]
 
-Restart the worker daemon (ends agent-device sessions on it)
+Restart the worker daemon (ends agent-device sessions on it); refuses while
+leases run unless --force
 
 Options:
+  --force     restart even while devices are leased (their agents lose them)
   -h, --help  display help for command
 ```
 

@@ -654,6 +654,11 @@ describe("iOS gaps (#48-#50)", () => {
     // The same hint when the session's app was killed (#50).
     expect(fromAgentDeviceError({ message: "app 'com.measify.pianolune' is not running" }, "inspect").hint).toMatch(/launch it again/);
   });
+  it("reports a lease whose device the worker forgot (restart mid-lease) as lost, with the fix", () => {
+    const e = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused: simlock picks the device" }, "inspect");
+    expect(e.code).toBe("LEASE_LOST");
+    expect(e.hint).toMatch(/lease again/);
+  });
   it("filters iOS logs by the app's executable, without case (#59)", () => {
     const plist = `{\n    "com.measify.pianolune" =     {\n        ApplicationType = User;\n        CFBundleDisplayName = Pianolune;\n        CFBundleExecutable = Pianolune;\n    };\n}`;
     expect(parseSimctlApps(plist)).toEqual([{ bundleId: "com.measify.pianolune", name: "Pianolune", executable: "Pianolune", user: true }]);

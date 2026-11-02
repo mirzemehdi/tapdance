@@ -63,6 +63,14 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   let noBackendHint = false;
 
   if (LEASE_GONE.test(message) || (rawCode === "UNAUTHORIZED" && LEASE_GONE_REASONS.has(reason))) code = "LEASE_LOST";
+  else if (/refused: simlock picks the device|refused: no device leased/i.test(message)) {
+    // Tapdance always names its own lease's device, so this means Simlock no longer ties the lease to
+    // a device: the worker restarted mid-lease (its agent-device state is gone) while the lease
+    // record lived on (self-test C1).
+    code = "LEASE_LOST";
+    hint = "The worker lost this lease's device (it was restarted). Release and lease again: `tapdance device release`, then `tapdance device lease` (MCP: release_device, lease_device).";
+    noBackendHint = true;
+  }
   else if (/not one of yours|needs an agent token/i.test(message) || SCOPE_REFUSED.test(reason) || SCOPE_REFUSED.test(message)) code = "FORBIDDEN";
   else if (rawCode === "UNAUTHORIZED") code = "AUTH_FAILED";
   else if (reason === "WORKER_UNREACHABLE" || /not connected to the gateway/i.test(message)) {

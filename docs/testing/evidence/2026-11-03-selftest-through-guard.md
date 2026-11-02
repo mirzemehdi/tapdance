@@ -19,7 +19,7 @@ agent uses (only the network hop differs).
 | # | Check | Result | Evidence |
 | --- | --- | --- | --- |
 | A1 (#57) | `app build` iOS, then onboarding to Home | Pass | Built in 36 s (`ARCHS=arm64`, `CODE_SIGN_IDENTITY=-`); the binary has a `__TEXT,__entitlements` section; 0 `-34018` lines in `logs --app`; Home lists the songs (API reached). |
-| A2/A3 (#56) | Taps in landscape | Cause found, fix not yet live | Runner log `point=(-22.0,437.0) reference=(0.0,0.0,874.0,402.0) orientation=3`: rotated against the runner's 320 pt legacy screen. A tap pre-shifted by 82 pt landed. The pnpm patch (c554547) is on the host, but the worker still ran the old agent-device folder (fixed in d98ee9f, needs `worker restart`). |
+| A2/A3 (#56) | Taps in landscape, then portrait | Pass (after the patch) | Before: runner log `point=(-22.0,437.0) reference=(0.0,0.0,874.0,402.0) orientation=3`, the tap rotated against the runner's 320 pt legacy screen. With the patched runner (host d98ee9f, after `worker restart`): in landscape a tap by id ("Let me try" → Question 1 of 8), by text ("Never touched one" → Question 2) and by x/y (Back at 92,46) all land; back in portrait a tap by id lands. |
 | A5 (#58) | `ui type` into a Compose field | Pass | "WRONGCODE1 Für Elise 2026": first fill dropped characters, the automatic retry at 80 ms filled all 25. |
 | A6 (#58) | `ui key dismiss_keyboard` | Not possible (documented) | Refused with the reason (the iPhone keyboard has no hide key). Tapping static text above it does not close a Compose field's keyboard either. |
 | A7 (#58) | Toggle a switch | Pass | `#settings_reduce_motion` flips and reads `[selected]`. Found: a row hidden under the tab bar reports "Tapped" with no effect. |
@@ -38,6 +38,7 @@ agent uses (only the network hop differs).
 | B7 | Orientation read, font scale | Pass | "The screen is portrait (1080×2400)"; `settings put system font_scale 2.0` read back 2.0; text size reads "Text size is large". |
 | B8 | Notifications through the guard | Pass | Post, `list` ("com.android.shell: Practice — Time to play"), open and close the shade, permission reset for Chrome. |
 | B9 | TalkBack | Not on this image | The `google_apis` image has no TalkBack package (the Play image has Google's accessibility suite). Labels come from `ui inspect`. |
+| C1 | Worker restart during a lease | Pass (after a fix) | It happened for real: the owner's `worker restart` ran 13 s after a lease was granted. The lease record lived on but agent-device lost its device, so every command failed with "refused: simlock picks the device" (as USAGE), and the restart printed "no lease was active". Now the client reports LEASE_LOST with "release and lease again", clears its session (`device status` and `doctor`: no lease), and `worker restart` refuses while leases run unless `--force`. |
 | C2 | Two sessions at once | Blocked by policy | The guard allows one session (`limits.maxSessions` 1); the refusal now says which setting to raise. |
 | C3 | Lease an Android version that is not installed | Pass | Refused in 1.3 s ("Runtime missing for android 28"); nothing leased or booted afterwards. |
 | C4 | Idle host | Pass | With warm spares at 0, both platforms showed 0 running about a minute after release. |
@@ -48,6 +49,5 @@ agent uses (only the network hop differs).
   done per simulator, because the simulator uses the Mac's clock and network.
 - B1, B2, B5, B6: the host has no CMake 3.31.6, so the Android build stops.
 - B10: needs a person to sign in a license tester.
-- C1 (worker restart mid-command) and C5 (scoped token): need the owner to restart the worker and to
-  pair a scoped token.
+- C5 (scoped token): needs the owner to pair a scoped token.
 
