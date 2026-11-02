@@ -28,6 +28,11 @@ export interface GuardOptions {
   env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
   log?: (m: string) => void;
+  /**
+   * Clears device claims left by dead agent-device processes before a lease is allocated (the remote
+   * agent cannot do it). The service passes `releaseStaleDeviceClaims`; failures never block a lease.
+   */
+  settleStaleClaims?: () => Promise<{ released: string[]; retained: Array<{ device: string; reason: string }> }>;
 }
 
 export async function startGuard(options: GuardOptions): Promise<{ server: Server; url: string; close: () => Promise<void> }> {
@@ -55,6 +60,18 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     return undefined;
   };
   const upstreamHeaders = { Authorization: `Bearer ${upstream.token}` };
+  let lastSettle = 0;
+  const settleStaleClaims = async () => {
+    if (!options.settleStaleClaims || Date.now() - lastSettle < 15_000) return;
+    lastSettle = Date.now();
+    try {
+      const r = await options.settleStaleClaims();
+      if (r.released.length > 0) options.log?.(`released stale device claims: ${r.released.join(", ")}`);
+      for (const k of r.retained) options.log?.(`stale device claim kept on ${k.device}: ${k.reason}`);
+    } catch (error) {
+      options.log?.(`stale claim cleanup failed: ${(error as Error).message}`);
+    }
+  };
 
   const send = (res: ServerResponse, status: number, code: string, message: string) => {
     if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
@@ -388,6 +405,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               const p = (parsed as { params: Record<string, unknown> }).params;
               if (typeof p["ttlMs"] !== "number" || p["ttlMs"] > cap) p["ttlMs"] = cap;
               await decide("allow", { command: "lease.allocate", leaseId });
+              await settleStaleClaims();
               let succeeded = false;
               const answer = await forward(req, res, Buffer.from(JSON.stringify(parsed)), (data) => {
                 succeeded = rpcSucceeded(data);

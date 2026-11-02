@@ -89,6 +89,22 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - `host-setup.sh` installs prerequisites (one confirmation, checksummed official downloads); pnpm
   without sudo; Tailscale without HTTPS certificates served over HTTP inside the tailnet.
 
+### After field runs 2 and 3 (issues #30–#38)
+
+- `device request-human` (the CLI form of `request_human`), `worker cleanup` (release device claims of
+  dead agent-device processes), `view --tailscale` (the viewer over https through `tailscale serve`),
+  `ui inspect --bounds`, `ui tap --inject` and MCP `tap` `inject` (Android raw input taps).
+- Fixed: leases failing with "owned by session …" while emulators were recycled in a loop (one
+  agent-device session per lease; stale claims released before each lease through the guard, at
+  `worker start` and for local leases); `ui tap` ignored by the Android file picker and share sheet (a
+  tap that changed nothing there is repeated as a raw input event); `ui swipe --until` missing rows
+  whose label merges several texts; `doctor` calling a slow-to-connect https guard unreachable;
+  `connect` saving an address that does not answer or an `http://` one the guard no longer serves;
+  `device release` printing "Released" when the worker could not be reached; `host-setup.sh`
+  downloading the emulator and a 1.5 GB image on Linux without KVM.
+- Changed: an emulator's notification list is readable through a worker guard by default
+  (`allow.inspection`); posting, and reading a physical phone's, still need `allow.notifications`.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

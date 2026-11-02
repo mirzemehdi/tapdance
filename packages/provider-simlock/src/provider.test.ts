@@ -16,7 +16,7 @@ import {
   validateAppPath,
 } from "./index.js";
 import { CODE_MAP } from "./agent-device-errors.js";
-import { actionResult, bundleIdOf, summarizeDiff } from "./provider.js";
+import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, focusedPackage, matchesTarget, summarizeDiff } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -210,6 +210,20 @@ describe("error mapping", () => {
     expect(fromAgentDeviceError({ code: "UNAUTHORIZED", message: "Lease is not active" }, "x").code).toBe("LEASE_LOST");
     expect(fromAgentDeviceError({ message: "lease ended by simlock; run disconnect, then open" }, "x").code).toBe("LEASE_LOST");
     expect(fromAgentDeviceError({ message: "fetch failed: ECONNREFUSED" }, "x").code).toBe("PROVIDER_UNREACHABLE");
+    const stale = fromAgentDeviceError(
+      {
+        message: 'android device emulator-5588 is owned by session "tok_x:td-y" in workspace "/".',
+        details: { hint: "The recorded owner can no longer release this device; settle its resources and release the claim with: agent-device device release --platform android --serial emulator-5588 --stale" },
+      },
+      "open device session",
+    );
+    expect(stale.code).toBe("DEVICE_UNAVAILABLE");
+    expect(stale.retryable).toBe(true);
+    expect(stale.hint).toContain("tapdance worker cleanup");
+    expect(stale.hint).not.toContain("agent-device device release");
+    expect(stale.details?.["reason"]).toBe("STALE_DEVICE_CLAIM");
+    // A live owner is a real conflict, not a stale claim.
+    expect(fromAgentDeviceError({ code: "DEVICE_IN_USE", message: 'android device emulator-5588 is owned by session "a" in workspace "/".' }, "x").details?.["reason"]).toBeUndefined();
     expect(fromAgentDeviceError({ code: "TEXT_INPUT_NOT_FOCUSED", message: "No focused text input" }, "x").code).toBe("ELEMENT_NOT_FOUND");
     expect(fromAgentDeviceError({ message: "refused: lease abc is not one of yours on this gateway" }, "x").code).toBe("FORBIDDEN");
   });
@@ -466,5 +480,42 @@ describe("ui wait --stable and element states (#26, #28)", () => {
       { ref: "@e4", role: "text", label: "It was too much at once" },
     ];
     expect(compactElements(els).map((e) => e.ref)).toEqual(["@e2", "@e3", "@e4"]);
+  });
+});
+
+describe("doctor reachability", () => {
+  it("names the https address when the guard answers an http request with its TLS error", () => {
+    const r = describeBadHealth("http://mac.tail.ts.net:4720", { status: 400, body: "Client sent an HTTP request to an HTTPS server.", ms: 20 }, "x");
+    expect(r.detail).toContain("serves HTTPS now");
+    expect(r.fix).toContain("tapdance connect https://mac.tail.ts.net:4720");
+  });
+  it("retries a slow first healthz before calling the endpoint unreachable", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("The operation was aborted due to timeout");
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const provider = new SimlockProvider({ kind: "remote", baseUrl: "https://mac.tail.ts.net:4720", token: "t", tenant: "x", runId: "r", clientId: "c" } as never, {}, fetchImpl);
+    const checks = await provider.doctor();
+    expect(checks.find((c) => c.id === "simlock.reachable")?.status).toBe("pass");
+    expect(calls).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("raw taps (#34)", () => {
+  it("reads the focused app from dumpsys window", () => {
+    const dump = "  mCurrentFocus=Window{a1b2c3 u0 com.google.android.documentsui/com.android.documentsui.picker.PickActivity}\n  mFocusedApp=…";
+    expect(focusedPackage(dump)).toBe("com.google.android.documentsui");
+    expect(RAW_INPUT_APPS.has(focusedPackage(dump)!)).toBe(true);
+    expect(focusedPackage("mCurrentFocus=null")).toBeUndefined();
+  });
+  it("matches elements by ref, id, exact text and simple selectors", () => {
+    const el = { ref: "@e7", role: "button", label: "tones.mp3", identifier: "item_title" };
+    expect(matchesTarget(el, { kind: "ref", ref: "e7" })).toBe(true);
+    expect(matchesTarget(el, { kind: "id", id: "item_title" })).toBe(true);
+    expect(matchesTarget(el, { kind: "text", text: "tones.mp3" })).toBe(true);
+    expect(matchesTarget(el, { kind: "selector", selector: 'label="tones.mp3"' })).toBe(true);
+    expect(matchesTarget(el, { kind: "text", text: "tones" })).toBe(false);
   });
 });

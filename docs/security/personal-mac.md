@@ -139,7 +139,8 @@ Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–
   test). Allowed: `simctl terminate <bundle id>`, `simctl spawn log show` with Tapdance's fixed flags,
   `simctl status_bar override --time HH:MM` / `clear`; `adb shell am force-stop <package>`,
   `adb shell pidof <package>`, `adb logcat` with fixed flags, `adb shell am start -W` with validated
-  intent fields, `dumpsys notification`, the notification
+  intent fields, `input tap <x> <y>` (a raw tap, for system screens that ignore the automation helper),
+  `dumpsys window displays` (which app is in front), `dumpsys notification`, the notification
   shade, a shell test notification, and files: base64 on stdin or stdout to `/sdcard/{Download,
   Pictures,DCIM,Documents,Movies,Music}/<name>` or a debuggable app's own `files/`, `cache/`,
   `databases/`, `shared_prefs/`, `no_backup/` (24 MB at most). Values that reach the emulator's own
@@ -164,7 +165,12 @@ Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–
 - **Each client sees only its own work.** `/v1/status` shows a client only its own leases, its own
   queued requests and the devices tied to its leases.
 - **Policy switches for the new areas.** `allow.settings`, `allow.files` and `allow.perf` default to
-  `true`; `allow.notifications` defaults to `false`, because notifications can hold private text.
+  `true`. Reading an emulator's or simulator's notification list is part of `allow.inspection`; posting
+  notifications, and reading a physical phone's (they can hold the owner's private text), need
+  `allow.notifications`, which defaults to `false`.
+- **Stale device claims.** Before each lease it does what `tapdance worker cleanup` does (at most every
+  15 s): claims left by agent-device processes that have gone, which would block the next lease of that
+  emulator, are released. Live owners are never touched. The remote client cannot do this itself.
 - **Uploads and artifacts belong to their client.** An upload must name one of the caller's own leases;
   its upload id is bound to that client, so another client cannot add bytes to it, finalize it or
   install it. Artifact ids are learned from the replies to a client's own commands; any other id

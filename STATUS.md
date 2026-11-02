@@ -313,6 +313,15 @@ paths below were exercised only by unit tests.
 | Worker guard as a login service (`worker guard install/uninstall`): plist and systemd unit text, launchctl/systemctl calls against a fake runner, no tokens in the service environment | H-03 | 🧪 | `packages/cli/src/guard/service.test.ts` |
 | Guard forwards agent-device upload headers; a 31 MB APK installed through a real guard (#23) | H-06 | ✅ | `guard.test.ts` 17; real run 2026-11-02 |
 | One-command host (`host up/status/down`, `connect`): Tailscale parsing, ready block, step-failure formatting, Windows refusal, cloud-VM detection | W-07 | 🧪 | `packages/cli/src/host/host.test.ts` |
+| One agent-device session per lease (was one per Tapdance session), so a new lease never inherits an earlier lease's unfinished recording or claim (#31, #32) | W-04 | 🧪 | `packages/provider-simlock/src/provider.test.ts` |
+| Stale device claims released before each lease through the guard, at `worker start`/`restart`, by `worker cleanup`, and by a local lease; a lease that meets one retries once. Unfinished recordings of dead sessions set aside. Run once by hand on the field-test Mac (2026-11-02): both stuck claims released, the next lease attached (#31, #36) | W-04, H-06 | 🧪 | `packages/provider-simlock/src/stale-claims.test.ts` (real agent-device against a temp Simlock home) |
+| `device request-human` on the CLI (#33) | U-13 | 🧪 | build + `--help`; same SDK path as the MCP tool |
+| Android raw taps: a settled tap that changed nothing on the file picker or share sheet is repeated as `input tap`; `ui tap --inject` / MCP `inject` (#34) | Y-04 | 🧪 | guard template test; not yet run on DocumentsUI |
+| `view --tailscale` (https via `tailscale serve`, live video); `host up` recommends HTTPS Certificates (#30) | V-01 | 🧪 | build + `--help`; not yet run on a tailnet |
+| `doctor` retries a slow first `/v1/healthz` and names an http→https switch; `connect` probes the address before saving (#37, #38) | W-07 | 🧪 | `provider.test.ts` "doctor reachability" |
+| `ui inspect --bounds`; `ui swipe --until` matches part of a label and stops at the end of a list; emulator notification lists readable through the guard by default (#35) | Y-04, H-06 | 🧪 | `guard.test.ts` 14 |
+| `device release` reports an unreachable worker (exit 4) and keeps the record to retry | C-04 | 🧪 | build |
+| `host-setup.sh` on Linux without `/dev/kvm` skips the emulator and system image and stops before `host up` (#19) | W-07 | 🧪 | `bash -n` only |
 
 ## Bugs found by running for real (fixed)
 
@@ -338,3 +347,4 @@ paths below were exercised only by unit tests.
 | Switching to AXe's device set left iOS disabled | Simlock refuses the switch while its own set holds simulators | `worker install --ios-backend axe` refuses first and prints the migration |
 | Android stayed off after a restart ("port occupied") | Simlock's adb server outlived the daemon | `worker restart` stops it |
 | First `open` failed with `AMBIGUOUS_MATCH` | Session opened without naming the leased UDID | Lease always opens the session with the leased device id |
+| Every lease of two emulators failed with "owned by session …", and Simlock kept recycling them (looked like an emulator restarting in a loop) | Claims of a dead agent-device daemon, kept because that session's screen recording never finished; one agent-device session name was reused for every lease | Per-lease session names; stale-claim cleanup before leases (#31, #32, #36) |

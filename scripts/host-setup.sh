@@ -116,12 +116,17 @@ check_all() {
   jdk_ok || MISSING+=("jdk")
   cmdline_ok || MISSING+=("android-cmdline-tools")
   pkg_ok platform-tools || MISSING+=("platform-tools")
-  pkg_ok emulator || MISSING+=("emulator")
-  (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
+  # Without KVM no emulator can run on Linux: skip the emulator and its ~1.5 GB image.
+  local no_kvm=0
+  [[ "$OS" == Linux && ! -e /dev/kvm ]] && no_kvm=1
+  if (( ! no_kvm )); then
+    pkg_ok emulator || MISSING+=("emulator")
+    (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
+  fi
   tailscale_bin >/dev/null || { MISSING+=("tailscale"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("tailscale"); }
   if [[ "$OS" == Linux ]]; then
     if [[ ! -e /dev/kvm ]]; then
-      NOTES+=("KVM: /dev/kvm is missing, so Android emulators cannot run here (a cloud VM without nested virtualization, or virtualization off in the BIOS). This machine can still be a control machine (tapdance connect).")
+      NOTES+=("KVM: /dev/kvm is missing, so Android emulators cannot run here (a cloud VM without nested virtualization, or virtualization off in the BIOS); the emulator and system image are skipped. This machine can still be a control machine: tapdance connect <host endpoint> < pairing-<label>.token")
     elif [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
       MISSING+=("kvm-group"); SUDO_STEPS+=("kvm-group")
     fi
@@ -349,4 +354,9 @@ else
   TAPDANCE=(node "$MAIN")
 fi
 
+if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
+  say "no /dev/kvm: this machine cannot run emulators, so it cannot host devices. Tapdance is installed;"
+  say "use it as the agent's machine instead: tapdance connect <host endpoint> < pairing-<label>.token"
+  exit 0
+fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { Command } from "commander";
 import { TapdanceError, hostChecks, isPrivateHost, saveCredentials, userConfigPath, writeConfigFile, type DoctorCheck, type TapdanceConfig } from "@tapdance/sdk";
+import { releaseStaleDeviceClaims, type StaleClaimReport } from "@tapdance/provider-simlock";
 import { agentDeviceBin, output, simlockBin, type GlobalOptions } from "./context.js";
 import { bold, dim, renderChecks, yellow } from "./output.js";
 import { readSecret } from "./commands-setup.js";
@@ -81,9 +82,18 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
  * state; it deletes nothing.
  */
 async function reconcileDevices(out: ReturnType<typeof output>): Promise<void> {
+  await cleanupClaims(out).catch(() => undefined);
   const status = safeJson(await simlock(["--local", "status", "--json"]).catch(() => "{}")) as { leases?: unknown[] } | undefined;
   if (!status || (Array.isArray(status.leases) && status.leases.length > 0)) return;
   await simlock(["--local", "nuke", "--yes"]).then(() => out.progress("Reset Simlock's device records (no lease was active)"), () => undefined);
+}
+
+/** Releases device claims left by dead agent-device processes and reports what happened. */
+async function cleanupClaims(out: ReturnType<typeof output>): Promise<StaleClaimReport> {
+  const r = await releaseStaleDeviceClaims({ simlockHome: simlockHome() });
+  if (r.released.length > 0) out.progress(`Released stale device claims: ${r.released.join(", ")}`);
+  for (const k of r.retained) out.warn(`A stale claim on ${k.device} was kept (${k.reason})`);
+  return r;
 }
 
 /**
@@ -437,6 +447,22 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         }
       });
   }
+  worker
+    .command("cleanup")
+    .description("Release device claims left by agent-device processes that have gone (a worker restart, the machine going offline mid-lease); live owners are never touched")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const r = await cleanupClaims(out);
+        out.result(r, () =>
+          r.released.length === 0 && r.retained.length === 0
+            ? "No stale device claims."
+            : `Released ${r.released.length} stale claim(s)${r.abandonedRecordings.length ? `, set aside ${r.abandonedRecordings.length} unfinished recording(s) of dead sessions` : ""}${r.retained.length ? `; kept ${r.retained.length}` : ""}.`,
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
   worker
     .command("restart")
     .description("Restart the worker daemon (ends agent-device sessions on it)")

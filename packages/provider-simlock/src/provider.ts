@@ -34,7 +34,9 @@ import {
   type DeviceOperationResult,
 } from "@tapdance/core";
 import { runDeviceOperation } from "./device-operations.js";
-import { fromAgentDeviceError } from "./agent-device-errors.js";
+import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
+import { releaseStaleDeviceClaims } from "./stale-claims.js";
+import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockWorker } from "./http.js";
 import { AxeBackend } from "./axe.js";
@@ -102,23 +104,26 @@ export class SimlockProvider implements DeviceProvider {
     const checks: DoctorCheck[] = [];
     const where = this.connection.kind === "local" ? "local worker" : "gateway/worker";
     let reachable = false;
-    try {
-      reachable = await this.http.healthz();
-      checks.push({
-        id: "simlock.reachable",
-        title: `Simlock ${where} reachable`,
-        status: reachable ? "pass" : "fail",
-        detail: `${this.connection.baseUrl}/v1/healthz ${reachable ? "answered" : "did not answer ok"}`,
-        ...(reachable ? {} : { fix: this.connection.kind === "local" ? "Run `tapdance worker start`." : "Check the endpoint, TLS proxy and network path to the gateway." }),
-      });
-    } catch (error) {
-      checks.push({
-        id: "simlock.reachable",
-        title: `Simlock ${where} reachable`,
-        status: "fail",
-        detail: (error as Error).message,
-        fix: this.connection.kind === "local" ? "Run `tapdance worker start`." : "Check the endpoint, TLS proxy and network path to the gateway.",
-      });
+    const fix = this.connection.kind === "local" ? "Run `tapdance worker start`." : "Check the endpoint, TLS proxy and network path to the gateway.";
+    // The first request over a fresh path (MagicDNS, a TLS handshake through `tailscale serve`, a
+    // certificate being issued) can take several seconds: one retry before calling it unreachable.
+    let failure: Error | undefined;
+    for (let attempt = 1; attempt <= 2 && !reachable; attempt++) {
+      try {
+        const h = await this.http.healthz();
+        if (h.ok) {
+          reachable = true;
+          checks.push({ id: "simlock.reachable", title: `Simlock ${where} reachable`, status: "pass", detail: `${this.connection.baseUrl}/v1/healthz answered in ${h.ms} ms` });
+        } else {
+          checks.push({ id: "simlock.reachable", title: `Simlock ${where} reachable`, status: "fail", ...describeBadHealth(this.connection.baseUrl, h, fix) });
+          return checks;
+        }
+      } catch (error) {
+        failure = error as Error;
+      }
+    }
+    if (!reachable) {
+      checks.push({ id: "simlock.reachable", title: `Simlock ${where} reachable`, status: "fail", detail: `${failure?.message ?? "no answer"} (two tries, 15 s each)`, fix });
     }
     if (!reachable) return checks;
 
@@ -390,8 +395,29 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   async lease(sessionId: string, request: LeaseRequest, options: CallOptions = {}): Promise<LeaseHandle> {
-    const agentDeviceSession = `td-${sessionKey(sessionId)}`;
+    // Claims left by a dead worker process block the devices they name; settle them first when the
+    // worker runs here (a worker guard does the same for remote agents).
+    if (this.isLocal()) await this.settleStaleClaims();
+    try {
+      return await this.leaseOnce(sessionId, request, options);
+    } catch (error) {
+      if (!(error instanceof TapdanceError) || error.details?.["reason"] !== STALE_CLAIM_REASON) throw error;
+      options.onProgress?.("That device still carried an earlier session's claim; clearing it and leasing again");
+      if (this.isLocal()) await this.settleStaleClaims();
+      return this.leaseOnce(sessionId, request, options);
+    }
+  }
+
+  /** Releases claims of dead agent-device processes on this machine; never fails a lease. */
+  protected async settleStaleClaims(): Promise<void> {
+    await releaseStaleDeviceClaims().catch(() => undefined);
+  }
+
+  private async leaseOnce(sessionId: string, request: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
     const leaseId = randomBytes(16).toString("hex");
+    // One agent-device session per lease: a session keeps state on the worker (an unfinished screen
+    // recording, a device claim) that a later lease under the same name would otherwise inherit.
+    const agentDeviceSession = `td-${sessionKey(sessionId).slice(0, 12)}-${leaseId.slice(0, 12)}`;
     const base = {
       baseUrl: this.connection.baseUrl,
       agentDeviceSession,
@@ -488,25 +514,27 @@ export class SimlockProvider implements DeviceProvider {
     return this.status(handle);
   }
 
-  async release(handle: LeaseHandle): Promise<{ released: boolean }> {
+  async release(handle: LeaseHandle): Promise<{ released: boolean; unreachable?: boolean }> {
     const client = this.agentClient(handle);
     let released = false;
+    let unreachable = 0;
+    const isUnreachable = (error: unknown) => ["PROVIDER_UNREACHABLE", "WORKER_OFFLINE"].includes(fromAgentDeviceError(error, "release").code);
     // `close` ends the agent-device session and, with it, the Simlock lease; `release` covers a
     // session that never opened. Either answering "not active" means it is already gone.
     try {
       await client.sessions.close({ ...this.scope(handle) } as never);
       released = true;
-    } catch {
-      // Fall through to an explicit release.
+    } catch (error) {
+      if (isUnreachable(error)) unreachable++;
     }
     try {
       const result = await client.leases.release({ ...this.scope(handle) } as never);
       released = released || result.released;
-    } catch {
-      // Already ended.
+    } catch (error) {
+      if (isUnreachable(error)) unreachable++;
     }
     this.clients.delete(this.data(handle).agentDeviceSession);
-    return { released };
+    return { released, ...(unreachable === 2 ? { unreachable: true } : {}) };
   }
 
   // ---------------------------------------------------------------- apps
@@ -601,19 +629,58 @@ export class SimlockProvider implements DeviceProvider {
     }
   }
 
-  async tap(handle: LeaseHandle, target: ElementTarget, options: { settle?: boolean } = {}): Promise<ActionResult> {
+  async tap(handle: LeaseHandle, target: ElementTarget, options: { settle?: boolean; inject?: boolean } = {}): Promise<ActionResult> {
     const axe = this.axeFor(handle);
     if (axe) return axe.tap(handle.deviceId, target);
+    if (options.inject) {
+      if (handle.platform !== "android") throw new TapdanceError("NOT_SUPPORTED", "Raw input taps are for Android; iOS taps already go through the simulator's own input");
+      return this.rawTap(handle, target.kind === "point" ? { x: target.x, y: target.y } : await this.centerOf(handle, target), target);
+    }
+    let out: ActionResult;
     try {
       const result = (await this.agentClient(handle).interactions.press({
         ...toAgentDeviceTarget(target),
         ...(options.settle === false ? {} : { settle: true }),
         ...this.scope(handle),
       } as never)) as unknown as { message?: string; x?: number; y?: number; settle?: { diff?: unknown } };
-      return actionResult(result, `Tapped ${describe(target)}`);
+      out = actionResult(result, `Tapped ${describe(target)}`);
     } catch (error) {
       throw fromAgentDeviceError(error, `tap ${describe(target)}`);
     }
+    // Some system surfaces (the file picker, the share sheet) drop the automation helper's touch
+    // events while `adb shell input tap` works. When a settled tap changed nothing there, repeat it
+    // as a raw input event. Elsewhere a tap that changes nothing (a piano key) is left alone.
+    const unchanged = options.settle !== false && !out.screenChanged && (out.changes ?? []).every((c) => c.startsWith("="));
+    if (handle.platform === "android" && unchanged && out.point && RAW_INPUT_APPS.has((await this.focusedApp(handle)) ?? "")) {
+      const raw = await this.rawTap(handle, { x: Math.round(out.point.x), y: Math.round(out.point.y) }, target);
+      return { ...raw, warning: "This system screen ignored the first tap; it was repeated as a raw input event" };
+    }
+    return out;
+  }
+
+  /** Taps through Android's input service (`adb shell input tap`), like a finger would. */
+  private async rawTap(handle: LeaseHandle, point: { x: number; y: number }, target: ElementTarget): Promise<ActionResult> {
+    const cmd = deviceCommands.android.inputTap(Math.round(point.x), Math.round(point.y));
+    const r = await this.execOn(handle, "adb", cmd.args, 15_000);
+    if (r.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Raw tap at (${point.x}, ${point.y}) failed: ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
+    return { ok: true, message: `Tapped ${describe(target)} at (${Math.round(point.x)}, ${Math.round(point.y)}) with a raw input event`, point };
+  }
+
+  /** The centre of the element `target` names, from a fresh snapshot. */
+  private async centerOf(handle: LeaseHandle, target: Exclude<ElementTarget, { kind: "point" }>): Promise<{ x: number; y: number }> {
+    const { elements } = await this.inspect(handle, { interactiveOnly: false });
+    const match = elements.find((e) => matchesTarget(e, target)) ?? (target.kind === "text" ? elements.find((e) => (e.label ?? e.value ?? "").toLowerCase().includes(target.text.toLowerCase())) : undefined);
+    if (!match?.rect) {
+      throw new TapdanceError("ELEMENT_NOT_FOUND", `No element with bounds matches ${describe(target)}`, { hint: "Run `tapdance ui inspect --bounds` and tap by coordinates (--x/--y)." });
+    }
+    return { x: Math.round(match.rect.x + match.rect.width / 2), y: Math.round(match.rect.y + match.rect.height / 2) };
+  }
+
+  /** The package of the focused Android window, from the window manager. */
+  private async focusedApp(handle: LeaseHandle): Promise<string | undefined> {
+    const cmd = deviceCommands.android.focusedWindow();
+    const r = await this.execOn(handle, "adb", cmd.args, 10_000).catch(() => undefined);
+    return r ? focusedPackage(r.stdout) : undefined;
   }
 
   async swipe(
@@ -632,16 +699,42 @@ export class SimlockProvider implements DeviceProvider {
       }
       // A finger swiping up moves the content down: Tapdance speaks in finger directions.
       const scroll: Record<SwipeDirection, string> = { up: "down", down: "up", left: "right", right: "left" };
+      if (gesture.untilText) return await this.swipeUntil(handle, scroll[gesture.direction], gesture.direction, gesture.untilText, gesture.amount);
       const result = await client.interactions.scroll({
         direction: scroll[gesture.direction],
         ...(gesture.amount === undefined ? {} : { amount: gesture.amount }),
-        ...(gesture.untilText ? { until: textSelector(gesture.untilText), maxPasses: 10 } : { settle: true }),
+        settle: true,
         ...this.scope(handle),
       } as never);
       return actionResult(result as never, `Swiped ${gesture.direction}`);
     } catch (error) {
       throw fromAgentDeviceError(error, "swipe");
     }
+  }
+
+  /**
+   * Scrolls one pass at a time until an element whose label or value contains `text` (any case) is on
+   * screen. A list row often merges several texts into one label ("Fantaisie-Impromptu, Chopin, 3:45"),
+   * which an exact selector misses. Stops at the end of the list (a pass that changes nothing).
+   */
+  private async swipeUntil(handle: LeaseHandle, direction: string, finger: SwipeDirection, text: string, amount: number | undefined): Promise<ActionResult> {
+    const client = this.agentClient(handle);
+    const needle = text.toLowerCase();
+    const find = (elements: UiElement[]) => elements.find((e) => [e.label, e.value, e.identifier].some((v) => v?.toLowerCase().includes(needle)));
+    let screen = await this.inspect(handle, { interactiveOnly: false });
+    let passes = 0;
+    for (; passes <= MAX_SWIPE_PASSES; passes++) {
+      const hit = find(screen.elements);
+      if (hit) return { ok: true, message: `Found "${hit.label ?? hit.value ?? text}" after ${passes} swipe(s) ${finger}`, ...(hit.rect ? { point: { x: hit.rect.x + Math.round(hit.rect.width / 2), y: hit.rect.y + Math.round(hit.rect.height / 2) } } : {}) };
+      if (passes === MAX_SWIPE_PASSES) break;
+      const before = screenFingerprint(screen.elements);
+      await client.interactions.scroll({ direction, ...(amount === undefined ? {} : { amount }), settle: true, ...this.scope(handle) } as never);
+      screen = await this.inspect(handle, { interactiveOnly: false });
+      if (screenFingerprint(screen.elements) === before && !find(screen.elements)) {
+        throw new TapdanceError("ELEMENT_NOT_FOUND", `Reached the end of the list after ${passes + 1} swipe(s) ${finger} without finding "${text}"`, { hint: "Swipe the other way, or check the text with `tapdance ui inspect --all`." });
+      }
+    }
+    throw new TapdanceError("ELEMENT_NOT_FOUND", `"${text}" did not appear within ${MAX_SWIPE_PASSES} swipes ${finger}`, { hint: "Check the text with `tapdance ui inspect --all`; it matches any part of a label or value." });
   }
 
   async waitFor(handle: LeaseHandle, condition: WaitCondition, timeoutMs: number): Promise<WaitResult> {
@@ -1157,4 +1250,50 @@ export function screenFingerprint(elements: UiElement[]): string {
   return elements
     .map((e) => [e.role, e.label ?? "", e.value ?? "", e.identifier ?? "", e.enabled === false ? "off" : "", (e.states ?? []).join(",")].join("|"))
     .join("\n");
+}
+
+/** Detail and fix for a /v1/healthz that answered but not with 2xx. */
+export function describeBadHealth(baseUrl: string, h: { status: number; body: string; ms: number }, fix: string): { detail: string; fix: string } {
+  if (baseUrl.startsWith("http://") && /http request to an https server/i.test(h.body)) {
+    const https = baseUrl.replace(/^http:/, "https:");
+    return {
+      detail: `${baseUrl} serves HTTPS now (HTTP ${h.status}: "Client sent an HTTP request to an HTTPS server")`,
+      // The token is saved per origin, so a scheme change needs connect again, not just a new endpoint.
+      fix: `Connect again with the https address: tapdance connect ${https} < pairing-<label>.token`,
+    };
+  }
+  return { detail: `${baseUrl}/v1/healthz answered HTTP ${h.status} after ${h.ms} ms${h.body ? `: ${h.body.slice(0, 120)}` : ""}`, fix };
+}
+
+const MAX_SWIPE_PASSES = 10;
+
+/** System apps whose lists ignore the automation helper's touches (#34). */
+export const RAW_INPUT_APPS = new Set([
+  "com.google.android.documentsui",
+  "com.android.documentsui",
+  "com.android.intentresolver",
+  "com.google.android.intentresolver",
+]);
+
+/** The package in `mCurrentFocus` of `dumpsys window displays`. */
+export function focusedPackage(dumpsys: string): string | undefined {
+  return /mCurrentFocus=Window\{\S+ \S+ ([A-Za-z][A-Za-z0-9_.]*)\//.exec(dumpsys)?.[1];
+}
+
+/** True when `el` is the element a ref, id, text or selector target names exactly. */
+export function matchesTarget(el: UiElement, target: Exclude<ElementTarget, { kind: "point" }>): boolean {
+  switch (target.kind) {
+    case "ref":
+      return el.ref === (target.ref.startsWith("@") ? target.ref : `@${target.ref}`);
+    case "id":
+      return el.identifier === target.id;
+    case "text":
+      return el.label === target.text || el.value === target.text;
+    case "selector": {
+      const m = /^(label|id|text|role)\s*=\s*"?(.*?)"?$/.exec(target.selector.trim());
+      if (!m) return false;
+      const v = m[2]!;
+      return m[1] === "id" ? el.identifier === v : m[1] === "role" ? el.role === v : el.label === v || el.value === v;
+    }
+  }
 }

@@ -9,6 +9,7 @@ import { TapdanceError, isPrivateHost, type Tapdance } from "@tapdance/sdk";
 import { run, type GlobalOptions } from "./context.js";
 import { VIEWER_PAGE } from "./viewer-page.js";
 import { bold, dim } from "./output.js";
+import { TAILSCALE_DNS_ADMIN, parseTailscaleStatus, tailscaleServeArgs, tailscaleServeOffArgs } from "./host/plan.js";
 
 /**
  * `tapdance view`: a loopback web page that shows the session's device live and lets a person
@@ -25,10 +26,13 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
     .option("--host <host>", "address to listen on (loopback by default; use SSH -L or Tailscale to reach it)")
     .option("--port <port>", "port to listen on")
     .option("--allow-host <name>", "another name the page may be opened by (repeatable); this machine's Tailscale names are allowed already", (v: string, prev: string[] = []) => [...prev, v])
-    .action(async (o: { host?: string; port?: string; allowHost?: string[] }) =>
+    .option("--tailscale", "serve the page over https on this machine's tailnet name (tailscale serve), for live video; needs HTTPS Certificates on the tailnet")
+    .action(async (o: { host?: string; port?: string; allowHost?: string[]; tailscale?: boolean }) =>
       run(globals(), async (t, out) => {
         const cfg = t.resolved.config.viewer;
-        const host = o.host ?? cfg.host;
+        if (o.tailscale && o.host) throw new TapdanceError("USAGE", "--tailscale listens on loopback behind tailscale serve; leave out --host");
+        if (o.tailscale && !(Number(o.port ?? cfg.port) > 0)) throw new TapdanceError("USAGE", "--tailscale needs a fixed --port (tailscale serve exposes that port)");
+        const host = o.tailscale ? "127.0.0.1" : (o.host ?? cfg.host);
         const port = o.port === undefined ? cfg.port : Number(o.port);
         if (!isPrivateHost(host) && host !== "0.0.0.0") {
           throw new TapdanceError("USAGE", `Refusing to serve the viewer on public address ${host}`, { hint: "Keep it on 127.0.0.1 and use `ssh -L` or a private network." });
@@ -38,18 +42,33 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
         const loopback = ["127.0.0.1", "localhost", "::1"].includes(host);
         // Names this machine answers to on its tailnet (MagicDNS, its 100.x addresses), so the link can
         // use the name and a browser opening it by name is not refused as DNS rebinding.
-        const tailnet = loopback ? { names: [] as string[] } : await tailnetNames();
-        const allowedHosts = [...tailnet.names, ...(o.allowHost ?? [])];
-        const { url, close } = await startViewer(t, { host, port, holdMs: cfg.humanHoldMs, allowedHosts, log: (m) => out.progress(m) });
-        const shown = tailnet.dnsName && (host === "0.0.0.0" || tailnet.names.includes(host)) ? url.replace(`//${host}:`, `//${tailnet.dnsName}:`) : url;
+        const tailnet = loopback && !o.tailscale ? { names: [] as string[] } : await tailnetNames();
+        const served = o.tailscale ? await serveOverTailscale(port, out) : undefined;
+        const allowedHosts = [...tailnet.names, ...(served ? [served.dnsName] : []), ...(o.allowHost ?? [])];
+        const { url, close: closeViewer } = await startViewer(t, { host, port, holdMs: cfg.humanHoldMs, allowedHosts, log: (m) => out.progress(m) }).catch(async (error: unknown) => {
+          await served?.stop();
+          throw error;
+        });
+        const close = async () => {
+          await closeViewer();
+          await served?.stop();
+        };
+        const shown = served
+          ? url.replace(`http://${host}:${port}`, `https://${served.dnsName}:${port}`)
+          : tailnet.dnsName && (host === "0.0.0.0" || tailnet.names.includes(host))
+            ? url.replace(`//${host}:`, `//${tailnet.dnsName}:`)
+            : url;
+        if (served) await warm(shown.split("#")[0]!, out);
         // The link's `#k=` key is the one secret this command exists to hand the person: not redacted.
         out.secretResult({ url: shown }, () =>
           [
             bold(`Viewer: ${shown}`),
             dim("Anyone with this link can watch and control the device while this viewer runs (Ctrl-C stops it; so does the lease ending)."),
-            loopback
-              ? dim(`From another computer: ssh -L ${port}:127.0.0.1:${port} <this-host>, then open the link there (live video).`)
-              : dim("Open it from a device on the same network. Over plain http on a non-localhost address, browsers do not allow the video decoder, so the page shows refreshed screenshots; for live video use https (tailscale serve) or ssh -L to localhost."),
+            served
+              ? dim("Open it from any device on your tailnet (live video over https). Ctrl-C also removes the tailscale serve entry.")
+              : loopback
+                ? dim(`From another computer: ssh -L ${port}:127.0.0.1:${port} <this-host>, then open the link there (live video).`)
+                : dim("Open it from a device on the same network. Over plain http on a non-localhost address, browsers do not allow the video decoder, so the page shows refreshed screenshots; for live video run `tapdance view --tailscale` (needs HTTPS Certificates on the tailnet) or use ssh -L to localhost."),
           ].join("\n"),
         );
         await new Promise<void>((resolve) => {
@@ -59,6 +78,42 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
         await close();
       }),
     );
+}
+
+/**
+ * Puts the viewer behind `tailscale serve --https=<port>` on this machine's tailnet name, so browsers
+ * get a secure context (live video). Fails with the one-time fix when the tailnet has no HTTPS
+ * certificates or this user may not change serve settings.
+ */
+async function serveOverTailscale(port: number, out: { progress: (m: string) => void }): Promise<{ dnsName: string; stop: () => Promise<void> }> {
+  const tailscale = (args: string[], timeout = 30_000) =>
+    new Promise<{ ok: boolean; text: string }>((resolve) => {
+      execFile("tailscale", args, { timeout }, (error, stdout, stderr) => resolve({ ok: !error, text: `${stdout}${stderr}`.trim() || (error?.message ?? "") }));
+    });
+  const status = await tailscale(["status", "--json"], 5000);
+  if (!status.ok) throw new TapdanceError("USAGE", "--tailscale needs the tailscale CLI on this machine", { hint: "Install Tailscale and run `tailscale up`, or use --host <this machine's 100.x address> (screenshot mode)." });
+  const state = parseTailscaleStatus(status.text);
+  if (!state.loggedIn || !state.dnsName) throw new TapdanceError("USAGE", `Tailscale is ${state.loggedIn ? "connected without a MagicDNS name" : `not connected (${state.backendState})`}`, { hint: `Run \`tailscale up\` and turn on MagicDNS (${TAILSCALE_DNS_ADMIN}).` });
+  if (!state.https) {
+    throw new TapdanceError("USAGE", "This tailnet has no HTTPS certificates, so tailscale serve cannot give the viewer an https address", {
+      hint: `Turn on HTTPS Certificates (${TAILSCALE_DNS_ADMIN}), then run this again. Until then: tapdance view --host <this machine's 100.x address> (screenshot mode).`,
+    });
+  }
+  const serve = await tailscale(tailscaleServeArgs(port, "https"));
+  if (!serve.ok) {
+    const denied = /access denied|permission|operator|must be root/i.test(serve.text);
+    throw new TapdanceError("PROVIDER_UNAVAILABLE", `tailscale serve failed: ${serve.text.split("\n").slice(-2).join(" ")}`, {
+      hint: denied ? "Allow your user to change serve settings once: sudo tailscale set --operator=$USER" : "Check `tailscale serve status`.",
+    });
+  }
+  out.progress(`Serving the viewer at https://${state.dnsName}:${port} (tailscale serve)`);
+  return { dnsName: state.dnsName, stop: async () => void (await tailscale(tailscaleServeOffArgs(port, "https"))) };
+}
+
+/** Requests the page once so the first open does not wait for the certificate to be issued. */
+async function warm(origin: string, out: { progress: (m: string) => void }): Promise<void> {
+  out.progress("Getting the tailnet certificate (the first time can take a few seconds)");
+  await fetch(`${origin.replace(/\/+$/, "")}/favicon.ico`, { signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
 }
 
 export async function startViewer(

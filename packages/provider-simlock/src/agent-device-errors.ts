@@ -40,6 +40,13 @@ const STALE_REF = /ref_generation_mismatch|ref_frame_expired|superseded snapshot
 const STALE_REF_HINT = "The screen changed since that inspect_screen; inspect again and use the new ref.";
 const NO_CAPACITY_HINT = "No device of that platform can run on any worker right now; call list_devices to see capacity, or ask the user to start a worker.";
 const UNKNOWN_DEVICE_HINT = "Call list_devices and pass one of the listed models / OS versions.";
+/** agent-device's refusal when a device is still claimed by a session whose daemon has gone. */
+const OWNED_BY = /device \S+ is owned by session/i;
+const DEAD_OWNER = /can no longer release|device release .*--stale/i;
+/** `details.reason` of a TapdanceError for a device blocked by a dead session's claim. */
+export const STALE_CLAIM_REASON = "STALE_DEVICE_CLAIM";
+const STALE_CLAIM_HINT =
+  "An earlier session's claim on this device outlived its worker process. Lease again: a worker guard clears such claims before each lease. On the worker machine, `tapdance worker cleanup` clears them by hand.";
 
 /** Turns an agent-device or proxy failure into a TapdanceError an agent can act on. */
 export function fromAgentDeviceError(error: unknown, action: string): TapdanceError {
@@ -52,6 +59,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   let code: ErrorCode = CODE_MAP[rawCode] ?? "DEVICE_ERROR";
   let hint: string | undefined;
   let retryable: boolean | undefined;
+  let staleClaim = false;
 
   if (LEASE_GONE.test(message) || (rawCode === "UNAUTHORIZED" && LEASE_GONE_REASONS.has(reason))) code = "LEASE_LOST";
   else if (/not one of yours|needs an agent token/i.test(message) || SCOPE_REFUSED.test(reason) || SCOPE_REFUSED.test(message)) code = "FORBIDDEN";
@@ -74,6 +82,11 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
       code = "DEVICE_UNAVAILABLE";
       hint = UNKNOWN_DEVICE_HINT;
     } else code = "USAGE";
+  } else if (OWNED_BY.test(message) && DEAD_OWNER.test(`${message} ${extractHint(e.details) ?? ""}`)) {
+    code = "DEVICE_UNAVAILABLE";
+    retryable = true;
+    hint = STALE_CLAIM_HINT;
+    staleClaim = true;
   } else if (STALE_REF.test(rawCode) || STALE_REF.test(reason) || STALE_REF.test(message)) {
     code = "ELEMENT_NOT_FOUND";
     hint = STALE_REF_HINT;
@@ -85,11 +98,13 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   const details: Record<string, unknown> = { action };
   if (rawCode) details["backendCode"] = rawCode;
   if (reason) details["reason"] = reason;
+  if (staleClaim) details["reason"] = STALE_CLAIM_REASON;
   if (rawCode === "AMBIGUOUS_MATCH") {
     const candidates = candidateLabels(backendDetails);
     if (candidates.length > 0) details["candidates"] = candidates;
   }
-  const backendHint = extractHint(e.details);
+  // agent-device's own fix for a stale claim names a command only the worker machine can run.
+  const backendHint = staleClaim ? undefined : extractHint(e.details);
   const ownHint = hint ?? HINTS[code];
   const joined = [ownHint, backendHint === ownHint ? undefined : backendHint].filter(Boolean).join(" ");
   return new TapdanceError(code, `${action} failed: ${firstLine(message)}`, {

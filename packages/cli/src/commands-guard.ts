@@ -5,6 +5,7 @@ import { homedir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { TapdanceError, defaultProfilePath, findAndroidSdk, isPrivateHost, readLocalProfile } from "@tapdance/sdk";
+import { releaseStaleDeviceClaims } from "@tapdance/provider-simlock";
 import { CLI_ENTRY, output, type GlobalOptions } from "./context.js";
 import { bold, dim, red, table, yellow } from "./output.js";
 import { GuardTokens, guardDir, loadPolicy, type GuardToken } from "./guard/policy.js";
@@ -137,7 +138,7 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
         if (!/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(upstream.baseUrl)) {
           throw new TapdanceError("CONFIG_INVALID", `Simlock must listen on loopback, not ${upstream.baseUrl}`);
         }
-        const { url, close } = await startGuard({ upstream, policy, log: (m) => out.warn(m) });
+        const { url, close } = await startGuard({ upstream, policy, log: (m) => out.warn(m), settleStaleClaims: () => releaseStaleDeviceClaims() });
         out.result({ url, policy: path, profile: policy.profile }, () =>
           [
             bold(`Worker guard (${policy.profile}) on ${url}`),

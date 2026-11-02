@@ -78,20 +78,29 @@ and tells you to either switch accounts or run it again with `--allow-admin-acco
 tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-my-mac.token
 ```
 
-1. Reads the token from stdin (or a hidden prompt), never from the command line.
-2. Writes `provider: "self-hosted"` and the endpoint to `~/.tapdance/config.json`, keeping your other
+1. Checks that the address answers (two tries, 15 s each) before saving anything. An `http://` address
+   the guard no longer serves (it switched to `https://` after HTTPS Certificates were turned on) fails
+   with the `https://` command to run instead.
+2. Reads the token from stdin (or a hidden prompt), never from the command line.
+3. Writes `provider: "self-hosted"` and the endpoint to `~/.tapdance/config.json`, keeping your other
    settings, and saves the token to `~/.tapdance/credentials.json` (mode 600) bound to that endpoint:
    Tapdance sends it nowhere else. This is the per-user equivalent of
    `tapdance init --mode self-hosted --endpoint <url> --yes` followed by `tapdance config set-token --endpoint <url>`;
    a project's own `tapdance.config.json` still wins inside that project, and `connect` warns when the
    current directory has one.
-3. Runs `tapdance doctor` (without the local host checks) and exits 10 if a check fails.
-4. Prints the MCP setup for Claude Code, Codex and Cursor, using `tapdance` if it is on `PATH`, or
+4. Runs `tapdance doctor` (without the local host checks) and exits 10 if a check fails.
+5. Prints the MCP setup for Claude Code, Codex and Cursor, using `tapdance` if it is on `PATH`, or
    the absolute Node.js and CLI paths otherwise. See [agents/](../agents/) for the details, including
    `TAPDANCE_SESSION_ID` for Codex and Cursor.
 
 The agent's machine can be macOS, Linux or Windows. It needs Node.js 22.13+ and Tapdance, and must be
 in the same tailnet as the host.
+
+**Recommended: turn on HTTPS Certificates** for the tailnet (<https://login.tailscale.com/admin/dns>)
+before `host up`. The guard then gets an `https://` address, and on the agent's machine
+`tapdance view --tailscale` serves the viewer over https with live video; over plain http the viewer
+falls back to about two screenshots a second. Turning them on later changes the guard's address from
+`http://` to `https://`: run `host up` again, then `connect` again on the agent's machine.
 
 ## Check and stop
 
@@ -133,7 +142,11 @@ itself when it starts with no lease active).
 
 Simlock keeps one booted, unleased **warm spare** of each device kind it has served, so the next lease
 is fast. `tapdance devices` shows it as "warm spare (booted, not in use)" and `host status` shows how
-much memory the devices use. On a laptop, `tapdance host up --warm android=0,ios=0` turns spares off
+much memory the devices use. A spare stays booted after its lease ends: that is the point of it. The kind
+is learned from leases, so the `host up` self-test (an Android device with no model or image tag)
+teaches it one kind, and an agent that leases another kind (say a Pixel 7 with
+`google_apis_playstore`) boots a second emulator next to it. With the default of one spare, expect up to
+two emulators: the agent's and one spare. On a laptop, `tapdance host up --warm android=0,ios=0` turns spares off
 (leases then cold-boot; idle devices shut down after 10 minutes), and `--warm android=1,ios=0` keeps one
 Android spare only.
 

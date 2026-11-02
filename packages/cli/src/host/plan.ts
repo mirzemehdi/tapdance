@@ -111,6 +111,9 @@ export function cloudCheck(vm: string | undefined, devKvm: boolean): DoctorCheck
 
 // ------------------------------------------------------------------ Tailscale
 
+/** Where a tailnet admin turns on MagicDNS and HTTPS Certificates. */
+export const TAILSCALE_DNS_ADMIN = "https://login.tailscale.com/admin/dns";
+
 export interface TailscaleState {
   /** BackendState is "Running": logged in and connected. */
   loggedIn: boolean;

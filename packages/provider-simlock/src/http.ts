@@ -129,9 +129,12 @@ export class SimlockHttp {
     return (await response.json()) as T;
   }
 
-  async healthz(): Promise<boolean> {
-    const response = await this.request("/v1/healthz", { timeoutMs: 5_000 });
-    return response.ok;
+  /** Probes `/v1/healthz`; `body` is kept for a failed answer so callers can say why. */
+  async healthz(timeoutMs = 15_000): Promise<{ ok: boolean; status: number; body: string; ms: number }> {
+    const started = Date.now();
+    const response = await this.request("/v1/healthz", { timeoutMs });
+    const body = response.ok ? "" : (await response.text().catch(() => "")).slice(0, 300);
+    return { ok: response.ok, status: response.status, body, ms: Date.now() - started };
   }
 
   identity(): Promise<{ principal: string; name?: string; role: string; via?: string }> {

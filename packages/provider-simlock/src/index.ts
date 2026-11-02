@@ -1,5 +1,5 @@
 export { AxeBackend, flattenAxe, type AxeNode } from "./axe.js";
-export { SimlockProvider, PROVIDER_NAME, TESTED_SIMLOCK_VERSION, type SimlockProviderOptions, toAgentDeviceTarget, toUiElement, validateAppPath, checkAppId } from "./provider.js";
+export { SimlockProvider, describeBadHealth, PROVIDER_NAME, TESTED_SIMLOCK_VERSION, type SimlockProviderOptions, toAgentDeviceTarget, toUiElement, validateAppPath, checkAppId } from "./provider.js";
 export { SimlockHttp, parseExecStream, type SimlockStatus, type SimlockLease, type SimlockWorker } from "./http.js";
 export {
   readLocalProfile,
@@ -25,3 +25,4 @@ export {
 } from "./profile-provider.js";
 export { fromAgentDeviceError } from "./agent-device-errors.js";
 export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";
+export { releaseStaleDeviceClaims, agentDeviceCli, simlockHomeDir, type StaleClaimReport, type StaleClaimOptions } from "./stale-claims.js";

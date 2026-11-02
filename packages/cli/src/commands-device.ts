@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import type { Command } from "commander";
 import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
-import { bold, dim, green, table } from "./output.js";
+import { bold, dim, green, table, yellow } from "./output.js";
 
 function platformArg(value: string | undefined): Platform {
   if (value === "android" || value === "ios") return value;
@@ -144,8 +144,29 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           out.progress("Holding the lease; press Ctrl-C to release");
           await runKeepalive(t, { maxMs: cfg.maxSessionMinutes * 60_000, signal: controller.signal, log: (m) => out.progress(m) });
           const released = await t.release();
-          out.progress(released.released ? "Released" : "Lease already ended");
+          out.progress(released.released ? "Released" : released.unreachable ? "Could not reach the worker; the lease ends there when it expires" : "Lease already ended");
         }
+      }),
+    );
+
+  device
+    .command("request-human")
+    .description("Ask a person to do something on the device (sign in, approve a purchase, solve a check) and wait until they hand back")
+    .requiredOption("--reason <text>", "what the person should do; shown in the viewer")
+    .option("--wait <seconds>", "how long to wait (10-1800)", "600")
+    .action(async (opts: { reason: string; wait: string }) =>
+      run(globals(), async (t, out) => {
+        const seconds = Number(opts.wait);
+        if (!Number.isInteger(seconds) || seconds < 10 || seconds > 1800) throw new TapdanceError("USAGE", "--wait takes whole seconds from 10 to 1800");
+        if (opts.reason.trim().length < 3) throw new TapdanceError("USAGE", "--reason needs a few words");
+        // Ctrl-C ends the wait cleanly, so the viewer stops showing the request.
+        const stop = new AbortController();
+        const onInt = () => stop.abort();
+        process.once("SIGINT", onInt);
+        const r = await t.requestHuman(opts.reason, seconds * 1000, stop.signal).finally(() => process.off("SIGINT", onInt));
+        if (stop.signal.aborted) throw new TapdanceError("USAGE", "Stopped waiting (interrupted)");
+        if (!r.completed) throw new TapdanceError("TIMEOUT", `Nobody handed back within ${seconds} s`, { ...(r.hint ? { hint: r.hint } : {}), details: { waitedMs: r.waitedMs } });
+        out.result(r, () => `Handed back after ${Math.round(r.waitedMs / 1000)} s (${r.how ?? "done"})`);
       }),
     );
 
@@ -239,6 +260,16 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .action(async () =>
       run(globals(), async (t, out) => {
         const r = await t.release();
+        if (r.unreachable && r.device) {
+          // Forgotten here only: the worker still holds the device until the lease runs out.
+          out.result(r, () =>
+            yellow(
+              `Could not reach the worker, so ${r.device!.model} (${r.device!.leaseId}) is not released yet. Run \`tapdance device release\` again once the worker answers; otherwise the worker frees it when the lease expires (${r.device!.expiresAt}).`,
+            ),
+          );
+          process.exitCode = 4;
+          return;
+        }
         out.result(r, () => (r.device ? `Released ${r.device.model} (${r.device.leaseId})` : "This session held no device"));
       }),
     );
@@ -419,13 +450,14 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .description("List on-screen elements with refs, roles and labels")
     .option("--all", "include non-interactive elements")
     .option("--compact", "leave out unlabelled containers (useful with --all on Compose or SwiftUI screens)")
-    .action(async (o: { all?: boolean; compact?: boolean }) =>
+    .option("--bounds", "show each element's position and size in pixels (x,y w×h); --json always includes them as rect")
+    .action(async (o: { all?: boolean; compact?: boolean; bounds?: boolean }) =>
       run(globals(), async (t, out) => {
         const s = await t.inspect({ interactiveOnly: !o.all, ...(o.compact ? { compact: true } : {}) });
         out.result(s, () =>
           [
             dim(`${s.app ?? "unknown app"}${s.viewport ? ` · ${s.viewport.width}×${s.viewport.height}` : ""} · ${s.elements.length} elements${s.truncated ? " (truncated)" : ""}`),
-            ...s.elements.map((e) => `${"  ".repeat(Math.min(e.depth ?? 0, 6))}${bold(e.ref)} [${e.role}]${e.label ? ` "${e.label}"` : ""}${e.value ? ` = "${e.value}"` : ""}${e.identifier ? dim(` #${e.identifier}`) : ""}${(e.states ?? []).map((st) => ` [${st}]`).join("")}${e.enabled === false ? dim(" (disabled)") : ""}`),
+            ...s.elements.map((e) => `${"  ".repeat(Math.min(e.depth ?? 0, 6))}${bold(e.ref)} [${e.role}]${e.label ? ` "${e.label}"` : ""}${e.value ? ` = "${e.value}"` : ""}${e.identifier ? dim(` #${e.identifier}`) : ""}${(e.states ?? []).map((st) => ` [${st}]`).join("")}${e.enabled === false ? dim(" (disabled)") : ""}${o.bounds && e.rect ? dim(` (${e.rect.x},${e.rect.y} ${e.rect.width}×${e.rect.height})`) : ""}`),
             ...s.warnings.map((w) => dim(`note: ${w}`)),
           ].join("\n"),
         );
@@ -444,7 +476,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   targetOptions(ui.command("tap").description("Tap one element"))
     .option("--no-settle", "do not wait for the UI to settle")
     .option("--settle-ms <ms>", "also wait up to this long for the UI to come to rest and report whether the screen changed (a tap that auto-advances)", Number)
-    .action(async (o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: number }) =>
+    .option("--inject", "Android: tap with a raw input event (`input tap`) at the element's centre, for system screens that ignore normal taps")
+    .action(async (o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: number; inject?: boolean }) =>
       run(globals(), async (t, out) => {
         const target = parseTarget({
           ...(o.text !== undefined ? { text: o.text } : {}),
@@ -454,10 +487,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(o.x !== undefined ? { x: numArg("--x", o.x)! } : {}),
           ...(o.y !== undefined ? { y: numArg("--y", o.y)! } : {}),
         });
-        const r = await t.tap(target, { settle: o.settle, ...(o.settleMs ? { settleMs: o.settleMs } : {}) });
+        const r = await t.tap(target, { settle: o.settle, ...(o.settleMs ? { settleMs: o.settleMs } : {}), ...(o.inject ? { inject: true } : {}) });
         out.result(r, () =>
           [
             r.message,
+            ...(r.warning ? [yellow(r.warning)] : []),
             ...(r.changes ?? []).map((c) => dim(`  ${c}`)),
             ...(o.settleMs ? [r.screenChanged ? `screen changed: ${(r.screen ?? []).join(" · ") || "(no labels)"}` : "same screen"] : []),
           ].join("\n"),

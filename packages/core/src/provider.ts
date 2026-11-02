@@ -63,7 +63,8 @@ export interface DeviceProvider {
   lease(sessionId: string, request: LeaseRequest, options?: CallOptions): Promise<LeaseHandle>;
   status(handle: LeaseHandle): Promise<LeaseStatus>;
   renew(handle: LeaseHandle, ttlMs?: number): Promise<LeaseStatus>;
-  release(handle: LeaseHandle): Promise<{ released: boolean }>;
+  /** `unreachable`: the worker could not be reached, so the lease may still stand there until its TTL ends. */
+  release(handle: LeaseHandle): Promise<{ released: boolean; unreachable?: boolean }>;
 
   installApp(handle: LeaseHandle, appPath: string, options?: CallOptions & { appId?: string }): Promise<AppInstallResult>;
   launchApp(handle: LeaseHandle, appId: string, options?: { relaunch?: boolean; url?: string; args?: string[] }): Promise<ActionResult>;
@@ -71,7 +72,8 @@ export interface DeviceProvider {
   listApps(handle: LeaseHandle): Promise<string[]>;
 
   inspect(handle: LeaseHandle, options?: { interactiveOnly?: boolean }): Promise<ScreenInspection>;
-  tap(handle: LeaseHandle, target: ElementTarget, options?: { settle?: boolean }): Promise<ActionResult>;
+  /** `inject` taps through Android's input service (`adb shell input tap`) instead of the automation helper. */
+  tap(handle: LeaseHandle, target: ElementTarget, options?: { settle?: boolean; inject?: boolean }): Promise<ActionResult>;
   swipe(
     handle: LeaseHandle,
     gesture:

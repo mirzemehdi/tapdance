@@ -72,6 +72,15 @@ export const android = {
     if (args.length === 4) throw usage("An intent needs at least an action, data or component");
     return { tool: "adb", args };
   },
+  /** A raw touch through Android's input service: system pickers ignore the automation helper's events. */
+  inputTap(x: number, y: number): DeviceCommand {
+    if (![x, y].every((n) => Number.isInteger(n) && n >= 0 && n < 100_000)) throw usage("tap coordinates must be whole pixels");
+    return { tool: "adb", args: ["shell", "input", "tap", String(x), String(y)] };
+  },
+  /** Window manager state; `mCurrentFocus` names the app in front. */
+  focusedWindow(): DeviceCommand {
+    return { tool: "adb", args: ["shell", "dumpsys", "window", "displays"] };
+  },
   notifications(): DeviceCommand {
     return { tool: "adb", args: ["shell", "dumpsys", "notification", "--noredact"] };
   },

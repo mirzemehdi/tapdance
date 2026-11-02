@@ -281,8 +281,12 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   const s = a.slice(1);
   // Launch with an explicit intent.
   if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
-  // Notifications.
-  if (s.length === 3 && s[0] === "dumpsys" && s[1] === "notification" && s[2] === "--noredact") return plain("notifications");
+  // Raw taps (system pickers ignore the automation helper) and which window is in front.
+  if (s.length === 4 && s[0] === "input" && s[1] === "tap" && /^\d{1,5}$/.test(s[2]!) && /^\d{1,5}$/.test(s[3]!)) return plain("interaction");
+  if (s.length === 3 && s[0] === "dumpsys" && s[1] === "window" && s[2] === "displays") return plain("inspection");
+  // Notifications: an emulator's own shade is inspection; a physical phone's can hold the owner's
+  // messages, so reading it (and posting anywhere) needs `notifications`.
+  if (s.length === 3 && s[0] === "dumpsys" && s[1] === "notification" && s[2] === "--noredact") return plain(lease.physical ? "notifications" : "inspection");
   if (s.length === 3 && s[0] === "cmd" && s[1] === "statusbar" && (s[2] === "expand-notifications" || s[2] === "collapse")) return plain("interaction");
   if (s.length === 7 && s[0] === "cmd" && s[1] === "notification" && s[2] === "post" && s[3] === "-t" && value(s[4]) && s[5] === "tapdance" && value(s[6])) return plain("notifications");
   // Files: shared storage and a debuggable app's own sandbox, contents base64 on stdin or stdout.

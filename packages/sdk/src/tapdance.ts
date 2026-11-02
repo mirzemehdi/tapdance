@@ -426,7 +426,7 @@ export class Tapdance {
    * Releases this session's lease. Only ever this session's: there is no id to pass. With
    * `onlyOwnedBy`, releases only a lease that process created (the MCP server's shutdown uses it).
    */
-  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
+  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; unreachable?: boolean; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
     const record = await this.store.get(this.session.id);
     if (record === undefined) return { released: false };
     if (options.onlyOwnedBy && (record.owner?.kind !== options.onlyOwnedBy.kind || record.owner.pid !== options.onlyOwnedBy.pid)) {
@@ -445,9 +445,12 @@ export class Tapdance {
         this.progress(`Could not stop the recording before release: ${(error as Error).message}`);
       }
     }
-    const result = await provider.release(record.handle).catch(() => ({ released: false }));
-    await this.store.delete(this.session.id, record.handle.leaseId);
-    await rm(this.endedPath(), { force: true });
+    const result: { released: boolean; unreachable?: boolean } = await provider.release(record.handle).catch(() => ({ released: false }));
+    // An unreachable worker still holds the lease: keep the record so release can be run again.
+    if (!result.unreachable) {
+      await this.store.delete(this.session.id, record.handle.leaseId);
+      await rm(this.endedPath(), { force: true });
+    }
     if (record.keepalivePid && record.keepalivePid !== process.pid && (await isKeepaliveProcess(record.keepalivePid))) {
       try {
         process.kill(record.keepalivePid, "SIGTERM");
@@ -455,7 +458,12 @@ export class Tapdance {
         // Already gone.
       }
     }
-    return { released: result.released, device: summarize(record, { state: "ended", handle: record.handle }), ...(artifacts.length > 0 ? { artifacts } : {}) };
+    return {
+      released: result.released,
+      ...(result.unreachable ? { unreachable: true } : {}),
+      device: summarize(record, { state: "ended", handle: record.handle }),
+      ...(artifacts.length > 0 ? { artifacts } : {}),
+    };
   }
 
   // ------------------------------------------------------------ apps
@@ -525,11 +533,12 @@ export class Tapdance {
    * the next screen after an animation) and says whether the screen's content changed, with its first
    * labels, so the agent does not have to inspect again to learn that.
    */
-  async tap(target: ElementTarget, options: { settle?: boolean; settleMs?: number } = {}): Promise<ActionResult & { screen?: string[] }> {
+  async tap(target: ElementTarget, options: { settle?: boolean; settleMs?: number; inject?: boolean } = {}): Promise<ActionResult & { screen?: string[] }> {
     await this.guardHuman();
-    if (!options.settleMs) return this.onDevice((handle, provider) => provider.tap(handle, target, { ...(options.settle !== undefined ? { settle: options.settle } : {}) }));
+    const tapOptions = { ...(options.settle !== undefined ? { settle: options.settle } : {}), ...(options.inject ? { inject: true } : {}) };
+    if (!options.settleMs) return this.onDevice((handle, provider) => provider.tap(handle, target, tapOptions));
     const before = fingerprintOf((await this.inspect({ interactiveOnly: false })).elements);
-    const result = await this.onDevice((handle, provider) => provider.tap(handle, target, { ...(options.settle !== undefined ? { settle: options.settle } : {}) }));
+    const result = await this.onDevice((handle, provider) => provider.tap(handle, target, tapOptions));
     await this.waitFor({ kind: "stable" }, Math.min(options.settleMs, 30_000)).catch(() => undefined);
     const after = await this.inspect({ interactiveOnly: false });
     const changed = fingerprintOf(after.elements) !== before;

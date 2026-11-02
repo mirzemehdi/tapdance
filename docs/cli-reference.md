@@ -72,7 +72,9 @@ tapdance doctor [--no-host]
 
 Checks configuration and its sources, the session identity, this machine (Node.js version, Android SDK
 and its packages, system images, KVM on Linux, Xcode and simulator runtimes; Windows is reported as not
-a worker), whether the Simlock worker or gateway answers `/v1/healthz`, the token's role, whether
+a worker), whether the Simlock worker or gateway answers `/v1/healthz` (two tries of 15 s, since a first
+connection through `tailscale serve` can be slow; the time is shown, and an `http://` endpoint that now
+serves HTTPS is named as such), the token's role, whether
 agent-device, streaming and input are available, capacity per platform, the Simlock version (warns if
 it is not 0.4.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored),
 and this session's lease.
@@ -143,6 +145,8 @@ tapdance device lease -p <android|ios> [-d <model>] [--os <version>] [--image-ta
 tapdance device status
 tapdance device renew [--ttl <minutes>]
 tapdance device release
+tapdance device request-human --reason <text> [--wait <seconds>]
+tapdance device done
 ```
 
 | `device lease` option | Meaning |
@@ -171,7 +175,15 @@ loopback or a private network, state, lease id and minutes left, a running recor
 from the viewer. If the lease has ended it fails with `LEASE_LOST` and clears the session record.
 
 `device renew` extends the lease now (optionally with a new TTL). `device release` releases this
-session's device; it is wiped. Releasing when nothing is held is not an error.
+session's device; it is wiped. Releasing when nothing is held is not an error. When the worker cannot
+be reached, `release` says so, exits 4 and keeps the lease record: run it again once the worker answers
+(otherwise the worker frees the device when the lease expires).
+
+`device request-human` is the CLI form of the MCP tool `request_human`: it shows `--reason` in the
+viewer's banner (and on stderr), then waits until the person presses **Hand back** in `tapdance view` or
+runs `tapdance device done`. Default wait 600 s (10–1800). Exit 0 when handed back, 9 (`TIMEOUT`) when
+nobody did; Ctrl-C stops waiting and clears the request. Use it for a Google sign-in, a password sheet
+or a CAPTCHA: the person types secrets on the device, never in chat.
 
 `device done` tells the agent you finished what it asked for with `request_human` (for example
 signing in); the viewer's **Hand back** does the same.
@@ -222,7 +234,8 @@ tapdance device shell [--stdin <file>] [--timeout <seconds>] -- <command…>
 
 These act on the leased device through Simlock's lease exec or agent-device, so they work for a device
 on a remote worker too; a worker in device-only mode decides with its policy (`allow.settings`,
-`allow.files`, `allow.notifications` (off by default), `allow.perf`). Every change ends with the lease:
+`allow.files`, `allow.inspection` (reading an emulator's notifications), `allow.notifications` (posting
+them, and reading a physical phone's; off by default), `allow.perf`). Every change ends with the lease:
 the device is wiped on release.
 
 - `setting`: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`), `location`
@@ -231,7 +244,16 @@ the device is wiped on release.
   `reset-keychain` (iOS), `orientation`, `status-bar-time <HH:MM|clear>` (iOS). Other Android settings
   (density, locale, time zone, …) go through `device shell`. Without a value it
   reads the setting where the platform can. A combination a platform cannot do fails with
-  `NOT_SUPPORTED` and says what to do instead.
+  `NOT_SUPPORTED` and says what to do instead. Common Android settings through `device shell` (standard
+  Android shell commands, not each one run with Tapdance yet):
+
+  | Want | Command |
+  | --- | --- |
+  | Font scale 2.0 | `device shell -- settings put system font_scale 2.0` |
+  | Density | `device shell -- wm density 420` (`wm density reset` to undo) |
+  | TalkBack on (when the image has the Android Accessibility Suite) | `device shell -- settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService`, then `-- settings put secure accessibility_enabled 1` |
+  | Move the clock (needs root: `google_apis` images, not `google_apis_playstore`) | `device shell -- settings put global auto_time 0`, then `-- su 0 date 1103190026` (MMDDhhmmYY) |
+
 - `push`: Android shared storage (media-scanned) or a debuggable app's sandbox, up to 24 MB; iOS Photos
   or an app's Documents (a remote simulator needs a worker guard).
 - `pull`: Android shared storage (`/sdcard/Download/…` and the other media folders) or `--app` with
@@ -280,8 +302,8 @@ the apps the automation backend sees.
 ### `ui`
 
 ```text
-tapdance ui inspect [--all] [--compact]
-tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>]
+tapdance ui inspect [--all] [--compact] [--bounds]
+tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>] [--inject]
 tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
 tapdance ui wait  (--text <text> | --absent <text> | --stable) [--timeout <ms>]
@@ -297,10 +319,10 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 
 | Command | Notes |
 | --- | --- |
-| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree). |
-| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. |
+| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). |
+| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. |
-| `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until` keeps scrolling until the text is visible. `--from`/`--to` take points like `120,640`. |
+| `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 30000. Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
 | `ui alert` | `get` shows a system alert's title, message and buttons; `accept` presses the allowing button, `dismiss` the declining one. Not available with the AXe backend. |
 | `ui key` | `back` is Android back or iOS in-app back. |
@@ -369,6 +391,7 @@ codes when the run cannot start (3 when there is no device and nothing to lease)
 
 ```text
 tapdance view [--host <host>] [--port <port>] [--allow-host <name>]...
+tapdance view --tailscale [--port <port>]
 ```
 
 Serves a live view of this session's device on `127.0.0.1:4710` (from `viewer.host` and `viewer.port`)
@@ -391,6 +414,13 @@ refreshed screenshots per second, with a banner saying why; tap, type, Take over
 work. For live video, open it through `ssh -L` (localhost) or behind HTTPS. Startup errors show in the
 banner instead of leaving the page on "loading…".
 
+`--tailscale` does the HTTPS part: the viewer listens on loopback, `tailscale serve --bg --https=<port>`
+exposes it on this machine's tailnet name, and the printed link is `https://<name>.ts.net:<port>/#k=…`
+(live video). It fetches the page once first, so the certificate is issued before you open it, and
+removes the serve entry on Ctrl-C. It needs MagicDNS and **HTTPS Certificates** on the tailnet
+(<https://login.tailscale.com/admin/dns>); without them it says so. If `tailscale serve` is refused for
+your user, run `sudo tailscale set --operator=$USER` once. Not yet tested on a real tailnet.
+
 ## Workers and gateways
 
 These commands manage the bundled Simlock daemons on this machine. Two-machine setups (gateway on a
@@ -408,6 +438,7 @@ machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
 | `worker logout` | Leave the gateway, turn the worker's own HTTP API back on, restart. Revoke the join token on the gateway afterwards. |
 | `worker guard start` / `pair` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator: H-02; dedicated-account script and Tailscale exposure untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
 | `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). Not yet installed on a real machine (H-03). See [security/personal-mac.md](security/personal-mac.md#keep-the-guard-running). |
+| `worker cleanup` | Release device claims left behind by agent-device processes that have gone (a worker restart, the machine going offline mid-lease). Such a claim blocks the next lease of that emulator with "owned by session …". Only claims whose owner process is provably dead are touched; an unfinished screen recording of such a session is set aside (renamed `*.abandoned-<time>`) so its claim can go. `worker start`/`restart` and the worker guard (before each lease) do this on their own. |
 | `worker start` / `stop` / `status` / `logs` / `restart` | Start, stop, show, print the log of, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. |
 
 **Security.** Joining gives the gateway operator rights on this machine's devices: whoever controls the
@@ -447,7 +478,7 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 
 | Command | Meaning |
 | --- | --- |
-| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint, or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
@@ -460,7 +491,9 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 tapdance connect <endpoint> < pairing-<label>.token
 ```
 
-On the agent's machine (macOS, Linux or Windows): reads the guard token from stdin (or a hidden
+On the agent's machine (macOS, Linux or Windows): first checks that `<endpoint>/v1/healthz` answers
+(two tries, 15 s each) and saves nothing if it does not; an `http://` address that the guard now serves
+over HTTPS fails with the `https://` command to use. Then it reads the guard token from stdin (or a hidden
 prompt; never from argv), sets `provider: "self-hosted"` and the endpoint in `~/.tapdance/config.json`
 (other keys kept), saves the token to `~/.tapdance/credentials.json` (mode 600) bound to the endpoint's
 origin, runs `doctor` without host checks, and prints MCP setup for Claude Code, Codex and Cursor
@@ -802,6 +835,9 @@ Options:
 Commands:
   lease [options]                   Lease one emulator or simulator for this
                                     session
+  request-human [options]           Ask a person to do something on the device
+                                    (sign in, approve a purchase, solve a check)
+                                    and wait until they hand back
   done                              Tell the agent you finished what it asked
                                     for (request_human), e.g. after signing in
   profile                           Device profiles: an emulator you set up once
@@ -854,6 +890,20 @@ Options:
   --hold                     stay in the foreground, renew, and release on
                              Ctrl-C
   -h, --help                 display help for command
+```
+
+### `tapdance device request-human`
+
+```text
+Usage: tapdance device request-human [options]
+
+Ask a person to do something on the device (sign in, approve a purchase, solve a
+check) and wait until they hand back
+
+Options:
+  --reason <text>   what the person should do; shown in the viewer
+  --wait <seconds>  how long to wait (10-1800) (default: "600")
+  -h, --help        display help for command
 ```
 
 ### `tapdance device done`
@@ -1203,6 +1253,8 @@ Options:
   --all       include non-interactive elements
   --compact   leave out unlabelled containers (useful with --all on Compose or
               SwiftUI screens)
+  --bounds    show each element's position and size in pixels (x,y w×h); --json
+              always includes them as rect
   -h, --help  display help for command
 ```
 
@@ -1224,6 +1276,9 @@ Options:
   --settle-ms <ms>       also wait up to this long for the UI to come to rest
                          and report whether the screen changed (a tap that
                          auto-advances)
+  --inject               Android: tap with a raw input event (`input tap`) at
+                         the element's centre, for system screens that ignore
+                         normal taps
   -h, --help             display help for command
 ```
 
@@ -1413,6 +1468,9 @@ Commands:
                      down the emulators and simulators it created
   status             Show the worker's devices, leases and capabilities
   logs               Print the worker daemon log
+  cleanup            Release device claims left by agent-device processes that
+                     have gone (a worker restart, the machine going offline
+                     mid-lease); live owners are never touched
   restart            Restart the worker daemon (ends agent-device sessions on
                      it)
   help [command]     display help for command
@@ -1644,6 +1702,18 @@ Options:
 Usage: tapdance worker logs [options]
 
 Print the worker daemon log
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance worker cleanup`
+
+```text
+Usage: tapdance worker cleanup [options]
+
+Release device claims left by agent-device processes that have gone (a worker
+restart, the machine going offline mid-lease); live owners are never touched
 
 Options:
   -h, --help  display help for command
@@ -1888,6 +1958,9 @@ Options:
   --port <port>        port to listen on
   --allow-host <name>  another name the page may be opened by (repeatable); this
                        machine's Tailscale names are allowed already
+  --tailscale          serve the page over https on this machine's tailnet name
+                       (tailscale serve), for live video; needs HTTPS
+                       Certificates on the tailnet
   -h, --help           display help for command
 ```
 

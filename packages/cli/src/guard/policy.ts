@@ -28,7 +28,10 @@ export const GuardPolicySchema = z
         settings: z.boolean().default(true),
         /** Files pushed to or pulled from the leased device's shared storage or a debuggable app's sandbox. */
         files: z.boolean().default(true),
-        /** Reading and posting notifications; off by default because notifications can hold private text. */
+        /**
+         * Posting notifications, and reading them on a physical phone (its notifications can hold the
+         * owner's private text). Reading an emulator's or simulator's list is part of `inspection`.
+         */
         notifications: z.boolean().default(false),
         /** Frame and memory measurements. */
         perf: z.boolean().default(true),

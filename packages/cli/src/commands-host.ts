@@ -4,6 +4,7 @@ import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "nod
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
+import { describeBadHealth } from "@tapdance/provider-simlock";
 import {
   Tapdance,
   TapdanceError,
@@ -36,6 +37,7 @@ import {
   mcpSnippets,
   pairingTokenPath,
   parseTailscaleStatus,
+  TAILSCALE_DNS_ADMIN,
   renderReadyBlock,
   sanitizeLabel,
   serveHasPort,
@@ -290,7 +292,11 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           }
           // Without tailnet HTTPS certificates, serve plain HTTP inside the tailnet: WireGuard encrypts it.
           const mode = state.https ? "https" : "http";
-          if (mode === "http") out.progress("This tailnet has no HTTPS certificates; serving the guard over HTTP inside the tailnet (WireGuard-encrypted). Turn on HTTPS certificates (admin console → DNS) for an https:// endpoint.");
+          if (mode === "http") {
+            out.warn(
+              `This tailnet has no HTTPS certificates; serving the guard over HTTP inside the tailnet (WireGuard-encrypted). Recommended: turn on HTTPS Certificates (${TAILSCALE_DNS_ADMIN}) for an https:// endpoint and live video in \`tapdance view --tailscale\`; then run host up again (agents must connect again: the address changes to https://).`,
+            );
+          }
           const args = tailscaleServeArgs(port, mode);
           const serve = await runCommand(bin, args);
           if (!serve.ok) {
@@ -590,6 +596,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       const out = output(g);
       try {
         const origin = tokenOrigin(endpoint);
+        await probeEndpoint(endpoint, out);
         const token = await readSecret(`Token for ${origin} (from the host's pairing file; input hidden):`);
         if (!token) throw new TapdanceError("USAGE", "No token given", { hint: `Pipe the token file in: tapdance connect ${endpoint} < pairing-<label>.token` });
         await writeConfigFile(userConfigPath(), { ...(await readUserConfig()), provider: "self-hosted", endpoint });
@@ -624,4 +631,29 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         process.exitCode = out.error(error);
       }
     });
+}
+
+/**
+ * Checks that `endpoint` answers before `connect` saves it: an address the guard no longer serves
+ * (http after it switched to https, a stale name) fails here with the fix, not later in doctor.
+ */
+async function probeEndpoint(endpoint: string, out: ReturnType<typeof output>): Promise<void> {
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch(`${endpoint.replace(/\/+$/, "")}/v1/healthz`, { signal: AbortSignal.timeout(15_000) });
+      if (response.ok) return;
+      const body = (await response.text().catch(() => "")).slice(0, 300);
+      const bad = describeBadHealth(endpoint, { status: response.status, body, ms: 0 }, "Check the address `host up` printed.");
+      throw new TapdanceError("PROVIDER_UNREACHABLE", `Nothing saved: ${bad.detail}`, { hint: bad.fix });
+    } catch (error) {
+      if (error instanceof TapdanceError) throw error;
+      lastError = error as Error;
+      if (attempt === 1) out.progress(`${endpoint} did not answer yet; trying once more (a first TLS connection can take a few seconds)`);
+    }
+  }
+  const reason = lastError?.cause instanceof Error ? lastError.cause.message : (lastError?.message ?? "no answer");
+  throw new TapdanceError("PROVIDER_UNREACHABLE", `Nothing saved: ${endpoint} did not answer (${reason})`, {
+    hint: "Check the address `host up` printed (its scheme too: http:// or https://), that both machines are on the same tailnet (`tailscale status`), and that the guard runs (`tapdance host status` on the host).",
+  });
 }

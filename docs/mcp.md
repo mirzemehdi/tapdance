@@ -148,7 +148,7 @@ the server's environment and restarts the server. When the backend reports no ap
 | Tool | Inputs | Returns | Viewer |
 | --- | --- | --- | --- |
 | `inspect_screen` | `all?` (include non-interactive elements), `compact?` (leave out unlabelled containers) | `{app?, viewport?, elements: [{ref, role, label?, value?, identifier?, placeholder?, enabled?, editable?, states?, rect?, depth?}], truncated, warnings}`. `states` lists `checked`, `unchecked`, `mixed`, `selected`, `focused`, `expanded`, `collapsed` when the platform reports them. A ref may carry a `~sN` suffix (`@e7~s3`), naming the snapshot it came from; pass it unchanged. | allowed |
-| `tap` | exactly one of `ref` (`@e7`), `text`, `id`, `selector`, or `x`+`y`; `settle_ms?` (100–30000) | `{ok, message, changes?, point?, screenChanged?, screen?}`: waits for the UI to settle and lists what changed. With `settle_ms`, also waits up to that long for the UI to come to rest (a tap that auto-advances) and returns `screenChanged` and the new screen's first labels. | blocked |
+| `tap` | exactly one of `ref` (`@e7`), `text`, `id`, `selector`, or `x`+`y`; `settle_ms?` (100–30000); `inject?` (Android) | `{ok, message, changes?, point?, screenChanged?, screen?, warning?}`: waits for the UI to settle and lists what changed. With `settle_ms`, also waits up to that long for the UI to come to rest (a tap that auto-advances) and returns `screenChanged` and the new screen's first labels. On Android system screens that ignore normal taps (the file picker, the share sheet), a tap that changed nothing is repeated once as a raw `input tap` (`warning` says so); `inject: true` taps that way from the start, at the element's centre. | blocked |
 | `swipe` | `direction` (`up`/`down`/`left`/`right`, the finger's direction) with `amount?` (0.1–0.8) and `until_text?` (up to 10 passes); or all of `from_x`, `from_y`, `to_x`, `to_y` | `{ok, message}` | blocked |
 | `type_text` | `text` (≤5000), optional field `into_ref` / `into_text` / `into_id` | `{ok, message, typed?, fieldNow?}`. With a field, its content is replaced; without, text is appended to the focused field. | blocked |
 | `press_key` | `key`: `back`, `home`, `enter`, `dismiss_keyboard`, `app_switcher` | `{ok, message}` | blocked |
@@ -203,7 +203,7 @@ Tapdance does not use it, and the worker guard refuses it.
 
 These run through Simlock's lease exec or agent-device, so they reach a device on a remote worker
 the same way as a local one. On a worker in device-only mode the owner's policy decides which are
-allowed (`allow.settings`, `allow.files`, `allow.notifications` (off by default), `allow.perf`,
+allowed (`allow.settings`, `allow.files`, `allow.inspection` (reading an emulator's notifications), `allow.notifications` (posting them and reading a physical phone's; off by default), `allow.perf`,
 `allow.deviceShell`).
 
 | Tool | Inputs | Returns | Viewer |

@@ -480,10 +480,16 @@ export const TOOLS: ToolDefinition[] = [
     name: "tap",
     title: "Tap an element",
     description:
-      "Tap one element named by exactly one of: ref, text, id, selector — or x and y as a last resort. Waits for the UI to settle and reports what changed. With settle_ms, also waits up to that long for the UI to come to rest (a tap that auto-advances after an animation) and returns screenChanged plus the new screen's first labels.",
-    input: z.object({ ...targetShape, settle_ms: z.number().int().min(100).max(30_000).optional() }).strict(),
+      "Tap one element named by exactly one of: ref, text, id, selector — or x and y as a last resort. Waits for the UI to settle and reports what changed. With settle_ms, also waits up to that long for the UI to come to rest (a tap that auto-advances after an animation) and returns screenChanged plus the new screen's first labels. On Android system screens that ignore normal taps (the file picker, the share sheet), a tap that changed nothing is repeated as a raw input event; inject: true does that from the start.",
+    input: z
+      .object({
+        ...targetShape,
+        settle_ms: z.number().int().min(100).max(30_000).optional(),
+        inject: z.boolean().optional().describe("Android: tap with a raw input event (adb input tap) at the element's centre."),
+      })
+      .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    run: async (t, a) => json(await t.tap(targetFrom(a) ?? parseTarget({}), { ...(a["settle_ms"] ? { settleMs: a["settle_ms"] as number } : {}) })),
+    run: async (t, a) => json(await t.tap(targetFrom(a) ?? parseTarget({}), { ...(a["settle_ms"] ? { settleMs: a["settle_ms"] as number } : {}), ...(a["inject"] ? { inject: true } : {}) })),
   },
   {
     name: "swipe",

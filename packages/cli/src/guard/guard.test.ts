@@ -440,6 +440,8 @@ describe("worker guard: hardening", () => {
     const built = [
       dc.android.startIntent({ action: "android.intent.action.VIEW", data: "https://example.com/a?b=c&d=e", component: "com.example/.Main", categories: ["android.intent.category.DEFAULT"], flags: "0x10000000", extras: { mode: "first run; rm -rf /", count: 3, fresh: true } }),
       dc.android.notifications(),
+      dc.android.inputTap(400, 955),
+      dc.android.focusedWindow(),
       dc.android.shade(true),
       dc.android.postNotification("Hi there", "Body with $(stuff)"),
       dc.android.pushShared("/sdcard/Download/song.mid", "TVRoZA=="),
@@ -480,8 +482,13 @@ describe("worker guard: hardening", () => {
     for (const args of [["forward", "tcp:1", "tcp:2"], ["reverse", "tcp:1", "tcp:2"], ["emu", "screenrecord", "start", "/Users/owner/x.webm"], ["install", "/Users/owner/x.apk"], ["shell"], ["shell", "  "]]) {
       expect(execOf({ tool: "adb", args }, all).ok, args.join(" ")).toBe(false);
     }
-    // Notifications stay off unless the owner turns them on; files can be turned off.
-    expect(execOf(dc.android.notifications(), GuardPolicySchema.parse({ allow: { deviceShell: false } })).ok).toBe(false);
+    // Reading an emulator's notifications is inspection (#35); a phone's stays behind `notifications`,
+    // and so does posting. Files can be turned off.
+    const defaults = GuardPolicySchema.parse({ allow: { deviceShell: false } });
+    expect(execOf(dc.android.notifications(), defaults).ok).toBe(true);
+    expect(execOf(dc.android.notifications(), defaults, { physical: true }).ok).toBe(false);
+    expect(execOf(dc.android.postNotification("a", "b"), defaults).ok).toBe(false);
+    expect(execOf({ tool: "adb", args: ["shell", "input", "tap", "1", "2; reboot"] }, defaults).ok).toBe(false);
     expect(execOf(dc.android.pushShared("/sdcard/Download/a.txt", "YQ=="), GuardPolicySchema.parse({ allow: { files: false, deviceShell: false } })).ok).toBe(false);
     // The builders refuse what they cannot quote.
     expect(() => dc.android.startIntent({ data: "it's" })).toThrow(/single quote/);

@@ -221,7 +221,7 @@ async function start() {
   }
   connectInput();
   refresh(); setInterval(() => refresh().catch(() => undefined), 3000);
-  if (framesMode) setBanner("Screenshot mode (about 2 per second): over plain http on a non-localhost address the browser does not allow the live video decoder. Tap and type still work. For live video use https or ssh -L to localhost.", "human");
+  if (framesMode) setBanner("Screenshot mode (about 2 per second): over plain http on a non-localhost address the browser does not allow the live video decoder. Tap and type still work. For live video run tapdance view --tailscale (needs HTTPS Certificates on the tailnet) or use ssh -L to localhost.", "human");
 }
 start().catch((e) => setBanner("The viewer could not start: " + (e && e.message ? e.message : e) + ". Reload to try again.", "human"));
 </script>
