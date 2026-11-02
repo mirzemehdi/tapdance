@@ -146,9 +146,13 @@ much memory the devices use. A spare stays booted after its lease ends: that is 
 is learned from leases, so the `host up` self-test (an Android device with no model or image tag)
 teaches it one kind, and an agent that leases another kind (say a Pixel 7 with
 `google_apis_playstore`) boots a second emulator next to it. With the default of one spare, expect up to
-two emulators: the agent's and one spare. On a laptop, `tapdance host up --warm android=0,ios=0` turns spares off
-(leases then cold-boot; idle devices shut down after 10 minutes), and `--warm android=1,ios=0` keeps one
-Android spare only.
+two emulators: the agent's and one spare. On a laptop, `tapdance host warm android=0,ios=0` turns spares
+off (leases then cold-boot; idle devices shut down after 10 minutes), and `host warm android=1,ios=0`
+keeps one Android spare only. Simlock reads these settings when the worker starts, and a worker restart
+ends running leases, so `host warm` saves them and restarts the worker only when nothing is leased;
+otherwise they apply at the next `tapdance worker restart` (or right away with `--now`, which ends the
+running lease). `host up --warm …` sets them too, but re-runs every setup step: do not use it during a
+test.
 
 ## Starting from nothing: `scripts/host-setup.sh`
 

@@ -278,16 +278,27 @@ export async function installWorker(
 
 /** The local worker daemon's own status, or undefined when it does not answer. */
 /** Applies a warm-spare count per platform to the local worker, restarting it when anything changed. */
-export async function applyWarm(out: ReturnType<typeof output>, warm: WarmCounts): Promise<Array<[string, string]>> {
-  const status = (await localWorkerStatus()) as { capacity?: Record<string, { limit?: number } | undefined> } | undefined;
+/**
+ * Saves the warm-spare counts in Simlock's config. Simlock reads them at start, so the worker restarts
+ * (`restart`, default "always"); "if-idle" skips that while a lease runs, since a restart ends leases.
+ */
+export async function applyWarm(
+  out: ReturnType<typeof output>,
+  warm: WarmCounts,
+  options: { restart?: "always" | "if-idle" | "never" } = {},
+): Promise<{ settings: Array<[string, string]>; restarted: boolean; activeLeases: number }> {
+  const status = (await localWorkerStatus()) as { capacity?: Record<string, { limit?: number } | undefined>; leases?: unknown[] } | undefined;
   const limits = { android: status?.capacity?.["android"]?.limit ?? 2, ios: status?.capacity?.["ios"]?.limit ?? 5 };
   const settings = warmSettings(warm, limits);
   for (const [key, value] of settings) {
     out.progress(`simlock config set ${key} ${value}`);
     await simlock(["--local", "config", "set", key, value]);
   }
+  const activeLeases = Array.isArray(status?.leases) ? status.leases.length : 0;
+  const when = options.restart ?? "always";
+  if (when === "never" || (when === "if-idle" && activeLeases > 0)) return { settings, restarted: false, activeLeases };
   await restart(false, out);
-  return settings;
+  return { settings, restarted: true, activeLeases };
 }
 
 /** Ends every lease on the local worker (Simlock's nuke without --delete-devices: deletes nothing). */

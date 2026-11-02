@@ -343,7 +343,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios }, () =>
           [
             renderReadyBlock(block),
-            dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host up --warm android=0,ios=0. Stop everything: tapdance host pause.`),
+            dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host warm android=0,ios=0. Stop everything: tapdance host pause.`),
             ...(endpoint.startsWith("http://127.0.0.1")
               ? ["", yellow("The endpoint is loopback only: an agent on another machine cannot reach it until Tailscale is set up (then run this command again).")]
               : []),
@@ -452,6 +452,30 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
               ? `Pairing ${active.map((p) => `"${p.label}"`).join(", ")} still valid: the VPS can connect again as before.`
               : yellow("No valid pairing token (expired or revoked): run `tapdance host up --repair` to issue a new one, then hand it over with `tapdance host token`."),
           ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  host
+    .command("warm <counts>")
+    .description("Set how many booted spare devices the worker keeps (e.g. android=0,ios=0), without re-running host up; restarts the worker only when nothing is leased")
+    .option("--now", "restart the worker even if a lease is running (that ends the lease)")
+    .action(async (counts: string, o: { now?: boolean }) => {
+      const out = output(globals());
+      try {
+        const warm = parseWarm(counts);
+        if (!(await workerRunning())) {
+          const r = await applyWarm(out, warm, { restart: "never" });
+          out.result(r, () => "Saved; the worker is not running, so it applies when it starts.");
+          return;
+        }
+        const r = await applyWarm(out, warm, { restart: o.now ? "always" : "if-idle" });
+        out.result(r, () =>
+          r.restarted
+            ? `Spares set to ${counts}; the worker restarted with it.`
+            : `Saved ${counts}, but ${r.activeLeases} lease(s) are running, so the worker was not restarted. It applies at the next worker restart (\`tapdance worker restart\` once the test is done), or now with --now, which ends the running lease(s).`,
         );
       } catch (error) {
         process.exitCode = out.error(error);

@@ -486,6 +486,7 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
+| `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -1820,22 +1821,26 @@ Set up this Mac or Linux machine as a device host for a remote agent, in one
 command
 
 Options:
-  -h, --help        display help for command
+  -h, --help               display help for command
 
 Commands:
-  up [options]      Worker, guard service, pairing, Tailscale and a self-test,
-                    step by step; prints a block to paste to the agent's machine
-  pause             Stop hosting for now, keeping the pairing: the guard (and
-                    caffeinate), Tailscale exposure, the worker and its devices
-                    stop, and nothing restarts at login
-  resume [options]  Start hosting again after `host pause`, the same way as
-                    before (guard flags, Tailscale, login services)
-  token [options]   Hand a pairing token to the agent: copy it to the clipboard
-                    (default) or show it once
-  status            Show the state of each `host up` step on this machine
-  down [options]    Stop hosting: remove the guard service and `tailscale serve`
-                    for its port (tokens are kept unless --revoke)
-  help [command]    display help for command
+  up [options]             Worker, guard service, pairing, Tailscale and a
+                           self-test, step by step; prints a block to paste to
+                           the agent's machine
+  pause                    Stop hosting for now, keeping the pairing: the guard
+                           (and caffeinate), Tailscale exposure, the worker and
+                           its devices stop, and nothing restarts at login
+  resume [options]         Start hosting again after `host pause`, the same way
+                           as before (guard flags, Tailscale, login services)
+  warm [options] <counts>  Set how many booted spare devices the worker keeps
+                           (e.g. android=0,ios=0), without re-running host up;
+                           restarts the worker only when nothing is leased
+  token [options]          Hand a pairing token to the agent: copy it to the
+                           clipboard (default) or show it once
+  status                   Show the state of each `host up` step on this machine
+  down [options]           Stop hosting: remove the guard service and `tailscale
+                           serve` for its port (tokens are kept unless --revoke)
+  help [command]           display help for command
 ```
 
 ### `tapdance host up`
@@ -1892,6 +1897,20 @@ Options:
   --keep-awake           macOS: run the guard under `caffeinate -i` (remembered
                          from `host pause` when it was used)
   -h, --help             display help for command
+```
+
+### `tapdance host warm`
+
+```text
+Usage: tapdance host warm [options] <counts>
+
+Set how many booted spare devices the worker keeps (e.g. android=0,ios=0),
+without re-running host up; restarts the worker only when nothing is leased
+
+Options:
+  --now       restart the worker even if a lease is running (that ends the
+              lease)
+  -h, --help  display help for command
 ```
 
 ### `tapdance host token`

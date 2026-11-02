@@ -147,6 +147,8 @@ describe("pairing and rerun commands", () => {
   it("prints the exact command to run again with the added flag", () => {
     expect(hostUpCommand({ label: "vps", keepAwake: true }, { allowAdminAccount: true })).toBe("tapdance host up --label vps --allow-admin-account --keep-awake");
     expect(hostUpCommand({ tailscale: false, label: "my vps" }, { repair: true })).toBe("tapdance host up --label 'my vps' --no-tailscale --repair");
+    // The "run this again" hint keeps --warm (it used to drop it).
+    expect(hostUpCommand({ warm: "android=0" }, { allowAdminAccount: true })).toBe("tapdance host up --allow-admin-account --warm android=0");
     expect(hostUpCommand({})).toBe("tapdance host up");
   });
 });

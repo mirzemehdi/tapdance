@@ -222,6 +222,7 @@ export function hostUpCommand(o: HostUpOptions, add: Partial<HostUpOptions> = {}
     ...(m.keepAwake ? ["--keep-awake"] : []),
     ...(m.repair ? ["--repair"] : []),
     ...(m.skipSelfTest ? ["--skip-self-test"] : []),
+    ...(m.warm ? [`--warm ${shellWord(m.warm)}`] : []),
     ...(m.yes ? ["--yes"] : []),
   ].join(" ");
 }
