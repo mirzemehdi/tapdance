@@ -627,12 +627,13 @@ export const TOOLS: ToolDefinition[] = [
         into_ref: targetShape.ref,
         into_text: targetShape.text,
         into_id: targetShape.id,
+        delay_ms: z.number().int().min(0).max(1000).optional().describe("Pause between keystrokes, for fields that drop fast input. A fill that drops characters is retried once at 80 ms on its own."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     run: async (t, a) => {
       const target = targetFrom({ ref: a["into_ref"], text: a["into_text"], id: a["into_id"] } as Record<string, unknown>);
-      return json(await t.typeText(a["text"] as string, target));
+      return json(await t.typeText(a["text"] as string, target, a["delay_ms"] !== undefined ? { delayMs: a["delay_ms"] as number } : {}));
     },
   },
   {

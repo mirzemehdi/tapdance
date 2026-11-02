@@ -145,6 +145,16 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed: a guard restart (an update) cut a running agent off its lease ("not this token's lease"); the
   guard now keeps lease ownership in `~/.tapdance/worker/leases.json`. agent-device's diagnostics for a
   failed request were refused by the guard; they now reach the session's owner.
+- Fixed (#57): iOS builds were unsigned, so the app had no entitlements and Keychain failed (-34018);
+  they are now signed ad-hoc like Xcode's Run (checked on Pianolune: `application-identifier` embedded).
+- Fixed (#59): `logs --app` on iOS matched the bundle id's last word instead of the app's executable
+  (`Pianolune`); asking for more than 5000 log lines now says it was capped.
+- Fixed (#50, #49): `ui alert get` missed a system alert that agent-device answered "no alert" for
+  without an error; reading the screen with the app killed gives the "launch it again" hint;
+  Notification Center no longer needs a snapshot to find the screen size.
+- Added (#58): `ui type --delay-ms` (MCP `delay_ms`), with one automatic retry at 80 ms when a fill
+  drops characters; iOS switch rows are tapped at the toggle when a tap on the row changed nothing;
+  `dismiss_keyboard` on iOS says why it cannot work (the iPhone keyboard has no hide key) and what to do.
 
 ### Not yet proven
 

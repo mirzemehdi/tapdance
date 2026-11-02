@@ -711,7 +711,25 @@ export class SimlockProvider implements DeviceProvider {
       const raw = await this.rawTap(handle, { x: Math.round(out.point.x), y: Math.round(out.point.y) }, target);
       return { ...raw, warning: "This system screen ignored the first tap; it was repeated as a raw input event" };
     }
+    // An iOS switch row reports the whole row as the switch, so its centre lands on the label and the
+    // toggle does not move (#58). Tap the control itself, at the row's trailing edge.
+    if (handle.platform === "ios" && unchanged && out.point && target.kind !== "point") {
+      const toggle = await this.switchKnob(handle, out.point).catch(() => undefined);
+      if (toggle) {
+        const result = await this.agentClient(handle).interactions.press({ x: toggle.x, y: toggle.y, settle: true, ...this.scope(handle) } as never);
+        return { ...actionResult(result as never, `Tapped ${describe(target)} at its toggle (${toggle.x}, ${toggle.y})`), warning: "The switch's centre is its label; it was tapped at the toggle instead" };
+      }
+    }
     return out;
+  }
+
+  /** The toggle of a wide iOS switch row containing `point`: 42 pt in from the row's trailing edge. */
+  private async switchKnob(handle: LeaseHandle, point: { x: number; y: number }): Promise<{ x: number; y: number } | undefined> {
+    const { elements } = await this.inspect(handle, { interactiveOnly: false });
+    const row = elements.find(
+      (e) => /switch|toggle/i.test(e.role) && e.rect && e.rect.width > 120 && point.x >= e.rect.x && point.x <= e.rect.x + e.rect.width && point.y >= e.rect.y && point.y <= e.rect.y + e.rect.height,
+    );
+    return row?.rect ? switchKnobPoint(row.rect) : undefined;
   }
 
   /** Taps through Android's input service (`adb shell input tap`), like a finger would. */
@@ -855,8 +873,12 @@ export class SimlockProvider implements DeviceProvider {
       const r = await command.alert({ action, ...this.scope(handle) });
       const alert = (r["alert"] ?? r) as Record<string, unknown>;
       const buttons = Array.isArray(alert["buttons"]) ? (alert["buttons"] as unknown[]).map((b) => (typeof b === "string" ? b : String((b as { label?: unknown }).label ?? b))) : undefined;
+      const present = alert["present"] !== false && (alert["title"] !== undefined || buttons !== undefined || action !== "get");
+      // agent-device can answer "no alert" without an error while its own snapshot shows a system
+      // alert (the notification prompt, #50): check the screen before saying none.
+      if (action === "get" && !present) return (await this.alertFromScreen(handle).catch(() => undefined)) ?? { present: false };
       return {
-        present: alert["present"] !== false && (alert["title"] !== undefined || buttons !== undefined || action !== "get"),
+        present,
         ...(typeof alert["title"] === "string" ? { title: alert["title"] } : {}),
         ...(typeof alert["message"] === "string" ? { message: alert["message"] } : {}),
         ...(buttons ? { buttons } : {}),
@@ -894,16 +916,25 @@ export class SimlockProvider implements DeviceProvider {
     };
   }
 
-  async typeText(handle: LeaseHandle, text: string, target?: ElementTarget): Promise<ActionResult> {
+  async typeText(handle: LeaseHandle, text: string, target?: ElementTarget, options: { delayMs?: number } = {}): Promise<ActionResult> {
     const axe = this.axeFor(handle);
     if (axe) return axe.type(handle.deviceId, text, target);
     const client = this.agentClient(handle);
+    const delay = options.delayMs !== undefined ? { delayMs: Math.max(0, Math.min(1000, Math.round(options.delayMs))) } : {};
+    const fill = (extra: { delayMs?: number }) => client.interactions.fill({ ...toAgentDeviceTarget(target!), text, settle: true, ...extra, ...this.scope(handle) } as never);
     try {
       if (target !== undefined) {
-        const result = await client.interactions.fill({ ...toAgentDeviceTarget(target), text, settle: true, ...this.scope(handle) } as never);
-        return actionResult(result as never, `Filled ${describe(target)}`);
+        try {
+          return actionResult((await fill(delay)) as never, `Filled ${describe(target)}`);
+        } catch (error) {
+          // A field that drops fast keystrokes (Compose Multiplatform on iOS, #58) fails agent-device's
+          // read-back; filling replaces the content, so one slower retry is safe.
+          if (options.delayMs !== undefined || !/mismatch|read.?back|delay-?ms/i.test(`${(error as Error).message} ${JSON.stringify((error as { details?: unknown }).details ?? {})}`)) throw error;
+          const r = actionResult((await fill({ delayMs: 80 })) as never, `Filled ${describe(target)}`);
+          return { ...r, message: `${r.message} (retried with 80 ms between keystrokes after the field dropped characters)` };
+        }
       }
-      const result = await client.interactions.type({ text, ...this.scope(handle) } as never);
+      const result = await client.interactions.type({ text, ...delay, ...this.scope(handle) } as never);
       return actionResult(result as never, `Typed ${text.length} characters`);
     } catch (error) {
       const mapped = fromAgentDeviceError(error, "type");
@@ -932,7 +963,14 @@ export class SimlockProvider implements DeviceProvider {
       const result = await call[key]();
       return actionResult(result as never, `Pressed ${key}`);
     } catch (error) {
-      throw fromAgentDeviceError(error, `press ${key}`);
+      const mapped = fromAgentDeviceError(error, `press ${key}`);
+      if (key === "dismiss_keyboard" && handle.platform === "ios" && /UNSUPPORTED|NOT_SUPPORTED|no dismiss key|unavailable/i.test(`${mapped.code} ${mapped.message}`)) {
+        // agent-device presses only a keyboard's own hide key, and the iPhone keyboard has none (#58).
+        throw new TapdanceError("NOT_SUPPORTED", "The iPhone keyboard has no hide key, so it cannot be dismissed directly", {
+          hint: "Tap the app's own Done/close control, or tap an empty, non-interactive spot above the keyboard (ui tap --x --y); press enter only when submitting is what you want.",
+        });
+      }
+      throw mapped;
     }
   }
 
@@ -1014,12 +1052,20 @@ export class SimlockProvider implements DeviceProvider {
       const result = await this.execOn(handle, "adb", args);
       const out = toLogResult(unfiltered ? "logcat (all processes)" : "logcat", result.stdout, lines);
       if (unfiltered) out.lines.push(`Note: ${options.appId} is not running, so these lines are not filtered to it. Launch the app and fetch logs again.`);
-      return out;
+      return capNote(out, options.lines);
     }
     const args = ["spawn", "log", "show", "--last", "3m", "--style", "compact"];
-    if (options.appId) args.push("--predicate", `subsystem BEGINSWITH "${options.appId}" OR process == "${options.appId.split(".").at(-1)}"`);
+    if (options.appId) args.push("--predicate", iosAppPredicate(options.appId, await this.iosExecutable(handle, options.appId)));
     const result = await this.execOn(handle, "simctl", args, 180_000);
-    return toLogResult("simulator log (last 3 min)", result.stdout, lines);
+    const out = toLogResult("simulator log (last 3 min)", result.stdout, lines);
+    if (options.appId) out.lines.push("Note: the system log has the app's os_log/NSLog lines; print/println output goes to stdout, which a launched app does not keep.");
+    return capNote(out, options.lines);
+  }
+
+  /** An installed iOS app's executable name (its process name in the log), from simctl listapps. */
+  private async iosExecutable(handle: LeaseHandle, appId: string): Promise<string | undefined> {
+    const r = await this.execOn(handle, "simctl", deviceCommands.ios.listApps().args, 30_000).catch(() => undefined);
+    return r && r.exitCode === 0 ? parseSimctlApps(r.stdout).find((a) => a.bundleId === appId)?.executable : undefined;
   }
 
   async crashLogs(handle: LeaseHandle, options: { lines: number; appId?: string }): Promise<LogResult> {
@@ -1030,7 +1076,7 @@ export class SimlockProvider implements DeviceProvider {
       return toLogResult("logcat crash buffer", result.stdout, lines);
     }
     const predicate = options.appId
-      ? `(messageType == fault OR eventMessage CONTAINS[c] "crash" OR eventMessage CONTAINS[c] "terminat") AND (subsystem BEGINSWITH "${options.appId}" OR process == "${options.appId.split(".").at(-1)}" OR eventMessage CONTAINS "${options.appId}")`
+      ? `(messageType == fault OR eventMessage CONTAINS[c] "crash" OR eventMessage CONTAINS[c] "terminat") AND (${iosAppPredicate(options.appId, await this.iosExecutable(handle, options.appId))} OR eventMessage CONTAINS "${options.appId}")`
       : `messageType == fault OR eventMessage CONTAINS[c] "crash"`;
     const result = await this.execOn(handle, "simctl", ["spawn", "log", "show", "--last", "10m", "--style", "compact", "--predicate", predicate], 180_000);
     const out = toLogResult("simulator faults and crash messages (last 10 min)", result.stdout, lines);
@@ -1330,6 +1376,17 @@ function clampLines(lines: number): number {
   return Math.min(lines, 5000);
 }
 
+/** Where an iOS switch row's toggle sits: 42 pt in from its trailing edge, vertically centred. */
+export function switchKnobPoint(rect: { x: number; y: number; width: number; height: number }): { x: number; y: number } {
+  return { x: Math.round(rect.x + rect.width - 42), y: Math.round(rect.y + rect.height / 2) };
+}
+
+/** Says so when the caller asked for more lines than one call returns (#59). */
+function capNote(out: LogResult, asked: number): LogResult {
+  if (Number.isInteger(asked) && asked > 5000) out.lines.push(`Note: capped at 5000 lines (asked for ${asked}).`);
+  return out;
+}
+
 function toLogResult(source: string, text: string, lines: number): LogResult {
   const all = text.split("\n").filter((l) => l.length > 0);
   return { source, lines: all.slice(-lines), truncated: all.length > lines };
@@ -1434,12 +1491,22 @@ export function parseUiautomator(xml: string, interactiveOnly: boolean): ScreenI
 }
 
 /** Apps from `simctl listapps` (an old-style plist): bundle id, name and whether it is a user app. */
-export function parseSimctlApps(plist: string): Array<{ bundleId: string; name?: string; user: boolean }> {
-  const out: Array<{ bundleId: string; name?: string; user: boolean }> = [];
+export function parseSimctlApps(plist: string): Array<{ bundleId: string; name?: string; executable?: string; user: boolean }> {
+  const out: Array<{ bundleId: string; name?: string; executable?: string; user: boolean }> = [];
   for (const m of plist.matchAll(/^\s{4}"?([A-Za-z0-9_.-]+)"?\s*=\s*\{([\s\S]*?)^\s{4}\};/gm)) {
     const body = m[2]!;
     const name = /CFBundleDisplayName\s*=\s*"?([^";\n]+)"?;/.exec(body)?.[1] ?? /CFBundleName\s*=\s*"?([^";\n]+)"?;/.exec(body)?.[1];
-    out.push({ bundleId: m[1]!, ...(name ? { name } : {}), user: /ApplicationType\s*=\s*User;/.test(body) });
+    const executable = /CFBundleExecutable\s*=\s*"?([^";\n]+)"?;/.exec(body)?.[1];
+    out.push({ bundleId: m[1]!, ...(name ? { name } : {}), ...(executable ? { executable } : {}), user: /ApplicationType\s*=\s*User;/.test(body) });
   }
   return out;
+}
+
+/**
+ * The log predicate that selects one iOS app: its subsystem, or its process, whose name is the app's
+ * executable (Pianolune for com.measify.pianolune), compared without case (#59).
+ */
+export function iosAppPredicate(appId: string, executable?: string): string {
+  const exe = executable && /^[A-Za-z0-9_.-]{1,100}$/.test(executable) ? executable : appId.split(".").at(-1)!;
+  return `subsystem BEGINSWITH "${appId}" OR process ==[c] "${exe}"`;
 }

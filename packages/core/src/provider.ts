@@ -87,7 +87,8 @@ export interface DeviceProvider {
   ): Promise<ActionResult>;
   waitFor(handle: LeaseHandle, condition: WaitCondition, timeoutMs: number): Promise<WaitResult>;
   alert(handle: LeaseHandle, action: AlertAction): Promise<AlertResult>;
-  typeText(handle: LeaseHandle, text: string, target?: ElementTarget): Promise<ActionResult>;
+  /** `delayMs` spaces the keystrokes, for text fields that drop fast input (Compose on iOS, #58). */
+  typeText(handle: LeaseHandle, text: string, target?: ElementTarget, options?: { delayMs?: number }): Promise<ActionResult>;
   pressKey(handle: LeaseHandle, key: DeviceKey): Promise<ActionResult>;
 
   screenshot(handle: LeaseHandle, outPath: string): Promise<{ path: string; width?: number; height?: number }>;

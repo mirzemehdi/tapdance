@@ -411,7 +411,8 @@ async function killApp(ctx: DeviceOperationContext, handle: LeaseHandle, appId: 
  * closes it (the simulator has no API for either).
  */
 async function notificationCenter(ctx: DeviceOperationContext, open: boolean): Promise<DeviceOperationResult> {
-  const snap = (await agentDevice("read the screen size", () => ctx.client.capture.snapshot({ interactiveOnly: true, ...ctx.scope } as never))) as { viewport?: { width?: number; height?: number } };
+  // The size comes from a snapshot of the session's app; with no app running (#49) use a phone's.
+  const snap = (await ctx.client.capture.snapshot({ interactiveOnly: true, ...ctx.scope } as never).catch(() => undefined)) as { viewport?: { width?: number; height?: number } } | undefined;
   const w = snap?.viewport?.width ?? 402;
   const h = snap?.viewport?.height ?? 874;
   const x = Math.round(w * 0.25);

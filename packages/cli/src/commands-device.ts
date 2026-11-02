@@ -626,10 +626,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
 
   targetOptions(ui.command("type <text>").description("Type text; with a target, replace that field's content"))
-    .action(async (text: string, o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string }) =>
+    .option("--delay-ms <ms>", "pause between keystrokes, for fields that drop fast input (a fill that drops characters is retried once at 80 ms on its own)")
+    .action(async (text: string, o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; delayMs?: string }) =>
       run(globals(), async (t, out) => {
         const named = { ...(o.text !== undefined ? { text: o.text } : {}), ...(o.id !== undefined ? { id: o.id } : {}), ...(o.ref !== undefined ? { ref: o.ref } : {}), ...(o.selector !== undefined ? { selector: o.selector } : {}), ...(o.x !== undefined ? { x: numArg("--x", o.x)! } : {}), ...(o.y !== undefined ? { y: numArg("--y", o.y)! } : {}) };
-        const r = await t.typeText(text, Object.keys(named).length ? parseTarget(named) : undefined);
+        const r = await t.typeText(text, Object.keys(named).length ? parseTarget(named) : undefined, o.delayMs !== undefined ? { delayMs: numArg("--delay-ms", o.delayMs)! } : {});
         out.result(r, () => r.message);
       }),
     );

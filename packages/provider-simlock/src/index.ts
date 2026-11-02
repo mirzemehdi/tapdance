@@ -1,5 +1,5 @@
 export { AxeBackend, flattenAxe, type AxeNode } from "./axe.js";
-export { SimlockProvider, describeBadHealth, PROVIDER_NAME, TESTED_SIMLOCK_VERSION, type SimlockProviderOptions, toAgentDeviceTarget, toUiElement, validateAppPath, checkAppId } from "./provider.js";
+export { SimlockProvider, describeBadHealth, iosAppPredicate, parseSimctlApps, switchKnobPoint, PROVIDER_NAME, TESTED_SIMLOCK_VERSION, type SimlockProviderOptions, toAgentDeviceTarget, toUiElement, validateAppPath, checkAppId } from "./provider.js";
 export { SimlockHttp, parseExecStream, type SimlockStatus, type SimlockLease, type SimlockWorker } from "./http.js";
 export {
   readLocalProfile,

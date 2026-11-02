@@ -65,7 +65,8 @@ describe("builds on the host (#45)", () => {
     const xcode = calls.find((c) => c.startsWith("xcodebuild"))!;
     expect(xcode).toContain("-scheme iosApp");
     expect(xcode).toContain("-sdk iphonesimulator");
-    expect(xcode).toContain("CODE_SIGNING_ALLOWED=NO");
+    expect(xcode).toContain("CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO");
+    expect(xcode).not.toContain("CODE_SIGNING_ALLOWED=NO");
     expect(lines).toContain(`Building https://github.com/acme/pianolune at ${SHA} (main)`);
     // A second build fetches instead of cloning again.
     const second = fakeRunner(root);
@@ -104,7 +105,7 @@ describe("builds on the host (#45)", () => {
     const args = second.calls.find((c) => c.startsWith("xcodebuild"))!;
     expect(args).toContain("ARCHS=x86_64");
     expect(args).not.toContain("ARCHS=arm64");
-    expect(args).toContain("CODE_SIGNING_ALLOWED=NO ONLY_ACTIVE_ARCH=YES ARCHS=x86_64 EXCLUDED_ARCHS= build");
+    expect(args).toContain("CODE_SIGNING_REQUIRED=NO ONLY_ACTIVE_ARCH=YES ARCHS=x86_64 EXCLUDED_ARCHS= build");
     for (const bad of ["SWIFT_EXEC=/bin/sh", "CC=clang", "OTHER_SWIFT_FLAGS=-x", "ARCHS=$(id)", "ARCHS=a/b", "archs=arm64"]) {
       expect(() => checkBuildRequest({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios", xcodeSettings: [bad] }, settings), bad).toThrow();
     }

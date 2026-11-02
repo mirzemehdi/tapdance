@@ -16,7 +16,7 @@ import {
   validateAppPath,
 } from "./index.js";
 import { CODE_MAP } from "./agent-device-errors.js";
-import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, focusedPackage, matchesTarget, summarizeDiff } from "./provider.js";
+import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, focusedPackage, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -651,5 +651,17 @@ describe("iOS gaps (#48-#50)", () => {
     const e = fromAgentDeviceError({ message: "iOS snapshot requires an active app session for this device. Run open first.", details: { hint: "agent-device open <app>" } }, "inspect");
     expect(e.hint).toMatch(/Home Screen/);
     expect(e.hint).not.toMatch(/agent-device open/);
+    // The same hint when the session's app was killed (#50).
+    expect(fromAgentDeviceError({ message: "app 'com.measify.pianolune' is not running" }, "inspect").hint).toMatch(/launch it again/);
+  });
+  it("filters iOS logs by the app's executable, without case (#59)", () => {
+    const plist = `{\n    "com.measify.pianolune" =     {\n        ApplicationType = User;\n        CFBundleDisplayName = Pianolune;\n        CFBundleExecutable = Pianolune;\n    };\n}`;
+    expect(parseSimctlApps(plist)).toEqual([{ bundleId: "com.measify.pianolune", name: "Pianolune", executable: "Pianolune", user: true }]);
+    expect(iosAppPredicate("com.measify.pianolune", "Pianolune")).toBe('subsystem BEGINSWITH "com.measify.pianolune" OR process ==[c] "Pianolune"');
+    expect(iosAppPredicate("com.measify.pianolune")).toContain('process ==[c] "pianolune"');
+    expect(iosAppPredicate("com.x", 'bad"name')).toContain('process ==[c] "x"');
+  });
+  it("taps an iOS switch row at its toggle, not its label (#58)", () => {
+    expect(switchKnobPoint({ x: 0, y: 136, width: 402, height: 48 })).toEqual({ x: 360, y: 160 });
   });
 });

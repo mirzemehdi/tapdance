@@ -253,7 +253,10 @@ async function buildIos(req: BuildRequest, src: string, cache: string, step: Ste
       "generic/platform=iOS Simulator",
       "-derivedDataPath",
       derived,
-      "CODE_SIGNING_ALLOWED=NO",
+      // Ad-hoc signing, as Xcode's Run does for a simulator: no team needed, and the app keeps its
+      // entitlements (application-identifier, keychain groups), which Keychain needs (#57).
+      "CODE_SIGN_IDENTITY=-",
+      "CODE_SIGNING_REQUIRED=NO",
       ...defaults,
       ...extra,
       "build",

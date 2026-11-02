@@ -641,9 +641,9 @@ export class Tapdance {
     return this.onDevice((handle, provider) => provider.alert(handle, action));
   }
 
-  async typeText(text: string, target?: ElementTarget): Promise<ActionResult> {
+  async typeText(text: string, target?: ElementTarget, options: { delayMs?: number } = {}): Promise<ActionResult> {
     await this.guardHuman();
-    return this.onDevice((handle, provider) => provider.typeText(handle, text, target));
+    return this.onDevice((handle, provider) => provider.typeText(handle, text, target, options));
   }
 
   async pressKey(key: DeviceKey): Promise<ActionResult> {

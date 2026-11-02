@@ -179,8 +179,9 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
 - **Which code:** only repositories on the allow-list. With `--protected-ref main` the host builds only
   commits already on `main` of the remote, so a compromised agent with push rights cannot get an
   unreviewed branch built. The reply and the audit log name the exact commit.
-- **iOS:** `xcodebuild -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'` with
-  `CODE_SIGNING_ALLOWED=NO`, building only this Mac's simulator arch (`ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`
+- **iOS:** `xcodebuild -sdk iphonesimulator -destination 'generic/platform=iOS Simulator'`, signed
+  ad-hoc like Xcode's Run (`CODE_SIGN_IDENTITY=-`, no team needed) so the app keeps its entitlements
+  and Keychain works, building only this Mac's simulator arch (`ARCHS=arm64 ONLY_ACTIVE_ARCH=YES`
   on Apple silicon, as Xcode's Run does; Kotlin Multiplatform apps usually declare only
   `iosSimulatorArm64`). `--project` and `--scheme` when the repository has more than one Xcode
   project. `--xcode-setting KEY=VALUE` passes a build setting from a short list (`ARCHS`,

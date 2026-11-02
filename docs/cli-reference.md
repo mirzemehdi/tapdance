@@ -343,7 +343,7 @@ the apps the automation backend sees.
 ```text
 tapdance ui inspect [--all] [--compact] [--bounds] [--system]
 tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>] [--inject]
-tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>]
+tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>] [--delay-ms <ms>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
 tapdance ui wait  (--text <text> | --absent <text> | --stable) [--timeout <ms>]
 tapdance ui sequence <file.json> [--start-on-text <text>] [--offset-ms <ms>] [--wait <seconds>]
@@ -360,13 +360,13 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 | Command | Notes |
 | --- | --- |
 | `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
-| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. |
-| `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. |
+| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). |
+| `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). A fill that drops characters is retried once at 80 ms on its own and says so. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
 | `ui sequence` | Android: runs timed taps **inside the emulator** as one shell script, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). Each tap starts in the background at its time; the reply gives every tap's `actualMs` and `driftMs` (when it started on the device; Android's `input` then takes a few tens of ms to deliver it). `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. Through a worker guard it needs `allow.deviceShell`. Not yet run on a device. |
 | `ui alert` | `get` shows a system alert's title, message and buttons; `accept` presses the allowing button, `dismiss` the declining one. Not available with the AXe backend. |
-| `ui key` | `back` is Android back or iOS in-app back. |
+| `ui key` | `back` is Android back or iOS in-app back. `dismiss_keyboard` presses the keyboard's own hide key; the iPhone keyboard has none, so on iOS it is refused with a hint (tap the app's Done control or an empty spot above the keyboard). |
 
 ## Evidence
 
@@ -398,8 +398,11 @@ tapdance logs [-n, --lines <n>] [--app <id>] [--crash]
 ```
 
 Recent device logs (Android logcat, iOS simulator unified log), default 200 lines, at most 5000.
-`--app` filters to one app; `--crash` shows Android's crash buffer or iOS faults and crash messages from
-the last 10 minutes. The output is also saved as an artifact.
+`--app` filters to one app (iOS: its subsystem or its process, the app's executable name). On iOS the
+system log has the app's `os_log`/`NSLog` lines, not `print`/`println` output, which goes to stdout.
+`--crash` shows Android's crash buffer or iOS faults and crash messages from the last 10 minutes; full
+iOS crash reports (`.ips`) stay on the host. Asking for more than 5000 lines says it was capped. The
+output is also saved as an artifact.
 
 ### `artifacts`
 
@@ -1465,6 +1468,9 @@ Options:
   --selector <selector>  agent-device selector
   --x <x>                x coordinate (fallback)
   --y <y>                y coordinate (fallback)
+  --delay-ms <ms>        pause between keystrokes, for fields that drop fast
+                         input (a fill that drops characters is retried once at
+                         80 ms on its own)
   -h, --help             display help for command
 ```
 
