@@ -156,7 +156,13 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   }
   await git(["checkout", "--force", "--detach", sha], "git checkout");
   await git(["clean", "-ffd"], "git clean");
-  if (existsSync(join(src, ".gitmodules"))) await git(["submodule", "update", "--init", "--recursive"], "git submodule update");
+  if (existsSync(join(src, ".gitmodules"))) {
+    // A submodule the host cannot fetch (another account, ssh without a key) is often docs or tooling
+    // the app does not need: warn and build; the build fails on its own if it did need it.
+    await git(["submodule", "update", "--init", "--recursive"], "git submodule update").catch((error: unknown) =>
+      onLine(`warning: some submodules could not be fetched (${(error as Error).message}); building without them`),
+    );
+  }
 
   const artifact = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step);
   onLine(`Built ${relative(cache, artifact)}`);

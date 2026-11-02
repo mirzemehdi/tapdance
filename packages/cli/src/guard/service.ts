@@ -44,9 +44,14 @@ export function guardServicePaths(platform: ServicePlatform, home: string): { fi
  */
 export function guardServiceEnvironment(env: NodeJS.ProcessEnv, node: string, androidSdk?: string): Record<string, string> {
   const sdk = androidSdk ?? env["ANDROID_HOME"] ?? env["ANDROID_SDK_ROOT"];
+  const java = env["JAVA_HOME"];
   const path = [
     ...(sdk ? [join(sdk, "platform-tools"), join(sdk, "emulator"), join(sdk, "cmdline-tools", "latest", "bin")] : []),
     dirname(node),
+    // Builds (`allow.builds`) run git, gh, xcodebuild and Gradle: the usual install places for them.
+    ...(java ? [join(java, "bin")] : []),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
     "/usr/bin",
     "/bin",
     "/usr/sbin",
@@ -55,6 +60,7 @@ export function guardServiceEnvironment(env: NodeJS.ProcessEnv, node: string, an
   return {
     PATH: [...new Set(path)].join(":"),
     ...(sdk ? { ANDROID_HOME: sdk } : {}),
+    ...(java ? { JAVA_HOME: java } : {}),
     ...(env["TAPDANCE_HOME"] ? { TAPDANCE_HOME: env["TAPDANCE_HOME"] } : {}),
     ...(env["SIMLOCK_HOME"] ? { SIMLOCK_HOME: env["SIMLOCK_HOME"] } : {}),
   };
