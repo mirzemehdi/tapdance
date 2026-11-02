@@ -99,14 +99,26 @@ tapdance connect <endpoint host up printed> < pairing-<label>.token   # on the V
 ```
 
 `host up` sets up device-only mode step by step and prints the `connect` line to paste on the agent's
-machine; the token goes to a mode-600 file, never to the terminal. You can cut the paired machine off
-at any time from the Mac (`tapdance worker guard revoke all`, or `tapdance host down --all`), or pause
-and resume hosting without re-pairing (`tapdance host pause` / `tapdance host resume`); see
-[Take access away](docs/security/personal-mac.md#take-access-away). `tapdance host token` copies the
-token to your clipboard. The installer's prerequisite step
-and the build were run on a scratch home; `host up` itself has **not yet run end to end** (no fresh
-machine, no second machine yet): see
-[one-command host](docs/deployment/one-command-host.md).
+machine; the token goes to a mode-600 file, never to the terminal.
+
+#### Day-to-day control on the Mac
+
+| Command | What it does |
+| --- | --- |
+| `tapdance host status` | State of each `host up` step: worker, guard, pairing, Tailscale, memory used by devices. |
+| `tapdance host token` | Copies the pairing token to the clipboard to hand to the agent (`--show` prints it once). |
+| `tapdance host pause` | Stop for now, keep the pairing: the guard (and its `caffeinate`), the Tailscale exposure, the worker and every emulator/simulator stop, and nothing restarts at login. The VPS can no longer reach the Mac. |
+| `tapdance host resume` | Start again after `pause`, with the same settings; the agent reconnects with its existing token while it is still valid. |
+| `tapdance host down` | Stop hosting: remove the guard service and its `tailscale serve` entry (tokens kept unless `--revoke`). |
+| `tapdance host down --all` | Stop everything and take access away: guard, Tailscale exposure, worker, devices, and revoke every token. Pair again with `host up`. |
+| `tapdance worker guard revoke all` | Revoke every token only; hosting keeps running. |
+
+Details and what each one leaves behind: [Take access away](docs/security/personal-mac.md#take-access-away)
+and [Pause, resume, or stop for good](docs/deployment/one-command-host.md#pause-resume-or-stop-for-good).
+
+The installer's prerequisite step and the build were run on a scratch home; `host up` itself has
+**not yet run end to end** on a fresh machine (`pause`, `resume`, `down --all` and `token` are
+unit-tested only): see [one-command host](docs/deployment/one-command-host.md).
 
 ## Deployment modes
 
@@ -189,6 +201,7 @@ Run `tapdance <command> --help` for every option. Global flags: `--json`, `--con
 | Apps | `app install <path>`, `app launch <appId>`, `app stop <appId>`, `app list` |
 | UI | `ui inspect`, `ui tap`, `ui swipe`, `ui type`, `ui wait`, `ui alert`, `ui key` |
 | Evidence | `screenshot`, `record start / stop`, `logs`, `artifacts`, `view` |
+| Personal-Mac host | `host up / status / token / pause / resume / down [--all]`; `connect <endpoint>` on the agent's machine |
 | Self-hosting | `gateway setup / token / status`, `worker check / install / login / logout / start / stop / status / logs / restart`, `simlock`, `worker guard start / pair / tokens / revoke / policy / audit` |
 | External tools | `tools list / doctor / versions`, `tool <name> -- <args>`, `asc -- <args>`, `android -- <args>` |
 | Agents | `mcp` (stdio), `mcp --http` (Streamable HTTP) |
