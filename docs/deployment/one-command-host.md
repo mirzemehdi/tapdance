@@ -101,6 +101,9 @@ tapdance host down              # remove the guard service and `tailscale serve`
 tapdance host down --revoke     # also revoke every paired control machine and delete the token files
 ```
 
+To cut off a paired machine without stopping, or to see what it did, see
+[Take access away](../security/personal-mac.md#take-access-away).
+
 `host down` asks first (`--yes` skips the question). It leaves the Simlock worker running for local
 agents; stop it with `tapdance worker stop`.
 

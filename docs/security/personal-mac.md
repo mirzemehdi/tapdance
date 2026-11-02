@@ -99,6 +99,23 @@ plugged in. On Linux `--keep-awake` changes nothing; use
 The LaunchAgent and the systemd unit are covered by unit tests of the generated files only; neither
 has been installed on a real machine yet.
 
+### Take access away
+
+Everything here runs on your Mac; nothing the paired machine sends can undo it.
+
+| You want to | Run (on the Mac) | Effect |
+| --- | --- | --- |
+| See who is paired | `tapdance worker guard tokens` | Each pairing's id, label and expiry. |
+| See what they did | `tapdance worker guard audit` | Every request, allowed or refused (no tokens, no file contents). |
+| Cut off one machine | `tapdance worker guard revoke <id>` | Its token stops working on its next request. Hosting continues for others. |
+| Cut off every machine | `tapdance worker guard revoke all` | All tokens stop working. Pair again with `tapdance host up` (or `worker guard pair`). |
+| Stop hosting | `tapdance host down --revoke` | Revokes every token, removes the guard's login service and the Tailscale exposure. |
+| Stop the devices too | `tapdance worker stop` | No emulators or simulators to drive. |
+| Instantly, without a terminal | Quit or disconnect Tailscale | The paired machine can no longer reach your Mac at all. |
+
+Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–90) in
+`~/.tapdance/worker/policy.json` for shorter pairings; it applies to tokens issued afterwards.
+
 ### What the guard enforces, on the Mac
 
 - **Its own credentials.** Tokens are created only by `guard pair` on the Mac; it requires a terminal
