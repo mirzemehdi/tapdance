@@ -210,7 +210,9 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       return { ok: true, message: `Location set to ${change.latitude}, ${change.longitude}`, data: { result: r as unknown } };
     }
     const r = await update({ setting: name, ...(value !== undefined ? { state: value } : {}), ...(change.appId ? { app: change.appId } : {}) });
-    return { ok: true, message: value === undefined ? `Read ${name}` : `${name} → ${value}`, data: { result: r as unknown } };
+    // A read answers with agent-device's own sentence ("Text size is large") when it has one.
+    const said = (r as { message?: unknown } | undefined)?.message;
+    return { ok: true, message: value === undefined ? (typeof said === "string" && said ? said : `Read ${name}`) : `${name} → ${value}`, data: { result: r as unknown } };
   }
   switch (name) {
     case "permission": {

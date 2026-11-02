@@ -569,9 +569,10 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--compact", "leave out unlabelled containers (useful with --all on Compose or SwiftUI screens)")
     .option("--bounds", "show each element's position and size in pixels (x,y w×h); --json always includes them as rect")
     .option("--system", "Android: every window as the system sees it (uiautomator), e.g. a Chrome Custom Tab and its URL, or a system picker; refs are not tappable")
-    .action(async (o: { all?: boolean; compact?: boolean; bounds?: boolean; system?: boolean }) =>
+    .option("--app <appId>", "switch to this app as it is (no relaunch) and read it, e.g. com.apple.mobilesafari after a link-out; later reads stay on it until you launch yours")
+    .action(async (o: { all?: boolean; compact?: boolean; bounds?: boolean; system?: boolean; app?: string }) =>
       run(globals(), async (t, out) => {
-        const s = await t.inspect({ interactiveOnly: !o.all, ...(o.compact ? { compact: true } : {}), ...(o.system ? { system: true } : {}) });
+        const s = await t.inspect({ interactiveOnly: !o.all, ...(o.compact ? { compact: true } : {}), ...(o.system ? { system: true } : {}), ...(o.app ? { appId: o.app } : {}) });
         out.result(s, () =>
           [
             dim(`${s.app ?? "unknown app"}${s.viewport ? ` · ${s.viewport.width}×${s.viewport.height}` : ""} · ${s.elements.length} elements${s.truncated ? " (truncated)" : ""}`),

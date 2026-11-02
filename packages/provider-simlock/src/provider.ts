@@ -637,7 +637,11 @@ export class SimlockProvider implements DeviceProvider {
 
   // ---------------------------------------------------------------- UI
 
-  async inspect(handle: LeaseHandle, options: { interactiveOnly?: boolean; system?: boolean } = {}): Promise<ScreenInspection> {
+  async inspect(handle: LeaseHandle, options: { interactiveOnly?: boolean; system?: boolean; appId?: string } = {}): Promise<ScreenInspection> {
+    // agent-device reads the session's app and brings it to the front first, so after a link-out a
+    // plain read hides Safari again (#58). Reading another app means making it the session's app:
+    // a launch without relaunch activates it as it is (Safari keeps its page).
+    if (options.appId !== undefined) await this.launchApp(handle, options.appId);
     if (options.system) {
       if (handle.platform !== "android") throw new TapdanceError("NOT_SUPPORTED", "The system view is Android only", { hint: "On iOS, inspect_screen already sees system sheets." });
       const cmd = deviceCommands.android.uiautomatorDump();
@@ -1085,8 +1089,7 @@ export class SimlockProvider implements DeviceProvider {
     return out;
   }
 
-  async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
-    if (operation.kind === "crash-list" || operation.kind === "crash-pull") return this.crashReports(handle, operation);
+  private runDevice(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
     return runDeviceOperation(
       {
         client: this.agentClient(handle),
@@ -1098,6 +1101,25 @@ export class SimlockProvider implements DeviceProvider {
       handle,
       operation,
     );
+  }
+
+  async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
+    if (operation.kind === "crash-list" || operation.kind === "crash-pull") return this.crashReports(handle, operation);
+    if (operation.kind === "notifications" && operation.action !== "list" && handle.platform === "ios") {
+      // agent-device drives the session's app; with that app killed (a reminder test) Notification
+      // Center is out of reach. SpringBoard can be the session's app, and draws Notification Center (#49).
+      try {
+        return await this.runDevice(handle, operation);
+      } catch (error) {
+        if (!/is not running|active app session/i.test((error as Error).message)) throw error;
+        await this.launchApp(handle, "com.apple.springboard");
+        // Right after the switch the swipe can land before SpringBoard takes input (seen on iOS 26.5).
+        await new Promise((r) => setTimeout(r, 1500));
+        const r = await this.runDevice(handle, operation);
+        return { ...r, message: `${r.message}. The session now reads SpringBoard (the Home Screen and Notification Center); launch your app to go back to it.` };
+      }
+    }
+    return this.runDevice(handle, operation);
   }
 
   /** iOS crash reports of the leased simulator: read on this Mac, or through a worker guard (#59). */

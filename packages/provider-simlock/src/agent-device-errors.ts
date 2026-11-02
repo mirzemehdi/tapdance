@@ -91,7 +91,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   } else if (/requires an active app session|Run open first|app '[^']*' is not running/i.test(message)) {
     // agent-device's iOS reads need the session's app running; on the Home Screen there is none (#50).
     code = "DEVICE_ERROR";
-    hint = "No app is in front (the Home Screen, or the app was killed). agent-device reads the session's app, so launch it again (launch_app / `tapdance app launch <id>`) before reading the screen; SpringBoard itself cannot be inspected.";
+    hint = "No app is in front (the Home Screen, or the app was killed). agent-device reads the session's app: launch it again (launch_app / `tapdance app launch <id>`), or read the Home Screen with `tapdance ui inspect --app com.apple.springboard` (inspect_screen app_id).";
     noBackendHint = true;
   } else if (STALE_REF.test(rawCode) || STALE_REF.test(reason) || STALE_REF.test(message)) {
     code = "ELEMENT_NOT_FOUND";

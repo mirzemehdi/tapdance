@@ -167,6 +167,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed: after a `pnpm install` that moved agent-device (a new version or patch), the worker kept
   running the old copy, because `worker install` stored its absolute path in Simlock's config.
   `worker start` and `worker restart` now point Simlock at the agent-device this Tapdance ships.
+- Added (self-test, #58/#49/#50): `ui inspect --app <id>` (MCP `inspect_screen app_id`) switches to that
+  app as it is and reads it: Safari after a link-out (any plain read brings the session's app back to
+  the front), or `com.apple.springboard` for the Home Screen. `notifications open/close` on iOS with the
+  app killed switch to SpringBoard on their own, so Notification Center can be read. A setting read
+  prints its value ("Text size is large").
 
 ### Not yet proven
 

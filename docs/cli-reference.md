@@ -370,7 +370,7 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 
 | Command | Notes |
 | --- | --- |
-| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
+| `ui inspect` | `--app <id>` switches to that app as it is (no relaunch) and reads it: on iOS every read brings the session's app to the front, so after a link-out use `--app com.apple.mobilesafari`, and for the Home Screen `--app com.apple.springboard`; later reads stay on it until you launch your app. Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
 | `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). A fill that drops characters is retried once at 80 ms on its own and says so. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
@@ -1433,15 +1433,18 @@ Usage: tapdance ui inspect [options]
 List on-screen elements with refs, roles and labels
 
 Options:
-  --all       include non-interactive elements
-  --compact   leave out unlabelled containers (useful with --all on Compose or
-              SwiftUI screens)
-  --bounds    show each element's position and size in pixels (x,y w×h); --json
-              always includes them as rect
-  --system    Android: every window as the system sees it (uiautomator), e.g. a
-              Chrome Custom Tab and its URL, or a system picker; refs are not
-              tappable
-  -h, --help  display help for command
+  --all          include non-interactive elements
+  --compact      leave out unlabelled containers (useful with --all on Compose
+                 or SwiftUI screens)
+  --bounds       show each element's position and size in pixels (x,y w×h);
+                 --json always includes them as rect
+  --system       Android: every window as the system sees it (uiautomator), e.g.
+                 a Chrome Custom Tab and its URL, or a system picker; refs are
+                 not tappable
+  --app <appId>  switch to this app as it is (no relaunch) and read it, e.g.
+                 com.apple.mobilesafari after a link-out; later reads stay on it
+                 until you launch yours
+  -h, --help     display help for command
 ```
 
 ### `tapdance ui tap`

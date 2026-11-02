@@ -547,10 +547,11 @@ export const TOOLS: ToolDefinition[] = [
           .boolean()
           .optional()
           .describe("Android: every window as the system sees it (uiautomator), when the normal view misses what is in front: a Chrome Custom Tab (warnings then include 'browser: <url>') or a system picker. Its refs (@u…) cannot be tapped; tap x/y at the centre of rect, or text with inject."),
+        app_id: appId.optional().describe("Switch to this app as it is (no relaunch) and read it, e.g. com.apple.mobilesafari after a link-out opened Safari. Reads bring the session's app to the front, so a plain read after a link-out shows your app again; later reads stay on this app until you launch_app yours."),
       })
       .strict(),
     annotations: { readOnlyHint: true },
-    run: async (t, a) => json(await t.inspect({ interactiveOnly: a["all"] !== true, ...(a["compact"] ? { compact: true } : {}), ...(a["system"] ? { system: true } : {}) })),
+    run: async (t, a) => json(await t.inspect({ interactiveOnly: a["all"] !== true, ...(a["compact"] ? { compact: true } : {}), ...(a["system"] ? { system: true } : {}), ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) })),
   },
   {
     name: "tap",

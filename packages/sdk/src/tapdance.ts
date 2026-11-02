@@ -594,9 +594,9 @@ export class Tapdance {
 
   // ------------------------------------------------------------ UI
 
-  async inspect(options: { interactiveOnly?: boolean; compact?: boolean; system?: boolean } = {}): Promise<ScreenInspection> {
+  async inspect(options: { interactiveOnly?: boolean; compact?: boolean; system?: boolean; appId?: string } = {}): Promise<ScreenInspection> {
     const screen = await this.onDevice((handle, provider) =>
-      provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}), ...(options.system ? { system: true } : {}) }),
+      provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}), ...(options.system ? { system: true } : {}), ...(options.appId ? { appId: options.appId } : {}) }),
     );
     return options.compact ? { ...screen, elements: compactElements(screen.elements) } : screen;
   }
