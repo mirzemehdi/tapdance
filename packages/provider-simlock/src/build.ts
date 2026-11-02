@@ -167,7 +167,9 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     if (r.code !== 0) {
       // The cause is often hundreds of lines above the end (#53): name it in the message itself.
       const cause = digest.lines();
+      const fix = missingSdkHint(cause.join("\n"));
       throw new TapdanceError("DEVICE_ERROR", `${what} failed (exit ${r.code})${cause.length > 0 ? `:\n  ${cause.join("\n  ")}` : ""}`, {
+        ...(fix ? { hint: fix } : {}),
         details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n") },
       });
     }
@@ -312,6 +314,22 @@ export class FailureDigest {
   private push(into: string[], line: string, max: number): void {
     if (into.length < max && !into.includes(line)) into.push(line);
   }
+}
+
+/**
+ * The host's install command when a Gradle build stops on an Android SDK package the host lacks
+ * (CMake, an NDK, a platform). Gradle does not fetch these itself; the host owner installs them once.
+ */
+export function missingSdkHint(text: string): string | undefined {
+  const sdkmanager = "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager";
+  const cmake = /CMake '([0-9.]+)' was not found/.exec(text);
+  if (cmake) return `The host's Android SDK has no CMake ${cmake[1]}. On the host: ${sdkmanager} "cmake;${cmake[1]}"`;
+  const ndk = /No version of NDK matched the requested version ([0-9.]+)|NDK (?:at \S+ )?did not have a source\.properties file|ndk;([0-9.]+)/.exec(text);
+  if (ndk && (ndk[1] ?? ndk[2])) return `The host's Android SDK has no NDK ${ndk[1] ?? ndk[2]}. On the host: ${sdkmanager} "ndk;${ndk[1] ?? ndk[2]}"`;
+  const platform = /Failed to find target with hash string\s+'android-([0-9]+)'|platforms;android-([0-9]+)/.exec(text);
+  const api = platform?.[1] ?? platform?.[2];
+  if (api) return `The host's Android SDK has no platform android-${api}. On the host: ${sdkmanager} "platforms;android-${api}"`;
+  return undefined;
 }
 
 /** Whether a build log line belongs in the quiet default view: steps, errors and the outcome (#53). */

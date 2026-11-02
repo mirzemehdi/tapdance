@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCacheDir, checkBuildRequest, FailureDigest, hostSimulatorArch, isNotableBuildLine, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
+import { buildCacheDir, checkBuildRequest, FailureDigest, hostSimulatorArch, isNotableBuildLine, missingSdkHint, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
 
 const SHA = "a".repeat(40);
 const settings: BuildSettings = { repos: ["https://github.com/acme/pianolune.git"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 };
@@ -149,5 +149,12 @@ describe("builds on the host (#45)", () => {
     expect(isNotableBuildLine("e: file:///x/Main.kt:3:1 Unresolved reference")).toBe(true);
     expect(isNotableBuildLine("    builtin-copy -exclude .DS_Store")).toBe(false);
     expect(isNotableBuildLine("export PATH=/usr/bin")).toBe(false);
+  });
+
+  it("names the SDK package a Gradle build is missing on the host", () => {
+    expect(missingSdkHint("> [CXX1300] CMake '3.31.6' was not found in SDK, PATH, or by cmake.dir property.")).toContain('sdkmanager "cmake;3.31.6"');
+    expect(missingSdkHint("No version of NDK matched the requested version 27.0.12077973")).toContain('sdkmanager "ndk;27.0.12077973"');
+    expect(missingSdkHint("Failed to find target with hash string 'android-35'")).toContain('sdkmanager "platforms;android-35"');
+    expect(missingSdkHint("e: Unresolved reference")).toBeUndefined();
   });
 });

@@ -172,6 +172,9 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   the front), or `com.apple.springboard` for the Home Screen. `notifications open/close` on iOS with the
   app killed switch to SpringBoard on their own, so Notification Center can be read. A setting read
   prints its value ("Text size is large").
+- Added: a Gradle build that stops on an Android SDK package the host lacks (CMake, an NDK, a platform)
+  now ends with the exact `sdkmanager` command to run on the host (seen in the self-test: Pianolune's
+  audio engine needs CMake 3.31.6).
 
 ### Not yet proven
 
