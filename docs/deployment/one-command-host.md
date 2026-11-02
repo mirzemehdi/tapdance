@@ -202,10 +202,13 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   [threat model](../security/threat-model.md). The guard reads the policy when it starts:
   `host builds enable`/`disable` restart it when no lease is running, and say so otherwise.
 
-Not built yet: uploading the agent's working tree (`--source`) and building from a folder already on
-the host (`--host-path`).
+Builds come from git only: the code the host builds is always a commit it can name. Uploading the
+agent's working tree or building from a folder already on the host is not planned; push the change to
+a branch on an allow-listed repository instead (with protected refs, merge it first).
 
-**Not yet run on a real repository.** The steps are unit-tested with a fake git, Xcode and Gradle.
+**Run once on a real repository:** on the owner's Mac, Pianolune's clone, checkout and xcodebuild ran;
+the build failed in its Kotlin framework step on the simulator arch (#53, fixed, waiting for a re-run). The steps are also
+unit-tested with a fake git, Xcode and Gradle.
 
 ## Starting from nothing: `scripts/host-setup.sh`
 
