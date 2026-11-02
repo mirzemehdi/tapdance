@@ -607,7 +607,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             if (owners.size >= policy.limits.maxSessions) await activeLeases();
             if (owners.size >= policy.limits.maxSessions || owners.has(leaseId)) {
               await decide("deny", { reason: "session limit", leaseId });
-              return send(res, 429, "NO_CAPACITY", `This worker allows ${policy.limits.maxSessions} session(s) at a time`);
+              return send(res, 429, "NO_CAPACITY", `This worker allows ${policy.limits.maxSessions} session(s) at a time; another lease is running (release it first, or the host owner raises limits.maxSessions in ~/.tapdance/worker/policy.json and restarts the guard)`);
             }
             owners.set(leaseId, token.id); // reserved while the allocate runs
             allocating.add(leaseId);
