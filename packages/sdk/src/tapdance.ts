@@ -689,7 +689,8 @@ export class Tapdance {
         stopped = await Promise.race([
           provider.stopRecording(handle, record.recording.token),
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new TapdanceError("TIMEOUT", "Stopping the recording took longer than 120 s", { hint: "Check `tapdance device status`; long recordings take longer to download, so prefer several shorter ones." })), 120_000).unref(),
+            // agent-device's own download (90 s), then Tapdance's slower fallback for a large file (#51).
+            setTimeout(() => reject(new TapdanceError("TIMEOUT", "Stopping the recording took longer than 32 min", { hint: "Check `tapdance device status`; on a slow link prefer several shorter recordings." })), 32 * 60_000).unref(),
           ),
         ]);
       } catch (error) {

@@ -601,7 +601,9 @@ describe("tap sequence (#42)", () => {
     expect(cmd.args[0]).toBe("shell");
     expect(cmd.args[1]).toContain("input tap 120 900 &");
     expect(cmd.args[1]).toContain("input swipe 240 900 240 900 200 &");
-    expect(cmd.args[1]).toContain("+ 480000000 -");
+    // Microseconds since the start, never nanosecond epochs: Android's shell arithmetic is 32-bit (#42).
+    expect(cmd.args[1]).toContain("(480000 - n) / 1000");
+    expect(cmd.args[1]).not.toMatch(/%s%N/);
     expect(() => android.tapSequence([{ t: 100, x: 1, y: 1 }, { t: 50, x: 1, y: 1 }])).toThrow(/time order/);
     expect(() => android.tapSequence([{ t: 0, x: "1; reboot" as never, y: 1 }])).toThrow(/whole number/);
     expect(() => android.tapSequence([])).toThrow(/1 to 500/);

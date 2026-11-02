@@ -101,7 +101,8 @@ The messages below are quoted from the code (with paths and names shortened).
 | `PROVIDER_UNAVAILABLE` "refused: android is not available on this simlock"; `doctor` fails "Android emulators available … offers no android device" | The worker skipped its Android driver at start. Most often an adb server Simlock did not start was listening on Simlock's port 5038 (one left behind, or `adb -P 5038 …` run by hand), and Simlock refuses to attach to it. Its log says "Skipped Android driver: adb server unavailable … occupied". | On the worker machine: `tapdance worker restart` (it stops that adb server first). Never run `adb -P 5038` by hand while the worker is stopped. |
 | `device release` says it could not reach the worker (exit 4) | The worker or guard did not answer; the lease still stands there. | Run `tapdance device release` again once `tapdance doctor` passes; otherwise the device is freed when the lease expires. |
 | `doctor`: "… serves HTTPS now" | The guard moved from http to https (HTTPS Certificates turned on, `host up` run again); the saved endpoint is still `http://`. | `tapdance connect https://<host>.ts.net:4720 < pairing-<label>.token` (the token is saved per address). |
-| `record stop` fails after 120 s with `TIMEOUT` | The recording could not be fetched (a lost lease, a worker restarting). | Check `tapdance device status`. On remote workers prefer several shorter recordings over one long one. |
+| `record stop` fails with `TIMEOUT` (after 32 min) or "Remote artifact download timed out" | The recording could not be fetched: a lost lease, a worker restarting, or a very slow link (Tapdance retries agent-device's 90 s download with up to 30 minutes). | Check `tapdance device status`. On a slow link prefer several shorter recordings over one long one. |
+| A tap from a second shell waits until `ui wait` ends | A session's device calls run one at a time. | Run the tap first, or put timed taps in one `ui sequence`. |
 
 ## Apps and UI
 

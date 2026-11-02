@@ -1,3 +1,8 @@
+import { createWriteStream } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { TapdanceError, type ErrorCode } from "@tapdance/core";
 
 /** Status → Tapdance code for Simlock's JSON errors (`{"error":{"code","message"}}`). */
@@ -222,6 +227,21 @@ export class SimlockHttp {
     }
     if (!result) throw new TapdanceError("PROVIDER_UNREACHABLE", "The build stream ended without a result");
     return result;
+  }
+
+  /** Streams an agent-device artifact (a recording) to `destination`, with a generous time limit. */
+  async downloadArtifact(artifactId: string, scope: { leaseId: string; tenant: string }, destination: string, timeoutMs: number): Promise<void> {
+    const response = await this.request(`/v1/agent-device/artifacts/${encodeURIComponent(artifactId)}`, {
+      headers: {
+        ...(this.token ? { "x-agent-device-token": this.token } : {}),
+        "x-agent-device-lease-id": scope.leaseId,
+        ...(/^[a-zA-Z0-9._-]{1,128}$/.test(scope.tenant) ? { "x-agent-device-tenant": scope.tenant } : {}),
+      },
+      timeoutMs,
+    });
+    if (!response.ok || !response.body) throw await toError(response, "/v1/agent-device/artifacts/{id}");
+    await mkdir(dirname(destination), { recursive: true });
+    await pipeline(Readable.fromWeb(response.body as never), createWriteStream(destination, { mode: 0o600 }));
   }
 
   async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000, stdin?: string): Promise<ExecResult> {

@@ -341,7 +341,7 @@ export const TOOLS: ToolDefinition[] = [
       "permission: value grant|deny|reset, permission camera|microphone|photos|contacts|notifications|location|calendar|…, app_id.",
       "faceid|touchid: match|nonmatch|enroll|unenroll (iOS). fingerprint: match|nonmatch (Android). reset-keychain (iOS, every app).",
       "orientation: portrait|landscape (= landscape-left)|landscape-left|landscape-right|portrait-upside-down. status-bar-time: HH:MM (or H:MM), clear, or no value to read it (iOS, for screenshots).",
-      "browser-first-run: off (Android: Chrome opens links without its welcome, sign-in and default-browser screens; set it before a test that opens links).",
+      "browser-first-run: off (Android: Chrome opens links without its welcome, sign-in, default-browser and notifications screens; set it before a test that opens links). orientation without a value reads portrait or landscape.",
       "Anything else on Android (density, locale, time zone, …): device_shell, e.g. `wm density 320`. iOS language: launch_app args [\"-AppleLanguages\", \"(de)\"].",
     ].join(" "),
     input: z

@@ -231,7 +231,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Q-03 | 🟡 | Procedures in `docs/testing/e2e-procedures.md`; only the macOS-iOS one has been run. |
 | Q-04 | ✅ | Every ✅ here links evidence or states a one-line basis for a non-device requirement; results from fakes are 🧪. |
 | Q-05 | ⛔ | Needs a GCP project with billing and nested virtualization allowed. |
-| Q-06 | 🟡 | Same flow ✅ on one host through a real gateway; the two-machine run needs a non-KVM VPS (the test Mac can be the laptop). |
+| Q-06 | 🟡 | Same flow ✅ on one host through a real gateway. Two machines over a real network ✅ in device-only mode (VPS → Mac guard over Tailscale, [evidence](docs/testing/evidence/2026-11-02-vps-field-runs.md)); the gateway mode across two machines is still not run. |
 | Q-07 | ⛔ | Needs Q-05/Q-06 infrastructure. |
 | Q-08 | ⛔ | Needs a VPS; the test Mac can be the Mac worker. |
 | Q-09 | ✅ | AXe sign-in flow on the demo app ([evidence](docs/testing/evidence/2026-11-01-axe.md)). |
@@ -290,7 +290,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | ID | | Notes |
 | --- | --- | --- |
 | K-01 | 🟡 | Multi-perspective review (architecture, developer, ease of use, docs, coding agent) is in use; no recorded review artifact in the repository. |
-| K-02 | ⬜ | Field test on a real VPS by an agent filing issues: pending. Runbook in [docs/testing/field-testing.md](docs/testing/field-testing.md). |
+| K-02 | ✅ | An agent on an Ubuntu VPS tested a real app (Pianolune) on the owner's Mac through the worker guard over Tailscale, Android and iOS, about 1,000 calls per run, and filed issues #13–#52 ([evidence](docs/testing/evidence/2026-11-02-vps-field-runs.md), reported by that agent). Runbook in [docs/testing/field-testing.md](docs/testing/field-testing.md). |
 | K-03 | 🟡 | No first-slice report file in the repository; this file, PRODUCT.md and the evidence records hold the facts it covers. |
 
 ## Changes in this round (unit-tested only)
@@ -322,6 +322,7 @@ paths below were exercised only by unit tests.
 | `ui inspect --bounds`; `ui swipe --until` matches part of a label and stops at the end of a list; emulator notification lists readable through the guard by default (#35) | Y-04, H-06 | 🧪 | `guard.test.ts` 14 |
 | `device release` reports an unreachable worker (exit 4) and keeps the record to retry | C-04 | 🧪 | build |
 | `doctor` fails, `devices` notes and `host up` warns when a platform has capacity but no device on offer; `worker start/restart` stop a stray adb server on Simlock's port even without `adb-server.json`. Restart verified on the field-test Mac 2026-11-02 (Android back in the catalog) (#39) | W-04 | ✅ / 🧪 | `provider.test.ts` "platform on offer" |
+| Field-run fixes: `ui sequence` timing in microseconds from the start (Android's shell arithmetic is 32-bit, #42); orientation read, Chrome notifications promo skipped, `inspect --system` via a file after stopping agent-device's helper (#44); `record stop` retries a timed-out remote download for up to 30 min (#51); quiet exit on EPIPE (#52) | Y-04, F-02 | 🧪 | `provider.test.ts`; sequence script run in bash with a fake clock; not yet re-run on a device |
 | Builds on the host from allow-listed git repositories (`host builds`, `app build`, MCP `build_app`): clone/fetch cache, exact sha, protected refs, xcodebuild for the simulator or Gradle, install on the lease, streamed log (#45) | H-08 | 🧪 | `build.test.ts` (fake git/Xcode/Gradle), `guard.test.ts` 16d; not yet run on a real repository |
 | Scoped guard tokens (`pair --scope`, `host up --scope`), threat model doc, host up security note and Tailscale ACL hint, token age in `host status` (#46) | H-05 | 🧪 | `guard.test.ts` 16c |
 | iOS Files app destination for `device push --to files` / `pull --files` (#47) | U-08 | 🧪 | `guard.test.ts` 16b |

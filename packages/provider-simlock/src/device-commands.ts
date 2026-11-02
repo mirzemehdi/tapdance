@@ -44,6 +44,9 @@ export function parseGroupContainer(stdout: string, group: string): string | und
 export const LOCALE = /^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|\d{3}))?$/;
 /** The most taps one timed sequence may hold. */
 export const MAX_SEQUENCE_STEPS = 500;
+/** The system dump script (`ui inspect --system`); the guard accepts exactly this string. */
+export const UIAUTOMATOR_DUMP =
+  "am force-stop com.callstack.agentdevice.snapshothelper; uiautomator dump /sdcard/tapdance-ui.xml >/dev/null 2>&1; cat /sdcard/tapdance-ui.xml; rm -f /sdcard/tapdance-ui.xml";
 /** Chrome without its welcome, sign-in and default-browser screens. */
 export const CHROME_FLAGS = "chrome --disable-fre --no-default-browser-check --no-first-run";
 /** Files pushed through exec travel as base64 on stdin; keep them small enough for one request. */
@@ -113,7 +116,11 @@ export const android = {
     };
     if (steps.length === 0 || steps.length > MAX_SEQUENCE_STEPS) throw usage(`A sequence has 1 to ${MAX_SEQUENCE_STEPS} taps`);
     let previous = 0;
-    const lines = ["s=$(date +%s%N)"];
+    // Android's mksh does 32-bit arithmetic, so nanosecond timestamps wrap every 2.1 s (#42). Count
+    // microseconds since the start instead, from whole seconds and the sub-second part: 10 minutes is
+    // 6e8 µs, well inside 32 bits. `10#` keeps a leading zero from reading as octal.
+    const since = "set -- $(date '+%s %N'); n=$(( ($1 - s0) * 1000000 + 10#${2%???} - b ))";
+    const lines = ["set -- $(date '+%s %N'); s0=$1; b=$((10#${2%???}))"];
     steps.forEach((step, i) => {
       const t = int(step.t, 600_000, "t");
       if (t < previous) throw usage("Taps must be in time order (t ascending)");
@@ -123,15 +130,23 @@ export const android = {
       const hold = step.hold === undefined ? 0 : int(step.hold, 10_000, "hold");
       const action = hold > 0 ? `input swipe ${x} ${y} ${x} ${y} ${hold}` : `input tap ${x} ${y}`;
       // Sleep until the step's time (ms resolution), then start the tap without waiting for it.
-      lines.push(`d=$(( (s + ${t}000000 - $(date +%s%N)) / 1000000 )); [ $d -gt 0 ] && sleep $((d/1000)).$(printf %03d $((d%1000)))`);
-      lines.push(`echo "${i} $(( ($(date +%s%N) - s) / 1000 ))"; ${action} &`);
+      lines.push(`${since}; d=$(( (${t * 1000} - n) / 1000 )); [ $d -gt 0 ] && sleep $((d/1000)).$(printf %03d $((d%1000)))`);
+      lines.push(`${since}; echo "${i} $n"; ${action} &`);
     });
     lines.push("wait");
     return { tool: "adb", args: ["shell", lines.join("\n")] };
   },
-  /** Every window on screen as the system sees it (XML on stdout), including other apps' windows. */
+  /**
+   * Every window on screen as the system sees it (XML on stdout), including other apps' windows.
+   * agent-device's snapshot helper holds the one UiAutomation connection, so it is stopped first (its
+   * next snapshot starts it again); `adb shell` without a terminal has no /dev/tty, so the dump goes
+   * to a file that is printed and removed (#44).
+   */
   uiautomatorDump(): DeviceCommand {
-    return { tool: "adb", args: ["shell", "uiautomator", "dump", "/dev/tty"] };
+    return { tool: "adb", args: ["shell", UIAUTOMATOR_DUMP] };
+  },
+  chromeNotifications(): DeviceCommand {
+    return { tool: "adb", args: ["shell", "pm", "grant", "com.android.chrome", "android.permission.POST_NOTIFICATIONS"] };
   },
   /** Android 13+: one app's language, e.g. de-DE. */
   appLocale(appId: string, locale: string): DeviceCommand {

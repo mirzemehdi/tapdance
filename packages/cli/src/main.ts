@@ -70,6 +70,15 @@ export function buildProgram(): Command {
 }
 
 const program = buildProgram();
+// A reader that closes early (`| head`, `| tail -0`) is normal for agents: the command already did its
+// work, so leave quietly instead of crashing on EPIPE (#52).
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") process.exit(process.exitCode ?? 0);
+    throw error;
+  });
+}
+
 program.parseAsync(process.argv).catch((error: unknown) => {
   const out = output(program.opts<GlobalOptions>());
   process.exitCode = out.error(error instanceof Error ? error : new TapdanceError("INTERNAL", String(error)));

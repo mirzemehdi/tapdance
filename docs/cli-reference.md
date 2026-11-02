@@ -257,9 +257,10 @@ the device is wiped on release.
   (`on`/`off`, or `--lat`/`--lon`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid`
   (iOS), `fingerprint` (Android), `permission <grant|deny|reset> --permission <p> --app <id>`,
   `reset-keychain` (iOS), `orientation` (`portrait`, `landscape` = `landscape-left`, `landscape-right`,
-`portrait-upside-down`), `status-bar-time <HH:MM|clear>` (iOS), `browser-first-run off` (Android: Chrome
-opens links without its welcome, sign-in and default-browser screens; through Chrome's command-line
-file, so on emulator images, which allow it). Other Android settings
+`portrait-upside-down`; without a value it reads portrait or landscape from the screen size),
+`status-bar-time <HH:MM|clear>` (iOS), `browser-first-run off` (Android: Chrome opens links without its
+welcome, sign-in, default-browser and notifications screens; through Chrome's command-line file and the
+notification permission, so on emulator images, which allow it). Other Android settings
   (density, locale, time zone, …) go through `device shell`. Without a value it
   reads the setting where the platform can. A combination a platform cannot do fails with
   `NOT_SUPPORTED` and says what to do instead. Common Android settings through `device shell` (standard
@@ -357,7 +358,7 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 
 | Command | Notes |
 | --- | --- |
-| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
+| `ui inspect` | Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
 | `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
@@ -385,7 +386,9 @@ tapdance record stop
 
 Records the screen to MP4. The path is chosen at `start`; `record stop -o` is accepted but ignored.
 Starting twice, or stopping with no recording running, is a `USAGE` error. Releasing the device stops a
-running recording.
+running recording. On a remote worker, agent-device downloads the video within 90 s; a longer download
+(a long recording over a slow link) is retried by Tapdance with up to 30 minutes, so the file is not
+lost. `record stop` gives up after 32 minutes.
 
 ### `logs`
 
@@ -655,8 +658,11 @@ These codes are **retryable by default** (the same call may succeed later withou
 
 ## Session identity
 
-A session owns at most one lease. Every CLI call and MCP server works out which session it belongs to,
-in this order:
+A session owns at most one lease, and its device calls run one at a time: a `ui tap` sent from a
+second shell while `ui wait` or `ui sequence` runs starts when that call ends. To act during a long wait,
+use `ui sequence` (it runs on the device) or `device shell` with an on-device `nohup` command.
+
+Every CLI call and MCP server works out which session it belongs to, in this order:
 
 | Order | Source | Session id |
 | --- | --- | --- |

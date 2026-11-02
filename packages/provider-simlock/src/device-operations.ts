@@ -219,7 +219,15 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       await update({ setting: "reset-keychain", state: "clear" });
       return { ok: true, message: "Reset the simulator keychain (every app)" };
     case "orientation": {
-      if (!value) throw new TapdanceError("USAGE", "orientation needs a value: portrait, landscape (= landscape-left), landscape-left, landscape-right or portrait-upside-down");
+      if (!value) {
+        // Read: the screen's shape says portrait or landscape (not which way it turned).
+        const snap = (await agentDevice("read the orientation", () => ctx.client.capture.snapshot({ interactiveOnly: true, ...scope } as never))) as { viewport?: { width?: number; height?: number } };
+        const w = snap?.viewport?.width;
+        const h = snap?.viewport?.height;
+        if (!w || !h) throw new TapdanceError("DEVICE_ERROR", "The screen size was not reported, so the orientation is unknown");
+        const orientation = w > h ? "landscape" : "portrait";
+        return { ok: true, message: `The screen is ${orientation} (${w}×${h})`, data: { orientation, width: w, height: h } };
+      }
       if (value === "landscape") value = "landscape-left";
       const command = ctx.client.command as unknown as { orientation: (o: unknown) => Promise<unknown> };
       // agent-device confirms the rotation within a short budget that a busy emulator can miss once.
@@ -235,6 +243,8 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       if (value !== "off") throw new TapdanceError("USAGE", "browser-first-run takes off (Chrome skips its welcome, sign-in and default-browser screens)");
       await run(ctx, android.chromeFlags(), "write Chrome's command line");
       await run(ctx, android.chromeDebugApp(), "let Chrome read its command line");
+      // Android 13+: with the permission already granted, Chrome skips its notifications promo sheet.
+      await ctx.exec(android.chromeNotifications());
       await ctx.exec({ tool: "adb", args: ["shell", "am", "force-stop", "com.android.chrome"] });
       return { ok: true, message: "Chrome now starts without its first-run screens (until the lease ends)" };
     }

@@ -464,6 +464,7 @@ describe("worker guard: hardening", () => {
       dc.android.uiautomatorDump(),
       dc.android.chromeFlags(),
       dc.android.chromeDebugApp(),
+      dc.android.chromeNotifications(),
       dc.android.focusedWindow(),
       dc.android.shade(true),
       dc.android.postNotification("Hi there", "Body with $(stuff)"),

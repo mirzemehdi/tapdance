@@ -959,12 +959,12 @@ export class SimlockProvider implements DeviceProvider {
     const base = { action: "start", path: resolve(outPath), ...this.scope(handle) };
     try {
       const result = (await client.recording.record(base as never)) as { outPath?: string };
-      return { path: result.outPath ?? resolve(outPath) };
+      return { path: result.outPath ?? resolve(outPath), token: { path: result.outPath ?? resolve(outPath) } };
     } catch (error) {
       // App-scoped recording needs an app in the foreground; fall back to the whole screen.
       try {
         const result = (await client.recording.record({ ...base, recordingScope: "device" } as never)) as { outPath?: string };
-        return { path: result.outPath ?? resolve(outPath) };
+        return { path: result.outPath ?? resolve(outPath), token: { path: result.outPath ?? resolve(outPath) } };
       } catch {
         throw fromAgentDeviceError(error, "start recording");
       }
@@ -987,6 +987,15 @@ export class SimlockProvider implements DeviceProvider {
       const extra = (result.chunks ?? []).map((c) => c.path).filter((p) => p !== result.outPath);
       return { path: result.outPath, ...(result.durationMs ? { durationMs: result.durationMs } : {}), extraPaths: extra };
     } catch (error) {
+      // agent-device gives a remote artifact download 90 s in all; a long recording over a slow link
+      // takes longer, and the file would be lost. Fetch the same artifact with more time (#51).
+      const artifactId = (error as { details?: { artifactId?: unknown } }).details?.artifactId;
+      const path = typeof token?.["path"] === "string" ? token["path"] : undefined;
+      if (/download timed out/i.test(String((error as Error).message)) && typeof artifactId === "string" && path && !this.isLocal()) {
+        const d = this.data(handle);
+        await this.http.downloadArtifact(artifactId, { leaseId: handle.leaseId, tenant: d.tenant }, path, 30 * 60_000);
+        return { path, extraPaths: [] };
+      }
       throw fromAgentDeviceError(error, "stop recording");
     }
   }

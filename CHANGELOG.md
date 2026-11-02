@@ -126,6 +126,15 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   bar; posting a notification to a simulator or emulator needs `interaction`, not `notifications`.
 - Fixed: `perf memory` refused by the guard.
 
+### After verifying #42–#44 (issues #51, #52)
+
+- Fixed: `ui sequence` firing early after gaps of 2.15 s or more (32-bit shell arithmetic); `ui inspect
+  --system` failing (UiAutomation held by agent-device's helper, no /dev/tty); `record stop` losing a long
+  recording to agent-device's 90 s download limit; the CLI crashing on EPIPE when piped to `head`.
+- Added: reading `device setting orientation`; `browser-first-run off` also skips Chrome's notifications
+  promo; builds tolerate a submodule the host cannot fetch; the guard service PATH includes Homebrew and
+  `JAVA_HOME`.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,
