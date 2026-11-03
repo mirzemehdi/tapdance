@@ -17,15 +17,16 @@ the agent reaches it only through the worker guard, never through Simlock direct
 opened to the public internet. This is the recommended way to host devices for an agent on another
 machine. For a cloud host, follow [Google Cloud N2](google-cloud-n2.md).
 
-> **Status: run on the owner's Mac; Linux and a fresh machine not yet run.** `host up` ran on the
-> owner's Mac (Node.js and Android Studio already installed), and an agent on a Linux VPS tested a real
-> app through it over Tailscale, Android and iOS, with the CLI
+> **Status: run on the owner's Mac and on a fresh Linux VM.** `host up` ran on the owner's Mac (Node.js
+> and Android Studio already installed), and an agent on a Linux VPS tested a real app through it over
+> Tailscale, Android and iOS, with the CLI
 > ([field runs](../testing/evidence/2026-11-02-vps-field-runs.md),
-> [self-test through the guard](../testing/evidence/2026-11-03-selftest-through-guard.md)). Not yet run:
-> `host up` on a Linux host or a cloud VM, `scripts/host-setup.sh` end to end on a fresh machine, and
-> the Linux-only steps (kvm ACL, `tailscale up --operator`, linger, headless emulators), which are
-> unit-tested only. `host pause`, `host resume` and `host down --all` are unit-tested only. See
-> [STATUS.md](../../STATUS.md) (W-07) and please report what you find with `tapdance report`.
+> [self-test through the guard](../testing/evidence/2026-11-03-selftest-through-guard.md)).
+> `scripts/host-setup.sh` and `host up` ran end to end on a fresh Google Cloud N2 VM (Ubuntu 24.04),
+> including the Linux-only steps, and a Mac drove it with `connect`
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: a fresh Mac, `host pause`,
+> `host resume` and `host down --all` (unit-tested only). See [STATUS.md](../../STATUS.md) (W-07) and
+> please report what you find with `tapdance report`.
 
 ## What `host up` does
 
@@ -36,8 +37,8 @@ command's output and a fix, and exits non-zero. Running it again is safe.
 | --- | --- |
 | 1. prerequisites | The checks from `tapdance worker check` (Node.js 22.13+, Android SDK with command-line tools, platform-tools, emulator, a system image, KVM on Linux; Xcode and an iOS runtime on macOS), plus a JDK check. On Linux it also reads the DMI vendor strings: a cloud VM without `/dev/kvm` is reported as unable to host Android emulators (nested virtualization is off). It **installs nothing**: if neither Android nor iOS is usable it stops and prints the install commands, with Homebrew lines on macOS. |
 | 2. account | The guard's own refusals: not as root, not while this worker has joined a gateway, and not from a macOS administrator account unless you pass `--allow-admin-account`. On an admin account it stops, explains the risk, and prints the exact command to run again. Nothing has changed at this point. |
-| 3. worker | Same as `tapdance worker install --service`: the bundled Simlock worker on loopback, agent-device, streaming and input on, restarted, and Simlock's login service installed. On Linux with no display (`DISPLAY` and `WAYLAND_DISPLAY` unset, as over SSH) it also sets `android.emulator.headless`, so emulators boot without a window. On a re-run, when the worker answers and the guard service is running, it is left alone, because a restart would end the sessions of an agent using this host. |
-| 4. guard service | Same as `tapdance worker guard install`: a LaunchAgent (macOS) or systemd user unit (Linux) that runs `worker guard start` at login and restarts it; then it waits until the guard answers on `127.0.0.1:4720`. A running service with an unchanged file is left alone (a restart keeps lease ownership, which the guard saves, but drops in-flight uploads). It refuses while a `worker guard start` in a terminal holds the port. On Linux it also turns on **linger** for your user (`loginctl enable-linger`), so the worker and guard keep running after you log out and start at boot; if that is refused it prints the `sudo` command. |
+| 3. worker | Same as `tapdance worker install --service`: the bundled Simlock worker on loopback, agent-device, streaming and input on, restarted, and Simlock's login service installed. On Linux with no display (`DISPLAY` and `WAYLAND_DISPLAY` unset, as over SSH) it also sets `android.emulator.headless`, so emulators boot without a window, and `android.emulator.gpu` to `swiftshader_indirect` (with the emulator's `auto`, an N2 VM without a GPU idled at 136–165 % CPU and screen-changing taps took 3.4–7.9 s; with `swiftshader_indirect`, about 0 % and 2.2–2.6 s). On a re-run, when the worker answers and the guard service is running, it is left alone, because a restart would end the sessions of an agent using this host. |
+| 4. guard service | Same as `tapdance worker guard install`: a LaunchAgent (macOS) or systemd user unit (Linux) that runs `worker guard start` at login and restarts it; then it waits until the guard answers on `127.0.0.1:4720`. A running service with an unchanged file is left alone (a restart keeps lease ownership, which the guard saves, but drops in-flight uploads). It refuses while a `worker guard start` in a terminal holds the port. On Linux it also turns on **linger** for your user (`loginctl enable-linger`), waits for the user manager's bus and points `systemctl --user` at it (over a non-interactive SSH session there is none otherwise: "Failed to connect to bus: No medium found"), so the worker and guard keep running after you log out and start at boot; if linger is refused it prints the `sudo` command. Accounts logind cannot look up (Google Cloud OS Login) cannot linger; for them `host-setup.sh` installs `tapdance-user-manager.service`, which starts the user manager at boot, and `host up` starts it. |
 | 5. pairing | Issues a guard token labelled with this machine's hostname (or `--label`), after you confirm at the terminal (`--yes` skips the prompt; without a terminal it needs `--yes`). The token is written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and is **never printed**. If a valid token file for that label exists, it is kept; `--repair` revokes it and issues a new one. Tokens expire after `limits.tokenDays` (7 days by default); after that, `host up` issues a new one. |
 | 6. tailscale | If `tailscale` is installed and logged in, it exposes the guard on this machine's MagicDNS name. With HTTPS certificates on the tailnet (`CertDomains` in `tailscale status --json`) it runs `tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the endpoint is `https://…`; without them (the default on many tailnets) it runs `tailscale serve --bg --http=4720 …` and the endpoint is `http://<mac>.<tailnet>.ts.net:4720`, which travels inside the tailnet's WireGuard encryption and which `connect` accepts. Otherwise (or with `--no-tailscale`) it prints what to do and the endpoint stays `http://127.0.0.1:4720`, which only this machine can use. `host status` shows which mode is served; `host down` turns off either. On Linux, when `tailscale serve` is refused ("Access denied"), it stops and names the fix: `sudo tailscale set --operator=$USER` once. |
 | 7. self-test | Through the guard, with the new token: lists the devices, leases an Android device (iOS if there is no Android), takes a screenshot and releases it. `--skip-self-test` keeps only the device list. The first boot of a device can take minutes, and the lease waits (up to 5 minutes) while an agent holds the guard's only session (`limits.maxSessions` is 1 by default). |
@@ -221,9 +222,12 @@ Builds come from git only: the code the host builds is always a commit it can na
 agent's working tree or building from a folder already on the host is not planned; push the change to
 a branch on an allow-listed repository instead (with protected refs, merge it first).
 
-**Run once on a real repository:** on the owner's Mac, Pianolune's clone, checkout and xcodebuild ran;
-the build failed in its Kotlin framework step on the simulator arch (#53, fixed, waiting for a re-run). The steps are also
-unit-tested with a fake git, Xcode and Gradle.
+**Run on a real repository:** on the owner's Mac, Pianolune's clone, checkout and xcodebuild ran;
+the iOS build failed in its Kotlin framework step on the simulator arch (#53, fixed, waiting for a re-run).
+On a Google Cloud N2 VM, the Android build of Pianolune's private repository succeeded (Gradle 2 min
+40 s, a reused build reinstalled in 11 s) through the CLI and MCP `build_app`
+([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). The steps are also unit-tested with a
+fake git, Xcode and Gradle.
 
 ### Private repositories
 
@@ -278,6 +282,11 @@ The script (`set -euo pipefail`):
      once, without logging out. A reboot drops the ACL; the group stays and applies from your next
      login. Without `/dev/kvm` at all it skips the emulator and the system image, installs Tapdance,
      and stops: that machine can only be the agent's machine.
+   - **Emulator libraries:** when `emulator -version` fails for a missing system library (Ubuntu's cloud
+     image lacks them), it installs `libpulse0 libxkbfile1 libxi6 libsm6 libice6` with apt (dnf and
+     pacman equivalents elsewhere).
+   - **User manager:** when your account cannot linger (Google Cloud OS Login), it installs
+     `tapdance-user-manager.service`, a system unit that starts your systemd user manager at boot.
    - **Tailscale:** after asking, it runs `sudo tailscale up --operator=$USER`, which prints a login
      link to open in any browser. Being the operator lets your user run `tailscale serve`, which
      `host up` needs. If the machine is already logged in, it only runs
@@ -291,14 +300,31 @@ The script (`set -euo pipefail`):
 Its own options: `--yes`, `--check`, `--skip-prerequisites`, `--prerequisites-only`,
 `--no-system-image`.
 
-Run so far: the check and the install of Node.js, the Android command-line tools, platform-tools and
-the emulator into a scratch home on macOS (2 min 13 s), the Temurin download, and a fresh clone and
-build with only that Node.js. Not yet run: the system image download, Linux, and `host up` end to end.
+Run so far: on macOS, the check and the install of Node.js, the Android command-line tools,
+platform-tools and the emulator into a scratch home (2 min 13 s), the Temurin download, and a fresh
+clone and build with only that Node.js. On a fresh Google Cloud N2 VM (Ubuntu 24.04): everything,
+including the system image download, Tailscale login and `host up` with its self-test; the run that
+passed took 2 min 44 s once earlier attempts had downloaded the SDK
+([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: a fresh Mac end to end.
 
-Piped through `curl`, the script's input is the pipe, so `host up` cannot ask you to approve the
-pairing. If it stops there with "Pairing must be approved at this machine's terminal", run
-`~/.local/bin/tapdance host up` (with the same options) in the same terminal; finished steps are left
-as they are. `--yes` approves it up front, but also skips the install question.
+Piped through `curl`, the script's input is the pipe; it gives `host up` your terminal (`/dev/tty`), so
+you can approve the pairing there. If it still stops with "Pairing must be approved at this machine's
+terminal" (no terminal at all, for example `gcloud compute ssh --command` without `-t`), run
+`~/.local/bin/tapdance host up` (with the same options) in an interactive terminal; finished steps are
+left as they are. `--yes` approves it up front, but also skips the install question.
+
+### Failures seen on a real Linux VM
+
+These stopped the first setup runs on the N2 VM and are handled now; on an older checkout, pull and run
+the script again. Details in [troubleshooting](../troubleshooting.md#linux-and-cloud-hosts-host-up).
+
+| Symptom | Cause | Handled by |
+| --- | --- | --- |
+| `host up` step 3: "Failed to connect to bus: No medium found" | No systemd user manager in a non-interactive SSH session | `host up`: linger, then waits for the user manager's bus |
+| "Could not enable linger: No such file or directory" | A Google Cloud OS Login account | `host-setup.sh`: `tapdance-user-manager.service` |
+| The emulator does not start; "system library libpulse.so.0 is missing" | Ubuntu's cloud image lacks the emulator's libraries | `host-setup.sh` installs them; host check `host.kvm.emulator-libs` |
+| Slow taps, the idle emulator at 130 % CPU or more | `-gpu auto` without a GPU | `swiftshader_indirect` on headless Linux hosts (existing hosts: see troubleshooting) |
+| `doctor` exits 10 against a Linux host | iOS was counted as missing | iOS on a Linux worker is skipped ("needs a Mac") |
 
 ## Windows
 
@@ -311,8 +337,8 @@ with nested virtualization (untested).
 
 A cloud VM can host Android emulators only with nested virtualization. The documented route is a Google
 Cloud N2 VM: [Google Cloud N2](google-cloud-n2.md) walks through creating it (Terraform or `gcloud`),
-running `scripts/host-setup.sh` on it over IAP SSH, and connecting the agent's machine (written, not yet
-run end to end). On a VM without `/dev/kvm`, `host up` says so in step 1 and stops; Tapdance never falls
+running `scripts/host-setup.sh` on it over IAP SSH, and connecting the agent's machine (run end to end
+from a Mac: [evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). On a VM without `/dev/kvm`, `host up` says so in step 1 and stops; Tapdance never falls
 back to software emulation. In that case keep the VM as the agent's machine and host the devices
 elsewhere.
 

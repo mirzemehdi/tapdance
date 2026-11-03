@@ -6,12 +6,13 @@ ordinary VPS, your laptop). After `apply` you run Tapdance's setup script on the
 installs everything and runs `tapdance host up`, and the agent's machine connects over Tailscale with
 `tapdance connect`. No inbound port is opened besides IAP SSH.
 
-> **Status: written, not yet run.** This configuration was **not** checked with
-> `terraform validate` (Terraform was not installed where it was written) and has **never been
-> applied** to a real project. The startup script was syntax-checked only. Neither the N2 VM nor
-> Android on a Linux host has been run. Run `terraform init && terraform validate` before your first
-> `plan`, and read [STATUS.md](../../../STATUS.md) (rows G-01, G-02, D-02, Q-05) for the current
-> state. Please open an issue with what you find.
+> **Status: applied once (2026-11-03).** With Terraform 1.17.1, `terraform validate` passed and
+> `apply` created 13 resources in 99 s (`region = "europe-west1"`, `zone = "europe-west1-b"`,
+> `assign_external_ip = true`, `boot_disk_size_gb = 64`, `max_run_hours` at its default of 8). The VM
+> then hosted Android emulators for an agent on a Mac
+> ([evidence](../../../docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the Cloud NAT
+> default (`assign_external_ip = false`), `create_project`, `stop_schedule` and
+> `terraform destroy`. See [STATUS.md](../../../STATUS.md) (rows G-01, G-02, G-07, Q-05).
 
 The step-by-step guide (prerequisites, IAM, the setup script, connecting the agent, costs,
 troubleshooting) is [docs/deployment/google-cloud-n2.md](../../../docs/deployment/google-cloud-n2.md).

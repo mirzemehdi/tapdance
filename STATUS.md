@@ -12,9 +12,12 @@ What is built, what was proven on real hardware, and what is missing — one row
 | ⛔ | Blocked (reason given) |
 | ❓ | Needs a product decision |
 
-Last updated: 2026-11-01. Test host for "✅": MacBook Pro M1 Pro, 16 GB, macOS 26.5, Xcode 26.5, Simlock
+Last updated: 2026-11-03. Test host for "✅": MacBook Pro M1 Pro, 16 GB, macOS 26.5, Xcode 26.5, Simlock
 0.4.0, agent-device 0.21.35, iOS 18.5 and 26.5 simulators (iPhone 16), Android 34 emulators (Pixel 8,
-arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.16717390. Evidence: [docs/testing/evidence/](docs/testing/evidence/).
+arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.16717390. Linux host: a Google
+Cloud `n2-standard-4` VM (europe-west1-b, Ubuntu 24.04, nested virtualization), emulator 37.2.13 with
+`android-34;google_apis_playstore;x86_64`, driven from that Mac ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)).
+Evidence: [docs/testing/evidence/](docs/testing/evidence/).
 
 ## Headline
 
@@ -28,8 +31,14 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 - **Proven on one machine through a real gateway:** worker joined over its outbound uplink; CLI, MCP and
   the viewer (rendered in a real browser) all worked through the gateway
   ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)).
-- **Built but not yet proven on real infrastructure:** a real network between two machines (gateway on a
-  VPS, laptop or N2 worker), Android on a Linux/KVM host, the dedicated macOS worker account.
+- **Android on a Linux/KVM host, proven for real:** a Google Cloud N2 VM created with the Terraform
+  module and set up with `scripts/host-setup.sh` and `host up`, driven from the owner's Mac over
+  Tailscale in device-only mode: CLI and MCP checklists, the viewer, installs from CI, an Android build
+  on the host from a private repository, the idle stop powering the VM off, and a VM restart back to
+  ready in 54 s ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)).
+- **Built but not yet proven on real infrastructure:** gateway mode across two machines (a Simlock
+  gateway on a VPS with a laptop, N2 or Mac worker joined over a real network), the dedicated macOS
+  worker account.
 - **Personal-Mac protection:** device-only mode (`tapdance worker guard`) passed its malicious-client
   unit tests (15 at the time of the run) and ran the full MCP loop on a real simulator
   ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); `worker login` now refuses unless the
@@ -47,12 +56,12 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 
 | ID | | Notes |
 | --- | --- | --- |
-| P-01 | 🟡 | iOS loop ✅ on a real simulator ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android loop ✅ on real emulators ([evidence](docs/testing/evidence/2026-11-01-android.md)). No recorded run from a real agent (Claude Code/Codex/Cursor) yet; Linux/KVM and remote Android not run. |
+| P-01 | 🟡 | iOS loop ✅ on a real simulator ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Android loop ✅ on real emulators ([evidence](docs/testing/evidence/2026-11-01-android.md)), and on a Linux/KVM host (Google Cloud N2) from a Mac over Tailscale, CLI and MCP ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). No recorded run from a real agent (Claude Code/Codex/Cursor) yet: the MCP runs used a scripted client. |
 | P-02 | ✅ | CLI and MCP verified for real; SDK (`@tapdance/sdk`) is what both use. |
-| P-03 | 🟡 | Local ✅. Self-hosted implemented, not run across machines. |
+| P-03 | 🟡 | Local ✅. Self-hosted in device-only mode ✅ across two machines: an agent on a VPS with a Mac host ([evidence](docs/testing/evidence/2026-11-02-vps-field-runs.md)) and a Mac with a Linux N2 host ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Gateway mode not run across machines. |
 | P-04 | ✅ | No billing, dashboard or hosted fleet code. |
 | P-05 | 🧪 | `DeviceProvider` contract; `provider: "cloud"` reserved and refused with NOT_SUPPORTED. |
-| P-06 | 🟡 | Same tools for local and remote by construction; remote not yet exercised. |
+| P-06 | 🟡 | Same tools for local and remote by construction; the same CLI and MCP tools ran against this Mac, a Mac over Tailscale and a Google Cloud N2 VM ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Cloud Macs, gateway workers and managed infrastructure not exercised. |
 | P-07 | 🟡 | Architecture supports it (gateway needs no KVM); not yet proven (Q-06). |
 
 ### Reuse
@@ -86,7 +95,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | --- | --- | --- |
 | M-01 | ✅ | iOS ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)) and Android ([evidence](docs/testing/evidence/2026-11-01-android.md)) on the same Mac. |
 | M-02 | 🟡 | Gateway + joined worker + self-hosted provider ✅ on one Mac ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)). Two machines over a real network pending (Q-06). |
-| M-03 | 🟡 | Same code path as M-02; N2 Terraform/scripts in `infrastructure/`. Not provisioned. |
+| M-03 | ✅ | Google Cloud N2 in device-only mode: VM from `infrastructure/terraform/google-cloud-n2`, `scripts/host-setup.sh` and `host up` on it, driven from a Mac over Tailscale ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Joining an N2 worker to a gateway, OVH and other KVM hosts not run. |
 | M-04 | ⬜ | By design (future). |
 | M-05 | 🟡 | `tapdance gateway setup` ✅ on macOS; not yet run on a Linux VPS. |
 
@@ -97,7 +106,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | C-01 | ✅ | All listed commands plus `worker guard start/pair/tokens/revoke/policy/audit`, `ui wait`, `ui alert`, `ui key`, `devices install`, `artifacts`, `view`, `report`, `tools`, `tool`, `asc`, `android`, `simlock` ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). `worker connect` folded into `worker login`/`start`. |
 | C-02 | 🧪 | `--json`, stdout/stderr split, exit codes (2 usage, 3 lease, 4 provider, 5 auth, 6 capacity, 7 device, 8 unsupported, 9 timeout, 10 host, 11 human-held); tested in `packages/cli/src/cli.test.ts`. Seen for real only in part (`LEASE_ALREADY_HELD` exit 3, `HUMAN_HELD` in the [evidence](docs/testing/evidence/2026-11-01-local-ios.md)). |
 | C-03 | ✅ | No command takes a device id; session record + lock. |
-| C-04 | 🧪 | Detached keepalive spawned on lease and exited after release on a real device ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)); renewal and idle release (30 min) not observed on a device, tested in `packages/sdk/src/tapdance.test.ts`. `--hold`. |
+| C-04 | 🧪 | Detached keepalive spawned on lease and exited after release on a real device ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)); idle release seen for real on the N2 run: the CLI keepalive released a lease 30 min after its last use ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); renewal is tested in `packages/sdk/src/tapdance.test.ts`. `--hold`. |
 | C-05 | 🟡 | doctor covers host SDKs/Xcode/KVM (local), Simlock reachability, token role, capabilities, capacity, version, workers (operator token). KVM state of *remote* workers is not reported (Simlock does not expose it). |
 | C-06 | ✅ | Device/Platform/Provider/Worker/Endpoint/Status/Lease block. |
 | C-07 | 🟡 | Interactive `init` written; prompts not exercised in a TTY test. |
@@ -107,7 +116,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | ID | | Notes |
 | --- | --- | --- |
 | S-01 | 🟡 | stdio ✅ (full loop, [evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Streamable HTTP: bearer check and read-only calls tried by hand, not recorded; full device loop not run. |
-| S-02 | 🟡 | All 19 exist, plus `wait_for`, `handle_alert`, `list_tools`, `execute_tool`, `list_apps`. Called over MCP on a real device: `lease_device`, `get_device_status`, `install_app` (through the guard), `launch_app`, `inspect_screen`, `tap`, `swipe`, `press_key`, `wait_for`, `handle_alert get`, `take_screenshot`, `start_recording`, `stop_recording`, `get_logs`, `get_crash_logs`, `get_test_artifacts`, `list_tools`, `execute_tool`, `release_device` ([evidence](docs/testing/evidence/2026-11-01-local-ios.md), [guard](docs/testing/evidence/2026-11-01-worker-guard.md)). Not called over MCP on a device: `stop_app`, `type_text`, `list_devices`, `list_workers`, `list_apps`. |
+| S-02 | 🟡 | All 19 exist, plus `wait_for`, `handle_alert`, `list_tools`, `execute_tool`, `list_apps`. Called over MCP on a real device: `lease_device`, `get_device_status`, `install_app` (through the guard), `launch_app`, `inspect_screen`, `tap`, `swipe`, `press_key`, `wait_for`, `handle_alert get`, `take_screenshot`, `start_recording`, `stop_recording`, `get_logs`, `get_crash_logs`, `get_test_artifacts`, `list_tools`, `execute_tool`, `release_device` ([evidence](docs/testing/evidence/2026-11-01-local-ios.md), [guard](docs/testing/evidence/2026-11-01-worker-guard.md)). On the N2 run also `type_text` (`into_text`), `kill_app`, `clear_app_data`, `push_file`/`pull_file`, `notifications`, `opened_links`, `tap_sequence` and `install_app` with `from_ci` ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not called over MCP on a device: `stop_app`, `list_devices`, `list_workers`, `list_apps`. |
 | S-03 | 🧪 | Strict Zod inputs (unknown keys refused); `packages/mcp/src/mcp.test.ts` checks every tool. |
 | S-04 | ✅ | Settle diffs, element lists, artifact refs, screenshots inline as images, logs saved as artifacts. |
 | S-05 | ✅ | No MCP tool or CLI command takes a device id; the real MCP loop ran without one ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). Handle checks unit-tested in `packages/sdk/src/tapdance.test.ts`. |
@@ -118,8 +127,8 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 
 | ID | | Notes |
 | --- | --- | --- |
-| D-01 | 🟡 | ✅ on macOS: Android 34 emulators created and booted by Simlock, CLI and MCP loops, custom APK, Google Play image ([evidence](docs/testing/evidence/2026-11-01-android.md)). Linux worker not run (D-02). |
-| D-02 | 🧪 | CPU flags, `/dev/kvm` access, `kvm-ok`, `emulator -accel-check`; worker install refuses to pretend. Needs a Linux run. |
+| D-01 | ✅ | macOS: Android 34 emulators created and booted by Simlock, CLI and MCP loops, custom APK, Google Play image ([evidence](docs/testing/evidence/2026-11-01-android.md)). Linux with KVM: a Google Cloud N2 VM (nested virtualization, headless emulator), CLI and MCP loops, a 77 MB APK, installs from CI ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Physical Android phones not run. |
+| D-02 | 🟡 | CPU flags, `/dev/kvm` access, `kvm-ok`, `emulator -accel-check`, and `host.kvm.emulator-libs` (`emulator -version`, naming missing system libraries); worker install refuses to pretend. Ran on a real Linux VM with KVM present; the emulator-library check came from a real failure on Ubuntu's cloud image ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). The missing-KVM path (no nested virtualization) is unit-tested only. |
 | D-03 | ✅ | macOS + Xcode + Simulator: discovery, boot, `.app` install, launch, interaction, screenshots, recording, logs ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). |
 | D-04 | 🧪 | `.ipa` refused for simulators with a build hint; `.aab` refused. |
 | D-05 | 🟡 | Simlock creates its own emulators from installed images and never hands out the developer's AVDs (deliberate; protects personal devices). `worker check` reports SDK, images, AVDs, running emulators. Uninstall / clear-data / explicit wipe are not exposed yet. |
@@ -142,7 +151,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | U-07 | ✅ | One allowlist (`device-commands.ts`) used by the provider and checked by the guard (`guard.test.ts` test 14: every builder's output passes, injection attempts do not). Ran through a real guard ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). External tools on a remote lease fail fast and name these tools. |
 | U-08 | ✅ | uninstall, clear data, keychain reset, launch arguments (iOS), intents (Android) on real devices ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). |
 | U-09 | ✅ | Settings on Android and iOS ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); bluetooth, mobile data, biometrics and location not exercised. |
-| U-10 | ✅ | Android shared storage push/pull locally and through the guard; iOS Photos and app Documents locally and through the guard (a guard route that resolves every path itself; `guard.test.ts` test 16) ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Android app-sandbox push/pull not exercised (needs a debuggable app using `run-as`). |
+| U-10 | ✅ | Android shared storage push/pull locally and through the guard; iOS Photos and app Documents locally and through the guard (a guard route that resolves every path itself; `guard.test.ts` test 16) ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Android app-sandbox push/pull on a debug build of a real app, CLI and MCP, on the N2 host ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). |
 | U-11 | 🟡 | Android post/list/open/close and an iOS push payload ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Reading iOS Notification Center is by `inspect_screen` only. |
 | U-12 | 🟡 | `perf frames` and `perf memory` on Android; `perf memory` on iOS. iOS frame health is not available on simulators (agent-device supports it on real iPhones only) and says so ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Audio and MIDI are left to `device_shell` (U-14). |
 | U-14 | ✅ | `tapdance device shell` on a real Pixel 8: getprop, `wm density`, a pipe inside the emulator, stdin; refused on iOS ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Guard allow/deny incl. phones and the off switch: `guard.test.ts` 14–15. |
@@ -158,14 +167,14 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | W-04 | 🟡 | TTL + keepalive + idle release + owner-scoped MCP shutdown; per-session lock. Interrupted-allocation cleanup relies on Simlock cancelling on disconnect. |
 | W-05 | 🟡 | `gateway setup` ✅ on macOS (tokens, capabilities, config); Caddy/Tailscale steps untested. |
 | W-06 | 🟡 | See C-05. |
-| W-07 | 🟡 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` (prerequisite check and install with one confirmation, checksum-verified official downloads, a no-sudo pnpm shim for the build) and `scripts/host-setup.ps1`. Run for real: the installer's check and install of Node.js, the Android command-line tools, platform-tools and emulator into a scratch macOS home, the Temurin download, and a fresh clone and build with only that Node.js (#20). Tailscale without HTTPS certificates falls back to `serve --http` inside the tailnet (#21, unit-tested). First real run by the owner (2026-11-02) passed its self-test; fixes since: token handover (`host token`, copy prompt, fingerprint), `host pause` / `host resume`, `host down --all`, warm-spare control (`--warm`), uploads through the guard (#23). Those fixes are unit-tested only. Not yet run: `host up` on a fresh Mac, Linux, the system image download, two machines. |
+| W-07 | 🟡 | `tapdance host up/status/down`, `tapdance connect`, `scripts/host-setup.sh` (prerequisite check and install with one confirmation, checksum-verified official downloads, a no-sudo pnpm shim for the build) and `scripts/host-setup.ps1`. Run for real on the owner's Mac (2026-11-02, self-test passed; fixes since: token handover, `host pause` / `host resume`, `host down --all`, `--warm`, uploads through the guard, #23). **Linux run for real (2026-11-03):** `host-setup.sh` end to end on a fresh Google Cloud N2 VM (Node.js, JDK, SDK, the system image download, emulator libraries, Tailscale login, clone and build, then `host up`) in 2 min 44 s once fixed; linger or the OS Login boot unit, headless emulators, `tailscale serve` over HTTPS, the self-test, and everything back after a VM restart; `connect` from a Mac ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: `host up` on a fresh Mac; `host pause`, `host resume`, `host down --all` on Linux; the no-`/dev/kvm` branch of `host-setup.sh`; any pair of machines other than VPS → Mac and Mac → N2. |
 
 ### Browser viewer
 
 | ID | | Notes |
 | --- | --- | --- |
 | V-01 | ✅ | `tapdance view`: real H.264 frames (meta, avcC, keyframes) proxied from Simlock's lease stream and decoded in the browser with WebCodecs ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). |
-| V-02 | 🟡 | stream, tap, status ✅ ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)); Home, tap, Screenshot and Start/Stop recording buttons ✅ on Android ([evidence](docs/testing/evidence/2026-11-01-android.md)); second computer untested. Back/Apps are Android-only (disabled for iOS). | Over a tailnet: MagicDNS names are allowed and pages that cannot decode video (plain http off localhost) fall back to refreshed screenshots (`viewer.test.ts`; not yet seen in the owner's browser).
+| V-02 | 🟡 | stream, tap, status ✅ ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)); Home, tap, Screenshot and Start/Stop recording buttons ✅ on Android ([evidence](docs/testing/evidence/2026-11-01-android.md)); a browser on the Mac streamed an emulator on the N2 VM live ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Back/Apps are Android-only (disabled for iOS). | Over a tailnet: MagicDNS names are allowed and pages that cannot decode video (plain http off localhost) fall back to refreshed screenshots (`viewer.test.ts`; not yet seen in the owner's browser).
 | V-03 | ✅ | A touch sets a human hold; the agent's next tap failed with `HUMAN_HELD` (retryable). Take over / Hand back. Advisory: enforced by Tapdance, not by Simlock. |
 | V-04 | ✅ | Loopback-only, one-time key in the URL fragment, HttpOnly cookie, Host/Origin checks; token stays server-side. |
 | V-05 | ✅ | Simlock console is view-only/operator-only; lease stream + input socket used instead (ADR). |
@@ -174,10 +183,11 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 
 | ID | | Notes |
 | --- | --- | --- |
-| F-01 | 🟡 | ✅ local: a custom simulator `.app` (examples/ios-demo) and a custom APK (examples/android-demo) uploaded, installed, launched, filled, tapped, verified with `ui wait`, screenshot returned ([iOS](docs/testing/evidence/2026-11-01-local-ios.md), [Android](docs/testing/evidence/2026-11-01-android.md)). A custom-app install through a gateway was not run. |
+| F-01 | 🟡 | ✅ local: a custom simulator `.app` (examples/ios-demo) and a custom APK (examples/android-demo) uploaded, installed, launched, filled, tapped, verified with `ui wait`, screenshot returned ([iOS](docs/testing/evidence/2026-11-01-local-ios.md), [Android](docs/testing/evidence/2026-11-01-android.md)). Through the worker guard from another machine: a 75 MB APK VPS → Mac ([evidence](docs/testing/evidence/2026-11-02-vps-field-runs.md)) and a 77 MB APK Mac → N2 in 149 s ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). A custom-app install through a gateway was not run. |
 | F-02 | ✅ | `LocalArtifactStore` + manifest per session; `ArtifactStore` interface. |
 | F-03 | ⬜ | Uploads/downloads pass through the gateway (agent-device proxy). |
 | F-04 | 🟡 | Per-session directories on the user's disk; viewer serves only manifest entries. |
+| F-05 | ✅ | `app install --from-ci` and MCP `install_app` `from_ci` on an Android lease of the N2 host: the host downloaded the GitHub Actions artifact with its own `gh` (first about 8 s, cached 7–12 s) and installed it ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Allow-list, size cap, fork and zip checks unit-tested with a fake `gh` (`ci-artifacts.test.ts`). |
 
 ### External tools
 
@@ -211,12 +221,13 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 
 | ID | | Notes |
 | --- | --- | --- |
-| G-01 | 🟡 | Terraform + scripts written; nothing provisioned (needs your GCP project). |
-| G-02 | 🟡 | As G-01. Scripts syntax-checked only; the install script prints the join command for a person to run (token never in a script) and boots a test emulator only with `--boot-test`. |
-| G-03 | 🟡 | Written; cost figures are estimates to re-check against the GCP calculator. |
+| G-01 | ✅ | `n2-standard-4`, Ubuntu 24.04, 64 GB `pd-balanced`, nested virtualization, KVM, SDK/emulator/image, Simlock worker, outbound-only networking with IAP SSH: created once with Terraform 1.17.1 (`validate` passed, 13 resources) and run as an Android host; stopped by its idle stop and started again ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). `terraform destroy` not yet run. |
+| G-02 | ✅ | `infrastructure/terraform/google-cloud-n2/` applied once; `scripts/host-setup.sh` checked and installed everything on the VM, ran `host up` and health-checked an emulator boot (self-test) ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). By design it pairs a worker guard instead of joining a gateway; the gateway-join script (`infrastructure/scripts/install-android-worker.sh`) has not been run. |
+| G-03 | ✅ | `docs/deployment/google-cloud-n2.md` followed end to end ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Measured: setup 2 min 44 s, VM start → ready 54 s, idle stop 30 min after the last lease, 19 GB of the 64 GB disk used after the run. Prices are estimates from Google's published rates (about USD 0.21/h for `n2-standard-4` in europe-west1, disk about USD 0.21/day for 64 GB), not a billing export. |
 | G-04 | 🟡 | Written; untested procedures. |
 | G-05 | 🟡 | Written; Scaleway/MacStadium/AWS steps not exercised. |
 | G-06 | 🟡 | Docs only. |
+| G-07 | 🟡 | Idle stop ✅: the guard powered the N2 VM off 30 min after the last lease ended, and the worker, guard and Tailscale came back after a start ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Terraform `max_run_hours = 8` set on the VM, not reached. Uptime cap, stop schedule and budget alert unit-tested or not triggered (`host-stop.test.ts`, `host.test.ts`, `guard.test.ts`). |
 | O-01 | ✅ | Basis: every listed document exists — README, installation, quick start, CLI reference, MCP, Claude Code/Codex/Cursor pages, Android and iOS pages, self-hosted guides, ADR, CONTRIBUTING, SECURITY, MIT LICENSE. `cli.test.ts` checks that every command, MCP tool and config key is documented. |
 | O-02 | ✅ | `CLAUDE.md`, `AGENTS.md`; a test fails when code names a `tapdance` command that does not exist. |
 | O-03 | ✅ | This file and PRODUCT.md. |
@@ -230,12 +241,12 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Q-02 | 🟡 | Real: Simlock + iOS and Android through MCP stdio (`pnpm test:integration` with `TAPDANCE_IT_PLATFORM=ios` or `android`, each with a custom app). Mocked and labelled: provider fakes, tool executables. |
 | Q-03 | 🟡 | Procedures in `docs/testing/e2e-procedures.md`; only the macOS-iOS one has been run. |
 | Q-04 | ✅ | Every ✅ here links evidence or states a one-line basis for a non-device requirement; results from fakes are 🧪. |
-| Q-05 | ⛔ | Needs a GCP project with billing and nested virtualization allowed. |
-| Q-06 | 🟡 | Same flow ✅ on one host through a real gateway. Two machines over a real network ✅ in device-only mode (VPS → Mac guard over Tailscale, [evidence](docs/testing/evidence/2026-11-02-vps-field-runs.md)); the gateway mode across two machines is still not run. |
-| Q-07 | ⛔ | Needs Q-05/Q-06 infrastructure. |
+| Q-05 | ✅ | Provisioned with Terraform, KVM verified, emulator booted, APK installed (upload and from CI), launch, screenshot, release, all through the worker guard from a separate machine over Tailscale ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). The agent's machine was the owner's Mac, not a Linux VPS. |
+| Q-06 | 🟡 | Same flow ✅ on one host through a real gateway. Two machines over a real network ✅ in device-only mode (VPS → Mac guard over Tailscale, [evidence](docs/testing/evidence/2026-11-02-vps-field-runs.md); Mac → N2 guard, [evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); the gateway mode across two machines is still not run. |
+| Q-07 | 🟡 | Device-only variant only: an N2 host driven from a Mac, with the viewer on that Mac streaming the N2 emulator live and the owner's take-over giving `HUMAN_HELD` ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). The gateway, an agent on a VPS and a browser on a third machine not run. |
 | Q-08 | ⛔ | Needs a VPS; the test Mac can be the Mac worker. |
 | Q-09 | ✅ | AXe sign-in flow on the demo app ([evidence](docs/testing/evidence/2026-11-01-axe.md)). |
-| Q-10 | ⛔ | Needs Q-05 (the Android CLI part is proven locally, U-05). |
+| Q-10 | ⛔ | The N2 host now exists (Q-05), but the Android CLI was not run on it: external tools run on the control machine only, and a remote lease needs a worker-side executor (E-04). The Android CLI part is proven locally (U-05). |
 | Q-11 | 🟡 | `pnpm test` is run during development and the build is kept green; there is no CI yet. |
 
 ### Protecting personal Macs
@@ -249,11 +260,13 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | H-05 | 🟡 | Local `guard pair` (TTY required unless TAPDANCE_GUARD_PAIR_NONINTERACTIVE is set), hashed tokens, expiry, immediate revocation, per-client lease ownership. No mutual TLS, replay protection or per-session short-lived tokens (Tailscale provides transport security). |
 | H-06 | 🟡 | Per-client lease isolation and filtered status; uploads must name the client's own lease, and upload and artifact ids are bound to the client that created them (a full MCP loop passed through a real guard with no denials: [evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)). Per-session staging directories and quotas on the Mac are agent-device's, not enforced by Tapdance. |
 | H-07 | 🟡 | Session cap, lease TTL cap, upload size cap. No recording-duration or disk quota. |
-| H-08 | 🟡 | Device-only only; builds refused. Approved-build and VM-isolated builds not started. |
+| H-08 | 🟡 | Device-only by default; builds only after the owner runs `host builds enable` on the host (Android git builds ✅ on the N2 host, [evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). VM-isolated builds not started. |
 | H-09 | ⬜ | Documentation only; AXe not installed on the test Mac. |
 | H-10 | 🟡 | Profiles documented (docs/security/personal-mac.md); multi-tenant not built. |
 | H-11 | ✅ | `~/.tapdance/worker/audit.log` (600), no secrets; `worker guard audit`, `tokens`, `revoke`. |
 | H-12 | 🧪 | Malicious-client tests against the API boundary in `packages/cli/src/guard/guard.test.ts`, using a recording fake Simlock (not OS/virtualization). |
+| H-13 | 🟡 | A fine-grained read-only token (`--git-auth gh`) cloned and built a private repository on the N2 host over `https://`; a submodule the token did not cover was skipped with a warning ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Per-repository deploy keys (`host builds key --repo`) unit-tested only (`build.test.ts`, fake git): the real attempt was refused because the organization disabled deploy keys. |
+| H-14 | 🧪 | `host builds files add/list/remove`: copied into the checkout for the build and removed after it, path and symlink refusals, no guard route; `build.test.ts`, `guard.test.ts`, `cli.test.ts` (fake git and Gradle). Not run on a real repository. |
 
 ### Product direction (phased)
 
@@ -275,7 +288,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | Y-14 | ⬜ | |
 | Y-15 | ⬜ | |
 | Y-16 | 🟡 | Session ids and artifact ids exist; `session`/`artifacts get`/`workers status` commands do not. |
-| Y-17 | 🟡 | Phase 1 mostly in place (see above and [ROADMAP.md](ROADMAP.md)); remote-machine and Linux/KVM proofs pending. |
+| Y-17 | 🟡 | Phase 1 mostly in place (see above and [ROADMAP.md](ROADMAP.md)); remote machines proven in device-only mode, Linux/KVM on a Google Cloud N2 VM ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); gateway mode across machines pending. |
 
 ### Landscape
 
@@ -323,7 +336,7 @@ paths below were exercised only by unit tests.
 | `device release` reports an unreachable worker (exit 4) and keeps the record to retry | C-04 | 🧪 | build |
 | `doctor` fails, `devices` notes and `host up` warns when a platform has capacity but no device on offer; `worker start/restart` stop a stray adb server on Simlock's port even without `adb-server.json`. Restart verified on the field-test Mac 2026-11-02 (Android back in the catalog) (#39) | W-04 | ✅ / 🧪 | `provider.test.ts` "platform on offer" |
 | Field-run fixes: `ui sequence` timing in microseconds from the start (Android's shell arithmetic is 32-bit, #42); orientation read, Chrome notifications promo skipped, `inspect --system` via a file after stopping agent-device's helper (#44); `record stop` retries a timed-out remote download for up to 30 min (#51); quiet exit on EPIPE (#52) | Y-04, F-02 | 🧪 | `provider.test.ts`; sequence script run in bash with a fake clock; not yet re-run on a device |
-| Builds on the host from allow-listed git repositories (`host builds`, `app build`, MCP `build_app`): clone/fetch cache, exact sha, protected refs, xcodebuild for the simulator or Gradle, install on the lease, streamed log (#45) | H-08 | 🧪 | `build.test.ts` (fake git/Xcode/Gradle), `guard.test.ts` 16d; not yet run on a real repository |
+| Builds on the host from allow-listed git repositories (`host builds`, `app build`, MCP `build_app`): clone/fetch cache, exact sha, protected refs, xcodebuild for the simulator or Gradle, install on the lease, streamed log (#45) | H-08 | ✅ / 🧪 | `build.test.ts` (fake git/Xcode/Gradle), `guard.test.ts` 16d. **Android ✅ on the N2 host:** a private repository cloned over `https://` with a fine-grained token, Gradle `BUILD SUCCESSFUL` in 2 min 40 s (after the owner installed the app's CMake), installed and launched; the kept build reused in 11 s (CLI) and through MCP `build_app` 5/5 ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). iOS: attempted on the owner's Mac (#53), no successful real build yet |
 | Scoped guard tokens (`pair --scope`, `host up --scope`), threat model doc, host up security note and Tailscale ACL hint, token age in `host status` (#46) | H-05 | 🧪 | `guard.test.ts` 16c |
 | iOS Files app destination for `device push --to files` / `pull --files` (#47) | U-08 | 🧪 | `guard.test.ts` 16b |
 | iOS: wifi/airplane refused instead of faked; status-bar time read and H:MM; clipboard; `app launch --locale`; push to simulators allowed by default; iOS Notification Center open/close; `perf memory` through the guard (#48, #49) | U-08 | 🧪 | `provider.test.ts`, `guard.test.ts`; not yet run on a device |
@@ -334,7 +347,21 @@ paths below were exercised only by unit tests.
 | `ui sequence` / MCP `tap_sequence`: timed taps as one script inside the emulator, with start times and drift (#42) | Y-04 | 🧪 | `provider.test.ts`; not yet run on a device |
 | `ui wait` up to 10 min; `orientation landscape`; `device setting browser-first-run off`; `ui inspect --system` (uiautomator, Custom Tab URL) (#44) | Y-04 | 🧪 | `provider.test.ts`; not yet run on a device |
 | Android image tiers: agents told to lease `google_apis_playstore` only when a test needs the Play Store; `devices install --image-tag google_atd` (ATD test images). Leasing an ATD image is untested. | R-06 | 🧪 | build + `--help` |
-| `host-setup.sh` on Linux without `/dev/kvm` skips the emulator and system image and stops before `host up` (#19) | W-07 | 🧪 | `bash -n` only |
+| `host-setup.sh` on Linux (#19): end to end on a fresh N2 VM with `/dev/kvm`, including the system image download ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); without `/dev/kvm` it skips the emulator and system image and stops before `host up` | W-07 | ✅ / 🧪 | Real run with KVM; the no-KVM branch `bash -n` only |
+| Cost guard for cloud hosts: the guard's idle stop and uptime cap (`host up --idle-stop`, `--max-uptime`, `hostStop` in the guard policy), the poweroff sudoers rule from `host-setup.sh`, Terraform `max_run_hours`, `stop_schedule` and budget | G-07 | ✅ / 🧪 | Idle stop ✅ on Google Compute Engine: the N2 VM powered itself off 30 min after the last lease ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Uptime cap 🧪 (`host-stop.test.ts`, `host.test.ts`, `guard.test.ts`); Terraform cap set, not reached |
+| Install from CI (`app install --from-ci`, MCP `install_app` `from_ci`, `host artifacts enable/disable/status`) | F-05 | ✅ | CLI and MCP on the N2 host ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); refusals with a fake `gh` in `ci-artifacts.test.ts` |
+| Per-repository deploy keys (`host builds key --repo`) | H-13 | 🧪 | `build.test.ts` (fake git). The deploy key route was not exercised for real: the test app's organization has deploy keys turned off |
+| Build files (`host builds files add/list/remove`), dot-folders such as `.github/` allowed, `.git` and `.gitmodules` refused | H-14 | 🧪 | `build.test.ts`, `guard.test.ts`, `cli.test.ts` |
+| Linux user services without a login session: linger, wait for the user manager's bus, `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` for `systemctl --user`; `tapdance-user-manager.service` for OS Login accounts that cannot linger | W-07 | ✅ | Fourth `host-setup.sh` run on the N2 VM and the VM restart ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)) |
+| Emulator system libraries: host check `host.kvm.emulator-libs`, `host-setup.sh` installs them; the check's output captured before matching (pipefail) | D-02, W-07 | ✅ | `host-checks.test.ts`; fourth `host-setup.sh` run on the N2 VM |
+| `host-setup.sh` finds the terminal by opening `/dev/tty` and gives `host up` the terminal under `curl \| bash` | W-07 | ✅ | Pairing approved during the fourth run on the N2 VM |
+| Headless Linux hosts run the emulator with `swiftshader_indirect` (`worker install`, `host up`) | D-01, W-07 | ✅ / 🧪 | Measured on the N2 VM with the setting made by hand: taps 2.2–2.6 s instead of 3.4–7.9 s, idle CPU about 0 % instead of 136–165 % ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); the new default `host.test.ts` |
+| `doctor` and `devices`: iOS on a Linux worker is skipped ("needs a Mac"), not a failure | C-05 | ✅ | `provider.test.ts`; `doctor` passed from the Mac against the N2 host |
+| Rotation with the launcher in front: one attempt (50 s → 17 s) | Y-04 | ✅ | Measured on the N2 host |
+| Guard restart over SSH sets up the user manager's bus first and warns on failure; `host status` over SSH reads the guard service through that bus | W-07 | 🧪 | Build only; found on the N2 host, not re-run there |
+| First `inspect` after a fresh lease retried once on agent-device's `INSTRUMENTATION_FAILED` | Y-04 | 🧪 | Build only; found on the N2 host, not re-run there |
+| `host builds enable` keeps earlier `--git-auth` and `--timeout-minutes`; the build JDK check honours `JAVA_HOME`; `env.sh` puts the JDK on `PATH`; the MCP outside-the-project hint covers `push_file` | H-08, S-04 | 🧪 | Build only; found on the N2 host |
+| Android install refusals name the fix (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `VERSION_DOWNGRADE`, `INSUFFICIENT_STORAGE`), for uploads, installs from CI and host builds | F-01, F-05, H-08 | 🧪 | `provider.test.ts`; the signature refusal itself was met on the N2 host, from CI and from a host build |
 
 ## Bugs found by running for real (fixed)
 
@@ -361,3 +388,10 @@ paths below were exercised only by unit tests.
 | Android stayed off after a restart ("port occupied") | Simlock's adb server outlived the daemon | `worker restart` stops it |
 | First `open` failed with `AMBIGUOUS_MATCH` | Session opened without naming the leased UDID | Lease always opens the session with the leased device id |
 | Every lease of two emulators failed with "owned by session …", and Simlock kept recycling them (looked like an emulator restarting in a loop) | Claims of a dead agent-device daemon, kept because that session's screen recording never finished; one agent-device session name was reused for every lease | Per-lease session names; stale-claim cleanup before leases (#31, #32, #36) |
+| `host up` on a Linux VM failed at the worker step: "Failed to connect to bus: No medium found" | Over non-interactive SSH there is no systemd user manager or `XDG_RUNTIME_DIR` | Turn on linger, wait for the user manager's bus, point `systemctl --user` at it ([N2 run](docs/testing/evidence/2026-11-03-gcp-n2-android.md)) |
+| `loginctl enable-linger` failed with "No such file or directory", also with sudo | logind cannot look up Google Cloud OS Login accounts | `host-setup.sh` installs `tapdance-user-manager.service`, which starts the user manager at boot |
+| The emulator did not start on Ubuntu's cloud image | Missing `libpulse0 libxkbfile1 libxi6 libsm6 libice6`; `pipefail` with `grep -q` hid the check | Host check `host.kvm.emulator-libs`; `host-setup.sh` installs them and captures the output first |
+| Pairing could not be approved when `host-setup.sh` came through `curl` | `[[ -r /dev/tty ]]` was true without a controlling terminal | Open `/dev/tty` to test it; `host up` runs with `< /dev/tty` |
+| `doctor` exited 10 against a Linux host | iOS counted as missing on a machine that cannot have it | Skipped with "needs a Mac" |
+| Rotating with the launcher in front took 50 s on the N2 emulator | Three confirmation attempts on a screen that does not rotate | One attempt (17 s) |
+| Screen-changing taps took 3.4–7.9 s and the idle emulator used 136–165 % CPU on the N2 VM | `-gpu auto` on a machine without a GPU | `swiftshader_indirect` on headless Linux hosts: 2.2–2.6 s, about 0 % idle |

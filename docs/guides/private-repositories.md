@@ -5,16 +5,19 @@ builds an app whose code is private, and what each way leaves on the host. Read
 [builds on the host](../deployment/one-command-host.md#builds-on-the-host) first: builds are off by
 default, and a build runs the repository's own scripts on the host.
 
-> **Status: unit-tested only.** Builds on the host have run once on a real repository, on the owner's
-> Mac. The per-repository deploy key, build files and the sign-in hint below are tested with a fake git,
-> Xcode and Gradle; none has run against a real private repository yet. See [STATUS.md](../../STATUS.md).
+> **Status: the token route is run; the rest is unit-tested.** On a Google Cloud N2 VM a fine-grained
+> token cloned a private repository over `https://`, and its Android build succeeded once the app's
+> CMake was installed on the host, through the CLI and MCP
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). The per-repository deploy key and build
+> files are tested with a fake git, Xcode and Gradle only: the real deploy key attempt was refused
+> because the organization had deploy keys turned off. See [STATUS.md](../../STATUS.md) (H-13, H-14).
 
 ## Pick one
 
 | Way | Best for | What it reaches | What the host keeps |
 | --- | --- | --- | --- |
 | **A fine-grained, read-only GitHub token** with `--git-auth gh` (recommended on a cloud VM) | Several repositories, GitHub submodules | The repositories you select, read-only, over `https://` | The token, in the `gh` config of the hosting account |
-| **A deploy key per repository** (`host builds key --repo`) | One or two repositories; git servers other than GitHub | One repository, read-only, over ssh | One ssh private key per repository |
+| **A deploy key per repository** (`host builds key --repo`) | One or two repositories; git servers other than GitHub; not when the organization has turned deploy keys off | One repository, read-only, over ssh | One ssh private key per repository |
 | **No repository access:** build elsewhere, then `tapdance app install` | Code or secrets that should never be on the host | Nothing | Nothing but the apps you install |
 
 The third way is often the best one: build in CI or on the agent's machine and install the APK. See
@@ -36,7 +39,9 @@ use `--protected-ref main` so only reviewed commits are built.
 4. **Repository access:** *Only select repositories*. Pick the app's repository and any private
    repositories it pulls in as submodules.
 5. **Permissions › Repository permissions:** *Contents: Read-only*. *Metadata: Read-only* is added for
-   you. Nothing else.
+   you. Add *Actions: Read-only* if the same host should also [install your CI's
+   APKs](ci-builds.md#let-the-host-fetch-the-artifact). Nothing else. One token can serve both; it must
+   select every repository it is used for, including the one whose workflow makes the artifact.
 6. Generate it and copy it.
 
 On the host, as the account that runs the guard. Install the [GitHub CLI](https://cli.github.com/) if
@@ -62,10 +67,15 @@ tapdance host builds enable --repo https://github.com/acme/app --git-auth gh --p
   fetched"; the build goes on and fails only if it needed them.
 - On a server without a keyring, `gh` keeps the token in `~/.config/gh/hosts.yml` of the hosting
   account.
+- **The app's toolchain must be on the host too.** Gradle does not download every SDK component: the
+  tested app needed CMake 3.31.6, and the build stopped with a hint naming
+  `sdkmanager "cmake;3.31.6"` for the host's owner to run (6 s); the next build succeeded.
 
 ## A deploy key per repository
 
-GitHub accepts a deploy key on one repository only, so each repository gets its own key.
+GitHub accepts a deploy key on one repository only, so each repository gets its own key. An
+organization can turn deploy keys off for all its repositories; GitHub then answers "Deploy keys are
+disabled for this repository" when you add one. Use a fine-grained token there.
 
 ```bash
 tapdance host builds key --repo git@github.com:acme/app.git

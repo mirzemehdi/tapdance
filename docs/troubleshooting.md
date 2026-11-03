@@ -54,9 +54,10 @@ The messages below are quoted from the code (with paths and names shortened).
 | `doctor` fails only because of Android on an iOS-only Mac | Android is enabled by default. | `tapdance config set platforms.android.enabled false`. |
 | A tool you just installed is still reported missing by Simlock | Simlock detects platform tools only when its daemon starts. | `tapdance worker restart`. |
 
-## Linux and cloud hosts (`host up`, not yet run on Linux)
+## Linux and cloud hosts (`host up`)
 
-The fixes below exist in `scripts/host-setup.sh` and `tapdance host up`; they are unit-tested only.
+`host-setup.sh` and `host up` ran end to end on a Google Cloud N2 VM; the rows marked "seen on N2" are
+failures met in that run ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). The others are unit-tested only.
 For a Google Cloud VM see also [the N2 guide's table](deployment/google-cloud-n2.md#troubleshooting).
 
 | Symptom | Cause | Fix |
@@ -65,13 +66,18 @@ For a Google Cloud VM see also [the N2 guide's table](deployment/google-cloud-n2
 | `host-setup.sh` notes "/dev/kvm is missing" and skips the emulator | No hardware virtualization (a cloud VM without nested virtualization, or VT-x/AMD-V off). | Use a VM type with nested virtualization (Google Cloud N2 with `--enable-nested-virtualization`) or bare metal; or use this machine as the agent's machine (`tapdance connect`). If the CPU flag is there, `sudo modprobe kvm_intel` (or `kvm_amd`). |
 | Leases never finish booting on a server reached over SSH | The emulator tried to open a window on a machine with no display. `worker install` turns headless on only when `DISPLAY` and `WAYLAND_DISPLAY` are unset (it was run with X11 forwarding, for example). | `tapdance simlock -- --local config set android.emulator.headless true`, then `tapdance worker restart`. |
 | The emulator starts but fails in its graphics setup (see `tapdance worker logs`) | No GPU on the machine. | `tapdance simlock -- --local config set android.emulator.gpu swiftshader_indirect`, then `tapdance worker restart`. |
+| Slow taps (several seconds for a tap that changes the screen) and an idle emulator at 130 % CPU or more (seen on N2) | The emulator's `-gpu auto` on a machine without a GPU. On the N2 VM: taps 3.4–7.9 s and 136–165 % idle CPU, against 2.2–2.6 s and about 0 % with `swiftshader_indirect`. `worker install` and `host up` set it on headless Linux hosts now; hosts set up earlier keep `auto`. | With no lease running: `tapdance simlock -- --local config set android.emulator.gpu swiftshader_indirect`, then `tapdance worker restart`. The next lease cold-boots. |
+| `doctor` / `host up`: "Android Emulator runs" fails with "system library libpulse.so.0 is missing" (or another library) (seen on N2) | Minimal cloud images (Ubuntu's included) lack the emulator's audio and X libraries. | `sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6` (Fedora: `sudo dnf install -y pulseaudio-libs libxkbfile libXi libSM libICE`). `host-setup.sh` installs them. |
+| `host up` fails at the worker step: "Failed to connect to bus: No medium found" (seen on N2) | Over a non-interactive SSH session no systemd user manager runs for your account, so `systemctl --user` has no bus. | Update Tapdance: `host up` now turns on linger and waits for the user manager's bus. If linger cannot be turned on, see the next row. |
+| "Could not enable linger: No such file or directory", also with `sudo` (seen on N2) | A Google Cloud OS Login account: logind cannot look it up. | Run `host-setup.sh` again: it installs `tapdance-user-manager.service`, a system unit that starts your user manager at boot (`systemctl status tapdance-user-manager.service`). |
 | `host up` warns "Could not turn on linger"; the worker and guard stop when you log out, or do not start after a reboot | systemd user services stop with your last session unless the account lingers. | `sudo loginctl enable-linger $USER`, then `tapdance host up` again. `loginctl show-user $USER --property=Linger` prints `Linger=yes` when it is on. |
 | `host up` fails at the tailscale step: "tailscale serve refused this user" ("Access denied") | On Linux only root and the tailnet's operator may change `tailscale serve`. | `sudo tailscale set --operator=$USER` once, then `tapdance host up` again. |
 | `host up` stops at pairing: "Pairing must be approved at this machine's terminal", right after `curl … host-setup.sh \| bash` | The script's input is the `curl` pipe, so the question cannot be answered. | Run `~/.local/bin/tapdance host up` with the same options in the same terminal. |
 | `No space left on device` during an install, or `INSUFFICIENT_DISK_SPACE` | The disk is full: the SDK, system images and Simlock's emulators (`~/.simlock/devices`) need tens of GB. | `df -h ~` to check. Grow the disk (Google Cloud: `gcloud compute disks resize`, then restart the VM), or remove system images you do not use with `sdkmanager --uninstall`. |
 
-## Cost guard on a cloud host (unit-tested only)
+## Cost guard on a cloud host
 
+The idle stop powered a real N2 VM off ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); the uptime cap is unit-tested only.
 The guard's idle stop and uptime cap (`tapdance host up --idle-stop`, `--max-uptime`), and the Terraform
 run-time cap and stop schedule. See [cost guardrails](deployment/google-cloud-n2.md#cost-guardrails).
 
@@ -96,6 +102,19 @@ See [builds on the host](deployment/one-command-host.md#builds-on-the-host) and
 | `USAGE` "Build file path … is absolute", "… contains ..", "… is one of git's own files (.git, .gitmodules)" or "… has characters that are not allowed" | `host builds files add` takes a path inside the repository: no leading `/` or `~`, no `..`, nothing in `.git`, no `.gitmodules`, letters, digits, space and `_ . + @ , = -` only. | Give the path relative to the repository root, e.g. `androidApp/google-services.json`. |
 | `FORBIDDEN` "Host build file … was not copied: …" | At that commit, the repository has a symlink or a folder where the build file goes, or a folder that is a symlink leading outside the checkout. | The owner removes or moves the build file: `tapdance host builds files remove --repo <url> <path>`, then adds it at another path. |
 | `CONFIG_INVALID` "Host build file … is missing or changed on disk since it was added" | Its stored copy under `~/.tapdance/worker/builds/files/` was changed or deleted. | Add it again: `tapdance host builds files add --repo <url> <path> --from <file>`. |
+| GitHub answers "Deploy keys are disabled for this repository" when you add the key from `host builds key --repo` (seen on N2) | The organization turned deploy keys off. | Use a fine-grained, read-only token with `--git-auth gh` instead; it also covers installs from CI. See [private repositories](guides/private-repositories.md). |
+| A build fails with "The host's Android SDK has no CMake …" (or another SDK component) | The app's Gradle build needs an SDK component that Gradle does not download. | The host's owner runs the `sdkmanager` command in the hint (for example `sdkmanager "cmake;3.31.6"`), then the agent builds again. |
+
+## Installs from CI
+
+See [build in CI, test with Tapdance](guides/ci-builds.md).
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `USAGE` "GitHub answered 404 for …: the run or artifact does not exist, or the host's token cannot read …" (seen on N2) | A wrong run id or artifact name, or the host's fine-grained token does not select that repository (for example a token for another repository of the same app), or the organization has not approved the token yet. | Check the run and the artifact name (`gh run list`, `gh run view <id>`). If they are right, the host's owner gives the token access to the repository whose workflow made the artifact, with *Actions: Read-only* and *Contents: Read-only*. `tapdance host artifacts status` on the host shows whether `gh` works. |
+| Install refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (seen on N2, from CI and from a host build) | The app on the device was signed with another key. CI runners often make a new debug key per run, and a build on the host is signed with the host's own debug key. | `tapdance app uninstall <appId>` (MCP `uninstall_app`; the app's data goes), then install again. To avoid it, sign debug builds in CI with one shared debug keystore. |
+| Install refused with `INSTALL_FAILED_VERSION_DOWNGRADE` | The installed app has a higher `versionCode`. | Uninstall it first, then install. |
+| Install refused with `INSTALL_FAILED_INSUFFICIENT_STORAGE` | The emulator is full. | Release the lease for a fresh device, or uninstall apps you no longer need. |
 
 ## Configuration and tokens
 

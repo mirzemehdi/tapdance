@@ -3,8 +3,9 @@
 Build the app in your CI, then let the agent install the result on a Tapdance device. The device host
 never sees your source code or your build secrets.
 
-> **Status:** installing an APK with `tapdance app install` has run on a real Android emulator on macOS;
-> Android on a Linux host (such as an N2 VM) has not run yet ([STATUS.md](../../STATUS.md), D-01, D-02).
+> **Status:** `tapdance app install` has run on real Android emulators on macOS and on a Google Cloud N2
+> VM, and installs from CI (`app install --from-ci`, MCP `install_app` `from_ci`) ran with the CLI and
+> MCP on that VM ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md), [STATUS.md](../../STATUS.md) F-05).
 > The workflow on this page is an example: it has not been run as part of Tapdance's own tests.
 
 ## Why
@@ -88,7 +89,39 @@ it. An agent can run these commands itself, or you hand it the path.
 
 ## Let the host fetch the artifact
 
-(being added: `app install --from-ci`)
+The device's host can download the artifact itself, with its own read-only GitHub login, and install
+the APK on the agent's Android lease. The APK never passes through the agent's machine, and the agent
+needs no GitHub token. On the N2 VM a 77 MB APK took about 8 s to download the first time and 7–12 s
+from the host's cache, against 149 s to upload it from a Mac.
+
+On the host, once (off by default):
+
+```bash
+# a fine-grained token: Actions: Read-only and Contents: Read-only on the app's repository
+read -rsp "GitHub token: " t && echo && printf '%s' "$t" | gh auth login --with-token; unset t
+tapdance host artifacts enable --repo acme/app --branch main
+tapdance host artifacts status
+```
+
+On the agent's machine, with an Android lease:
+
+```bash
+tapdance app install --from-ci acme/app --artifact app-debug --launch com.acme.app
+tapdance app install --from-ci acme/app --artifact app-debug --run 1234567890   # a given run
+```
+
+Without `--run` the host takes the newest successful run on `--branch` (default: the repository's
+default branch) that has the artifact; forks' runs are never used. MCP: `install_app` with
+`from_ci: {repo: "acme/app", artifact: "app-debug"}` (and `run` or `branch`).
+
+- **The token must select the repository whose workflow made the artifact.** A token for another
+  repository (another repository of the same app, say) gets "GitHub answered 404" from Tapdance. An
+  organization may also have to approve the token first.
+- **Debug keys differ per CI run** unless you give CI a keystore. Installing a new run's APK over an
+  earlier one then fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: `tapdance app uninstall <appId>`
+  first, or sign debug builds in CI with one shared debug keystore.
+- The same token also serves [builds on the host](private-repositories.md#a-fine-grained-github-token),
+  which helps when your organization has turned deploy keys off.
 
 ## iOS
 

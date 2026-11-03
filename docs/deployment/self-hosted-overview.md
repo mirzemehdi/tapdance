@@ -169,13 +169,13 @@ From [STATUS.md](../../STATUS.md):
 | Path | Status |
 | --- | --- |
 | Device-only host (`host up` + `connect`), agent on a Linux VPS, host on a Mac, over Tailscale | **Run by the owner**: about a day of Android and iOS testing of a real app with the CLI ([field runs](../testing/evidence/2026-11-02-vps-field-runs.md)), and a tool self-test through the guard ([evidence](../testing/evidence/2026-11-03-selftest-through-guard.md)). An MCP client on the VPS was not used. |
-| `host up` on a Linux host or a cloud VM | **Not run.** The Linux steps (kvm ACL, `tailscale up --operator`, linger, headless emulators) are unit-tested only. |
-| Google Cloud N2 host | Guide and Terraform written, **nothing provisioned**. |
+| `host up` on a Linux host or a cloud VM | **Run** on a fresh Google Cloud N2 VM with `scripts/host-setup.sh`, driven from a Mac with `connect` ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| Google Cloud N2 host | **Run once end to end**: Terraform, setup, CLI and MCP checklists, viewer, installs from CI, idle stop and restart ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). |
 | Gateway + joined worker on **one** Mac | **Verified**: CLI loop, MCP over stdio and the viewer in a real browser all worked through the gateway ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). |
 | Gateway + worker on two machines | **Not tested.** Same code path, but no real network between them yet; Q-06 is pending. |
 | `tapdance gateway setup` on a VPS | Run on macOS only; **not run on a Linux VPS**. |
 | `tapdance worker login` across machines | Implemented, **not run across machines**. |
-| Android end to end | **Verified on a Mac** ([evidence](../testing/evidence/2026-11-01-android.md)); not run on a Linux host. |
+| Android end to end | **Verified on a Mac** ([evidence](../testing/evidence/2026-11-01-android.md)) and on a Linux host, a Google Cloud N2 VM ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). |
 | Browser viewer | Stream, input and take-over verified **on one Mac** (scripted, and in a real browser through a gateway on that Mac); see STATUS.md V-02 for use over a tailnet. |
 | Streamable HTTP MCP (`tapdance mcp --http`) | **Partly verified**: 401 without the token, tools listed, `list_devices` and `get_device_status` worked; a full device loop over HTTP not run. |
 | Windows as a worker | Not supported (Simlock runs on macOS and Linux only). |

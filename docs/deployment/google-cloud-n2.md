@@ -5,14 +5,14 @@ coding agent that runs somewhere else (your laptop, an ordinary VPS). You create
 script on it, and connect the agent's machine over Tailscale. Requirements G-01 to G-03 in
 [PRODUCT.md](../../PRODUCT.md).
 
-> **Status: written, being proven in phase 2 — not yet run end to end.** No N2 VM has been created
-> with this guide, and Android has not yet run on a Linux host. What is proven: `tapdance host up` ran
-> on the owner's Mac, and an agent on a Linux VPS tested a real app through it over Tailscale
-> ([field runs](../testing/evidence/2026-11-02-vps-field-runs.md),
-> [self-test through the guard](../testing/evidence/2026-11-03-selftest-through-guard.md)). The Linux
-> parts of `scripts/host-setup.sh` and `host up` (kvm access, `tailscale up --operator`, linger,
-> headless emulators) are unit-tested only. The Terraform module has never been applied. Cost figures
-> are estimates. See [STATUS.md](../../STATUS.md).
+> **Status: run end to end once (2026-11-03).** An `n2-standard-4` VM in `europe-west1-b`, created
+> with the Terraform module and set up with `scripts/host-setup.sh`, hosted Android emulators for an
+> agent on a Mac over Tailscale: the CLI and MCP checklists, the browser viewer, installs from CI, the
+> idle stop powering the VM off, and a start back to ready in 54 s
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the gcloud-by-hand route, a
+> Linux VPS as the agent's machine, a successful build on the VM, a Spot VM, other machine types, the
+> uptime cap, `terraform destroy`, the snapshot commands under [Parking the VM](#parking-the-vm). Prices
+> are estimates from Google's published rates. See [STATUS.md](../../STATUS.md).
 
 ## The path at a glance
 
@@ -67,6 +67,10 @@ documents N2 only. Google also notes that nested VMs can be 10% or more slower f
   address, and the browser viewer shows live video.
 - Tapdance on the agent's machine ([installation](../installation.md)). The VM gets its own copy from
   the setup script.
+- **Check gcloud's quota project.** If `gcloud config get-value billing/quota_project` names another
+  project, gcloud bills API calls such as OS Login to that one, and `gcloud compute ssh` fails saying the
+  OS Login API has not been used in that project. Add `--billing-project=<PROJECT_ID>` to the `gcloud`
+  commands in this guide, or run `gcloud config unset billing/quota_project`.
 
 ### IAM roles
 
@@ -132,10 +136,23 @@ outbound traffic, no external IP, an SSH rule for IAP only, and a startup script
 ```bash
 cd infrastructure/terraform/google-cloud-n2
 terraform init
-terraform validate   # the module has never been validated or applied; report what you find
+terraform validate   # passed with Terraform 1.17.1
 terraform plan -out tapdance.plan
 terraform apply tapdance.plan
 ```
+
+The tested run used these variables (`apply` took 99 s and created 13 resources):
+
+```hcl
+# terraform.tfvars (never commit it)
+project_id         = "<PROJECT_ID>"
+region             = "europe-west1"
+zone               = "europe-west1-b"
+assign_external_ip = true   # an ephemeral external IP for outbound traffic instead of Cloud NAT
+boot_disk_size_gb  = 64
+```
+
+With other region and zone values, use them in place of `us-central1-a` in the commands below.
 
 Nothing secret goes into Terraform: the pairing token is made on the VM and never passes through
 Terraform state or instance metadata. Still, never commit Terraform state or a `terraform.tfvars`.
@@ -198,8 +215,9 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
 
 1. **It lists what is missing and asks once** ("Install them now?"). On a fresh VM that is Node.js,
    a JDK 17, the Android command-line tools, platform-tools, the emulator, the system image
-   `system-images;android-34;google_apis_playstore;x86_64` (about 1.5 GB), Tailscale, and access to
-   `/dev/kvm`. Saying yes also **accepts the Android SDK licenses** for you; read them first at
+   `system-images;android-34;google_apis_playstore;x86_64` (about 1.5 GB), the emulator's system
+   libraries that Ubuntu's cloud image lacks (`libpulse0 libxkbfile1 libxi6 libsm6 libice6`, from apt),
+   Tailscale, and access to `/dev/kvm`. Saying yes also **accepts the Android SDK licenses** for you; read them first at
    [developer.android.com/studio/terms](https://developer.android.com/studio/terms) if you have not.
    Everything goes into your home folder, checked against its publisher's checksum, except the steps
    that need `sudo`: git and unzip (the Terraform startup script already installed them), the Tailscale
@@ -220,8 +238,8 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    | --- | --- |
    | prerequisites | Checks the SDK, the image and KVM; reports the VM "with /dev/kvm (nested virtualization is on)". |
    | account | Refuses root. |
-   | worker | The bundled Simlock worker as a systemd user service, with `android.emulator.headless` on because the VM has no display. |
-   | guard service | `tapdance-guard.service`, a systemd user unit, answering on `127.0.0.1:4720`. It turns on **linger** for your user, so the worker and guard keep running after you close SSH and start at boot. On a cloud VM it also turns on the idle stop: 30 minutes without use powers the VM off ([cost guardrails](#cost-guardrails)). |
+   | worker | The bundled Simlock worker as a systemd user service, with `android.emulator.headless` on and `android.emulator.gpu` set to `swiftshader_indirect`, because the VM has no display and no GPU ([speed](#speed-on-n2-standard-4)). |
+   | guard service | `tapdance-guard.service`, a systemd user unit, answering on `127.0.0.1:4720`. It turns on **linger** for your user, so the worker and guard keep running after you close SSH and start at boot. **OS Login accounts** (the default when you log in with `gcloud compute ssh`) cannot linger: logind cannot look them up ("Could not enable linger: No such file or directory"). For them `host-setup.sh` installs `tapdance-user-manager.service`, a small system unit that starts your systemd user manager at boot, and `host up` starts it. On a cloud VM it also turns on the idle stop: 30 minutes without use powers the VM off ([cost guardrails](#cost-guardrails)). |
    | pairing | Asks you to approve the pairing, then writes the token to `~/.tapdance/worker/pairing-gcp-n2-1.token` (mode 600). The token is never printed. |
    | tailscale | `tailscale serve` on port 4720 of the VM's MagicDNS name: `https://…` with HTTPS Certificates, `http://…` (inside the tailnet's encryption) without. |
    | self-test | Through the guard: leases an Android emulator, takes a screenshot, releases it. The first boot under nested virtualization can take several minutes. |
@@ -237,6 +255,10 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    cost guard: idle stop after 30 min, uptime cap off
    on the agent machine:  tapdance connect https://tapdance-n2.tail1234.ts.net:4720 < pairing-gcp-n2-1.token
    ```
+
+On the tested VM, the run that passed took **2 min 44 s**, including the emulator libraries, `host up`,
+the first cold emulator boot and the self-test. Earlier attempts had already downloaded Node.js, the JDK,
+the SDK and the system image; a first run downloads those too (not timed).
 
 Running the script or `host up` again is safe: finished steps are left as they are. The pairing
 question is asked on your terminal even though the script came through `curl`. Every option of `host up` is in
@@ -310,10 +332,32 @@ anywhere else (`lease_device`, `install_app`, `take_screenshot`, …).
 ### Getting your app onto the VM
 
 The simplest path keeps your source code off the VM: build the APK on the agent's machine or in CI and
-install it with `tapdance app install` ([build in CI, test with Tapdance](../guides/ci-builds.md)). The
+install it with `tapdance app install` ([build in CI, test with Tapdance](../guides/ci-builds.md)).
+
+**Let the VM fetch the APK from CI.** Uploading a 77 MB APK from the Mac took 149 s; the VM downloading
+the same build from GitHub Actions took about 8 s the first time and 7–12 s from its cache. On the VM,
+log `gh` in with a fine-grained, read-only token (*Actions: Read-only*, *Contents: Read-only*) and allow
+the repository:
+
+```bash
+tapdance host artifacts enable --repo acme/app --branch main
+```
+
+The agent then runs `tapdance app install --from-ci acme/app --artifact app-debug` (MCP: `install_app`
+with `from_ci`). The token must select the repository whose workflow made the artifact: a token for
+another repository of the same app gets a 404 from GitHub. CI runners often make a new debug key per
+run, so installing over an earlier build can fail with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: uninstall
+the app first, or sign debug builds with one shared keystore in CI. The
 VM can also build from a repository ([builds on the host](one-command-host.md#builds-on-the-host)); for
 a private repository, read [private repositories](../guides/private-repositories.md) first, including
-what a compromised VM would give away.
+what a compromised VM would give away. If your GitHub organization has turned deploy keys off (GitHub
+answers "Deploy keys are disabled for this repository"), use a fine-grained token: one token covers
+builds and CI artifacts. A build needs the app's own toolchain on the VM too: the tested app's first Gradle
+build stopped after 8 min 43 s (with dependency downloads) because it needs CMake 3.31.6. After the
+owner ran `sdkmanager "cmake;3.31.6"` (6 s), the build succeeded in 2 min 40 s, and asking again for
+the same commit reinstalled the kept build in 11 s. The host signs with its own debug key, so a build
+installed over a CI build is refused with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: `tapdance app uninstall`
+first.
 
 ## Stop, start, delete
 
@@ -321,7 +365,7 @@ what a compromised VM would give away.
 | --- | --- | --- |
 | Stop hosting, keep the VM running | `tapdance host pause` on the VM; later `tapdance host resume` | The guard, the Tailscale exposure, the worker and its emulators stop, and nothing starts at boot. The pairing is kept. |
 | Stop the VM | `gcloud compute instances stop tapdance-n2 --zone=us-central1-a` | vCPU and RAM billing stops; **the disk keeps billing**. Leases on it end. |
-| Start it again | `gcloud compute instances start tapdance-n2 --zone=us-central1-a` | With linger on, the worker and guard start at boot, and Tailscale comes back with its `serve` setting; the endpoint and token stay the same. Check with `tapdance doctor` on the agent's machine. Not yet observed on a real VM. |
+| Start it again | `gcloud compute instances start tapdance-n2 --zone=us-central1-a` | The worker and guard start at boot (linger, or `tapdance-user-manager.service` for OS Login accounts), and Tailscale comes back with its `serve` setting; the endpoint and token stay the same. Check with `tapdance doctor` on the agent's machine. On the tested VM: `RUNNING` after 12 s, the guard answered over Tailscale after 48 s, `doctor` passed after 54 s; the first lease then cold-booted an emulator (154 s). |
 | Delete everything | See [Teardown](#teardown) | |
 
 ### What still bills when the VM is stopped
@@ -334,10 +378,50 @@ what a compromised VM would give away.
   VM bills at a higher hourly rate. An ephemeral external IP does not bill while the VM is stopped.
 - **Snapshots and custom images** you made, for the storage they use.
 
+### Parking the VM
+
+| State | What bills | Back to work |
+| --- | --- | --- |
+| **Stopped** (`gcloud compute instances stop`, or the idle stop) | The 64 GB boot disk: about USD 0.21 a day (USD 6.40–7 a month) | `gcloud compute instances start`: ready in about a minute (54 s measured) |
+| **Snapshot, then delete the VM** | The snapshot, for the data actually used: about USD 1 a month for about 20 GB | Recreate the VM from the snapshot (below): a few minutes, same Tailscale name and pairing |
+| **Destroyed** (`terraform destroy`, or [Teardown](#teardown)) | Nothing | Start over from [Create the VM](#create-the-vm) and pair again |
+
+Snapshot and delete (not yet run; the zone and names are this guide's):
+
+```bash
+gcloud compute instances stop tapdance-n2 --zone=us-central1-a
+gcloud compute snapshots create tapdance-n2-parked \
+  --source-disk=tapdance-n2 --source-disk-zone=us-central1-a
+gcloud compute instances delete tapdance-n2 --zone=us-central1-a
+```
+
+Recreate it from the snapshot:
+
+```bash
+gcloud compute disks create tapdance-n2 --zone=us-central1-a \
+  --source-snapshot=tapdance-n2-parked --type=pd-balanced --size=64GB
+gcloud compute instances create tapdance-n2 --zone=us-central1-a \
+  --machine-type=n2-standard-4 --enable-nested-virtualization \
+  --disk=name=tapdance-n2,boot=yes,auto-delete=yes \
+  --no-service-account --no-scopes --tags=tapdance-host \
+  --metadata=enable-oslogin=TRUE,block-project-ssh-keys=TRUE \
+  --max-run-duration=8h --instance-termination-action=STOP
+gcloud compute snapshots delete tapdance-n2-parked   # once the VM is back
+```
+
+On the Terraform route, use the module's network and tag instead: `--subnet=tapdance-n2-subnet
+--tags=tapdance-n2-worker` (and `--no-address` if you use Cloud NAT). The recreated VM is then outside
+Terraform's state: `terraform destroy` no longer removes it, so delete it with gcloud first. Keeping
+`enable-oslogin=TRUE` matters: your files on the disk belong to your OS Login account. The disk keeps the
+Tailscale identity, so the VM comes back under the same MagicDNS name and the token on the agent's
+machine keeps working until it expires.
+
 ## Cost guardrails
 
-> **Status: unit-tested; being proven on a real N2 VM in phase 2.** Neither the guard's idle stop nor
-> the Terraform caps have stopped a real VM yet.
+> **Status: the idle stop is proven on a real N2 VM.** The CLI keepalive released the last lease, and
+> 30 minutes later the guard powered the VM off (`TERMINATED`); compute billing stopped
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). The uptime cap is unit-tested only; the Terraform run-time
+> cap was set (8 h) but not reached; the stop schedule and the budget were not exercised.
 
 An `n2-standard-4` bills about USD 0.19 an hour while it runs, whether an agent uses it or not. Three
 layers keep a forgotten VM from running on. Each one catches what the layer above it misses.
@@ -445,7 +529,8 @@ gcloud compute instances start tapdance-n2 --zone=us-central1-a
 
 `terraform output start_command` prints the same for the Terraform route. With linger on, the worker and
 guard start at boot and Tailscale comes back under the same MagicDNS name, so the endpoint and token on
-the agent's machine keep working; run `tapdance doctor` there to check. (Not yet observed on a real VM.)
+the agent's machine keep working; run `tapdance doctor` there to check (on the tested VM it passed 54 s
+after the start).
 The token still expires on its own date. Start the VM when the agent is about to use it: after the idle
 time without use, it stops again.
 
@@ -486,10 +571,47 @@ The boot disk is deleted with the VM (auto-delete is on by default). Then remove
 tailnet in the [Tailscale admin console](https://login.tailscale.com/admin/machines). The token saved on
 the agent's machine stops working with the VM; nothing else needs revoking.
 
+## Speed on n2-standard-4
+
+Measured from a Mac over Tailscale on the tested VM, with one emulator
+([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)):
+
+| What | Time |
+| --- | --- |
+| Warm lease (a booted spare) | CLI 2.4–5 s; MCP 3.8–34 s (34 s when the spare had to boot) |
+| Cold lease (first after a VM or worker restart) | 154–206 s |
+| Key press | CLI 0.75–0.8 s (process start and TLS each time); MCP 0.1–0.2 s |
+| Tap by text | CLI 2.6–4 s, up to 9–20 s when a sheet or the app opened (with `-gpu auto`) |
+| `inspect` | 0.8–2.6 s |
+| Screenshot | 1.2–2.9 s |
+| Recording | start about 1 s, stop 2.5–3.8 s |
+| Install, 77 MB APK uploaded from the Mac | 149 s |
+| Install from CI on the VM | first download about 8 s plus the install; cached 7–12 s |
+
+Memory: the emulator used about 3.7–4.2 GB, and the VM 4.6 GB of its 16 GB with one emulator.
+
+**Taps that change the screen are slower than key presses.** The emulator runs under nested
+virtualization with software rendering (the VM has no GPU). With the emulator's `-gpu auto`, the idle
+emulator kept 136–165 % CPU busy (of 400 %) and the same 6 tab-switch taps took 3.4–7.9 s (median about
+4.3 s). With `swiftshader_indirect` the idle emulator was near 0 % CPU and those taps took 2.2–2.6 s
+(median about 2.3 s); key presses stayed at about 0.6–0.8 s from the CLI in both. `worker install` and
+`host up` now set `swiftshader_indirect` on a Linux host without a display. On a host set up before
+that, with no lease running:
+
+```bash
+tapdance simlock -- --local config set android.emulator.gpu swiftshader_indirect
+tapdance worker restart
+```
+
+The next lease cold-boots the emulator (206 s measured). Larger machine types (`n2-standard-8`) and
+other GPU modes have not been compared.
+
 ## Cost estimates (November 2026)
 
-These are **estimates**, gathered in November 2026 from Google's published rates and third-party price
-trackers, on-demand, before taxes, credits and sustained-use discounts. Prices differ by region and
+Measured basis from the tested VM: it ran about 2 hours before its idle stop powered it off, 30 minutes
+after the last lease; a start took 54 s to be ready again, so letting it stop when idle costs little
+time. The prices are **estimates**, gathered in November 2026 from Google's published rates and
+third-party price trackers, on-demand, before taxes, credits and sustained-use discounts. Prices differ by region and
 change: check [VM instance pricing](https://cloud.google.com/compute/vm-instance-pricing),
 [disk pricing](https://cloud.google.com/compute/disks-image-pricing),
 [network pricing](https://cloud.google.com/vpc/network-pricing) and the
@@ -518,11 +640,16 @@ nested virtualization.
 | Creating the VM fails naming `constraints/compute.disableNestedVirtualization` | The org policy forbids nested virtualization. | See [Check the nested virtualization org policy](#check-the-nested-virtualization-org-policy). |
 | Quota error on create | Not enough `N2_CPUS` in the region. | Request more, or pick another region. |
 | `gcloud compute ssh` hangs or is refused | IAP firewall rule or permissions. | Check the IAP rule exists and you have IAP-secured Tunnel User (Terraform: list yourself in `ssh_members`). |
+| `gcloud compute ssh` fails saying the OS Login API has not been used in a project that is not yours | gcloud's `billing/quota_project` names another project. | Add `--billing-project=<PROJECT_ID>`, or `gcloud config unset billing/quota_project`. |
 | `grep -cw vmx /proc/cpuinfo` prints `0` | The VM was created without nested virtualization, or on a series that does not support it (E2, N2D). | Recreate it as `n2-standard-4` with `--enable-nested-virtualization`. |
 | `vmx` present, `/dev/kvm` missing | The KVM module is not loaded. | `sudo modprobe kvm_intel`. Terraform route: read `/var/log/tapdance-startup.log`. |
 | `/dev/kvm present but not writable by this user` | Your user cannot open `/dev/kvm`. | Run the setup script again: it adds you to the `kvm` group and sets an ACL. If `setfacl` was missing (`sudo apt-get install -y acl`), or after a reboot without a new login, log out and back in so the group applies (`id -nG` lists `kvm`). |
+| `doctor` or `host up`: "Android Emulator runs" fails, "the emulator cannot start: system library libpulse.so.0 is missing" | Ubuntu's cloud image lacks the emulator's audio and X libraries. | `sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6` (the setup script does this). |
+| `host up` fails at the worker step: "Failed to connect to bus: No medium found" | No systemd user manager runs for your account in a non-interactive SSH session. | Update Tapdance and run the setup script again: `host up` turns on linger and waits for the user manager. For an OS Login account, see the next row. |
+| "Could not enable linger: No such file or directory", also with `sudo` | An OS Login account, which logind cannot look up. | The setup script installs `tapdance-user-manager.service` instead; `systemctl status tapdance-user-manager.service` should show it active. |
+| Taps that change the screen take several seconds; `top` shows the emulator at 130 % CPU or more while idle | The emulator's `-gpu auto` on a VM without a GPU (hosts set up before `swiftshader_indirect` became the default). | See [speed](#speed-on-n2-standard-4): set `swiftshader_indirect` and restart the worker with no lease running. |
 | The self-test or a lease never finishes booting | The emulator tried to open a window, or its graphics mode fails on a VM with no GPU. | `worker install` turns headless on only when no display is set; if you ran it with X11 forwarding, run `tapdance simlock -- --local config set android.emulator.headless true`. If `tapdance worker logs` points at graphics, run `tapdance simlock -- --local config set android.emulator.gpu swiftshader_indirect`. Then `tapdance worker restart`. |
-| The worker and guard stop when you close SSH, or do not come back after a VM restart | Linger is off; `host up` warned "Could not turn on linger". | `sudo loginctl enable-linger $USER`, then `tapdance host up --label gcp-n2-1` again. `loginctl show-user $USER --property=Linger` should print `Linger=yes`. |
+| The worker and guard stop when you close SSH, or do not come back after a VM restart | Linger is off; `host up` warned "Could not turn on linger". | `sudo loginctl enable-linger $USER`, then `tapdance host up --label gcp-n2-1` again. `loginctl show-user $USER --property=Linger` should print `Linger=yes`. For an OS Login account, run the setup script again so it installs `tapdance-user-manager.service`. |
 | `host up` fails at the tailscale step: "tailscale serve refused this user" (Access denied) | On Linux only root and the tailnet's operator may change `tailscale serve`. | `sudo tailscale set --operator=$USER`, then `host up` again. |
 | `host up` warns Tailscale is not logged in, and the endpoint stays on loopback | The VM is not in your tailnet. | `sudo tailscale up --operator=$USER`, open the link, then `host up` again. |
 | `host up` stops at pairing: "Pairing must be approved at this machine's terminal" | It ran without a terminal (for example `gcloud compute ssh --command …` without `-t`). | Run it in an interactive SSH session, or pass `--yes` if you are the owner. |
