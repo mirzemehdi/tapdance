@@ -622,7 +622,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         const r = await t.audit(o.app ? { appId: o.app } : {});
         out.result(r, () =>
           [
-            `${r.app ?? "screen"}: ${r.checked} controls checked, ${r.findings.length} finding(s)`,
+            `${r.app ?? "screen"}: ${r.checked} controls checked, ${r.findings.length} finding(s)${r.partlyHidden.length ? dim(`; not judged, partly off screen or under a bar: ${r.partlyHidden.join(", ")} (scroll them into view to audit them)`) : ""}`,
             ...r.findings.map((f) => `${f.severity === "error" ? red("error") : f.severity === "warning" ? yellow("warn ") : dim("info ")} ${f.rule} ${bold(f.ref)} [${f.role}]${f.label ? ` "${f.label}"` : ""}${f.identifier ? dim(` #${f.identifier}`) : ""}: ${f.detail}`),
           ].join("\n"),
         );

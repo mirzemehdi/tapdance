@@ -12,7 +12,7 @@ describe("accessibility audit (#60)", () => {
         truncated: false,
         warnings: [],
         elements: [
-          el("@e1", "button", { identifier: "play_pause", rect: { x: 0, y: 0, width: 60, height: 60 }, depth: 0 }),
+          el("@e1", "button", { identifier: "play_pause", rect: { x: 0, y: 5, width: 60, height: 60 }, depth: 0 }),
           el("@e2", "button", { label: "Next", rect: { x: 0, y: 70, width: 30, height: 30 }, depth: 0 }),
           el("@e3", "button", { label: "Delete", rect: { x: 0, y: 110, width: 200, height: 48 }, depth: 0 }),
           el("@e4", "button", { label: "Delete", rect: { x: 0, y: 170, width: 200, height: 48 }, depth: 0 }),
@@ -76,4 +76,44 @@ describe("accessibility audit (#60)", () => {
     );
     expect(r.findings.map((f) => f.ref)).toEqual(["@e3"]);
   });
+
+  it("does not judge rows behind a tab bar or cut by their list, top or bottom (#69, run 7)", () => {
+    const row = (ref: string, id: string, y: number, height: number, label?: string) =>
+      el(ref, "switch", { identifier: id, rect: { x: 16, y, width: 370, height }, depth: 1, ...(label ? { label } : {}) });
+    // iOS, Compose tab bar (three tabs side by side, no bar element): a row cut just above it, one under it.
+    const ios = auditScreen(
+      { viewport: { width: 402, height: 874 }, truncated: false, warnings: [], elements: [
+        el("@e0", "other", { rect: { x: 0, y: 0, width: 402, height: 874 }, depth: 0 }),
+        row("@e1", "settings_haptics", 0, 25),
+        row("@e2", "a", 400, 69, "A"),
+        row("@e3", "b", 469, 69, "B"),
+        row("@e4", "c", 538, 69, "C"),
+        row("@e5", "d", 607, 69, "D"),
+        row("@e6", "settings_reduce_motion", 784, 15, "Reduce motion"),
+        row("@e7", "settings_usage_stats", 805, 69),
+        el("@t1", "button", { label: "Play", rect: { x: 16, y: 800, width: 120, height: 50 }, depth: 1 }),
+        el("@t2", "button", { label: "Songs", rect: { x: 141, y: 800, width: 120, height: 50 }, depth: 1 }),
+        el("@t3", "button", { label: "Settings", rect: { x: 266, y: 800, width: 120, height: 50 }, depth: 1 }),
+        el("@x", "button", { label: "Tiny", rect: { x: 300, y: 300, width: 20, height: 20 }, depth: 1 }),
+      ] },
+      "ios",
+    );
+    expect(ios.findings.map((f) => `${f.rule} ${f.ref}`)).toEqual(["small-target @x"]);
+    expect(ios.partlyHidden.sort()).toEqual(["@e1", "@e6", "@e7"]);
+
+    // Android: a list between an app bar and a bottom bar, scrolled so its first row is cut at the top
+    // and a sliver of the last shows at the bottom.
+    const list = (rows: UiElementLike[]) => auditScreen(
+      { viewport: { width: 1080, height: 2400 }, truncated: false, warnings: [], elements: [el("@s", "ScrollView", { rect: { x: 0, y: 300, width: 1080, height: 1870 }, depth: 0 }), ...rows] },
+      "android",
+    );
+    const arow = (ref: string, y: number, height: number, label?: string) => el(ref, "button", { rect: { x: 42, y, width: 996, height }, depth: 1, ...(label ? { label } : {}) });
+    const android = list([arow("@a1", 300, 117, "Connect piano"), arow("@a2", 417, 147, "Two"), arow("@a3", 564, 147, "Three"), arow("@a4", 711, 147, "Four"), arow("@a5", 2160, 10)]);
+    expect(android.findings).toEqual([]);
+    expect(android.partlyHidden).toEqual(["@a1", "@a5"]);
+    // A whole first row at the top of its list is judged as usual.
+    const whole = list([arow("@a1", 300, 147), arow("@a2", 447, 147, "Two")]);
+    expect(whole.findings.map((f) => `${f.rule} ${f.ref}`)).toEqual(["unlabelled-control @a1"]);
+  });
 });
+type UiElementLike = ReturnType<typeof el>;

@@ -237,6 +237,15 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (#68): `device links` showed web links as a bare `https:`: the log filter missed Launch
   Services' "url scheme" lines (case); the app that took the link shows again.
 
+### Self-test run 7 (issue #69)
+
+- Fixed (#69): `ui audit` still flagged rows hidden behind a tab bar, rows cut at the top of a scrolled
+  list, and slivers at a list's bottom edge (size and, on iOS, a missing label). A control is now left
+  unjudged when it touches the screen's top or bottom, is covered by a tab, navigation or tool bar (also
+  a Compose or SwiftUI tab row with no bar element), touches its list's or a bar's edge and looks cut,
+  or is the first or last of several rows alike and clearly shorter. The report lists them as
+  `partlyHidden`; the CLI names them.
+
 ### Self-test run 6 (issues #65, #69, #70)
 
 - Fixed (#65): rotating an Android emulator on the Home Screen failed with "adb timed out after 1ms":
