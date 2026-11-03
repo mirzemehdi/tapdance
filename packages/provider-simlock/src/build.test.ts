@@ -1,46 +1,61 @@
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCacheDir, checkBuildRequest, FailureDigest, hostNetworkHint, hostSimulatorArch, isNotableBuildLine, missingSdkHint, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
+import { buildCacheDir, checkBuildRequest, deployKeyFor, FailureDigest, gitAuthHint, gitEnv, hostNetworkHint, hostSimulatorArch, isNotableBuildLine, missingSdkHint, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
+import { addBuildFile, BUILD_FILE_MAX_BYTES, BUILD_FILES_MAX, buildFilesDigest, checkBuildFilePath, listAllBuildFiles, readBuildFiles, removeBuildFile, repoKeyPath, repoSlug } from "./build-files.js";
 
 const SHA = "a".repeat(40);
 const settings: BuildSettings = { repos: ["https://github.com/acme/pianolune.git"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 };
 
-/** A fake git + xcodebuild + gradle: records commands and lays out what each would leave on disk. */
-function fakeRunner(root: string, opts: { onMain?: boolean; xcodeFails?: string[]; fetchFails?: boolean } = {}): { run: CommandRunner; calls: string[] } {
+/** A fake git + xcodebuild + gradle (mocked): records commands and lays out what each would leave on disk. */
+function fakeRunner(
+  root: string,
+  opts: { onMain?: boolean; xcodeFails?: string[]; fetchFails?: boolean; cloneFails?: string; sha?: string; onClone?: (src: string) => Promise<void>; onBuild?: (cwd: string) => Promise<void> } = {},
+): { run: CommandRunner; calls: string[]; envs: NodeJS.ProcessEnv[] } {
   const calls: string[] = [];
+  const envs: NodeJS.ProcessEnv[] = [];
+  const sha = opts.sha ?? SHA;
   const run: CommandRunner = async (command, args, o) => {
     calls.push([command.split("/").pop(), ...args.filter((a) => !a.startsWith(root))].join(" "));
+    envs.push(o.env);
+    if (command === "git" && args[0] === "clone" && opts.cloneFails) {
+      o.onLine(opts.cloneFails);
+      return { code: 128, output: opts.cloneFails };
+    }
     if (command === "git" && args[0] === "clone") {
       const src = args.at(-1)!;
       await mkdir(join(src, ".git"), { recursive: true });
       await mkdir(join(src, "iosApp", "iosApp.xcodeproj"), { recursive: true });
       await writeFile(join(src, "gradlew"), "#!/bin/sh\n");
+      await opts.onClone?.(src);
     }
     if (command === "git" && args.includes("fetch") && opts.fetchFails) {
       o.onLine("fatal: unable to access 'https://github.com/acme/pianolune/': Could not resolve host: github.com");
       return { code: 128, output: "fatal: unable to access 'https://github.com/acme/pianolune/': Could not resolve host: github.com" };
     }
-    if (command === "git" && args.includes("rev-parse")) return { code: args.some((a) => a.startsWith("origin/main") || a.startsWith(SHA.slice(0, 7))) ? 0 : 1, output: `${SHA}\n` };
+    if (command === "git" && args.includes("rev-parse")) return { code: args.some((a) => a.startsWith("origin/main") || a.startsWith(sha.slice(0, 7))) ? 0 : 1, output: `${sha}\n` };
     if (command === "git" && args.includes("merge-base")) return { code: opts.onMain === false ? 1 : 0, output: "" };
     if (command === "xcodebuild" && opts.xcodeFails) {
       for (const l of opts.xcodeFails) o.onLine(l);
       return { code: 65, output: opts.xcodeFails.slice(-3).join("\n") };
     }
     if (command === "xcodebuild") {
+      await opts.onBuild?.(o.cwd!);
       const derived = args[args.indexOf("-derivedDataPath") + 1]!;
       await mkdir(join(derived, "Build", "Products", "Debug-iphonesimulator", "iosApp.app"), { recursive: true });
       o.onLine("** BUILD SUCCEEDED **");
     }
     if (command.endsWith("gradlew")) {
+      await opts.onBuild?.(o.cwd!);
       const out = join(o.cwd!, "androidApp", "build", "outputs", "apk", "debug");
       await mkdir(out, { recursive: true });
       await writeFile(join(out, "androidApp-debug.apk"), "APK");
     }
     return { code: 0, output: "" };
   };
-  return { run, calls };
+  return { run, calls, envs };
 }
 
 describe("builds on the host (#45)", () => {
@@ -193,5 +208,196 @@ describe("builds on the host (#45)", () => {
     expect(warned.some((l) => l.startsWith("warning: git fetch failed"))).toBe(true);
     expect(hostNetworkHint("BUILD FAILED: Could not GET 'https://dl.google.com/x.pom'")).toBeDefined();
     expect(hostNetworkHint("e: Unresolved reference")).toBeUndefined();
+  });
+});
+
+describe("private repositories: per-repository deploy keys and host build files", () => {
+  const REPO = "https://github.com/acme/pianolune";
+  const SSH = "git" + "@github.com:Acme/pianolune.git";
+
+  it("derives one safe, collision-resistant slug per repository", () => {
+    const slug = repoSlug(REPO);
+    expect(slug).toMatch(/^github\.com-acme-pianolune-[0-9a-f]{10}$/);
+    // The https and ssh URLs, case, .git and a trailing slash name the same repository.
+    for (const same of [SSH, "https://GitHub.com/acme/pianolune.git", "ssh://git@github.com/acme/pianolune/", "https://user@github.com/acme/pianolune"]) expect(repoSlug(same), same).toBe(slug);
+    // Repositories whose readable parts sanitize to the same text still get different slugs.
+    expect(repoSlug("https://github.com/acme/a+b")).not.toBe(repoSlug("https://github.com/acme/a-b"));
+    expect(repoSlug("https://github.com/acme/pianolune2")).not.toBe(slug);
+    expect(repoSlug("https://gitlab.com/acme/pianolune")).not.toBe(slug);
+    for (const odd of ["https://github.com/../../etc/passwd", "https://github.com/a/.hidden", "https://h.example/$(id)/`x`"]) {
+      expect(repoSlug(odd), odd).toMatch(/^[a-z0-9][a-z0-9._-]*-[0-9a-f]{10}$/);
+      expect(repoSlug(odd)).not.toContain("..");
+    }
+    expect(repoSlug(`https://github.com/acme/${"x".repeat(500)}`).length).toBeLessThanOrEqual(91);
+    expect(() => repoSlug("file:///etc")).toThrow(/https/);
+  });
+
+  it("uses a repository's own deploy key, else the legacy single key with deploy-key auth", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const legacy = join(root, "deploy_key");
+    await writeFile(legacy, "KEY");
+    const deployKey: BuildSettings = { ...settings, gitAuth: "deploy-key", deployKeyPath: legacy };
+    expect(deployKeyFor(root, SSH, deployKey)).toBe(legacy);
+    expect(deployKeyFor(root, SSH, { ...settings, gitAuth: "none" })).toBeUndefined();
+    await mkdir(join(root, "keys"), { recursive: true });
+    await writeFile(repoKeyPath(root, SSH), "OWN");
+    // The repository's own key wins, whatever the URL form and whatever gitAuth says.
+    expect(deployKeyFor(root, REPO, deployKey)).toBe(repoKeyPath(root, SSH));
+    expect(deployKeyFor(root, SSH, { ...settings, gitAuth: "gh" })).toBe(repoKeyPath(root, SSH));
+    expect(deployKeyFor(root, "https://github.com/acme/other", deployKey)).toBe(legacy);
+    expect(gitEnv(settings, repoKeyPath(root, SSH))["GIT_SSH_COMMAND"]).toBe(`ssh -i '${repoKeyPath(root, SSH)}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`);
+    expect(gitEnv(settings)["GIT_SSH_COMMAND"]).toBeUndefined();
+    const gh = gitEnv({ ...settings, gitAuth: "gh" }, repoKeyPath(root, SSH));
+    expect(gh["GIT_CONFIG_VALUE_1"]).toBe("!gh auth git-credential");
+    expect(gh["GIT_SSH_COMMAND"]).toContain("IdentitiesOnly=yes");
+
+    // runBuild (fake git, mocked) hands git the repository's own key.
+    const { run, envs } = fakeRunner(root);
+    await runBuild({ repo: SSH, ref: "main", platform: "ios" }, deployKey, root, () => undefined, run);
+    expect(envs[0]!["GIT_SSH_COMMAND"]).toContain(repoKeyPath(root, SSH));
+    expect(envs[0]!["GIT_SSH_COMMAND"]).not.toContain(`'${legacy}'`);
+  });
+
+  it("names the three ways out when the clone cannot sign in (fake git, mocked)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const { run } = fakeRunner(root, { cloneFails: "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository." });
+    const error = (await runBuild({ repo: SSH, ref: "main", platform: "ios" }, settings, root, () => undefined, run).catch((e: unknown) => e)) as Error & { hint?: string; details?: Record<string, unknown> };
+    expect(error.message).toMatch(/^git clone failed/);
+    expect(error.hint).toContain("gh auth login --with-token");
+    expect(error.hint).toContain("fine-grained, read-only token");
+    expect(error.hint).toContain("tapdance host builds key --repo <url>");
+    expect(error.hint).toContain("tapdance app install <path>");
+    expect(error.details?.["reason"]).toBe("GIT_AUTH");
+    for (const text of ["remote: Repository not found.", "fatal: could not read Username for 'https://github.com': terminal prompts disabled", "The requested URL returned error: 403"]) expect(gitAuthHint(text, REPO), text).toBeDefined();
+    expect(gitAuthHint("error: pathspec 'x' did not match", REPO)).toBeUndefined();
+    // A network failure stays a network failure.
+    const offline = fakeRunner(root, { cloneFails: "ssh: Could not resolve hostname github.com: nodename nor servname provided\nfatal: Could not read from remote repository." });
+    const net = (await runBuild({ repo: SSH, ref: "main", platform: "ios" }, settings, root, () => undefined, offline.run).catch((e: unknown) => e)) as Error & { details?: Record<string, unknown> };
+    expect(net.details?.["reason"]).toBe("HOST_NETWORK");
+  });
+
+  it("refuses build file paths outside the repository or in git's own files", () => {
+    expect(checkBuildFilePath("androidApp/google-services.json")).toBe("androidApp/google-services.json");
+    expect(checkBuildFilePath(".env")).toBe(".env");
+    expect(checkBuildFilePath("local.properties")).toBe("local.properties");
+    for (const bad of ["/etc/passwd", "~/x", "C:/x", "\\\\x", "../x", "a/../../x", "a/..", ".git", ".git/config", ".GIT/hooks/pre-commit", ".gitmodules", "sub/.git/config", "a//b", "./a", "a/b\\c", "a/$(id)", ""]) {
+      expect(() => checkBuildFilePath(bad), bad).toThrow();
+    }
+  });
+
+  it("caps a build file at 1 MB and a repository at 50 files; stores them owner-only", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    await expect(addBuildFile(root, REPO, "big.bin", Buffer.alloc(BUILD_FILE_MAX_BYTES + 1))).rejects.toThrow(/at most/);
+    await addBuildFile(root, REPO, "max.bin", Buffer.alloc(BUILD_FILE_MAX_BYTES));
+    for (let i = 1; i < BUILD_FILES_MAX; i++) await addBuildFile(root, REPO, `f${i}.txt`, Buffer.from(`v${i}`));
+    await expect(addBuildFile(root, REPO, "one-more.txt", Buffer.from("x"))).rejects.toThrow(/50 build files/);
+    // Replacing a file that is already there is not one more.
+    await addBuildFile(root, REPO, "f1.txt", Buffer.from("changed"));
+    expect((await readBuildFiles(root, SSH)).length).toBe(BUILD_FILES_MAX);
+    const dir = join(root, "files", repoSlug(REPO));
+    expect((await stat(dir)).mode & 0o777).toBe(0o700);
+    expect((await stat(join(dir, "index.json"))).mode & 0o777).toBe(0o600);
+    const blobs = await readdir(join(dir, "blobs"));
+    expect(blobs.length).toBe(BUILD_FILES_MAX); // the replaced content's blob is gone
+    for (const b of blobs) expect((await stat(join(dir, "blobs", b))).mode & 0o777).toBe(0o600);
+    const listed = await listAllBuildFiles(root);
+    expect(listed).toHaveLength(1);
+    await removeBuildFile(root, REPO, "f1.txt");
+    await expect(removeBuildFile(root, REPO, "f1.txt")).rejects.toThrow(/no build file/);
+  });
+
+  it("copies build files into the checkout for the build, logs only path and hash, and takes them out after (fake git and Xcode, mocked)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    await addBuildFile(root, REPO, "iosApp/GoogleService-Info.plist", Buffer.from("SECRET-PLIST"));
+    await addBuildFile(root, REPO, "config/.env", Buffer.from("API_KEY=SECRET-ENV"));
+    const seen: Record<string, string> = {};
+    const { run } = fakeRunner(root, {
+      onBuild: async (src) => {
+        seen["plist"] = await readFile(join(src, "iosApp", "GoogleService-Info.plist"), "utf8");
+        seen["env"] = await readFile(join(src, "config", ".env"), "utf8");
+      },
+    });
+    const lines: string[] = [];
+    await runBuild({ repo: REPO, ref: "main", platform: "ios" }, settings, root, (l) => lines.push(l), run);
+    expect(seen).toEqual({ plist: "SECRET-PLIST", env: "API_KEY=SECRET-ENV" });
+    const sha = (await readBuildFiles(root, REPO)).find((f) => f.path === "config/.env")!.sha256;
+    expect(lines).toContain(`using host build file config/.env (sha256 ${sha.slice(0, 8)})`);
+    expect(lines.some((l) => l.includes("SECRET"))).toBe(false);
+    expect(isNotableBuildLine(`using host build file config/.env (sha256 ${sha.slice(0, 8)})`)).toBe(true);
+    const src = join(buildCacheDir(root, REPO), "src");
+    expect(existsSync(join(src, "iosApp", "GoogleService-Info.plist"))).toBe(false);
+    expect(existsSync(join(src, "config", ".env"))).toBe(false);
+  });
+
+  it("builds again when a build file changes, and a removed file does not linger for the next commit (fake git and Xcode, mocked)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const req = { repo: REPO, ref: "main", platform: "ios" as const };
+    const first = await runBuild(req, settings, root, () => undefined, fakeRunner(root).run);
+    // Same commit, settings and (no) files: reused.
+    expect((await runBuild(req, settings, root, () => undefined, fakeRunner(root).run)).reused).toBe(true);
+    // A build file appears: the reuse key changes, so it builds again.
+    await addBuildFile(root, REPO, "local.properties", Buffer.from("sdk.dir=/a"));
+    const withFile = fakeRunner(root);
+    const second = await runBuild(req, settings, root, () => undefined, withFile.run);
+    expect(second.reused).toBeUndefined();
+    expect(second.artifact).not.toBe(first.artifact);
+    expect(withFile.calls.some((c) => c.startsWith("xcodebuild"))).toBe(true);
+    expect((await runBuild(req, settings, root, () => undefined, fakeRunner(root).run)).reused).toBe(true);
+    // The file's content changes: builds again.
+    const before = buildFilesDigest(await readBuildFiles(root, REPO));
+    await addBuildFile(root, REPO, "local.properties", Buffer.from("sdk.dir=/b"));
+    expect(buildFilesDigest(await readBuildFiles(root, REPO))).not.toBe(before);
+    expect(buildFilesDigest([])).toBe("");
+    const changed = fakeRunner(root);
+    expect((await runBuild(req, settings, root, () => undefined, changed.run)).reused).toBeUndefined();
+    // The owner removes it; the next commit builds without it, even though a build that died left a copy.
+    await removeBuildFile(root, REPO, "local.properties");
+    const cache = buildCacheDir(root, REPO);
+    const src = join(cache, "src");
+    await writeFile(join(src, "local.properties"), "sdk.dir=/b");
+    await writeFile(join(cache, "placed-files.json"), JSON.stringify(["local.properties"]));
+    let present = true;
+    const next = fakeRunner(root, { sha: "c".repeat(40), onBuild: async (cwd) => void (present = existsSync(join(cwd, "local.properties"))) });
+    await runBuild(req, settings, root, () => undefined, next.run);
+    expect(present).toBe(false);
+    // Removed before git checks out the next commit.
+    expect(next.calls.findIndex((c) => c.startsWith("git -C checkout"))).toBeGreaterThan(-1);
+    expect(existsSync(join(cache, "placed-files.json"))).toBe(false);
+  });
+
+  it("refuses a build file whose folder is a symlink out of the checkout, writing nothing there (fake git, mocked)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const outside = await mkdtemp(join(tmpdir(), "td-outside-"));
+    await addBuildFile(root, REPO, "app/google-services.json", Buffer.from("{}"));
+    const { run, calls } = fakeRunner(root, { onClone: (src) => symlink(outside, join(src, "app")) });
+    const error = (await runBuild({ repo: REPO, ref: "main", platform: "ios" }, settings, root, () => undefined, run).catch((e: unknown) => e)) as Error & { code?: string };
+    expect(error.code).toBe("FORBIDDEN");
+    expect(error.message).toContain("app/google-services.json");
+    expect(error.message).toMatch(/symlink that leads outside the checkout/);
+    expect(await readdir(outside)).toEqual([]);
+    expect(calls.some((c) => c.startsWith("xcodebuild"))).toBe(false);
+
+    // A symlink at the file's own path is refused too (writing would follow it).
+    const root2 = await mkdtemp(join(tmpdir(), "td-build-"));
+    await addBuildFile(root2, REPO, ".env", Buffer.from("A=1"));
+    const victim = join(outside, "victim.txt");
+    await writeFile(victim, "untouched");
+    const second = fakeRunner(root2, { onClone: (src) => symlink(victim, join(src, ".env")) });
+    await expect(runBuild({ repo: REPO, ref: "main", platform: "ios" }, settings, root2, () => undefined, second.run)).rejects.toThrow(/\.env in the repository is a symlink/);
+    expect(await readFile(victim, "utf8")).toBe("untouched");
+
+    // A symlink to a folder inside the checkout is fine.
+    const root3 = await mkdtemp(join(tmpdir(), "td-build-"));
+    await addBuildFile(root3, REPO, "link/google-services.json", Buffer.from("{}"));
+    let copied = "";
+    const third = fakeRunner(root3, {
+      onClone: async (src) => {
+        await mkdir(join(src, "real"));
+        await symlink(join(src, "real"), join(src, "link"));
+      },
+      onBuild: async (src) => void (copied = await readFile(join(src, "real", "google-services.json"), "utf8")),
+    });
+    await runBuild({ repo: REPO, ref: "main", platform: "ios" }, settings, root3, () => undefined, third.run);
+    expect(copied).toBe("{}");
   });
 });

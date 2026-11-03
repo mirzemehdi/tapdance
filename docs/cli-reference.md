@@ -2225,10 +2225,15 @@ Commands:
   enable [options]  Allow builds from these repositories (git mode): the agent
                     sends a repo and ref, this machine fetches and builds it
   disable           Turn builds off (the allow-list is kept)
-  status            Show whether builds are on, the allowed repositories and the
-                    build cache size
-  key               Create a read-only deploy key for --git-auth deploy-key and
-                    print its public half to add to the repository
+  status            Show whether builds are on, the allowed repositories (with
+                    their deploy key and build files) and the build cache
+  key [options]     Create a read-only deploy key and print its public half to
+                    add to the repository; --repo makes one for that repository
+                    only (GitHub accepts a deploy key on one repository)
+  files             Files this machine copies into the checkout before each
+                    build of a repository: config kept out of git
+                    (google-services.json, local.properties, .env). Only you add
+                    or read them; agents cannot
   help [command]    display help for command
 ```
 
@@ -2243,8 +2248,10 @@ this machine fetches and builds it
 Options:
   --repo <url>              repository allowed to be built (repeatable)
   --git-auth <mode>         how git reaches private repositories: gh (this
-                            machine's `gh auth`), deploy-key (`host builds
-                            key`), or none (default: "none")
+                            machine's `gh auth`, e.g. a fine-grained read-only
+                            token), deploy-key (`host builds key`), or none; a
+                            repository's own key from `host builds key --repo`
+                            is used whenever it exists (default: "none")
   --protected-ref <branch>  only build commits already on this branch of the
                             remote, e.g. main (repeatable)
   --timeout-minutes <n>     longest build (default: "45")
@@ -2269,7 +2276,8 @@ Options:
 ```text
 Usage: tapdance host builds status [options]
 
-Show whether builds are on, the allowed repositories and the build cache size
+Show whether builds are on, the allowed repositories (with their deploy key and
+build files) and the build cache
 
 Options:
   -h, --help  display help for command
@@ -2280,11 +2288,37 @@ Options:
 ```text
 Usage: tapdance host builds key [options]
 
-Create a read-only deploy key for --git-auth deploy-key and print its public
-half to add to the repository
+Create a read-only deploy key and print its public half to add to the
+repository; --repo makes one for that repository only (GitHub accepts a deploy
+key on one repository)
 
 Options:
-  -h, --help  display help for command
+  --repo <url>  the repository this key is for; its builds use it whatever
+                --git-auth says
+  -h, --help    display help for command
+```
+
+### `tapdance host builds files`
+
+```text
+Usage: tapdance host builds files [options] [command]
+
+Files this machine copies into the checkout before each build of a repository:
+config kept out of git (google-services.json, local.properties, .env). Only you
+add or read them; agents cannot
+
+Options:
+  -h, --help                       display help for command
+
+Commands:
+  add [options] <path-in-repo>     Add or replace a build file: its content
+                                   comes from --from or stdin (at most 1 MB, 50
+                                   files per repository)
+  list [options]                   List build files: path, size and the start of
+                                   the sha256, never their content
+  remove [options] <path-in-repo>  Remove a build file; the next build runs
+                                   without it
+  help [command]                   display help for command
 ```
 
 ### `tapdance host token`

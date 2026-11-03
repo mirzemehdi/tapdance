@@ -121,6 +121,36 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["--json", "config", "set-token", "--endpoint", "http://100.101.102.103:4720"], {}, "slk_x\n").code).toBe(0);
   });
 
+  it("host builds files and key --repo: validate their arguments and never print a file's content", () => {
+    const home = mkdtempSync(join(tmpdir(), "td-cli-"));
+    const env = { TAPDANCE_HOME: home };
+    const repo = "https://github.com/acme/app";
+    const file = join(home, "google-services.json");
+    writeFileSync(file, '{"api_key":"FILE_SECRET_CONTENT"}');
+    expect(tapdance(["host", "builds", "files", "add", "--repo", "file:///etc", "a.json", "--from", file], env).code).toBe(2);
+    for (const bad of ["/etc/passwd", "../x", ".git/config", "sub/.git/hooks/post-checkout"]) {
+      const r = tapdance(["host", "builds", "files", "add", "--repo", repo, bad, "--from", file], env);
+      expect(r.code, bad).toBe(2);
+    }
+    expect(tapdance(["host", "builds", "files", "add", "--repo", repo, "a.json", "--from", join(home, "missing")], env).code).toBe(2);
+    const big = join(home, "big.bin");
+    writeFileSync(big, Buffer.alloc(1024 * 1024 + 1));
+    expect(tapdance(["host", "builds", "files", "add", "--repo", repo, "big.bin", "--from", big], env).stderr).toMatch(/larger than 1 MB/);
+    expect(tapdance(["host", "builds", "files", "add", "--repo", repo, "empty.txt"], env).code).toBe(2); // nothing on stdin
+    expect(tapdance(["host", "builds", "files", "add", "--repo", repo, "androidApp/google-services.json", "--from", file], env).code).toBe(0);
+    expect(tapdance(["--json", "host", "builds", "files", "add", "--repo", repo, "local.properties"], env, "sdk.dir=STDIN_SECRET_CONTENT\n").code).toBe(0);
+    const listed = tapdance(["--json", "host", "builds", "files", "list"], env);
+    expect(listed.code).toBe(0);
+    const rows = (JSON.parse(listed.stdout) as { files: Array<{ path: string; size: number; sha256: string }> }).files;
+    expect(rows.map((f) => f.path)).toEqual(["androidApp/google-services.json", "local.properties"]);
+    expect(rows.every((f) => /^[0-9a-f]{8}$/.test(f.sha256))).toBe(true);
+    expect(listed.stdout + tapdance(["host", "builds", "files", "list", "--repo", repo], env).stdout).not.toMatch(/SECRET_CONTENT/);
+    expect(tapdance(["host", "builds", "files", "remove", "--repo", repo, "local.properties"], env).code).toBe(0);
+    expect(tapdance(["host", "builds", "files", "remove", "--repo", repo, "local.properties"], env).code).toBe(2);
+    expect(tapdance(["host", "builds", "key", "--repo", "file:///etc"], env).code).toBe(2);
+    expect(tapdance(["host", "builds", "files", "list", "--repo", "not a url"], env).code).toBe(2);
+  });
+
   it("hints never name a bare simlock command or a global npm install", () => {
     const bad: string[] = [];
     for (const dir of ["cli", "provider-simlock", "sdk", "core", "mcp"]) {
