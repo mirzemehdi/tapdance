@@ -237,6 +237,12 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (#68): `device links` showed web links as a bare `https:`: the log filter missed Launch
   Services' "url scheme" lines (case); the app that took the link shows again.
 
+### Licence
+
+- Changed: Tapdance is now licensed under the GNU AGPL-3.0-only (was MIT). Self-hosting and changes
+  stay free; a modified Tapdance offered to others as a network service must share its source.
+  Copies obtained under MIT up to commit b3ec7e3 keep the MIT terms.
+
 ### Self-test run 7 (issue #69)
 
 - Fixed (#69): `ui audit` still flagged rows hidden behind a tab bar, rows cut at the top of a scrolled

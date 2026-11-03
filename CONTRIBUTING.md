@@ -182,4 +182,5 @@ and removes its own code when an upstream tool gains the capability.
   [issue templates](.github/ISSUE_TEMPLATE/). `tapdance report` writes a redacted report you can paste.
 - Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
-By contributing, you agree that your contributions are licensed under the [MIT license](LICENSE).
+By contributing, you agree that your contributions are licensed under the
+[GNU AGPL-3.0-only](LICENSE), the licence of this repository.

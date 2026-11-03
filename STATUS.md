@@ -217,7 +217,7 @@ arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.1671739
 | G-04 | 🟡 | Written; untested procedures. |
 | G-05 | 🟡 | Written; Scaleway/MacStadium/AWS steps not exercised. |
 | G-06 | 🟡 | Docs only. |
-| O-01 | ✅ | Basis: every listed document exists — README, installation, quick start, CLI reference, MCP, Claude Code/Codex/Cursor pages, Android and iOS pages, self-hosted guides, ADR, CONTRIBUTING, SECURITY, MIT LICENSE. `cli.test.ts` checks that every command, MCP tool and config key is documented. |
+| O-01 | ✅ | Basis: every listed document exists — README, installation, quick start, CLI reference, MCP, Claude Code/Codex/Cursor pages, Android and iOS pages, self-hosted guides, ADR, CONTRIBUTING, SECURITY, LICENSE (AGPL-3.0-only). `cli.test.ts` checks that every command, MCP tool and config key is documented. |
 | O-02 | ✅ | `CLAUDE.md`, `AGENTS.md`; a test fails when code names a `tapdance` command that does not exist. |
 | O-03 | ✅ | This file and PRODUCT.md. |
 | O-04 | ✅ | `.github/ISSUE_TEMPLATE/*`, `tapdance report`, [field-testing runbook](docs/testing/field-testing.md). |
