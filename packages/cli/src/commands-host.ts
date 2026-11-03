@@ -35,7 +35,7 @@ import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerS
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
 import { HOST_STOP_COMMAND, HOST_STOP_SUDO_CHECK, describeHostStop, hostStopApplies, sudoersInstallCommand, sudoersRule } from "./guard/host-stop.js";
-import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
+import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, prepareLinuxUserServices, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
 import {
   assertHostPlatform,
   cloudCheck,
@@ -61,7 +61,6 @@ import {
   tokenFingerprint,
   clipboardCommand,
   parseWarm,
-  parseLinger,
   serveNeedsOperator,
   resolveHostStop,
   describeIdle,
@@ -151,22 +150,6 @@ function findTailscale(): string | undefined {
 
 /** The pairing files `host up` wrote, with what the guard thinks of each token. */
 /** Puts text on the clipboard through the platform's tool (stdin, never argv). */
-/**
- * Linux: the worker and guard are systemd user units, which stop when the owner's last login session
- * ends and do not start at boot unless the account lingers. Turns linger on (logind lets a user do that
- * for their own account); when that is refused, says how to do it with sudo.
- */
-async function ensureLinger(out: Output): Promise<void> {
-  const user = userInfo().username;
-  if (parseLinger((await runCommand("loginctl", ["show-user", user, "--property=Linger"])).out) === true) return;
-  const r = await runCommand("loginctl", ["enable-linger", user]);
-  if (r.ok && parseLinger((await runCommand("loginctl", ["show-user", user, "--property=Linger"])).out) === true) {
-    out.progress(`Turned on linger for ${user}: the worker and guard keep running after you log out and start at boot`);
-    return;
-  }
-  out.warn(`Could not turn on linger for ${user} (${r.out.split("\n")[0] ?? "loginctl failed"}): the worker and guard stop when you log out. Run \`sudo loginctl enable-linger ${user}\`.`);
-}
-
 /** sudo lets this account run the cost guard's stop command without a password. */
 async function hostStopAllowed(): Promise<boolean> {
   return (await runCommand("sudo", [...HOST_STOP_SUDO_CHECK])).ok;
@@ -322,6 +305,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
 
         const hostStop = await step(out, "guard service", async () => {
           const settings = await applyHostStop(out, costChoice, platform);
+          if (platform === "linux") await prepareLinuxUserServices(out);
           const r = await installGuardAsService({ allowAdminAccount: Boolean(o.allowAdminAccount), keepAwake: Boolean(o.keepAwake) });
           out.progress(r.unchanged ? `Already installed and running (${r.file}); left as is` : `Installed ${r.file}`);
           for (const n of r.notes) out.progress(dim(n));
@@ -332,7 +316,6 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
               if (!(await waitForGuard(localUrl, 15_000))) out.warn(`The guard does not answer on ${localUrl} after its restart; check \`tapdance host status\`.`);
             } else out.warn(`The new cost guard setting applies when the guard restarts: \`systemctl --user restart ${GUARD_SYSTEMD_UNIT}\` once no lease is running.`);
           }
-          if (platform === "linux") await ensureLinger(out);
           if (!r.answering) {
             const log = r.log ? await readFile(r.log, "utf8").catch(() => "") : (await runCommand("journalctl", ["--user", "-u", "tapdance-guard.service", "-n", "30", "--no-pager"])).out;
             const runs = [process.execPath, CLI_ENTRY, "worker", "guard", "start", ...(o.allowAdminAccount ? ["--allow-admin-account"] : [])];

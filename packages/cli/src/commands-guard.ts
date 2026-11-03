@@ -10,7 +10,7 @@ import { CLI_ENTRY, output, type GlobalOptions } from "./context.js";
 import { bold, dim, red, table, yellow } from "./output.js";
 import { GuardTokens, guardDir, loadPolicy, scopeNames, type GuardToken } from "./guard/policy.js";
 import { startGuard } from "./guard/server.js";
-import {
+import { prepareLinuxUserServices,
   guardServiceEnvironment,
   guardServiceState,
   installGuardService,
@@ -100,6 +100,7 @@ export async function installGuardAsService(o: { allowAdminAccount?: boolean; ke
   assertGuardHostSafe(Boolean(o.allowAdminAccount), adminHint);
   const { policy } = await loadPolicy();
   if (!isPrivateHost(policy.listen.host)) throw new TapdanceError("CONFIG_INVALID", `policy.listen.host ${policy.listen.host} is not a private address`);
+  if (platform === "linux") await prepareLinuxUserServices({ progress: (m) => process.stderr.write(`› ${m}\n`), warn: (m) => process.stderr.write(`! ${m}\n`) });
   const io = { run: runCommand, uid: process.getuid?.() ?? 0 };
   const url = `http://${policy.listen.host}:${policy.listen.port}`;
   // A `guard start` still running in a terminal holds the port: the service would restart in a loop

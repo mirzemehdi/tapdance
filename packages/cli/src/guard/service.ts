@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { TapdanceError, redactSecrets } from "@tapdance/sdk";
+import { parseLinger } from "../host/plan.js";
 
 /**
  * Keeps the worker guard running as a login service of the worker account: a LaunchAgent on macOS,
@@ -294,4 +296,31 @@ export async function waitForGuard(url: string, timeoutMs: number, fetchImpl: ty
     if (Date.now() >= deadline) return false;
     await new Promise((r) => setTimeout(r, 500));
   }
+}
+
+/**
+ * Linux: the worker and guard run as systemd user units. They need the account's systemd user manager,
+ * which a non-interactive SSH command (`gcloud compute ssh --command`, a script over ssh) does not start,
+ * and they stop at logout or never start at boot unless the account lingers. Turns linger on (as the
+ * user, else with passwordless sudo), waits for the user manager's bus, and points this process (and the
+ * Simlock and systemctl it runs) at it when XDG_RUNTIME_DIR is not set.
+ */
+export async function prepareLinuxUserServices(out: { progress: (m: string) => void; warn: (m: string) => void }): Promise<void> {
+  const user = userInfo().username;
+  const lingering = async () => parseLinger((await runCommand("loginctl", ["show-user", user, "--property=Linger"])).out) === true;
+  if (!(await lingering())) {
+    const self = await runCommand("loginctl", ["enable-linger", user]);
+    if (!(await lingering())) await runCommand("sudo", ["-n", "loginctl", "enable-linger", user]);
+    if (await lingering()) out.progress(`Turned on linger for ${user}: the worker and guard keep running after you log out and start at boot`);
+    else out.warn(`Could not turn on linger for ${user} (${self.out.split("\n")[0] ?? "loginctl failed"}): the worker and guard stop when you log out. Run \`sudo loginctl enable-linger ${user}\`.`);
+  }
+  const runtime = `/run/user/${process.getuid?.() ?? 0}`;
+  for (let i = 0; i < 60 && !existsSync(`${runtime}/bus`); i++) await new Promise((r) => setTimeout(r, 250));
+  if (!existsSync(`${runtime}/bus`)) {
+    throw new TapdanceError("HOST_CHECK_FAILED", `No systemd user manager runs for ${user} (${runtime}/bus is missing), so the worker cannot be installed as a service`, {
+      hint: `Run \`sudo loginctl enable-linger ${user}\` (it starts the user manager and keeps it running), then this command again.`,
+    });
+  }
+  if (!process.env["XDG_RUNTIME_DIR"]) process.env["XDG_RUNTIME_DIR"] = runtime;
+  if (!process.env["DBUS_SESSION_BUS_ADDRESS"]) process.env["DBUS_SESSION_BUS_ADDRESS"] = `unix:path=${runtime}/bus`;
 }
