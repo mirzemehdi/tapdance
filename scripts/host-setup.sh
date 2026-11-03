@@ -166,10 +166,13 @@ describe() {
   esac
 }
 
+# /dev/tty is "readable" by permissions even without a controlling terminal; opening it tells.
+have_tty() { { : < /dev/tty; } 2>/dev/null; }
+
 ask() {
   (( YES )) && return 0
   # Piped through curl, stdin is this script: ask on the terminal.
-  [[ -r /dev/tty ]] || die "no terminal to ask on; run again with --yes to install, or --check to only report"
+  have_tty || die "no terminal to ask on; run again with --yes to install, or --check to only report"
   printf '%s [y/N] ' "$1" > /dev/tty
   local answer; read -r answer < /dev/tty
   [[ "$answer" =~ ^[Yy] ]]
@@ -419,5 +422,5 @@ if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
   exit 0
 fi
 # Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
-if [[ ! -t 0 && -r /dev/tty ]]; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
+if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"
