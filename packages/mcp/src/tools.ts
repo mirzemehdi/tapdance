@@ -88,7 +88,7 @@ export function confinePath(path: string, env: NodeJS.ProcessEnv = process.env, 
   if (!inside) {
     throw new TapdanceError("FORBIDDEN", `${path} is outside the project directory`, {
       hint:
-        "Rebuild into the project (iOS: add `-derivedDataPath ./build`, then install ./build/Build/Products/Debug-iphonesimulator/<App>.app) or copy the .app/.apk into the project directory, then call install_app again. (The user can also add a directory to TAPDANCE_ALLOWED_ROOTS and restart the server.)",
+        "Agents may send only files inside the project directory. For an app: rebuild into the project (iOS: add `-derivedDataPath ./build`, then install ./build/Build/Products/Debug-iphonesimulator/<App>.app) or copy the .app/.apk into it, then call install_app again; for push_file, copy the file into the project first. (The user can also add a directory to TAPDANCE_ALLOWED_ROOTS and restart the server.)",
     });
   }
   return real;
