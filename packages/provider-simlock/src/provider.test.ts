@@ -735,3 +735,14 @@ describe("iOS gaps (#48-#50)", () => {
     expect(switchKnobPoint({ x: 0, y: 136, width: 402, height: 48 })).toEqual({ x: 360, y: 160 });
   });
 });
+
+describe("iOS on a host that is not a Mac", () => {
+  it("is never expected from a Linux worker, and still expected from a Mac or an unknown host", async () => {
+    const { iosNeedsMac } = await import("./provider.js");
+    expect(iosNeedsMac("ios", "linux")).toBe(true);
+    expect(iosNeedsMac("ios", "darwin")).toBe(false);
+    expect(iosNeedsMac("ios", "macOS")).toBe(false);
+    expect(iosNeedsMac("ios", undefined)).toBe(false);
+    expect(iosNeedsMac("android", "linux")).toBe(false);
+  });
+});

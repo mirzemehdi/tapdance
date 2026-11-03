@@ -201,6 +201,10 @@ export class SimlockProvider implements DeviceProvider {
         const cap = status.capacity?.[platform];
         const limit = cap?.limit ?? 0;
         const tool = status.host?.tools?.find((t) => t.platform === platform);
+        if (iosNeedsMac(platform, status.host?.os)) {
+          checks.push({ id: "simlock.capacity.ios", title: "iOS simulators available", status: "skip", detail: `not on this host: it runs ${status.host?.os}, and iOS simulators need a Mac` });
+          continue;
+        }
         if (limit > 0 && offered && !offered.has(platform)) {
           checks.push({
             id: `simlock.capacity.${platform}`,
@@ -328,7 +332,8 @@ export class SimlockProvider implements DeviceProvider {
       .filter((d) => filter.platform === undefined || d.platform === filter.platform);
     const notes: string[] = [];
     for (const c of capacity) {
-      if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
+      if (iosNeedsMac(c.platform, status.host?.os)) notes.push(`No ios here: this host runs ${status.host?.os}, and iOS simulators need a Mac host.`);
+      else if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
       else if (!entries.some((e) => e.platform === c.platform && (e.models.length > 0 || e.osVersions.length > 0))) {
         notes.push(`${c.platform} is not available right now: the worker offers no ${c.platform} device, so leases are refused. ${notOfferedFix(c.platform)}`);
       }
@@ -1714,6 +1719,11 @@ export function matchesTarget(el: UiElement, target: Exclude<ElementTarget, { ki
       return m[1] === "id" ? el.identifier === v : m[1] === "role" ? el.role === v : el.label === v || el.value === v;
     }
   }
+}
+
+/** A Linux (or other non-macOS) worker still reports iOS capacity, but can never run a simulator. */
+export function iosNeedsMac(platform: string, hostOs: string | undefined): boolean {
+  return platform === "ios" && hostOs !== undefined && hostOs !== "" && !/darwin|mac/i.test(hostOs);
 }
 
 /** What the worker's owner can do when a platform has capacity but no device on offer. */
