@@ -1,6 +1,6 @@
-# Android worker on OVHcloud Public Cloud
+# Android host on OVHcloud Public Cloud
 
-This guide covers running the Android worker on an [OVHcloud Public Cloud](https://www.ovhcloud.com/en/public-cloud/)
+This guide covers hosting Android emulators on an [OVHcloud Public Cloud](https://www.ovhcloud.com/en/public-cloud/)
 instance. It is mode C in [PRODUCT.md](../../PRODUCT.md) ("OVH with confirmed nested
 virtualization").
 
@@ -36,28 +36,30 @@ Public Cloud instances can be billed by the hour, which makes the check cheap:
 `tapdance worker check --android-only` (after installing Tapdance) runs the same checks and prints a
 fix for each failure.
 
-## Set up the worker
+## Set it up as a host
 
-Once KVM is confirmed, the steps are the same as on Google Cloud. Follow these sections of
-[Google Cloud N2](google-cloud-n2.md):
+Once KVM is confirmed, the steps are the same as on a Google Cloud N2 VM, in device-only mode: one
+script installs everything and runs `tapdance host up`, and your agent's machine connects over
+Tailscale. Follow these sections of [Google Cloud N2](google-cloud-n2.md), over ordinary SSH instead
+of IAP:
 
-1. [Verify KVM on the VM](google-cloud-n2.md#verify-kvm-on-the-vm), including adding your user to
-   the `kvm` group.
-2. [Install the software](google-cloud-n2.md#install-the-software): either
-   `infrastructure/scripts/install-android-worker.sh` (provider-agnostic, written for Ubuntu, not yet
-   run on OVHcloud) or the manual steps. Use x86_64 system images.
-3. [Emulators: Simlock creates them](google-cloud-n2.md#emulators-simlock-creates-them).
-4. [Join the gateway](google-cloud-n2.md#join-the-gateway) with a join token from
-   `tapdance gateway token --role worker --label ovh-1`.
-5. [Connect Tapdance and use it](google-cloud-n2.md#connect-tapdance-and-use-it) from your VPS.
+1. [Run the setup script](google-cloud-n2.md#run-the-setup-script) as your own user (not root), with
+   a `--label` such as `ovh-1`. It installs an x86_64 system image, logs the instance into your tailnet,
+   and runs `host up`.
+2. [Copy the token to the agent machine](google-cloud-n2.md#copy-the-token-to-the-agent-machine) with
+   `scp`, then delete the copies.
+3. [Connect the agent machine](google-cloud-n2.md#connect-the-agent-machine) and
+   [lease a device](google-cloud-n2.md#first-lease).
 
-The gateway itself can run on any ordinary VPS, OVHcloud's included; it needs no KVM. See
-[laptop worker](laptop-worker.md#1-start-the-gateway-on-the-vps) for the gateway steps.
+None of this has run on OVHcloud. The [troubleshooting table](google-cloud-n2.md#troubleshooting)
+covers KVM access, headless emulators, linger and Tailscale. To join the instance to a gateway
+instead, see [Alternative: join a gateway](google-cloud-n2.md#alternative-join-a-gateway).
 
 ## Network and firewall
 
-A Public Cloud instance normally gets a public IPv4 address. The worker needs **no inbound port**:
-it dials out to the gateway. Allow only SSH in, ideally only from your own address:
+A Public Cloud instance normally gets a public IPv4 address. The host needs **no inbound port**:
+Tailscale connects outbound, and `tailscale serve` exposes the guard inside your tailnet only. Allow
+only SSH in, ideally only from your own address:
 
 ```bash
 sudo ufw default deny incoming
@@ -66,9 +68,8 @@ sudo ufw allow from <your-ip> to any port 22 proto tcp
 sudo ufw enable
 ```
 
-You can also use OpenStack security groups on the instance's network port. Joining over
-[Tailscale](https://tailscale.com/) instead of a public `wss://` address works the same way as on a
-laptop (see [laptop worker](laptop-worker.md#option-b-tailscale)).
+You can also use OpenStack security groups on the instance's network port. Never open the guard's
+port (4720) to the internet.
 
 ## Costs and billing (November 2026 estimates)
 
@@ -83,5 +84,6 @@ laptop (see [laptop worker](laptop-worker.md#option-b-tailscale)).
   guide. Leases on the worker end, because their emulators are gone when it comes back.
 - Deleting the instance stops instance billing; delete its snapshots and any extra volumes too.
 
-When you retire the worker, also revoke its join token on the gateway
+When you retire the instance, also remove it from your tailnet in the Tailscale admin console. If
+you joined it to a gateway instead, revoke its join token there
 (`tapdance simlock --gateway token list`, then `token revoke <id>`).

@@ -1,13 +1,13 @@
-# Tapdance Android worker on a Google Cloud N2 VM with nested virtualization.
+# Tapdance Android host on a Google Cloud N2 VM with nested virtualization.
 #
 # Creates: (optionally) a project; the Compute/IAM/OS Login (and IAP) APIs; a dedicated VPC and
 # subnet; firewall rules that allow only IAP SSH; Cloud NAT for outbound traffic (or an ephemeral
 # external IP); a service account with logging/monitoring only; and one N2 VM running Ubuntu
-# 24.04 with a startup script that prepares KVM and copies the Tapdance install scripts.
+# 24.04 with a startup script that prepares KVM and copies helper scripts.
 #
-# It does NOT install Tapdance or join a gateway: the gateway join token must never be in
-# Terraform state or instance metadata. You run the install script and `tapdance worker login`
-# yourself over IAP SSH. See README.md.
+# It does NOT install Tapdance, Tailscale or a pairing token: no secret may be in Terraform state or
+# instance metadata. You run scripts/host-setup.sh (which runs `tapdance host up`) yourself over IAP
+# SSH. See README.md.
 #
 # Not yet validated with `terraform validate` or applied anywhere. See STATUS.md (G-01, G-02).
 

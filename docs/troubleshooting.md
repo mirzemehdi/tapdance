@@ -54,6 +54,22 @@ The messages below are quoted from the code (with paths and names shortened).
 | `doctor` fails only because of Android on an iOS-only Mac | Android is enabled by default. | `tapdance config set platforms.android.enabled false`. |
 | A tool you just installed is still reported missing by Simlock | Simlock detects platform tools only when its daemon starts. | `tapdance worker restart`. |
 
+## Linux and cloud hosts (`host up`, not yet run on Linux)
+
+The fixes below exist in `scripts/host-setup.sh` and `tapdance host up`; they are unit-tested only.
+For a Google Cloud VM see also [the N2 guide's table](deployment/google-cloud-n2.md#troubleshooting).
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `host-setup.sh` lists "add <user> to the kvm group", or `doctor`: "/dev/kvm present but not writable by this user" | Your user cannot open `/dev/kvm`. | Let `host-setup.sh` fix it: it adds you to the `kvm` group and sets an ACL on `/dev/kvm` (`setfacl`), which works at once. If `setfacl` is missing (`sudo apt-get install -y acl`), or after a reboot (the ACL is gone, the group applies from your next login), log out and back in; `id -nG` should list `kvm`. |
+| `host-setup.sh` notes "/dev/kvm is missing" and skips the emulator | No hardware virtualization (a cloud VM without nested virtualization, or VT-x/AMD-V off). | Use a VM type with nested virtualization (Google Cloud N2 with `--enable-nested-virtualization`) or bare metal; or use this machine as the agent's machine (`tapdance connect`). If the CPU flag is there, `sudo modprobe kvm_intel` (or `kvm_amd`). |
+| Leases never finish booting on a server reached over SSH | The emulator tried to open a window on a machine with no display. `worker install` turns headless on only when `DISPLAY` and `WAYLAND_DISPLAY` are unset (it was run with X11 forwarding, for example). | `tapdance simlock -- --local config set android.emulator.headless true`, then `tapdance worker restart`. |
+| The emulator starts but fails in its graphics setup (see `tapdance worker logs`) | No GPU on the machine. | `tapdance simlock -- --local config set android.emulator.gpu swiftshader_indirect`, then `tapdance worker restart`. |
+| `host up` warns "Could not turn on linger"; the worker and guard stop when you log out, or do not start after a reboot | systemd user services stop with your last session unless the account lingers. | `sudo loginctl enable-linger $USER`, then `tapdance host up` again. `loginctl show-user $USER --property=Linger` prints `Linger=yes` when it is on. |
+| `host up` fails at the tailscale step: "tailscale serve refused this user" ("Access denied") | On Linux only root and the tailnet's operator may change `tailscale serve`. | `sudo tailscale set --operator=$USER` once, then `tapdance host up` again. |
+| `host up` stops at pairing: "Pairing must be approved at this machine's terminal", right after `curl … host-setup.sh \| bash` | The script's input is the `curl` pipe, so the question cannot be answered. | Run `~/.local/bin/tapdance host up` with the same options in the same terminal. |
+| `No space left on device` during an install, or `INSUFFICIENT_DISK_SPACE` | The disk is full: the SDK, system images and Simlock's emulators (`~/.simlock/devices`) need tens of GB. | `df -h ~` to check. Grow the disk (Google Cloud: `gcloud compute disks resize`, then restart the VM), or remove system images you do not use with `sdkmanager --uninstall`. |
+
 ## Configuration and tokens
 
 | Error | Cause | Fix |

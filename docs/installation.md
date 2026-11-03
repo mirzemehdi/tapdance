@@ -34,8 +34,9 @@ Google's Android CLI, Maestro, fastlane) are yours to install; see [tools.md](to
 Windows cannot be a worker: Simlock supports macOS and Linux only. `tapdance worker install` refuses
 on Windows, and `tapdance doctor` says so. Windows works as a control machine.
 
-The only combination tested so far is a local iOS worker on an Apple-silicon Mac with Node 22.22.0
-([evidence](testing/evidence/2026-11-01-local-ios.md)). See [compatibility.md](compatibility.md) and
+Tested so far: local iOS and Android workers on an Apple-silicon Mac with Node 22.22.0
+([iOS](testing/evidence/2026-11-01-local-ios.md), [Android](testing/evidence/2026-11-01-android.md)).
+A Linux worker has not been run. See [compatibility.md](compatibility.md) and
 [STATUS.md](../STATUS.md) for what is and is not proven.
 
 ## Install the CLI
@@ -110,9 +111,9 @@ simulator; Tapdance refuses it with `APP_PATH_INVALID`.
 
 ### Android (macOS, or Linux with KVM)
 
-**Not yet run end to end with Tapdance** (the test Mac has no Android command-line tools; see
-[STATUS.md](../STATUS.md), D-01). The requirements below come from Simlock's documentation and
-Tapdance's own checks.
+Run end to end on Android 34 emulators on a Mac ([evidence](testing/evidence/2026-11-01-android.md));
+**not yet run on a Linux machine** (see [STATUS.md](../STATUS.md), D-01, D-02). The Linux requirements
+below come from Simlock's documentation and Tapdance's own checks.
 
 Simlock needs the **SDK command-line tools** (`sdkmanager` and `avdmanager`) to create emulators. Android
 Studio alone does not always install them. Without them, `tapdance doctor` fails on "command-line tools
@@ -146,6 +147,20 @@ Studio alone does not always install them. Without them, `tapdance doctor` fails
 
 Simlock leases emulators **it creates** from the installed system images. It never hands out your own
 AVDs or running emulators; `tapdance worker check` lists them only for information.
+
+## Hosting devices for an agent on another machine
+
+When the agent runs on one machine (a VPS, a laptop) and the devices on another, you do not need to
+follow the steps above by hand on the host. One script installs the prerequisites, Tapdance itself,
+and runs `tapdance host up`, which sets up the worker, the worker guard, a pairing token and Tailscale;
+on the agent's machine, `tapdance connect` uses it.
+
+- **A Mac or a Linux machine with KVM:** [one-command host](deployment/one-command-host.md). Run on the
+  owner's Mac; Linux not yet run.
+- **A cloud VM in your own Google Cloud project:** [Google Cloud N2](deployment/google-cloud-n2.md).
+  Written, not yet run end to end.
+
+The agent's machine needs only Node.js and Tapdance (this page) and must be in the same tailnet.
 
 ## Next
 

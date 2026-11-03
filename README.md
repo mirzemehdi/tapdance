@@ -143,7 +143,9 @@ and [Pause, resume, or stop for good](docs/deployment/one-command-host.md#pause-
 `host up` has run on the owner's Mac (with Node and Android Studio already installed) and an agent on a
 VPS has tested through it for a day ([field runs](docs/testing/evidence/2026-11-02-vps-field-runs.md)).
 Not yet run: a fresh Mac, Linux hosts, builds on the host with a real repository; `pause`, `resume` and
-`down --all` are unit-tested only. See [one-command host](docs/deployment/one-command-host.md).
+`down --all` are unit-tested only. See [one-command host](docs/deployment/one-command-host.md). For
+devices on a VM in your own Google Cloud project, see [Google Cloud N2](docs/deployment/google-cloud-n2.md)
+(written, not yet run end to end).
 
 ## Deployment modes
 
@@ -151,7 +153,7 @@ Not yet run: a fresh Mac, Linux hosts, builds on the host with a real repository
 | --- | --- | --- | --- | --- |
 | Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). **Android emulator on macOS: yes** ([evidence](docs/testing/evidence/2026-11-01-android.md)); Linux not run. |
 | Laptop as remote worker | An ordinary VPS (no KVM needed) that also runs the gateway | Your laptop or Mac, which dials out to the gateway | `provider: "self-hosted"` | Gateway + joined worker + CLI, MCP and viewer worked with **both on one Mac** ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)). **Not yet tested across two machines over a real network.** |
-| Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM | `provider: "self-hosted"` | Terraform and scripts written. **Never provisioned; Android not run.** |
+| Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM, set up with `tapdance host up` (device-only) | `provider: "self-hosted"`, endpoint = guard URL | Guide, Terraform and the Linux steps of `host up` written. **Never provisioned; Android not run on Linux.** |
 | Personal Mac, device-only | A VPS | Your Mac, reached over Tailscale through `tapdance worker guard` (one command: `tapdance host up`) | `provider: "self-hosted"`, endpoint = guard URL | Full MCP loop through the guard on one Mac ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)). **An agent on a VPS tested a real app through it over Tailscale**, Android and iOS, with the CLI ([field runs](docs/testing/evidence/2026-11-02-vps-field-runs.md)). |
 | Cloud Mac worker (Scaleway, MacStadium, AWS EC2 Mac) | A VPS | A rented Mac | `provider: "self-hosted"` | Documentation only. **Not exercised.** |
 | Managed cloud | Anywhere | Hosted by Tapdance | `provider: "cloud"` | **Not built.** The value is reserved and fails with `NOT_SUPPORTED`. |
