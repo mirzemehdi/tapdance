@@ -14,8 +14,9 @@
 #      Android   Google's command-line tools (repository XML SHA-1), then sdkmanager installs
 #                platform-tools, emulator and the system image -> ~/Library/Android/sdk or ~/Android/Sdk.
 #                Accepting the Android SDK licenses is part of this step.
-#      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there; Linux: tailscale.com's
-#                installer (it uses sudo). You log in yourself; the script prints how.
+#      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there (you log in in the app);
+#                Linux: tailscale.com's installer, then `sudo tailscale up --operator=$USER`, which
+#                prints a login link (asked first), so the guard can be served without root.
 #    Only system packages (Linux: git, unzip; Tailscale) and the kvm group use sudo, and only after you
 #    said yes. Everything else goes into your home folder.
 # 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, corepack pnpm,
@@ -147,7 +148,7 @@ describe() {
     emulator) echo "Android emulator (sdkmanager)" ;;
     system-image) echo "Android system image $IMAGE (sdkmanager, about 1.5 GB)" ;;
     tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
-    kvm-group) echo "add $(id -un) to the kvm group (sudo; log out and in afterwards)" ;;
+    kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
   esac
 }
 
@@ -261,7 +262,24 @@ install_tailscale() {
     NOTES+=("Tailscale: open the Tailscale app and log in, then run this script again to expose the guard")
   else
     curl -fsSL https://tailscale.com/install.sh | sh
-    NOTES+=("Tailscale: run \`sudo tailscale up\` and open the login link, then run this script again to expose the guard")
+  fi
+}
+
+# Linux: join the tailnet (tailscale up prints a login link to open in any browser) and make this user
+# the operator, since tailscaled lets only root and the operator run `tailscale serve`.
+linux_tailscale() {
+  [[ "$OS" == Linux ]] || return 0
+  local ts; ts="$(tailscale_bin)" || return 0
+  local me; me="$(id -un)"
+  if ! "$ts" status >/dev/null 2>&1; then
+    if ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
+      sudo "$ts" up --operator="$me"
+    else
+      NOTES+=("Tailscale: run \`sudo tailscale up --operator=$me\` and open the link, then run this script again to expose the guard")
+    fi
+  elif ! "$ts" debug prefs 2>/dev/null | grep -q "\"OperatorUser\": \"$me\""; then
+    say "letting $me run tailscale serve (sudo tailscale set --operator=$me)"
+    sudo "$ts" set --operator="$me"
   fi
 }
 
@@ -273,11 +291,15 @@ write_env_file() {
     echo "export ANDROID_HOME=\"$SDK\""
     local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; fi
   } > "$ENV_FILE"
-  local rc; rc="$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")"
-  if ! grep -qs "tapdance/env.sh" "$rc"; then
-    printf '\n[ -f "%s" ] && . "%s"\n' "$ENV_FILE" "$ENV_FILE" >> "$rc"
-    say "added $ENV_FILE to $rc (new shells pick up the tools)"
-  fi
+  local rcs=("$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")")
+  # Ubuntu's .bashrc stops early in non-interactive shells: .profile serves `bash -lc` over ssh.
+  [[ "$OS" == Linux ]] && rcs+=("$HOME/.profile")
+  local rc; for rc in "${rcs[@]}"; do
+    if ! grep -qs "tapdance/env.sh" "$rc"; then
+      printf '\n[ -f "%s" ] && . "%s"\n' "$ENV_FILE" "$ENV_FILE" >> "$rc"
+      say "added $ENV_FILE to $rc (new shells pick up the tools)"
+    fi
+  done
   . "$ENV_FILE"
 }
 
@@ -301,7 +323,13 @@ if (( ! SKIP_PREREQ )); then
         android-cmdline-tools) node_ok || install_node; install_cmdline_tools ;;
         git|unzip) install_system_packages "$m" ;;
         tailscale) install_tailscale ;;
-        kvm-group) sudo usermod -aG kvm "$(id -un)"; NOTES+=("log out and back in so the kvm group applies, then run this script again") ;;
+        kvm-group)
+          sudo usermod -aG kvm "$(id -un)"
+          # The group applies to new logins only; an ACL lets this login and its running systemd user
+          # manager (which starts the worker) use /dev/kvm now. A reboot drops the ACL; the group remains.
+          if ! { command -v setfacl >/dev/null 2>&1 && sudo setfacl -m "u:$(id -un):rw" /dev/kvm; }; then
+            NOTES+=("log out and back in so the kvm group applies, then run this script again")
+          fi ;;
       esac
     done
     SDK_PKGS=()
@@ -315,6 +343,7 @@ if (( ! SKIP_PREREQ )); then
     remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group ]] || remaining+=("$m"); done
     (( ${#remaining[@]} == 0 )) || die "still missing after installing: ${remaining[*]}"
   fi
+  (( CHECK )) || linux_tailscale
 elif (( CHECK )); then
   die "--check and --skip-prerequisites together check nothing"
 fi

@@ -24,6 +24,9 @@ import {
   clipboardCommand,
   parseWarm,
   warmSettings,
+  linuxEmulatorSettings,
+  parseLinger,
+  serveNeedsOperator,
 } from "./plan.js";
 
 /** Pure parts of `host up/status/down` and `connect`. No test here runs tailscale, launchctl, Simlock or a device. */
@@ -97,6 +100,28 @@ describe("cloud VM detection", () => {
     expect(cloudCheck("Hetzner", false)).toMatchObject({ status: "fail", detail: expect.stringContaining("cannot host Android emulators") });
     expect(cloudCheck("Google Cloud", true)?.status).toBe("pass");
     expect(cloudCheck(undefined, false)).toBeUndefined();
+  });
+});
+
+describe("linux hosts", () => {
+  it("runs emulators headless on Linux without a display, and leaves desktops and macOS alone", () => {
+    expect(linuxEmulatorSettings("linux", {})).toEqual([["android.emulator.headless", "true"]]);
+    expect(linuxEmulatorSettings("linux", { DISPLAY: ":0" })).toEqual([]);
+    expect(linuxEmulatorSettings("linux", { WAYLAND_DISPLAY: "wayland-0" })).toEqual([]);
+    expect(linuxEmulatorSettings("darwin", {})).toEqual([]);
+  });
+
+  it("reads loginctl's Linger property and nothing else", () => {
+    expect(parseLinger("Linger=yes\n")).toBe(true);
+    expect(parseLinger("Linger=no")).toBe(false);
+    expect(parseLinger("Failed to get user: No such user")).toBeUndefined();
+    expect(parseLinger("")).toBeUndefined();
+  });
+
+  it("recognises tailscaled refusing serve to a non-operator on Linux only", () => {
+    expect(serveNeedsOperator("linux", "Access denied: serve config denied\nUse 'sudo tailscale serve' or 'tailscale set --operator=$USER'")).toBe(true);
+    expect(serveNeedsOperator("darwin", "Access denied")).toBe(false);
+    expect(serveNeedsOperator("linux", "serve: HTTPS is not enabled for this tailnet")).toBe(false);
   });
 });
 

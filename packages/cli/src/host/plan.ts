@@ -109,6 +109,29 @@ export function cloudCheck(vm: string | undefined, devKvm: boolean): DoctorCheck
   };
 }
 
+// ------------------------------------------------------------------ Linux hosts
+
+/**
+ * Simlock settings a Linux host needs for its emulators. Simlock opens an emulator window by default;
+ * on a machine with no display (a cloud VM, a server reached over SSH) that window cannot open and the
+ * emulator never boots, so it runs headless (`-no-window`).
+ */
+export function linuxEmulatorSettings(platform: string, env: Record<string, string | undefined>): Array<[string, string]> {
+  if (platform !== "linux" || env["DISPLAY"] || env["WAYLAND_DISPLAY"]) return [];
+  return [["android.emulator.headless", "true"]];
+}
+
+/** Reads `loginctl show-user <user> --property=Linger`: undefined when the output is not that line. */
+export function parseLinger(raw: string): boolean | undefined {
+  const m = /^Linger=(yes|no)$/m.exec(raw);
+  return m ? m[1] === "yes" : undefined;
+}
+
+/** `tailscale serve` as a user who is not the tailnet's operator on Linux: tailscaled refuses it. */
+export function serveNeedsOperator(platform: string, output: string): boolean {
+  return platform === "linux" && /access denied|permission denied|--operator/i.test(output);
+}
+
 // ------------------------------------------------------------------ Tailscale
 
 /** Where a tailnet admin turns on MagicDNS and HTTPS Certificates. */
