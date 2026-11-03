@@ -280,6 +280,7 @@ describe("private repositories: per-repository deploy keys and host build files"
     expect(checkBuildFilePath("androidApp/google-services.json")).toBe("androidApp/google-services.json");
     expect(checkBuildFilePath(".env")).toBe(".env");
     expect(checkBuildFilePath("local.properties")).toBe("local.properties");
+    expect(checkBuildFilePath(".github/ci.env")).toBe(".github/ci.env");
     for (const bad of ["/etc/passwd", "~/x", "C:/x", "\\\\x", "../x", "a/../../x", "a/..", ".git", ".git/config", ".GIT/hooks/pre-commit", ".gitmodules", "sub/.git/config", "a//b", "./a", "a/b\\c", "a/$(id)", ""]) {
       expect(() => checkBuildFilePath(bad), bad).toThrow();
     }

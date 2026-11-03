@@ -81,7 +81,8 @@ export function checkBuildFilePath(path: string): string {
   if (path.startsWith("/") || path.startsWith("\\") || path.startsWith("~") || /^[A-Za-z]:/.test(path)) refuse("is absolute: give a path inside the repository");
   if (path.includes("\\") || path.includes("\0")) refuse("must use forward slashes");
   const segments = path.split("/");
-  if (/^\.git/i.test(segments[0]!)) refuse("is in git's own files (.git…): those are never written");
+  // .gitmodules would change what git fetches; .github/ and other dot-files are ordinary content.
+  if (/^\.git(modules)?$/i.test(segments[0]!)) refuse("is one of git's own files (.git, .gitmodules): those are never written");
   for (const s of segments) {
     if (s === "..") refuse("contains ..: it must stay inside the repository");
     if (s === "" || s === ".") refuse("has an empty or . part");
