@@ -118,7 +118,12 @@ export function cloudCheck(vm: string | undefined, devKvm: boolean): DoctorCheck
  */
 export function linuxEmulatorSettings(platform: string, env: Record<string, string | undefined>): Array<[string, string]> {
   if (platform !== "linux" || env["DISPLAY"] || env["WAYLAND_DISPLAY"]) return [];
-  return [["android.emulator.headless", "true"]];
+  // Measured on a Google Cloud N2 VM (no GPU): with `-gpu auto` the idle emulator used 136–165% CPU and
+  // screen-changing taps took 3.4–7.9 s; with swiftshader_indirect it idled near 0% and taps took 2.2–2.6 s.
+  return [
+    ["android.emulator.headless", "true"],
+    ["android.emulator.gpu", "swiftshader_indirect"],
+  ];
 }
 
 /** Reads `loginctl show-user <user> --property=Linger`: undefined when the output is not that line. */

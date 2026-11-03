@@ -108,8 +108,11 @@ describe("cloud VM detection", () => {
 });
 
 describe("linux hosts", () => {
-  it("runs emulators headless on Linux without a display, and leaves desktops and macOS alone", () => {
-    expect(linuxEmulatorSettings("linux", {})).toEqual([["android.emulator.headless", "true"]]);
+  it("runs emulators headless with software GPU rendering on Linux without a display, and leaves desktops and macOS alone", () => {
+    expect(linuxEmulatorSettings("linux", {})).toEqual([
+      ["android.emulator.headless", "true"],
+      ["android.emulator.gpu", "swiftshader_indirect"],
+    ]);
     expect(linuxEmulatorSettings("linux", { DISPLAY: ":0" })).toEqual([]);
     expect(linuxEmulatorSettings("linux", { WAYLAND_DISPLAY: "wayland-0" })).toEqual([]);
     expect(linuxEmulatorSettings("darwin", {})).toEqual([]);
