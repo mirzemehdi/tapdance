@@ -422,7 +422,11 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
         request.platform === "ios"
           ? await execUpstream(leaseId, "simctl", ["install", result.artifact])
           : await execUpstream(leaseId, "adb", ["install", "-r", "-t", result.artifact]);
-      if (install.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Installing the build failed: ${(install.stderr || install.stdout).trim().split("\n").slice(-3).join(" ")}`);
+      if (install.exitCode !== 0) {
+        const out = (install.stderr || install.stdout).trim();
+        const hint = request.platform === "android" ? androidInstallHint(out) : undefined;
+        throw new TapdanceError("DEVICE_ERROR", `Installing the build failed: ${out.split("\n").slice(-3).join(" ")}`, hint ? { hint } : undefined);
+      }
       await decide("allow", { command: `build installed ${result.sha}`, leaseId });
       line({ result: { sha: result.sha, seconds: result.seconds, artifact: result.artifact.split(sep).pop(), installed: true, ...(result.reused ? { reused: true } : {}) } });
     } catch (error) {
