@@ -306,6 +306,13 @@ Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
 - Fixed: on a VM without a GPU the emulator's `-gpu auto` kept it at 136–165 % CPU when idle and
   screen-changing taps took 3.4–7.9 s; headless Linux hosts now use `swiftshader_indirect` (about 0 %
   idle, taps 2.2–2.6 s on the N2 VM).
+- Fixed (#72): on Android, `ui type` and MCP `type_text` without a target answered "Typed N chars" when
+  no text field had focus and nothing was typed. When the screen shows no focused field, they now fail
+  with `ELEMENT_NOT_FOUND` and a hint to pass the field (`--text`/`--ref`/`--id`, MCP
+  `into_text`/`into_ref`/`into_id`); when the screen does not say, they type as before.
+- Fixed (#73): on Android, `ui inspect` and MCP `inspect_screen` named the session's app while the
+  launcher was in front. When no element on screen belongs to the session's app, the app most elements
+  belong to is named instead, with a note that the session's app is not in front.
 
 ### Not yet proven
 

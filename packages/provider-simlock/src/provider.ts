@@ -708,12 +708,20 @@ export class SimlockProvider implements DeviceProvider {
       // Refs pinned to this snapshot (`@e7~s4`): agent-device then refuses one the screen has
       // since replaced instead of acting on whatever element now has that number.
       const generation = typeof raw.refsGeneration === "number" && Number.isInteger(raw.refsGeneration) ? raw.refsGeneration : undefined;
+      // agent-device names the session's app even when another app (the launcher after Back) is in
+      // front. On Android the elements carry their package, so name the app they belong to (#73).
+      const sessionApp = raw.appBundleId ?? raw.appName;
+      const front = handle.platform === "android" ? frontApp(raw.nodes ?? [], sessionApp) : sessionApp;
+      const warnings = (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w)));
+      if (front && sessionApp && front !== sessionApp) {
+        warnings.unshift(`${front} is in front, not the session's app ${sessionApp}. Bring it back with \`tapdance app launch ${sessionApp}\` (MCP launch_app) if that is the app you meant.`);
+      }
       return {
-        ...(raw.appBundleId ?? raw.appName ? { app: (raw.appBundleId ?? raw.appName) as string } : {}),
+        ...(front ? { app: front } : {}),
         ...(raw.viewport?.width && raw.viewport.height ? { viewport: { width: raw.viewport.width, height: raw.viewport.height } } : {}),
         elements: (raw.nodes ?? []).map((node) => pinRef(toUiElement(node), generation)),
         truncated: raw.truncated ?? false,
-        warnings: (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w))),
+        warnings,
       };
     } catch (error) {
       throw fromAgentDeviceError(error, "inspect");
@@ -852,6 +860,14 @@ export class SimlockProvider implements DeviceProvider {
       throw new TapdanceError("ELEMENT_NOT_FOUND", `No element with bounds matches ${describe(target)}`, { hint: "Run `tapdance ui inspect --bounds` and tap by coordinates (--x/--y)." });
     }
     return { x: Math.round(match.rect.x + match.rect.width / 2), y: Math.round(match.rect.y + match.rect.height / 2) };
+  }
+
+  /** Whether an editable element has input focus, from one snapshot; undefined when it cannot tell (#72). */
+  private async editableHasFocus(handle: LeaseHandle): Promise<boolean | undefined> {
+    const snap = (await this.agentClient(handle)
+      .capture.snapshot({ interactiveOnly: true, ...this.scope(handle) } as never)
+      .catch(() => undefined)) as { nodes?: Array<Record<string, unknown>> } | undefined;
+    return snap ? editableFocus(snap.nodes ?? []) : undefined;
   }
 
   /** The package of the focused Android window, from the window manager. */
@@ -1032,6 +1048,11 @@ export class SimlockProvider implements DeviceProvider {
     const client = this.agentClient(handle);
     const delay = options.delayMs !== undefined ? { delayMs: Math.max(0, Math.min(1000, Math.round(options.delayMs))) } : {};
     const fill = (extra: { delayMs?: number }) => client.interactions.fill({ ...toAgentDeviceTarget(target!), text, settle: true, ...extra, ...this.scope(handle) } as never);
+    // Without a target, Android's text input goes nowhere when no field has focus, and agent-device
+    // still answers "typed" (#72). Check the focus first; when the snapshot cannot tell, type as before.
+    if (target === undefined && handle.platform === "android" && (await this.editableHasFocus(handle)) === false) {
+      throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus, so nothing was typed", { hint: NO_FOCUS_HINT });
+    }
     try {
       if (target !== undefined) {
         // A field that drops fast keystrokes (Compose Multiplatform on iOS) can fail agent-device's
@@ -1063,9 +1084,7 @@ export class SimlockProvider implements DeviceProvider {
     } catch (error) {
       const mapped = fromAgentDeviceError(error, "type");
       if (mapped.code === "ELEMENT_NOT_FOUND" && target === undefined) {
-        throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus", {
-          hint: "Tap the field first, or pass a target so Tapdance fills that field.",
-        });
+        throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus", { hint: NO_FOCUS_HINT });
       }
       throw mapped;
     }
@@ -1701,6 +1720,46 @@ export const RAW_INPUT_APPS = new Set([
   "com.android.intentresolver",
   "com.google.android.intentresolver",
 ]);
+
+const NO_FOCUS_HINT =
+  "Pass the field as a target so Tapdance focuses and fills it: --text, --ref or --id with `tapdance ui type` (MCP type_text: into_text, into_ref or into_id). Or tap the field first.";
+
+const EDITABLE_ROLE = /edit ?text|text ?field|search ?field|secure|text ?area|text-?input|combo ?box/i;
+
+/**
+ * From snapshot nodes: true when an editable element has input focus; false when the nodes report
+ * focus and no element has it; undefined when they carry no focus flags, or a focused element's kind
+ * is unclear.
+ */
+export function editableFocus(nodes: Array<Record<string, unknown>>): boolean | undefined {
+  if (!nodes.some((n) => typeof n["focused"] === "boolean")) return undefined;
+  const focused = nodes.filter((n) => n["focused"] === true);
+  const roleOf = (n: Record<string, unknown>) => ["type", "kind", "role"].map((k) => (typeof n[k] === "string" ? n[k] : "")).join(" ");
+  if (focused.some((n) => n["editable"] === true || EDITABLE_ROLE.test(roleOf(n)))) return true;
+  return focused.some((n) => n["editable"] !== false) ? undefined : false;
+}
+
+/** Packages that share the screen with any app, never "the app in front". */
+const NOT_FRONT_APP = /^(android|com\.android\.systemui)$|inputmethod/i;
+
+/**
+ * The Android app an agent-device snapshot shows (#73): the most common package among its elements
+ * (a node's `bundleId`, or the part of its `identifier` before `:id/`). The session's app stays the
+ * answer while any element belongs to it, and when no element names a package.
+ */
+export function frontApp(nodes: Array<Record<string, unknown>>, sessionApp: string | undefined): string | undefined {
+  const counts = new Map<string, number>();
+  for (const n of nodes) {
+    if (n["systemBar"] || n["systemChrome"]) continue;
+    const bundle = typeof n["bundleId"] === "string" && n["bundleId"] ? n["bundleId"] : undefined;
+    const pkg = bundle ?? (typeof n["identifier"] === "string" ? /^([A-Za-z]\w*(?:\.\w+)+):id\//.exec(n["identifier"])?.[1] : undefined);
+    if (pkg && !NOT_FRONT_APP.test(pkg)) counts.set(pkg, (counts.get(pkg) ?? 0) + 1);
+  }
+  if (sessionApp && counts.has(sessionApp)) return sessionApp;
+  let top: string | undefined;
+  for (const [pkg, c] of counts) if (top === undefined || c > counts.get(top)!) top = pkg;
+  return top ?? sessionApp;
+}
 
 /** The package in `mCurrentFocus` of `dumpsys window displays`. */
 export function focusedPackage(dumpsys: string): string | undefined {

@@ -362,6 +362,8 @@ paths below were exercised only by unit tests.
 | First `inspect` after a fresh lease retried once on agent-device's `INSTRUMENTATION_FAILED` | Y-04 | 🧪 | Build only; found on the N2 host, not re-run there |
 | `host builds enable` keeps earlier `--git-auth` and `--timeout-minutes`; the build JDK check honours `JAVA_HOME`; `env.sh` puts the JDK on `PATH`; the MCP outside-the-project hint covers `push_file` | H-08, S-04 | 🧪 | Build only; found on the N2 host |
 | Android install refusals name the fix (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `VERSION_DOWNGRADE`, `INSUFFICIENT_STORAGE`), for uploads, installs from CI and host builds | F-01, F-05, H-08 | 🧪 | `provider.test.ts`; the signature refusal itself was met on the N2 host, from CI and from a host build |
+| Android `ui type` / MCP `type_text` without a target refuses (`ELEMENT_NOT_FOUND`, hint to pass a target) when the snapshot shows no focused text field; types as before when it cannot tell (#72) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client); found on the N2 host, not re-run there |
+| Android `ui inspect` / MCP `inspect_screen` names the app whose elements are on screen (the launcher after Back) when none belong to the session's app, with a note (#73) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client); found on the N2 host, not re-run there |
 
 ## Bugs found by running for real (fixed)
 
