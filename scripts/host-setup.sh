@@ -421,6 +421,24 @@ if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
   say "use it as the agent's machine instead: tapdance connect <host endpoint> < pairing-<label>.token"
   exit 0
 fi
+# Linux: the worker and guard are systemd user units, so this account's user manager must run without a
+# login (after logout, at boot). Linger does that, but logind cannot look up some accounts (Google Cloud
+# OS Login users: "Could not enable linger: No such file or directory"); then a small system unit starts
+# the user manager at boot instead.
+linux_user_manager() {
+  [[ "$OS" == Linux && -e /dev/kvm ]] || return 0
+  local me uid; me="$(id -un)"; uid="$(id -u)"
+  lingers() { loginctl show-user "$me" --property=Linger 2>/dev/null | grep -q '=yes'; }
+  lingers && return 0
+  loginctl enable-linger "$me" 2>/dev/null || sudo loginctl enable-linger "$me" 2>/dev/null || true
+  lingers && { say "turned on linger for $me"; return 0; }
+  say "logind cannot keep $me lingering (an OS Login account?); starting its user manager from a system unit at boot"
+  printf '[Unit]\nDescription=Tapdance: user manager for %s (runs the worker and guard without a login)\nAfter=systemd-user-sessions.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/systemctl start user@%s.service\n\n[Install]\nWantedBy=multi-user.target\n' "$me" "$uid" \
+    | sudo tee /etc/systemd/system/tapdance-user-manager.service >/dev/null
+  sudo systemctl daemon-reload && sudo systemctl enable --now tapdance-user-manager.service
+}
+linux_user_manager
+
 # Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
 if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"

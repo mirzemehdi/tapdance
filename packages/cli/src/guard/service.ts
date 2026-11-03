@@ -315,10 +315,12 @@ export async function prepareLinuxUserServices(out: { progress: (m: string) => v
     else out.warn(`Could not turn on linger for ${user} (${self.out.split("\n")[0] ?? "loginctl failed"}): the worker and guard stop when you log out. Run \`sudo loginctl enable-linger ${user}\`.`);
   }
   const runtime = `/run/user/${process.getuid?.() ?? 0}`;
+  // logind cannot look up some accounts (Google Cloud OS Login): start the user manager directly.
+  if (!existsSync(`${runtime}/bus`)) await runCommand("sudo", ["-n", "systemctl", "start", `user@${process.getuid?.() ?? 0}.service`]);
   for (let i = 0; i < 60 && !existsSync(`${runtime}/bus`); i++) await new Promise((r) => setTimeout(r, 250));
   if (!existsSync(`${runtime}/bus`)) {
     throw new TapdanceError("HOST_CHECK_FAILED", `No systemd user manager runs for ${user} (${runtime}/bus is missing), so the worker cannot be installed as a service`, {
-      hint: `Run \`sudo loginctl enable-linger ${user}\` (it starts the user manager and keeps it running), then this command again.`,
+      hint: `Run \`sudo loginctl enable-linger ${user}\` (it starts the user manager and keeps it running), then this command again. For an account logind cannot look up (Google Cloud OS Login), scripts/host-setup.sh installs a boot unit that starts it instead.`,
     });
   }
   if (!process.env["XDG_RUNTIME_DIR"]) process.env["XDG_RUNTIME_DIR"] = runtime;
