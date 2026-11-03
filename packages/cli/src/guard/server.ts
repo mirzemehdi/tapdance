@@ -10,6 +10,8 @@ import type { SimlockConnection } from "@tapdance/sdk";
 import { checkBuildRequest, checkTimedTaps, clearConsole, consolePaths, crashReportsDir, listCrashReports, playTouches, toFramebuffer, viewportFromConfig, type Orientation, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
+import { HOST_STOP_COMMAND, describeHostStop, hostStopApplies, hostStopDecision, parseProcUptime, uptimeCapReached, uptimeCapRefusal } from "./host-stop.js";
+import { runCommand, type CommandRunner as HostCommandRunner } from "./service.js";
 
 /**
  * The worker guard: the only endpoint a remote control machine reaches on a worker in device-only
@@ -39,6 +41,24 @@ export interface GuardOptions {
    * agent cannot do it). The service passes `releaseStaleDeviceClaims`; failures never block a lease.
    */
   settleStaleClaims?: () => Promise<{ released: string[]; retained: Array<{ device: string; reason: string }> }>;
+  /**
+   * Runs the cost guard's fixed stop command (`policy.hostStop`). The service runs it for real; tests
+   * pass a fake that records the call and never powers anything off.
+   */
+  hostStopRunner?: HostCommandRunner;
+  /** Seconds since boot (default: /proc/uptime). Tests pass a fake. */
+  uptimeSeconds?: () => Promise<number | undefined>;
+  /** The platform the cost guard decides for (default: this one). It never acts on darwin. */
+  platform?: NodeJS.Platform;
+  /** How often the cost guard checks, in ms (default 60 s). */
+  hostStopIntervalMs?: number;
+  /** The clock the cost guard uses (tests move it forward). */
+  now?: () => number;
+}
+
+/** Seconds since boot on Linux, from /proc/uptime. */
+async function procUptime(): Promise<number | undefined> {
+  return parseProcUptime(await readFile("/proc/uptime", "utf8").catch(() => ""));
 }
 
 /** A Map/Set that calls `changed` after every write. */
@@ -150,9 +170,40 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
 
   /** The token a response answers, so a refusal can say when the token's scopes, not the policy, refused. */
   const tokenOf = new WeakMap<ServerResponse, GuardToken>();
-  const send = (res: ServerResponse, status: number, code: string, message: string) => {
+  const send = (res: ServerResponse, status: number, code: string, message: string, hint?: string) => {
     if (!res.headersSent) res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" });
-    res.end(JSON.stringify({ error: { code, message: scopeRefusal(message, tokenOf.get(res), hostPolicy) ?? message } }));
+    res.end(JSON.stringify({ error: { code, message: scopeRefusal(message, tokenOf.get(res), hostPolicy) ?? message, ...(hint ? { hint } : {}) } }));
+  };
+
+  // ---------------------------------------------------------------- cost guard (policy.hostStop)
+  const now = options.now ?? Date.now;
+  const stopPlatform = options.platform ?? process.platform;
+  const stopSettings = hostStopApplies(hostPolicy.hostStop, stopPlatform) ? hostPolicy.hostStop : undefined;
+  if (!stopSettings && stopPlatform === "darwin" && hostPolicy.hostStop && (hostPolicy.hostStop.idleMinutes > 0 || hostPolicy.hostStop.maxUptimeHours > 0)) {
+    options.log?.("policy.hostStop is ignored on macOS: the guard never powers a Mac off");
+  }
+  const uptime = options.uptimeSeconds ?? procUptime;
+  /** When a lease, an authenticated request or a build last ran. */
+  let lastActivity = now();
+  /** Authenticated requests and input sockets still open: a long stream counts as use. */
+  let inFlight = 0;
+  /** The stop command ran and succeeded: the machine is going down. */
+  let stopping = false;
+  let lastStopReport = Number.NEGATIVE_INFINITY;
+  const touch = () => {
+    lastActivity = now();
+  };
+  /** Counts a request or socket as use until `onEnd` calls back. */
+  const holdOpen = (onEnd: (release: () => void) => void) => {
+    inFlight++;
+    touch();
+    let released = false;
+    onEnd(() => {
+      if (released) return;
+      released = true;
+      inFlight--;
+      touch();
+    });
   };
 
   const authenticate = async (req: IncomingMessage): Promise<GuardToken | undefined> => {
@@ -294,6 +345,59 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   };
 
   let building = false;
+  /** Leases Simlock reports, made through this guard or locally; undefined when Simlock does not answer. */
+  const simlockLeases = async (): Promise<number | undefined> => {
+    const r = await doFetch(`${upstream.baseUrl}/v1/status`, { headers: upstreamHeaders }).catch(() => undefined);
+    if (!r?.ok) {
+      await r?.body?.cancel().catch(() => undefined);
+      return undefined;
+    }
+    const body = (await r.json().catch(() => ({}))) as { leases?: unknown };
+    return Array.isArray(body.leases) ? body.leases.length : 0;
+  };
+  /** One cost-guard check: notes activity, then powers off when the policy says so. */
+  let checking = false;
+  const checkHostStop = async () => {
+    if (!stopSettings || stopping || checking) return;
+    checking = true;
+    try {
+      const leases = await simlockLeases();
+      const busy = (leases ?? 0) > 0 || allocating.size > 0 || building || inFlight > 0;
+      if (busy) touch();
+      const decision = hostStopDecision(stopSettings, { now: now(), lastActivity, busy, uptimeSeconds: await uptime() });
+      // For `tapdance host status`: how long the host has been idle.
+      await writeFile(
+        join(guardDir(env), "host-stop.json"),
+        JSON.stringify({ checkedAt: new Date(now()).toISOString(), lastActivityAt: new Date(lastActivity).toISOString(), leases: leases ?? null, ...stopSettings }),
+        { mode: 0o600 },
+      ).catch(() => undefined);
+      if (!decision.stop) return;
+      // Report the first attempt, then a failing one (no sudo rule yet) at most once an hour.
+      const report = now() - lastStopReport >= 3_600_000;
+      const command = HOST_STOP_COMMAND.join(" ");
+      if (report) await audit({ method: "TIMER", path: "host-stop", decision: "allow", command, reason: decision.message }, env).catch(() => undefined);
+      const [file, ...args] = HOST_STOP_COMMAND;
+      const r = await (options.hostStopRunner ?? runCommand)(file, args).catch((error: Error) => ({ ok: false, out: error.message }));
+      if (r.ok) {
+        stopping = true;
+        options.log?.(`cost guard: powering off (${decision.message})`);
+        return;
+      }
+      if (report) {
+        lastStopReport = now();
+        const why = redactSecrets(r.out.split("\n")[0] ?? "").slice(0, 200);
+        options.log?.(`cost guard: ${command} failed (${why}); the host keeps running. Install the sudoers rule that \`tapdance host up\` prints.`);
+        await audit({ method: "TIMER", path: "host-stop", decision: "deny", command, reason: `stop command failed: ${why}` }, env).catch(() => undefined);
+      }
+    } catch (error) {
+      options.log?.(`cost guard check failed: ${(error as Error).message}`);
+    } finally {
+      checking = false;
+    }
+  };
+  const stopTimer = stopSettings ? setInterval(() => void checkHostStop(), options.hostStopIntervalMs ?? 60_000) : undefined;
+  stopTimer?.unref();
+  if (stopSettings) options.log?.(`cost guard: ${describeHostStop(stopSettings, stopPlatform)}`);
   /** The owner's build settings, with the deploy key `host builds key` created, when there is one. */
   const buildSettings = (): BuildSettings => {
     const key = join(guardDir(env), "builds", "deploy_key");
@@ -455,6 +559,8 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
         await decide("deny", { reason: "unauthenticated" });
         return send(res, 401, "UNAUTHENTICATED", "Missing, expired or revoked worker-guard token");
       }
+      // Any authenticated request is use of the host, for as long as it stays open.
+      holdOpen((release) => res.once("close", release));
       // This token's view of the policy: a switch is on only when the host allows it and the token's
       // scopes (when it has any) include it.
       const policy = scopedPolicy(hostPolicy, token);
@@ -708,6 +814,11 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               return send(res, 409, "FORBIDDEN", "Lease id already in use");
             }
             const leaseId = call.leaseId!;
+            if (stopSettings && (stopping || uptimeCapReached(stopSettings, await uptime()))) {
+              const refusal = uptimeCapRefusal(stopSettings);
+              await decide("deny", { reason: stopping ? "host is powering off" : "uptime cap", leaseId });
+              return send(res, 503, refusal.code, stopping ? "This host is powering off (its owner's cost guard) and takes no new leases" : refusal.message, refusal.hint);
+            }
             // Count and reserve with no await in between, so parallel allocates cannot all pass the cap.
             if (owners.size >= policy.limits.maxSessions) await activeLeases();
             if (owners.size >= policy.limits.maxSessions || owners.has(leaseId)) {
@@ -856,6 +967,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     }
     await audit({ client: token.id, method: "WS", path: (req.url ?? "").split("?")[0]!, decision: "allow", leaseId: route.value.leaseId, command: "input" }, env).catch(() => undefined);
     wss.handleUpgrade(req, socket, head, (client) => {
+      holdOpen((release) => client.once("close", release));
       const up = new WebSocket(`${upstream.baseUrl.replace(/^http/, "ws")}${req.url}`, { headers: upstreamHeaders });
       const pending: Buffer[] = [];
       up.on("open", () => pending.splice(0).forEach((m) => up.send(m)));
@@ -877,6 +989,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     server,
     url: `http://${policy.listen.host}:${port}`,
     close: () => new Promise<void>((resolve) => {
+      if (stopTimer) clearInterval(stopTimer);
       wss.close();
       server.close(() => resolve());
     }),

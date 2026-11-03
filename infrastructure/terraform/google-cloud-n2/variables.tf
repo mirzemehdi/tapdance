@@ -18,7 +18,7 @@ variable "project_name" {
 }
 
 variable "billing_account" {
-  description = "Billing account ID (XXXXXX-XXXXXX-XXXXXX), only used when create_project is true."
+  description = "Billing account ID (XXXXXX-XXXXXX-XXXXXX). Used when create_project is true, and by budget_amount_usd."
   type        = string
   default     = null
 }
@@ -176,4 +176,43 @@ variable "grant_logging_roles" {
   description = "Grant the VM's service account roles/logging.logWriter and roles/monitoring.metricWriter so the guest agent can write logs and metrics. Nothing else is granted."
   type        = bool
   default     = true
+}
+
+# ------------------------------------------------------------------ cost guards
+#
+# Three layers, from hardest to softest. On the VM itself, the Tapdance guard can also power it off
+# when idle (`tapdance host up --idle-stop`); these work even when the guard does not run.
+
+variable "max_run_hours" {
+  description = "Per-boot hard cap: Compute Engine STOPS (never deletes) the VM this many hours after each start. The countdown starts when the VM is RUNNING, restarts at every start and is cleared by a stop; a reboot inside the VM does not reset it. The boot disk is kept (and still billed). 0 or null turns it off. Google allows 30 seconds to 120 days; here 1 to 2880 whole hours. Sets scheduling.max_run_duration with instance_termination_action = \"STOP\" (standard provisioning; GA in hashicorp/google 6.x). A running lease is cut off when the cap hits."
+  type        = number
+  default     = 8
+
+  validation {
+    condition     = var.max_run_hours == null ? true : (var.max_run_hours == 0 || (var.max_run_hours >= 1 && var.max_run_hours <= 2880 && floor(var.max_run_hours) == var.max_run_hours))
+    error_message = "max_run_hours must be 0 or null (off), or a whole number of hours from 1 to 2880 (120 days)."
+  }
+}
+
+variable "stop_schedule" {
+  description = "Unix-cron schedule at which Compute Engine stops the VM, in schedule_time_zone, e.g. \"0 20 * * *\" for 20:00 every day. null: no schedule. Creates an instance schedule (google_compute_resource_policy) in var.region (a schedule only applies to VMs in its own region) and grants the Compute Engine Service Agent (service-PROJECT_NUMBER@compute-system.iam.gserviceaccount.com) roles/compute.instanceAdmin.v1 on the project, which Google requires for schedules to stop VMs. A scheduled stop can begin up to 15 minutes late. It only stops; start the VM yourself. Changing this later recreates the VM (resource_policies cannot change in place), which wipes the boot disk."
+  type        = string
+  default     = null
+}
+
+variable "schedule_time_zone" {
+  description = "IANA time zone for stop_schedule, e.g. \"Europe/Berlin\" or \"America/New_York\"."
+  type        = string
+  default     = "UTC"
+}
+
+variable "budget_amount_usd" {
+  description = "Monthly budget in USD for this project, with alert e-mails to the billing account's admins at 50%, 90% and 100% of actual spend. ALERTS ONLY: a Google Cloud budget never stops, caps or slows the VM; max_run_hours and the guard's idle stop do that. null: no budget. Needs billing_account (billed in USD), the Cloud Billing Budget API (enabled here) and billing.budgets.create on the billing account (Billing Account Administrator or Billing Account Costs Manager). The budget is created through a provider alias with user_project_override, as the hashicorp/google docs require for user credentials."
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.budget_amount_usd == null ? true : var.budget_amount_usd >= 1
+    error_message = "budget_amount_usd must be at least 1, or null for no budget."
+  }
 }

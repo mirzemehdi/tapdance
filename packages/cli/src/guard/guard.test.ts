@@ -7,7 +7,7 @@ import type { LeaseHandle } from "@tapdance/core";
 import { SimlockProvider } from "@tapdance/provider-simlock";
 import { GuardPolicySchema, GuardTokens, type GuardPolicy } from "./policy.js";
 import { execOf } from "./rules.js";
-import { startGuard } from "./server.js";
+import { startGuard, type GuardOptions } from "./server.js";
 
 /**
  * Security tests for the worker guard, written as a deliberately malicious remote client against
@@ -112,12 +112,13 @@ afterEach(async () => {
   for (const c of cleanups.splice(0)) await c();
 });
 
-async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {}) {
+async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {}, extra: Partial<GuardOptions> = {}) {
   const home = await mkdtemp(join(tmpdir(), "td-guard-"));
   const env = { TAPDANCE_HOME: home };
   const upstream = await fakeSimlock(fake);
   const policy = GuardPolicySchema.parse({ listen: { host: "127.0.0.1", port: 0 }, ...overrides });
   const guard = await startGuard({
+    ...extra,
     upstream: { kind: "local", baseUrl: upstream.url, token: "slk_LOCALONLYSECRET", tenant: "local", runId: "r", clientId: "c", source: "test" },
     policy,
     env,
@@ -808,6 +809,145 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/sessions/other/requests/x/diagnostics")).status).toBe(404);
+  });
+});
+
+/**
+ * The cost guard (policy.hostStop). Mocked throughout: a fake Simlock, a fake clock and uptime, and a
+ * fake stop runner that records the command. Nothing here powers a machine off.
+ */
+describe("cost guard (fake Simlock, fake clock, fake stop runner)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const until = async (ok: () => boolean, ms = 2000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(10)) if (ok()) return;
+    throw new Error("timed out waiting");
+  };
+  const costGuard = (
+    stop: { idleMinutes: number; maxUptimeHours: number },
+    status: unknown,
+    o: { platform?: NodeJS.Platform; uptime?: number; fails?: boolean } = {},
+    fake: FakeOptions = {},
+    policy: Partial<GuardPolicy> = {},
+  ) => {
+    const clock = { now: 1_000_000_000 };
+    const calls: string[][] = [];
+    const logs: string[] = [];
+    const ready = setup({ hostStop: stop, ...policy }, { status, ...fake }, {
+      platform: o.platform ?? "linux",
+      now: () => clock.now,
+      hostStopIntervalMs: 15,
+      uptimeSeconds: async () => o.uptime ?? 600,
+      log: (m) => logs.push(m),
+      hostStopRunner: async (file, args) => {
+        calls.push([file, ...args]);
+        return o.fails ? { ok: false, out: "sudo: a password is required" } : { ok: true, out: "" };
+      },
+    });
+    return { ready, clock, calls, logs };
+  };
+  const NO_LEASES = { leases: [], devices: [] };
+
+  it("powers off with the fixed command after the idle limit, audits it, then refuses new leases", async () => {
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, NO_LEASES);
+    const t = await c.ready;
+    await sleep(80);
+    expect(c.calls).toEqual([]);
+    c.clock.now += 31 * 60_000;
+    await until(() => c.calls.length > 0);
+    expect(c.calls[0]).toEqual(["sudo", "-n", "/usr/bin/systemctl", "poweroff"]);
+    const log = await readFile(join(t.home, "worker", "audit.log"), "utf8");
+    expect(log).toContain('"path":"host-stop"');
+    expect(log).toContain("idle for 31 min");
+    const refused = await t.allocate(t.alice.secret, A);
+    expect(refused.status).toBe(503);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("NO_CAPACITY");
+    expect(c.calls).toHaveLength(1);
+  });
+
+  it("does not power off while Simlock reports a lease, even one made locally, not through the guard", async () => {
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, { leases: [{ id: C }], devices: [] });
+    await c.ready;
+    c.clock.now += 120 * 60_000;
+    await sleep(120);
+    expect(c.calls).toEqual([]);
+  });
+
+  it("does not power off while a guard request is open, and counts its end as activity", async () => {
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, NO_LEASES, {}, { leaseDelayMs: 300 });
+    const t = await c.ready;
+    expect((await t.allocate(t.alice.secret, A)).status).toBe(200);
+    const open = t.call(t.alice.secret, "GET", `/v1/leases/${A}`);
+    await sleep(30);
+    c.clock.now += 60 * 60_000;
+    await sleep(100);
+    expect(c.calls).toEqual([]);
+    await open;
+    await sleep(80);
+    expect(c.calls).toEqual([]); // the request just ended: idle time starts again from then
+    c.clock.now += 31 * 60_000;
+    await until(() => c.calls.length > 0);
+  });
+
+  it("does not power off while a build runs", async () => {
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (finish = r));
+    const { mkdir: mk } = await import("node:fs/promises");
+    const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args) => {
+      if (command === "git" && args[0] === "clone") await mk(join(args.at(-1)!, "App.xcodeproj"), { recursive: true });
+      if (command === "git" && args.includes("rev-parse")) return { code: 0, output: `${"b".repeat(40)}\n` };
+      if (command === "xcodebuild") {
+        await gate;
+        await mk(join(args[args.indexOf("-derivedDataPath") + 1]!, "Build", "Products", "Debug-iphonesimulator", "App.app"), { recursive: true });
+      }
+      return { code: 0, output: "" };
+    };
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, NO_LEASES, {}, { buildRunner: runner }, {
+      allow: { ...GuardPolicySchema.parse({}).allow, builds: true },
+      builds: { repos: ["https://github.com/acme/app"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 },
+    });
+    const t = await c.ready;
+    await t.allocate(t.alice.secret, A);
+    const build = t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, { repo: "https://github.com/acme/app", ref: "main" }).then((r) => r.text());
+    await sleep(50);
+    c.clock.now += 60 * 60_000;
+    await sleep(100);
+    expect(c.calls).toEqual([]);
+    finish();
+    await build;
+  });
+
+  it("past the uptime cap refuses new leases with the owner's reason, and powers off once none runs", async () => {
+    const c = costGuard({ idleMinutes: 0, maxUptimeHours: 8 }, NO_LEASES, { uptime: 9 * 3600 });
+    const t = await c.ready;
+    const refused = await t.allocate(t.alice.secret, A);
+    expect(refused.status).toBe(503);
+    const body = (await refused.json()) as { error: { code: string; message: string; hint: string } };
+    expect(body.error.code).toBe("NO_CAPACITY");
+    expect(body.error.message).toContain("uptime cap (8 h)");
+    expect(body.error.hint).toContain("owner set an uptime cap");
+    expect(t.upstream.seen.some((s) => s.body.includes("lease.allocate"))).toBe(false);
+    await until(() => c.calls.length > 0);
+  });
+
+  it("logs a failing stop command once an hour and keeps serving", async () => {
+    const c = costGuard({ idleMinutes: 1, maxUptimeHours: 0 }, NO_LEASES, { fails: true });
+    const t = await c.ready;
+    c.clock.now += 2 * 60_000;
+    await until(() => c.calls.length >= 3);
+    expect(c.logs.filter((l) => l.includes("failed")).length).toBe(1);
+    c.clock.now += 61 * 60_000;
+    await until(() => c.logs.filter((l) => l.includes("failed")).length === 2);
+    expect((await t.call(t.alice.secret, "GET", "/v1/status")).status).toBe(200);
+  });
+
+  it("never acts on macOS, whatever the policy says", async () => {
+    const c = costGuard({ idleMinutes: 1, maxUptimeHours: 1 }, NO_LEASES, { platform: "darwin", uptime: 99 * 3600 });
+    const t = await c.ready;
+    c.clock.now += 24 * 60 * 60_000;
+    await sleep(100);
+    expect(c.calls).toEqual([]);
+    expect((await t.allocate(t.alice.secret, A)).status).toBe(200);
+    expect(c.logs.some((l) => l.includes("ignored on macOS"))).toBe(true);
   });
 });
 

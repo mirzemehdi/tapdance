@@ -2146,26 +2146,34 @@ Worker, guard service, pairing, Tailscale and a self-test, step by step; prints
 a block to paste to the agent's machine
 
 Options:
-  --label <name>         name for the control machine's pairing (default: this
-                         machine's hostname)
-  --allow-admin-account  run the guard from an administrator account (not
-                         recommended)
-  --no-tailscale         do not expose the guard with `tailscale serve`; the
-                         endpoint stays on loopback
-  --keep-awake           macOS: run the guard under `caffeinate -i` so idle
-                         sleep does not take it offline
-  --repair               revoke the existing pairing with this label and issue a
-                         new token
-  --skip-self-test       do not lease a device through the guard at the end
-  --scope <areas>        limit the pairing token to these policy areas, e.g.
-                         interaction,inspection,screenshots,streaming,input (no
-                         install: it cannot put apps on the devices)
-  --warm <counts>        booted spare devices kept ready for fast leases, per
-                         platform, e.g. android=1,ios=0 (0 frees the memory;
-                         default: Simlock keeps one per device kind used)
-  -y, --yes              approve pairing without a prompt (you are at this
-                         machine)
-  -h, --help             display help for command
+  --label <name>             name for the control machine's pairing (default:
+                             this machine's hostname)
+  --allow-admin-account      run the guard from an administrator account (not
+                             recommended)
+  --no-tailscale             do not expose the guard with `tailscale serve`; the
+                             endpoint stays on loopback
+  --keep-awake               macOS: run the guard under `caffeinate -i` so idle
+                             sleep does not take it offline
+  --repair                   revoke the existing pairing with this label and
+                             issue a new token
+  --skip-self-test           do not lease a device through the guard at the end
+  --scope <areas>            limit the pairing token to these policy areas, e.g.
+                             interaction,inspection,screenshots,streaming,input
+                             (no install: it cannot put apps on the devices)
+  --warm <counts>            booted spare devices kept ready for fast leases,
+                             per platform, e.g. android=1,ios=0 (0 frees the
+                             memory; default: Simlock keeps one per device kind
+                             used)
+  --idle-stop <minutes|off>  Linux cloud VMs: power the machine off after this
+                             many minutes with no lease, request or build
+                             (default on a detected cloud VM: 30; elsewhere off;
+                             refused on macOS)
+  --max-uptime <hours|off>   Linux cloud VMs: after this many hours up, take no
+                             new leases and power off when the last one ends
+                             (default off; refused on macOS)
+  -y, --yes                  approve pairing without a prompt (you are at this
+                             machine)
+  -h, --help                 display help for command
 ```
 
 ### `tapdance host pause`
