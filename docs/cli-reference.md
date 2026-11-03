@@ -364,7 +364,7 @@ tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x
 tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>] [--delay-ms <ms>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
 tapdance ui wait  (--text <text> | --absent <text> | --stable) [--timeout <ms>]
-tapdance ui sequence <file.json> [--start-on-text <text>] [--offset-ms <ms>] [--wait <seconds>]
+tapdance ui sequence <file.json> [--start-on-text <text>] [--offset-ms <ms>] [--wait <seconds>] [--orientation <o>]
 tapdance ui alert <get|accept|dismiss>
 tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 ```
@@ -382,7 +382,7 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). A fill that drops characters is retried once at 80 ms on its own and says so. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
-| `ui sequence` | Android: runs timed taps **inside the emulator** as one shell script, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). Each tap starts in the background at its time; the reply gives every tap's `actualMs` and `driftMs` (when it started on the device; Android's `input` then takes a few tens of ms to deliver it). `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. Through a worker guard it needs `allow.deviceShell`. Not yet run on a device. |
+| `ui sequence` | Timed taps next to the device, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). **Android:** one shell script inside the emulator; each tap starts in the background at its time (Android's `input` then takes a few tens of ms to deliver it); through a worker guard it needs `allow.deviceShell`. **iOS:** touches through the simulator's input channel (what the live viewer uses, not XCTest, whose taps take 300–450 ms each), scheduled on the Mac: by the worker guard (`allow.interaction` and `allow.input`) or by Tapdance itself in local mode; x and y are the points `ui inspect --bounds` shows. In landscape the device is taken as turned `landscape-left` (Tapdance's "landscape", and what most apps that force landscape use); `--orientation landscape-right` for the other way. The reply gives every tap's `actualMs` and `driftMs`. `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. |
 | `ui alert` | `get` shows a system alert's title, message and buttons; `accept` presses the allowing button, `dismiss` the declining one. Not available with the AXe backend. |
 | `ui key` | `back` is Android back or iOS in-app back. `dismiss_keyboard` presses the keyboard's own hide key; the iPhone keyboard has none, so on iOS it is refused with a hint (tap the app's Done control or an empty spot above the keyboard). |
 
@@ -1427,9 +1427,10 @@ Commands:
                              (--absent), or the UI to settle (--stable)
   alert <action>             Read (get) or answer (accept, dismiss) a system
                              alert
-  sequence [options] <file>  Android: run timed taps inside the emulator (rhythm
-                             and timing games): a JSON list of {t, x, y, hold?}
-                             with t in ms from the start
+  sequence [options] <file>  Run timed taps (rhythm and timing games): a JSON
+                             list of {t, x, y, hold?} with t in ms from the
+                             start; Android inside the emulator, iOS through the
+                             simulator's touch input on the host
   key <key>                  Press back, home, enter, dismiss_keyboard or
                              app_switcher
   help [command]             display help for command
@@ -1550,14 +1551,18 @@ Options:
 ```text
 Usage: tapdance ui sequence [options] <file>
 
-Android: run timed taps inside the emulator (rhythm and timing games): a JSON
-list of {t, x, y, hold?} with t in ms from the start
+Run timed taps (rhythm and timing games): a JSON list of {t, x, y, hold?} with t
+in ms from the start; Android inside the emulator, iOS through the simulator's
+touch input on the host
 
 Options:
   --start-on-text <text>  wait for this text first, then start
   --offset-ms <ms>        start this long after the text appeared (or after now)
                           (default: "0")
   --wait <seconds>        how long to wait for --start-on-text (default: "60")
+  --orientation <o>       iOS: which way the device is turned when the app
+                          forces landscape (landscape-left, the default for a
+                          landscape screen, or landscape-right)
   -h, --help              display help for command
 ```
 

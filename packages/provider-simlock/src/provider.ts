@@ -41,6 +41,8 @@ import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.
 import { releaseStaleDeviceClaims } from "./stale-claims.js";
 import { crashReportsDir, listCrashReports, readCrashReport, summarizeCrash } from "./crash-reports.js";
 import { clearConsole, consolePaths, readConsole } from "./console-capture.js";
+import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, type PlayedTap } from "./touch-sequence.js";
+import { WebSocket } from "ws";
 import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockWorker } from "./http.js";
@@ -1153,6 +1155,7 @@ export class SimlockProvider implements DeviceProvider {
 
   async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
     if (operation.kind === "crash-list" || operation.kind === "crash-pull") return this.crashReports(handle, operation);
+    if (operation.kind === "tap-sequence" && handle.platform === "ios") return this.iosTouchSequence(handle, operation);
     if (operation.kind === "notifications" && operation.action !== "list" && handle.platform === "ios") {
       // agent-device drives the session's app; with that app killed (a reminder test) Notification
       // Center is out of reach. SpringBoard can be the session's app, and draws Notification Center (#49).
@@ -1168,6 +1171,37 @@ export class SimlockProvider implements DeviceProvider {
       }
     }
     return this.runDevice(handle, operation);
+  }
+
+  /**
+   * iOS timed taps through Simlock's input channel (#58): XCTest taps take 300–450 ms each, these a
+   * few ms. Coordinates are the app's (ui inspect --bounds); the screen size comes from one snapshot.
+   */
+  private async iosTouchSequence(handle: LeaseHandle, operation: Extract<DeviceOperation, { kind: "tap-sequence" }>): Promise<DeviceOperationResult> {
+    const steps = checkTimedTaps(operation.steps);
+    const snap = (await this.agentClient(handle).capture.snapshot({ interactiveOnly: true, ...this.scope(handle) } as never).catch((e: unknown) => {
+      throw fromAgentDeviceError(e, "read the screen size");
+    })) as { viewport?: { width?: number; height?: number } };
+    if (!snap.viewport?.width || !snap.viewport.height) throw new TapdanceError("DEVICE_ERROR", "The screen size was not reported, so taps cannot be placed");
+    const viewport = { width: snap.viewport.width, height: snap.viewport.height };
+    const orientation = orientationOf(viewport, operation.orientation);
+    let played: PlayedTap[];
+    if (this.isLocal()) {
+      const v = await this.viewer(handle);
+      const socket = new WebSocket(v.inputUrl, { headers: v.headers });
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", () => resolve());
+        socket.once("error", (e) => reject(new TapdanceError("DEVICE_ERROR", `The input channel did not open: ${e.message}`)));
+      });
+      try {
+        played = await playTouches(socket, steps, (x, y) => toFramebuffer(x, y, viewport, orientation));
+      } finally {
+        socket.close();
+      }
+    } else {
+      played = await this.http.touches(handle.leaseId, { steps, viewport, orientation });
+    }
+    return sequenceResult(played, steps.length, `actualMs is when each touch was sent to the simulator, next to it (${orientation}, ${viewport.width}×${viewport.height} pt).`);
   }
 
   /** iOS crash reports of the leased simulator: read on this Mac, or through a worker guard (#59). */

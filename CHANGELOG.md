@@ -189,6 +189,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   stdout and stderr captured on the Mac, and `logs --app` adds them: `print`/`println` lines (for
   Pianolune: its `Api: REQUEST/RESPONSE` lines) that the system log never has. Through a worker guard,
   `POST/GET /v1/leases/<id>/console`, files chosen by the guard.
+- Added (#58): `ui sequence` / MCP `tap_sequence` on iOS. Touches go through the simulator's input
+  channel (the live viewer's, not XCTest, whose taps take 300–450 ms each), scheduled on the Mac by the
+  worker guard (`POST /v1/leases/<id>/touches`) or by Tapdance in local mode. Measured on an iPhone 17
+  simulator: 14 taps at 250 ms, largest start drift 4 ms; timed taps on Pianolune's buttons landed in
+  portrait and landscape. `--orientation` for apps that force landscape-right.
 
 ### Not yet proven
 

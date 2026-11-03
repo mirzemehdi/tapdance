@@ -682,11 +682,12 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
 
   ui.command("sequence <file>")
-    .description("Android: run timed taps inside the emulator (rhythm and timing games): a JSON list of {t, x, y, hold?} with t in ms from the start")
+    .description("Run timed taps (rhythm and timing games): a JSON list of {t, x, y, hold?} with t in ms from the start; Android inside the emulator, iOS through the simulator's touch input on the host")
     .option("--start-on-text <text>", "wait for this text first, then start")
     .option("--offset-ms <ms>", "start this long after the text appeared (or after now)", "0")
     .option("--wait <seconds>", "how long to wait for --start-on-text", "60")
-    .action(async (file: string, o: { startOnText?: string; offsetMs: string; wait: string }) =>
+    .option("--orientation <o>", "iOS: which way the device is turned when the app forces landscape (landscape-left, the default for a landscape screen, or landscape-right)")
+    .action(async (file: string, o: { startOnText?: string; offsetMs: string; wait: string; orientation?: string }) =>
       run(globals(), async (t, out) => {
         let steps: unknown;
         try {
@@ -699,6 +700,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(o.startOnText ? { startOnText: o.startOnText } : {}),
           offsetMs: intArg("--offset-ms", o.offsetMs, 0, 60_000)!,
           waitMs: intArg("--wait", o.wait, 1, 600)! * 1000,
+          ...(o.orientation ? { orientation: o.orientation as never } : {}),
         });
         out.result(r, () => r.message);
         if (!r.ok) process.exitCode = 7;

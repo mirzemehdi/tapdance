@@ -7,7 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { checkBuildRequest, clearConsole, consolePaths, crashReportsDir, listCrashReports, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
+import { checkBuildRequest, checkTimedTaps, clearConsole, consolePaths, crashReportsDir, listCrashReports, playTouches, toFramebuffer, type Orientation, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
 
@@ -509,6 +509,53 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             await decide("allow", { command: `build ${request.platform} ${request.repo}@${request.ref}`, leaseId: r.leaseId });
             await runBuildRoute(res, r.leaseId, request, decide);
+            return;
+          }
+          if (r.action === "touches") {
+            // Timed taps on an iOS simulator, scheduled here next to Simlock so the network between
+            // the agent and this machine adds no jitter (#58). Same rights as live input.
+            if (!policy.allow.interaction || !policy.allow.input) {
+              await decide("deny", { reason: "interaction or input off", leaseId: r.leaseId, command: "touches" });
+              return send(res, 403, "FORBIDDEN", policyOff(policy.allow.interaction ? "input" : "interaction", "Timed taps"));
+            }
+            const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${r.leaseId}`, { headers: upstreamHeaders });
+            const lease = detail.ok ? ((await detail.json()) as { lease?: { platform?: string } }).lease : undefined;
+            if (lease?.platform !== "ios") return send(res, 400, "NOT_SUPPORTED", "This route is for iOS simulators; Android sequences run in the emulator's shell");
+            let steps;
+            let viewport: { width: number; height: number };
+            let orientation: Orientation;
+            try {
+              const raw = await readBody(req, 512 * 1024);
+              const body = JSON.parse(raw ? raw.toString("utf8") : "{}") as { steps?: unknown; viewport?: { width?: unknown; height?: unknown }; orientation?: unknown };
+              steps = checkTimedTaps(body.steps);
+              const w = Number(body.viewport?.width);
+              const h = Number(body.viewport?.height);
+              if (!(w > 0 && w < 5000 && h > 0 && h < 5000)) throw new TapdanceError("USAGE", "viewport must give the screen's width and height in points");
+              viewport = { width: w, height: h };
+              const o = body.orientation ?? "portrait";
+              if (!["portrait", "landscape-left", "landscape-right", "portrait-upside-down"].includes(String(o))) throw new TapdanceError("USAGE", "orientation must be portrait, landscape-left, landscape-right or portrait-upside-down");
+              orientation = o as Orientation;
+            } catch (error) {
+              const e = error instanceof TapdanceError ? error : new TapdanceError("USAGE", "The request is not valid JSON");
+              await decide("deny", { reason: e.message, leaseId: r.leaseId, command: "touches" });
+              return send(res, 400, e.code, e.message);
+            }
+            await decide("allow", { command: `touches ${steps.length}`, leaseId: r.leaseId });
+            const up = new WebSocket(`${upstream.baseUrl.replace(/^http/, "ws")}/v1/leases/${r.leaseId}/input`, { headers: upstreamHeaders });
+            try {
+              await new Promise<void>((resolve, reject) => {
+                up.once("open", () => resolve());
+                up.once("error", reject);
+              });
+              const played = await playTouches(up, steps, (x, y) => toFramebuffer(x, y, viewport, orientation));
+              res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+              res.end(JSON.stringify({ steps: played }));
+            } catch (error) {
+              const e = error instanceof TapdanceError ? error : new TapdanceError("DEVICE_ERROR", `The input channel failed: ${(error as Error).message}`);
+              send(res, e.code === "NOT_SUPPORTED" ? 400 : 502, e.code, e.message);
+            } finally {
+              up.close();
+            }
             return;
           }
           if (r.action === "console-launch" || r.action === "console-read") {

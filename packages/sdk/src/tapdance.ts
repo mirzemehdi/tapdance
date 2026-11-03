@@ -510,7 +510,7 @@ export class Tapdance {
    */
   async tapSequence(
     steps: TimedTap[],
-    options: { startOnText?: string; offsetMs?: number; waitMs?: number } = {},
+    options: { startOnText?: string; offsetMs?: number; waitMs?: number; orientation?: "portrait" | "landscape-left" | "landscape-right" | "portrait-upside-down" } = {},
   ): Promise<DeviceOperationResult & { startedAfterMs?: number }> {
     const offset = options.offsetMs ?? 0;
     if (!Number.isInteger(offset) || offset < 0 || offset > 60_000) throw new TapdanceError("USAGE", "offsetMs must be whole milliseconds from 0 to 60000");
@@ -521,7 +521,7 @@ export class Tapdance {
       if (!wait.found) throw new TapdanceError("TIMEOUT", `"${options.startOnText}" did not appear within ${Math.round(wait.waitedMs / 1000)} s; no tap was sent`);
       startedAfterMs = wait.waitedMs;
     }
-    const result = await this.device({ kind: "tap-sequence", steps: shifted });
+    const result = await this.device({ kind: "tap-sequence", steps: shifted, ...(options.orientation ? { orientation: options.orientation } : {}) });
     return { ...result, ...(startedAfterMs !== undefined ? { startedAfterMs } : {}) };
   }
 

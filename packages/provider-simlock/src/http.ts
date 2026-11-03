@@ -5,6 +5,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { TapdanceError, type ErrorCode } from "@tapdance/core";
 import type { CrashReportInfo } from "./crash-reports.js";
+import type { PlayedTap } from "./touch-sequence.js";
+import type { TimedTap } from "@tapdance/core";
 
 /** Status → Tapdance code for Simlock's JSON errors (`{"error":{"code","message"}}`). */
 const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
@@ -192,6 +194,22 @@ export class SimlockHttp {
     if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw filesUnsupported();
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/files");
     return Buffer.from(await response.arrayBuffer());
+  }
+
+  /** A worker guard's touch route: plays timed taps on the lease's simulator from the host (#58). */
+  async touches(leaseId: string, body: { steps: TimedTap[]; viewport: { width: number; height: number }; orientation: string }): Promise<PlayedTap[]> {
+    const last = body.steps.at(-1);
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/touches`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      timeoutMs: (last ? last.t + (last.hold ?? 0) : 0) + 60_000,
+    });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) {
+      throw new TapdanceError("NOT_SUPPORTED", "This endpoint cannot play timed taps on an iOS simulator", { hint: "Timed iOS taps go through a worker in device-only mode (tapdance worker guard) that is up to date, or run Tapdance on the Mac itself." });
+    }
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/touches");
+    return ((await response.json()) as { steps: PlayedTap[] }).steps;
   }
 
   /** A worker guard's console route: relaunch the app with its stdout/stderr captured on the host (#59). */

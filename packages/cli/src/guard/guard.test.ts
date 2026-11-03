@@ -736,6 +736,23 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.mallory.secret, "GET", `/v1/leases/${A}/console`)).status).toBe(404);
   });
 
+  it("22. timed iOS taps: iOS leases only, interaction and input on, steps checked (#58)", async () => {
+    const body = { steps: [{ t: 0, x: 10, y: 10 }], viewport: { width: 402, height: 874 }, orientation: "portrait" };
+    const android = await setup({}, { leasePlatform: "android" });
+    await android.allocate(android.alice.secret, A, { platform: "android" });
+    expect((await android.call(android.alice.secret, "POST", `/v1/leases/${A}/touches`, body)).status).toBe(400);
+    const off = await setup({ allow: { ...GuardPolicySchema.parse({}).allow, input: false } });
+    await off.allocate(off.alice.secret, A);
+    const refused = await off.call(off.alice.secret, "POST", `/v1/leases/${A}/touches`, body);
+    expect(refused.status).toBe(403);
+    expect(await refused.text()).toContain("allow.input");
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    expect((await t.call(t.alice.secret, "POST", `/v1/leases/${A}/touches`, { ...body, steps: [{ t: 500, x: 1, y: 1 }, { t: 0, x: 1, y: 1 }] })).status).toBe(400);
+    expect((await t.call(t.alice.secret, "POST", `/v1/leases/${A}/touches`, { ...body, orientation: "sideways" })).status).toBe(400);
+    expect((await t.call(t.mallory.secret, "POST", `/v1/leases/${A}/touches`, body)).status).toBe(404);
+  });
+
   it("19. agent-device's diagnostics for a failed request reach only the session's owner", async () => {
     const t = await setup();
     await t.allocate(t.alice.secret, A);

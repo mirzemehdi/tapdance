@@ -659,7 +659,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "tap_sequence",
     title: "Tap at set times",
     description:
-      "Android: run a list of taps at set times inside the emulator, so network latency does not delay them (rhythm games, timing-graded input, double taps at an exact interval). steps: [{t, x, y, hold?}], t in ms from the start, ascending; hold ms makes a long press. start_on_text waits for that text first and starts offset_ms after it appeared (that wait costs one round trip). Returns each tap's actualMs and driftMs (when it was started on the device; Android's input then takes a few tens of ms to deliver it).",
+      "Run a list of taps at set times next to the device, so network latency does not delay them (rhythm games, timing-graded input, double taps at an exact interval). Android: inside the emulator; iOS: through the simulator's touch input on the host (a few ms each, unlike tap). steps: [{t, x, y, hold?}] in the points inspect_screen gives, t in ms from the start, ascending; hold ms makes a long press. start_on_text waits for that text first and starts offset_ms after it appeared (that wait costs one round trip). iOS landscape apps: orientation landscape-left (default for a landscape screen) or landscape-right. Returns each tap's actualMs and driftMs.",
     input: z
       .object({
         steps: z
@@ -668,6 +668,7 @@ export const TOOLS: ToolDefinition[] = [
           .max(500),
         start_on_text: z.string().min(1).max(200).optional(),
         offset_ms: z.number().int().min(0).max(60_000).optional(),
+        orientation: z.enum(["portrait", "landscape-left", "landscape-right", "portrait-upside-down"]).optional(),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -676,6 +677,7 @@ export const TOOLS: ToolDefinition[] = [
         await t.tapSequence(a["steps"] as never, {
           ...(a["start_on_text"] ? { startOnText: a["start_on_text"] as string } : {}),
           ...(a["offset_ms"] !== undefined ? { offsetMs: a["offset_ms"] as number } : {}),
+          ...(a["orientation"] ? { orientation: a["orientation"] as never } : {}),
         }),
       ),
   },

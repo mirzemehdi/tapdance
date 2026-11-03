@@ -296,7 +296,8 @@ export type DeviceOperation =
   | { kind: "uninstall"; appId: string }
   | { kind: "clear-app-data"; appId: string }
   /** Android: taps (or holds) at set times, run as one script inside the emulator so the network adds no delay between them. */
-  | { kind: "tap-sequence"; steps: TimedTap[] }
+  /** `orientation` (iOS, landscape apps): which way the device is turned; default from the screen shape, landscape = landscape-left. */
+  | { kind: "tap-sequence"; steps: TimedTap[]; orientation?: "portrait" | "landscape-left" | "landscape-right" | "portrait-upside-down" }
   /** Read or write the device clipboard (paste flows, checking what "Copy link" copied). */
   | { kind: "clipboard"; action: "get" } | { kind: "clipboard"; action: "set"; text: string }
   /** Android 13+: one app's language (`cmd locale set-app-locales`), e.g. "de-DE". */
