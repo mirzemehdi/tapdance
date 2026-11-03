@@ -2,7 +2,7 @@
   "name": "@tapdance/provider-simlock",
   "version": "0.1.0",
   "description": "Tapdance device provider backed by Simlock and agent-device.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

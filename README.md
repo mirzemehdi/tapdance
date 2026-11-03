@@ -16,7 +16,9 @@ gateway come from [Simlock](https://github.com/callstackincubator/simlock). UI a
 [Google's Android CLI](https://developer.android.com/cli), and Xcode builds. Tapdance adds sessions,
 routing, safety checks, artifacts, a browser viewer and one consistent CLI/MCP/SDK surface on top.
 
-Tapdance is free and open source under the [MIT license](LICENSE). It needs no account.
+Tapdance is free and open source under the [GNU AGPL-3.0](LICENSE). It needs no account. You may use,
+change and self-host it freely; if you offer a modified Tapdance to others as a network service, the
+AGPL asks you to share your changes under the same licence.
 
 > **Status: 0.1.0, unreleased.** The full loop works on one Mac with iOS simulators and Android
 > emulators, locally and through a gateway on the same Mac. An agent on a Linux VPS has tested a real

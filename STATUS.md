@@ -228,7 +228,7 @@ Evidence: [docs/testing/evidence/](docs/testing/evidence/).
 | G-05 | 🟡 | Written; Scaleway/MacStadium/AWS steps not exercised. |
 | G-06 | 🟡 | Docs only. |
 | G-07 | 🟡 | Idle stop ✅: the guard powered the N2 VM off 30 min after the last lease ended, and the worker, guard and Tailscale came back after a start ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Terraform `max_run_hours = 8` set on the VM, not reached. Uptime cap, stop schedule and budget alert unit-tested or not triggered (`host-stop.test.ts`, `host.test.ts`, `guard.test.ts`). |
-| O-01 | ✅ | Basis: every listed document exists — README, installation, quick start, CLI reference, MCP, Claude Code/Codex/Cursor pages, Android and iOS pages, self-hosted guides, ADR, CONTRIBUTING, SECURITY, MIT LICENSE. `cli.test.ts` checks that every command, MCP tool and config key is documented. |
+| O-01 | ✅ | Basis: every listed document exists — README, installation, quick start, CLI reference, MCP, Claude Code/Codex/Cursor pages, Android and iOS pages, self-hosted guides, ADR, CONTRIBUTING, SECURITY, LICENSE (AGPL-3.0-only). `cli.test.ts` checks that every command, MCP tool and config key is documented. |
 | O-02 | ✅ | `CLAUDE.md`, `AGENTS.md`; a test fails when code names a `tapdance` command that does not exist. |
 | O-03 | ✅ | This file and PRODUCT.md. |
 | O-04 | ✅ | `.github/ISSUE_TEMPLATE/*`, `tapdance report`, [field-testing runbook](docs/testing/field-testing.md). |

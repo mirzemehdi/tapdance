@@ -11,6 +11,9 @@ Legend: ✅ done and exercised on real devices · 🟡 partly done or not yet pr
 gateway and through device-only mode, on one Mac. Phase 1 closes when it is proven across two machines
 and the Phase 1 items below are ✅.
 
+Where devices run, stage by stage (your Mac → a Google Cloud N2 VM for Android → a rented Mac for iOS →
+one agent across both → a hosted Tapdance Cloud), is planned in [docs/hosting-plan.md](docs/hosting-plan.md).
+
 The first public release is about three things: get a device from any supported worker, let the agent
 actually use the app, and return useful screenshots, recordings and evidence. Later phases wait until
 those are excellent.
@@ -69,12 +72,15 @@ fastlane is ⏸ for iOS: `asc` already covers App Store Connect.
 | Item | State | IDs |
 | --- | --- | --- |
 | Multiple device pools, scheduling | 🟡 Simlock's queue and warm pool per gateway | Y-17 |
-| BYOI provisioning (GCP N2) | 🟡 Terraform and `host-setup.sh` run once on a real N2 VM ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)); provisioning is still by hand | G-01, G-02 |
+| BYOI provisioning (GCP N2, Android) | ✅ Terraform, `host-setup.sh`, `host up` and `connect` run on a real N2 VM ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md), [hosting plan](docs/hosting-plan.md) stage 2); provisioning is still by hand | G-01, G-02 |
+| Rented Mac for iOS (Scaleway first) | ⬜ docs written, not run ([hosting plan](docs/hosting-plan.md) stage 3) | G-05, G-06 |
+| One agent across a Linux and a Mac host | ⬜ ([hosting plan](docs/hosting-plan.md) stage 4) | Y-17 |
 | Browser console (many sessions) | ⬜ | V-* |
-| Managed Android and Mac workers | ⬜ | M-04 |
+| Tapdance Cloud: hosted fleet, accounts, metered billing (open-source core under AGPL-3.0) | ⬜ ([hosting plan](docs/hosting-plan.md) stage 5) | M-04, P-04 |
 | Usage metering | ⬜ | P-04 |
 
 ## Not planned for now
 
-Subscriptions and billing, a SaaS dashboard, Kubernetes, a custom streaming stack, Windows workers
-(Simlock runs on macOS and Linux only).
+Kubernetes, a custom streaming stack, Windows workers (Simlock runs on macOS and Linux only).
+Subscriptions, billing and a hosted dashboard come with Tapdance Cloud, stage 5 of
+[docs/hosting-plan.md](docs/hosting-plan.md), after the self-hosted stages are proven.
