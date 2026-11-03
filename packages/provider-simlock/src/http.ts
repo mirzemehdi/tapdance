@@ -197,7 +197,7 @@ export class SimlockHttp {
   }
 
   /** A worker guard's touch route: plays timed taps on the lease's simulator from the host (#58). */
-  async touches(leaseId: string, body: { steps: TimedTap[]; viewport: { width: number; height: number }; orientation: string }): Promise<PlayedTap[]> {
+  async touches(leaseId: string, body: { steps: TimedTap[]; viewport?: { width: number; height: number }; orientation: string; model?: string }): Promise<PlayedTap[]> {
     const last = body.steps.at(-1);
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/touches`, {
       method: "POST",

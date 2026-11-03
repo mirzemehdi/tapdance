@@ -231,6 +231,17 @@ export const ios = {
   launchWithConsole(appId: string, stdoutPath: string, stderrPath: string, args: string[] = []): DeviceCommand {
     return { tool: "simctl", args: ["launch", "--terminate-running-process", `--stdout=${stdoutPath}`, `--stderr=${stderrPath}`, appId, ...args] };
   },
+  /** The simulator's device-wide language and region (`de-DE`): what Settings › General › Language sets (#49). */
+  setLanguage(locale: string): DeviceCommand[] {
+    if (!LOCALE.test(locale)) throw usage(`"${locale}" is not a locale such as de-DE or pt-BR`);
+    return [
+      { tool: "simctl", args: ["spawn", "defaults", "write", "-g", "AppleLanguages", "-array", locale] },
+      { tool: "simctl", args: ["spawn", "defaults", "write", "-g", "AppleLocale", "-string", locale.replace(/-/g, "_")] },
+    ];
+  },
+  readLanguage(): DeviceCommand {
+    return { tool: "simctl", args: ["spawn", "defaults", "read", "-g", "AppleLanguages"] };
+  },
   statusBarList(): DeviceCommand {
     return { tool: "simctl", args: ["status_bar", "list"] };
   },

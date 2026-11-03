@@ -202,6 +202,12 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Added (#60): `device links` / MCP `opened_links`: the links apps asked the system to open, whether
   anything opened them and in which app, and `mailto:` address and subject. Checked on Pianolune:
   "Contact us" → `mailto:team@measify.com (nothing handles it)`, Terms → `https (opened in com.apple.mobilesafari)`.
+- Added (#49): `device setting language <locale>` on iOS, the device-wide language (checked: Settings
+  came up as "Einstellungen" with de-DE). `device notifications tap --text <text>` (MCP `notifications`
+  action `tap`) opens a notification the way a person does: on iOS a real swipe right in Notification
+  Center, which opened Pianolune after it was killed; a banner tap through `ui sequence --orientation
+  portrait` opened it from the Home Screen. Timed iOS steps can drag (`toX`/`toY`), and with
+  `--orientation` nothing is read from the app first.
 
 ### Not yet proven
 

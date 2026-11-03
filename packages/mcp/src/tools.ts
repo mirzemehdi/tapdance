@@ -447,10 +447,10 @@ export const TOOLS: ToolDefinition[] = [
     name: "notifications",
     title: "Notifications",
     description:
-      "list: the notifications currently posted (Android; filter with app_id). open/close: pull the notification shade down or up (Android), then inspect_screen and tap to act on one. post: a test notification (Android shell notification with title/text; with app_id + payload, a push payload delivered to that app, which is how to test pushes on the iOS simulator). Workers in device-only mode turn this off unless the owner allows it.",
+      "list: the notifications currently posted (Android; filter with app_id). open/close: pull the notification shade (Android) or Notification Center (iOS) down or up. tap with text: open the notification whose text contains it, the way a person does (iOS: a real swipe in Notification Center, which opens the app even when it was killed). post: a test notification (Android shell notification with title/text; with app_id + payload, a push payload delivered to that app, which is how to test pushes on the iOS simulator). Workers in device-only mode turn this off unless the owner allows it.",
     input: z
       .object({
-        action: z.enum(["list", "open", "close", "post"]),
+        action: z.enum(["list", "open", "close", "post", "tap"]),
         app_id: appId.optional(),
         title: z.string().max(200).optional(),
         text: z.string().max(1000).optional(),
@@ -459,7 +459,8 @@ export const TOOLS: ToolDefinition[] = [
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     run: async (t, a) => {
-      const action = a["action"] as "list" | "open" | "close" | "post";
+      const action = a["action"] as "list" | "open" | "close" | "post" | "tap";
+      if (action === "tap") return json(await t.device({ kind: "notifications", action: "tap", text: (a["text"] as string | undefined) ?? "" }));
       const appIdArg = a["app_id"] ? { appId: a["app_id"] as string } : {};
       if (action === "post") {
         return json(

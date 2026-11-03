@@ -462,6 +462,9 @@ describe("worker guard: hardening", () => {
       dc.android.startIntent({ action: "android.intent.action.VIEW", data: "https://example.com/a?b=c&d=e", component: "com.example/.Main", categories: ["android.intent.category.DEFAULT"], flags: "0x10000000", extras: { mode: "first run; rm -rf /", count: 3, fresh: true } }),
       dc.android.notifications(),
       dc.ios.linkLog(5),
+      ...dc.ios.setLanguage("de-DE"),
+      ...dc.ios.setLanguage("zh-Hant-TW"),
+      dc.ios.readLanguage(),
       dc.android.inputTap(400, 955),
       dc.android.home(),
       dc.android.stopApp("com.example"),
@@ -499,6 +502,9 @@ describe("worker guard: hardening", () => {
       { tool: "adb", args: ["pull", "/sdcard/Download/x", "/Users/owner/x"] },
       { tool: "simctl", args: ["addmedia", "/Users/owner/Pictures/private.jpg"] },
       { tool: "simctl", args: ["status_bar", "override", "--time", "9:41; rm"] },
+      { tool: "simctl", args: ["spawn", "defaults", "write", "-g", "AppleLanguages", "-array", "de; rm"] },
+      { tool: "simctl", args: ["spawn", "defaults", "write", "-g", "NSShowAllViews", "-string", "YES"] },
+      { tool: "simctl", args: ["spawn", "defaults", "write", "com.apple.Preferences", "x", "-string", "y"] },
     ];
     // With the device shell off, only the fixed shapes pass.
     const fixedOnly = GuardPolicySchema.parse({ allow: { notifications: true, deviceShell: false } });

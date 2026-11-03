@@ -268,6 +268,19 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       await ctx.exec({ tool: "adb", args: ["shell", "am", "force-stop", "com.android.chrome"] });
       return { ok: true, message: "Chrome now starts without its first-run screens (until the lease ends)" };
     }
+    case "language": {
+      if (isAndroid) throw notSupported("A device-wide language is iOS only here", "On Android, launch_app with locale sets the app's own language (Android 13+), which is what an app test needs.");
+      if (value === undefined) {
+        const r = await run(ctx, ios.readLanguage(), "read the language");
+        const first = /"?([A-Za-z]{2,3}(?:-[A-Za-z0-9]+)*)"?/.exec(r.stdout.replace(/[()\s]/g, " "))?.[1];
+        return { ok: true, message: first ? `The device language is ${first}` : "The device uses its default language", data: { language: first ?? null } };
+      }
+      for (const cmd of ios.setLanguage(value)) await run(ctx, cmd, "set the language");
+      return {
+        ok: true,
+        message: `The device language is now ${value}. Apps take it when they start: relaunch the app (and Settings) to see it; the Home Screen keeps its labels until the simulator restarts.`,
+      };
+    }
     case "status-bar-time": {
       if (isAndroid) throw notSupported("status-bar-time is iOS only");
       if (value === undefined) {

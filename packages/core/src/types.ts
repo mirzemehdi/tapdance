@@ -236,6 +236,7 @@ export const DEVICE_SETTINGS = [
   "orientation",
   "status-bar-time",
   "browser-first-run",
+  "language",
 ] as const;
 export type DeviceSettingName = (typeof DEVICE_SETTINGS)[number];
 
@@ -290,6 +291,9 @@ export interface TimedTap {
   x: number;
   y: number;
   hold?: number;
+  /** iOS: drag from (x, y) to here over `hold` ms (default 250): a swipe at a set time. */
+  toX?: number;
+  toY?: number;
 }
 
 export type DeviceOperation =
@@ -308,7 +312,8 @@ export type DeviceOperation =
   | { kind: "intent"; intent: IntentSpec }
   | { kind: "push-file"; localPath: string; destination: FileDestination; appId?: string; name?: string }
   | { kind: "pull-file"; outPath: string; devicePath?: string; appId?: string; relativePath?: string; filesName?: string }
-  | { kind: "notifications"; action: "list" | "open" | "close"; appId?: string }
+  /** `tap` opens the notification whose text contains `text`, the way a person does (#49). */
+  | { kind: "notifications"; action: "list" | "open" | "close" | "tap"; appId?: string; text?: string }
   | { kind: "post-notification"; title?: string; text?: string; appId?: string; payload?: Record<string, unknown> }
   | { kind: "perf"; metric: "frames" | "memory"; appId?: string }
   /** iOS: crash reports (.ips) from the leased simulator since the lease began, newest first. */

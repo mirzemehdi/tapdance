@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, type TouchSocket } from "./touch-sequence.js";
+import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, viewportFromConfig, type TouchSocket } from "./touch-sequence.js";
 
 const portrait = { width: 402, height: 874 };
 const landscape = { width: 874, height: 402 };
@@ -49,11 +49,22 @@ describe("iOS timed taps through the input channel (#58)", () => {
     const t0 = performance.now();
     const { socket, sent } = fakeSocket(() => performance.now() - t0);
     const played = await playTouches(socket, [{ t: 0, x: 201, y: 437 }, { t: 120, x: 201, y: 437, hold: 300 }, { t: 200, x: 100, y: 100 }], (x, y) => toFramebuffer(x, y, portrait, "portrait"));
+    expect(viewportFromConfig({ width: 1206, height: 2622 }, "portrait", "iPhone 17")).toEqual({ width: 402, height: 874 });
+    expect(viewportFromConfig({ width: 1206, height: 2622 }, "landscape-left", "iPhone 17")).toEqual({ width: 874, height: 402 });
+    expect(viewportFromConfig({ width: 750, height: 1334 }, "portrait", "iPhone SE (3rd generation)")).toEqual({ width: 375, height: 667 });
+    expect(viewportFromConfig({ width: 1640, height: 2360 }, "portrait", "iPad Air")).toEqual({ width: 820, height: 1180 });
     expect(played.map((p) => p.t)).toEqual([0, 120, 200]);
     for (const p of played) expect(Math.abs(p.driftMs)).toBeLessThan(25);
     expect(sent.map((s) => s.type)).toEqual(["begin", "end", "begin", "end", "begin", "end"]);
     // The held second tap was cut short by the third (one finger).
     expect(sent[3]!.at).toBeLessThan(sent[4]!.at + 1);
     expect(sequenceResult(played, 3, "n").message).toMatch(/^Ran 3\/3 taps; largest start drift/);
+    // A drag: begin, moves along the way, end at the target.
+    const drag = fakeSocket(() => 0);
+    await playTouches(drag.socket, [{ t: 0, x: 0, y: 437, toX: 402, toY: 437, hold: 80 }], (x, y) => toFramebuffer(x, y, portrait, "portrait"));
+    expect(drag.sent[0]).toMatchObject({ type: "begin", x: 0 });
+    expect(drag.sent.at(-1)).toMatchObject({ type: "end", x: 1 });
+    expect(drag.sent.filter((s) => s.type === "move").length).toBeGreaterThanOrEqual(4);
+    expect(() => checkTimedTaps([{ t: 0, x: 1, y: 1, toX: 5 }])).toThrow(/both toX and toY/);
   });
 });

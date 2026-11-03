@@ -255,7 +255,7 @@ anyone who can lease the profile acts as that account.
 tapdance device setting <name> [value] [--app <id>] [--permission <p>] [--lat <n> --lon <n>]
 tapdance device push <path> --to <downloads|pictures|documents|app_sandbox|files> [--app <id>] [--name <n>]
 tapdance device pull [devicePath] [--app <id> --path <relative>] [--files <name>] [-o <file>]
-tapdance device notifications <list|open|close|post> [--app <id>] [--title <t>] [--text <t>] [--payload <json>]
+tapdance device notifications <list|open|close|post|tap> [--app <id>] [--title <t>] [--text <t>] [--payload <json>]
 tapdance device perf <frames|memory> [--app <id>]
 tapdance device shell [--stdin <file>] [--timeout <seconds>] -- <command…>
 ```
@@ -273,7 +273,9 @@ the device is wiped on release.
   (iOS), `fingerprint` (Android), `permission <grant|deny|reset> --permission <p> --app <id>`,
   `reset-keychain` (iOS), `orientation` (`portrait`, `landscape` = `landscape-left`, `landscape-right`,
 `portrait-upside-down`; without a value it reads portrait or landscape from the screen size),
-`status-bar-time <HH:MM|clear>` (iOS), `browser-first-run off` (Android: Chrome opens links without its
+`status-bar-time <HH:MM|clear>` (iOS), `language <locale>` (iOS: the device-wide language and region,
+e.g. `de-DE`, what Settings › General › Language sets; apps take it when they start, so relaunch them;
+without a value it reads it; on Android use `app launch --locale`), `browser-first-run off` (Android: Chrome opens links without its
 welcome, sign-in, default-browser and notifications screens; through Chrome's command-line file and the
 notification permission, so on emulator images, which allow it). Other Android settings
   (density, locale, time zone, …) go through `device shell`. Without a value it
@@ -300,8 +302,13 @@ notification permission, so on emulator images, which allow it). Other Android s
   (remote: through a worker guard). Saved as an
   artifact.
 - `notifications`: `list` (Android), `open`/`close` the shade (Android) or Notification Center (iOS: a
-  swipe from the top-left edge, untested), `post` a shell notification
-  (Android) or, with `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator).
+  swipe from the top-left edge; with the app killed the session switches to SpringBoard, which draws
+  it, so `ui inspect --all` reads the notifications), `post` a shell notification (Android) or, with
+  `--app` and `--payload`, a push payload (the way to test pushes on the iOS simulator). `tap --text
+  <text>` opens the notification whose text contains it, the way a person does: on iOS a real swipe
+  right across it in Notification Center (a tap there only selects it), which opens the app even when
+  it was killed; on Android a tap in the shade. A banner can also be tapped while it shows: `ui sequence`
+  with `--orientation portrait` and a tap at the top of the screen.
 - `shell` (Android emulators only): runs the command with `adb shell` **inside the leased emulator**
   (its own VM, wiped at release; never this machine), e.g. `tapdance device shell -- dumpsys
   media.audio_flinger` or `-- wm density 320`. Exit code 1 when the command fails. Refused on iOS and on
@@ -392,7 +399,7 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). A fill that drops characters is retried once at 80 ms on its own and says so. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
-| `ui sequence` | Timed taps next to the device, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). **Android:** one shell script inside the emulator; each tap starts in the background at its time (Android's `input` then takes a few tens of ms to deliver it); through a worker guard it needs `allow.deviceShell`. **iOS:** touches through the simulator's input channel (what the live viewer uses, not XCTest, whose taps take 300–450 ms each), scheduled on the Mac: by the worker guard (`allow.interaction` and `allow.input`) or by Tapdance itself in local mode; x and y are the points `ui inspect --bounds` shows. In landscape the device is taken as turned `landscape-left` (Tapdance's "landscape", and what most apps that force landscape use); `--orientation landscape-right` for the other way. The reply gives every tap's `actualMs` and `driftMs`. `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. |
+| `ui sequence` | Timed taps next to the device, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). **Android:** one shell script inside the emulator; each tap starts in the background at its time (Android's `input` then takes a few tens of ms to deliver it); through a worker guard it needs `allow.deviceShell`. **iOS:** touches through the simulator's input channel (what the live viewer uses, not XCTest, whose taps take 300–450 ms each), scheduled on the Mac: by the worker guard (`allow.interaction` and `allow.input`) or by Tapdance itself in local mode; x and y are the points `ui inspect --bounds` shows. In landscape the device is taken as turned `landscape-left` (Tapdance's "landscape", and what most apps that force landscape use); `--orientation landscape-right` for the other way. With `--orientation` given, nothing is read from the app first (a read brings the session's app to the front), so use `--orientation portrait` for taps outside your app: a banner, Notification Center, the Home Screen. On iOS a step with `toX`/`toY` is a drag to that point over `hold` ms (default 250): a swipe at a set time. The reply gives every tap's `actualMs` and `driftMs`. `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. |
 | `ui alert` | `get` shows a system alert's title, message and buttons; `accept` presses the allowing button, `dismiss` the declining one. Not available with the AXe backend. |
 | `ui key` | `back` is Android back or iOS in-app back. `dismiss_keyboard` presses the keyboard's own hide key; the iPhone keyboard has none, so on iOS it is refused with a hint (tap the app's Done control or an empty spot above the keyboard). |
 
@@ -950,9 +957,9 @@ Commands:
                                     appearance, text-size, faceid, touchid,
                                     fingerprint, permission, reset-keychain,
                                     orientation, status-bar-time,
-                                    browser-first-run. Values: on|off for the
-                                    switches; appearance light|dark|toggle;
-                                    orientation
+                                    browser-first-run, language. Values: on|off
+                                    for the switches; appearance
+                                    light|dark|toggle; orientation
                                     portrait|landscape|landscape-left|landscape-right|portrait-upside-down;
                                     browser-first-run off. The iOS simulator's
                                     clock is the Mac's and cannot be set
@@ -962,8 +969,9 @@ Commands:
                                     Documents)
   pull [options] [devicePath]       Copy a file from the device into this
                                     session's artifacts
-  notifications [options] <action>  list | open | close | post notifications on
-                                    the device
+  notifications [options] <action>  list | open | close | post | tap
+                                    notifications on the device (tap --text
+                                    opens one the way a person does)
   shell [options] <command...>      Android emulators: run a command with `adb
                                     shell` inside the leased emulator (not on
                                     this machine)
@@ -1186,7 +1194,7 @@ Usage: tapdance device setting [options] <name> [value]
 Change (or, without a value, read) a device setting: wifi, bluetooth, airplane,
 mobile-data, location, animations, appearance, text-size, faceid, touchid,
 fingerprint, permission, reset-keychain, orientation, status-bar-time,
-browser-first-run. Values: on|off for the switches; appearance
+browser-first-run, language. Values: on|off for the switches; appearance
 light|dark|toggle; orientation
 portrait|landscape|landscape-left|landscape-right|portrait-upside-down;
 browser-first-run off. The iOS simulator's clock is the Mac's and cannot be set
@@ -1238,12 +1246,13 @@ Options:
 ```text
 Usage: tapdance device notifications [options] <action>
 
-list | open | close | post notifications on the device
+list | open | close | post | tap notifications on the device (tap --text opens
+one the way a person does)
 
 Options:
   --app <appId>     filter (list) or the app a push payload goes to (post)
   --title <title>   post: title
-  --text <text>     post: body
+  --text <text>     post: body; tap: text of the notification to open
   --payload <json>  post: a push payload (APNs-style JSON) delivered to --app
   -h, --help        display help for command
 ```

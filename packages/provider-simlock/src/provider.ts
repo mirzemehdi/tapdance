@@ -41,7 +41,7 @@ import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.
 import { releaseStaleDeviceClaims } from "./stale-claims.js";
 import { crashReportsDir, listCrashReports, readCrashReport, summarizeCrash } from "./crash-reports.js";
 import { clearConsole, consolePaths, readConsole } from "./console-capture.js";
-import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, type PlayedTap } from "./touch-sequence.js";
+import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, viewportFromConfig, type InputConfig, type PlayedTap } from "./touch-sequence.js";
 import { WebSocket } from "ws";
 import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
@@ -1184,6 +1184,7 @@ export class SimlockProvider implements DeviceProvider {
   async device(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult> {
     if (operation.kind === "crash-list" || operation.kind === "crash-pull") return this.crashReports(handle, operation);
     if (operation.kind === "tap-sequence" && handle.platform === "ios") return this.iosTouchSequence(handle, operation);
+    if (operation.kind === "notifications" && operation.action === "tap") return this.tapNotification(handle, operation.text ?? "");
     if (operation.kind === "notifications" && operation.action !== "list" && handle.platform === "ios") {
       // agent-device drives the session's app; with that app killed (a reminder test) Notification
       // Center is out of reach. SpringBoard can be the session's app, and draws Notification Center (#49).
@@ -1207,12 +1208,18 @@ export class SimlockProvider implements DeviceProvider {
    */
   private async iosTouchSequence(handle: LeaseHandle, operation: Extract<DeviceOperation, { kind: "tap-sequence" }>): Promise<DeviceOperationResult> {
     const steps = checkTimedTaps(operation.steps);
-    const snap = (await this.agentClient(handle).capture.snapshot({ interactiveOnly: true, ...this.scope(handle) } as never).catch((e: unknown) => {
-      throw fromAgentDeviceError(e, "read the screen size");
-    })) as { viewport?: { width?: number; height?: number } };
-    if (!snap.viewport?.width || !snap.viewport.height) throw new TapdanceError("DEVICE_ERROR", "The screen size was not reported, so taps cannot be placed");
-    const viewport = { width: snap.viewport.width, height: snap.viewport.height };
-    const orientation = orientationOf(viewport, operation.orientation);
+    // With an orientation given, read nothing from the app: a snapshot brings the session's app to the
+    // front, which would hide a banner, Notification Center or the Home Screen the taps are meant for.
+    // The screen size then comes from the input channel. Without one, the app's screen says both.
+    let viewport: { width: number; height: number } | undefined;
+    if (!operation.orientation) {
+      const snap = (await this.agentClient(handle).capture.snapshot({ interactiveOnly: true, ...this.scope(handle) } as never).catch((e: unknown) => {
+        throw fromAgentDeviceError(e, "read the screen size");
+      })) as { viewport?: { width?: number; height?: number } };
+      if (snap.viewport?.width && snap.viewport.height) viewport = { width: snap.viewport.width, height: snap.viewport.height };
+    }
+    const orientation = viewport ? orientationOf(viewport, operation.orientation) : (operation.orientation ?? "portrait");
+    const mapper = (x: number, y: number, config: InputConfig) => toFramebuffer(x, y, viewport ?? viewportFromConfig(config, orientation, handle.model), orientation);
     let played: PlayedTap[];
     if (this.isLocal()) {
       const v = await this.viewer(handle);
@@ -1222,14 +1229,45 @@ export class SimlockProvider implements DeviceProvider {
         socket.once("error", (e) => reject(new TapdanceError("DEVICE_ERROR", `The input channel did not open: ${e.message}`)));
       });
       try {
-        played = await playTouches(socket, steps, (x, y) => toFramebuffer(x, y, viewport, orientation));
+        played = await playTouches(socket, steps, mapper);
       } finally {
         socket.close();
       }
     } else {
-      played = await this.http.touches(handle.leaseId, { steps, viewport, orientation });
+      played = await this.http.touches(handle.leaseId, { steps, orientation, model: handle.model, ...(viewport ? { viewport } : {}) });
     }
-    return sequenceResult(played, steps.length, `actualMs is when each touch was sent to the simulator, next to it (${orientation}, ${viewport.width}×${viewport.height} pt).`);
+    return sequenceResult(played, steps.length, `actualMs is when each touch was sent to the simulator, next to it (${orientation}${viewport ? `, ${viewport.width}×${viewport.height} pt` : ""}).`);
+  }
+
+  /**
+   * Opens a notification the way a person does (#49). iOS: from the Home Screen, Notification Center,
+   * then a real swipe right across it (a tap there only selects it; XCTest touches do not open it).
+   * Android: the shade, then a tap on its text.
+   */
+  private async tapNotification(handle: LeaseHandle, text: string): Promise<DeviceOperationResult> {
+    if (!text.trim()) throw new TapdanceError("USAGE", "notifications tap needs the text of the notification (--text)");
+    if (handle.platform === "android") {
+      await this.runDevice(handle, { kind: "notifications", action: "open" });
+      const r = await this.tap(handle, { kind: "text", text });
+      return { ok: true, message: `Opened the notification "${text}"`, data: { point: r.point ?? null } };
+    }
+    // The session reads SpringBoard (it draws Notification Center); a read of the app would bring it back.
+    await this.launchApp(handle, "com.apple.springboard");
+    await new Promise((r) => setTimeout(r, 1500));
+    await this.runDevice(handle, { kind: "notifications", action: "open" });
+    await new Promise((r) => setTimeout(r, 1000));
+    const needle = text.toLowerCase();
+    const { elements } = await this.inspect(handle, { interactiveOnly: false });
+    const hit =
+      elements.find((e) => e.rect && /ListCell$|NotificationShortLookView/.test(e.identifier ?? "") && (e.label ?? "").toLowerCase().includes(needle)) ??
+      elements.find((e) => e.rect && e.rect.width > 200 && (e.label ?? "").toLowerCase().includes(needle));
+    if (!hit?.rect) {
+      throw new TapdanceError("ELEMENT_NOT_FOUND", `No notification with "${text}" in Notification Center`, { hint: "List them with `tapdance device notifications open` then `tapdance ui inspect --all`; a notification shows only when the app has notification permission." });
+    }
+    const y = hit.rect.y + hit.rect.height / 2;
+    const swipe = { t: 0, x: hit.rect.x + hit.rect.width * 0.15, y, toX: hit.rect.x + hit.rect.width * 0.85, toY: y, hold: 220 };
+    await this.iosTouchSequence(handle, { kind: "tap-sequence", steps: [swipe], orientation: "portrait" });
+    return { ok: true, message: `Opened the notification "${hit.label}" (swiped it right in Notification Center). The session reads SpringBoard now: launch your app to read it again.`, data: { label: hit.label ?? null } };
   }
 
   /** iOS crash reports of the leased simulator: read on this Mac, or through a worker guard (#59). */

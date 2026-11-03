@@ -61,12 +61,30 @@ export interface PlayedTap extends TimedTap {
  * at its time (begin at `t`, end after `hold`). A tap that starts before the previous one ended ends
  * that one first (the channel has one finger). Answers when each touch began, against the schedule.
  */
+/** The input channel's answer: the framebuffer in pixels (always portrait, whatever the rotation). */
+export interface InputConfig {
+  width: number;
+  height: number;
+}
+
+/**
+ * The screen in points from the framebuffer: iPhones are 3x (1206 px = 402 pt), iPads and older
+ * small iPhones 2x. Turned for a landscape orientation.
+ */
+export function viewportFromConfig(config: InputConfig, orientation: Orientation, model = ""): { width: number; height: number } {
+  const scale = /ipad/i.test(model) || Math.min(config.width, config.height) < 1080 ? 2 : 3;
+  const short = Math.round(Math.min(config.width, config.height) / scale);
+  const long = Math.round(Math.max(config.width, config.height) / scale);
+  return orientation.startsWith("landscape") ? { width: long, height: short } : { width: short, height: long };
+}
+
 export async function playTouches(
   socket: TouchSocket,
   steps: TimedTap[],
-  point: (x: number, y: number) => { x: number; y: number },
+  point: (x: number, y: number, config: InputConfig) => { x: number; y: number },
   clock: () => number = () => performance.now(),
 ): Promise<PlayedTap[]> {
+  let config: InputConfig = { width: 0, height: 0 };
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
       socket.off?.("message", onMessage);
@@ -78,12 +96,21 @@ export async function playTouches(
       const text = bytes.toString("utf8", 1);
       clearTimeout(timer);
       socket.off?.("message", onMessage);
-      if (/inputUnavailable/.test(text)) reject(new TapdanceError("NOT_SUPPORTED", "This device takes no remote input", { hint: "The worker's input capability is off: tapdance worker install --stream enables it." }));
-      else resolve();
+      if (/inputUnavailable/.test(text)) {
+        reject(new TapdanceError("NOT_SUPPORTED", "This device takes no remote input", { hint: "The worker's input capability is off: tapdance worker install --stream enables it." }));
+        return;
+      }
+      try {
+        const c = JSON.parse(text) as { width?: unknown; height?: unknown };
+        if (typeof c.width === "number" && typeof c.height === "number") config = { width: c.width, height: c.height };
+      } catch {
+        // A configuration without sizes: the caller's viewport is used.
+      }
+      resolve();
     };
     socket.on("message", onMessage);
   });
-  const send = (type: "begin" | "end", p: { x: number; y: number }) => socket.send(Buffer.concat([Buffer.from([TOUCH]), Buffer.from(JSON.stringify({ type, x: p.x, y: p.y }))]));
+  const send = (type: "begin" | "move" | "end", p: { x: number; y: number }) => socket.send(Buffer.concat([Buffer.from([TOUCH]), Buffer.from(JSON.stringify({ type, x: p.x, y: p.y }))]));
   const sleepUntil = async (at: number, t0: number) => {
     for (;;) {
       const left = at - (clock() - t0);
@@ -103,10 +130,23 @@ export async function playTouches(
     }
     await sleepUntil(step.t, t0);
     if (down) send("end", down.p);
-    const p = point(step.x, step.y);
+    const p = point(step.x, step.y, config);
     const at = clock() - t0;
     send("begin", p);
     played.push({ ...step, actualMs: Math.round(at * 10) / 10, driftMs: Math.round((at - step.t) * 10) / 10 });
+    if (step.toX !== undefined && step.toY !== undefined) {
+      // A drag: moves every 16 ms to the end point over the hold, then lift there.
+      const duration = step.hold ?? 250;
+      const frames = Math.max(1, Math.round(duration / 16));
+      let last = p;
+      for (let i = 1; i <= frames; i++) {
+        await sleepUntil(step.t + (duration * i) / frames, t0);
+        last = point(step.x + ((step.toX - step.x) * i) / frames, step.y + ((step.toY - step.y) * i) / frames, config);
+        send("move", last);
+      }
+      send("end", last);
+      continue;
+    }
     down = { p, until: step.t + (step.hold ?? DEFAULT_HOLD_MS) };
   }
   if (down) {
@@ -133,7 +173,10 @@ export function checkTimedTaps(steps: unknown): TimedTap[] {
     if (t < previous) throw usage("Taps must be in time order (t ascending)");
     previous = t;
     const hold = num("hold", 10_000, false);
-    return { t, x: num("x", 10_000)!, y: num("y", 10_000)!, ...(hold !== undefined ? { hold } : {}) };
+    const toX = num("toX", 10_000, false);
+    const toY = num("toY", 10_000, false);
+    if ((toX === undefined) !== (toY === undefined)) throw usage("A drag needs both toX and toY");
+    return { t, x: num("x", 10_000)!, y: num("y", 10_000)!, ...(hold !== undefined ? { hold } : {}), ...(toX !== undefined ? { toX, toY: toY! } : {}) };
   });
 }
 

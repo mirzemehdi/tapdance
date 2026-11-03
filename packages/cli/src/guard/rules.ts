@@ -307,6 +307,13 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
     if (a.length === 4 && a[0] === "status_bar" && a[1] === "override" && a[2] === "--time" && CLOCK.test(a[3]!)) return plain("settings");
     if (a.length === 2 && a[0] === "status_bar" && a[1] === "clear") return plain("settings");
     if (a.length === 2 && a[0] === "status_bar" && a[1] === "list") return plain("inspection");
+    // The device-wide language (#49): the global AppleLanguages / AppleLocale defaults, nothing else.
+    if (a.length === 7 && a[0] === "spawn" && a[1] === "defaults" && a[2] === "write" && a[3] === "-g") {
+      if (a[4] === "AppleLanguages" && a[5] === "-array" && /^[a-z]{2,3}(-[A-Z][a-z]{3})?(-([A-Z]{2}|\d{3}))?$/.test(a[6]!)) return plain("settings");
+      if (a[4] === "AppleLocale" && a[5] === "-string" && /^[a-z]{2,3}(_[A-Z][a-z]{3})?(_([A-Z]{2}|\d{3}))?$/.test(a[6]!)) return plain("settings");
+      return deny("only the device language can be written");
+    }
+    if (a.length === 5 && a[0] === "spawn" && a[1] === "defaults" && a[2] === "read" && a[3] === "-g" && a[4] === "AppleLanguages") return plain("inspection");
     if (a.length === 1 && a[0] === "listapps") return plain("inspection");
     return deny(`simctl ${String(a[0] ?? "")} is not part of the device API`);
   }

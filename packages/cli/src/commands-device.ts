@@ -414,10 +414,10 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
   device
     .command("notifications <action>")
-    .description("list | open | close | post notifications on the device")
+    .description("list | open | close | post | tap notifications on the device (tap --text opens one the way a person does)")
     .option("--app <appId>", "filter (list) or the app a push payload goes to (post)")
     .option("--title <title>", "post: title")
-    .option("--text <text>", "post: body")
+    .option("--text <text>", "post: body; tap: text of the notification to open")
     .option("--payload <json>", "post: a push payload (APNs-style JSON) delivered to --app")
     .action(async (action: string, o: { app?: string; title?: string; text?: string; payload?: string }) =>
       run(globals(), async (t, out) => {
@@ -434,7 +434,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           }
           r = await t.device({ kind: "post-notification", ...app, ...(o.title ? { title: o.title } : {}), ...(o.text ? { text: o.text } : {}), ...(payload ? { payload } : {}) });
         } else if (action === "list" || action === "open" || action === "close") r = await t.device({ kind: "notifications", action, ...app });
-        else throw new TapdanceError("USAGE", "action must be list, open, close or post");
+        else if (action === "tap") r = await t.device({ kind: "notifications", action: "tap", text: o.text ?? "" });
+        else throw new TapdanceError("USAGE", "action must be list, open, close, post or tap");
         const list = (r.data?.["notifications"] as Array<{ package: string; title?: string; text?: string }> | undefined) ?? undefined;
         out.result(r, () => (list ? (list.map((n) => `${n.package}: ${n.title ?? ""}${n.text ? ` — ${n.text}` : ""}`).join("\n") || "No notifications") : r.message));
       }),
