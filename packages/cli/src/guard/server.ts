@@ -7,7 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { checkCiRequest, fetchCiApk, type CiInstallRequest } from "@tapdance/provider-simlock";
+import { androidInstallHint, checkCiRequest, fetchCiApk, type CiInstallRequest } from "@tapdance/provider-simlock";
 import { checkBuildRequest, checkTimedTaps, clearConsole, consolePaths, crashReportsDir, listCrashReports, playTouches, toFramebuffer, viewportFromConfig, type Orientation, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
@@ -449,7 +449,11 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       const what = `${apk.repo} run ${apk.runId} sha ${apk.sha} branch ${apk.branch} artifact ${apk.artifact} apk sha256 ${apk.apkSha256.slice(0, 12)}${apk.cached ? " (cached)" : ""}`;
       line({ log: `Installing ${apk.artifact} on the lease` });
       const install = await execUpstream(leaseId, "adb", ["install", "-r", "-t", apk.apk]);
-      if (install.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Installing the APK failed: ${(install.stderr || install.stdout).trim().split("\n").slice(-3).join(" ")}`);
+      if (install.exitCode !== 0) {
+        const out = (install.stderr || install.stdout).trim();
+        const hint = androidInstallHint(out);
+        throw new TapdanceError("DEVICE_ERROR", `Installing the APK failed: ${out.split("\n").slice(-3).join(" ")}`, hint ? { hint } : undefined);
+      }
       await decide("allow", { command: `ci-install installed ${what}`, leaseId });
       line({ result: { repo: apk.repo, runId: apk.runId, sha: apk.sha, branch: apk.branch, artifact: apk.artifact, apkSha256: apk.apkSha256.slice(0, 12), cached: apk.cached, installed: true } });
     } catch (error) {

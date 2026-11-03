@@ -51,6 +51,19 @@ const STALE_CLAIM_HINT =
   "An earlier session's claim on this device outlived its worker process. Lease again: a worker guard clears such claims before each lease. On the worker machine, `tapdance worker cleanup` clears them by hand.";
 
 /** Turns an agent-device or proxy failure into a TapdanceError an agent can act on. */
+/**
+ * What to do about Android install refusals people meet in practice: a build signed with another key
+ * (CI runners usually make a fresh debug key per run) cannot update the installed app.
+ */
+export function androidInstallHint(output: string): string | undefined {
+  if (/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(output)) {
+    return "The installed app was signed with a different key (CI builds often get a new debug key per run). Uninstall it first (`tapdance app uninstall <appId>`, MCP uninstall_app; its data goes), or sign debug builds with one shared debug keystore in CI.";
+  }
+  if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(output)) return "The installed app has a higher versionCode. Uninstall it first (`tapdance app uninstall <appId>`), then install.";
+  if (/INSTALL_FAILED_INSUFFICIENT_STORAGE/i.test(output)) return "The emulator is out of storage: release the lease for a fresh device, or uninstall apps you no longer need.";
+  return undefined;
+}
+
 export function fromAgentDeviceError(error: unknown, action: string): TapdanceError {
   if (error instanceof TapdanceError) return error;
   const e = (error ?? {}) as AgentDeviceLikeError;
@@ -63,6 +76,8 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   }
   const rawCode = typeof e.code === "string" ? e.code : "";
   const message = typeof e.message === "string" ? e.message : String(error);
+  const installHint = action === "install" ? androidInstallHint(`${message} ${JSON.stringify(e.details ?? "")}`) : undefined;
+  if (installHint) return new TapdanceError("DEVICE_ERROR", `install failed: ${message.split("\n")[0]}`, { hint: installHint });
   const backendDetails = e.details !== null && typeof e.details === "object" ? (e.details as Record<string, unknown>) : {};
   const reason = typeof backendDetails["reason"] === "string" ? backendDetails["reason"] : "";
   let code: ErrorCode = CODE_MAP[rawCode] ?? "DEVICE_ERROR";

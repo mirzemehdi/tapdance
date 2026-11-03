@@ -746,3 +746,13 @@ describe("iOS on a host that is not a Mac", () => {
     expect(iosNeedsMac("android", "linux")).toBe(false);
   });
 });
+
+describe("Android install refusals", () => {
+  it("says to uninstall when a build is signed with another key (CI debug keys differ per run)", async () => {
+    const { androidInstallHint, fromAgentDeviceError } = await import("./agent-device-errors.js");
+    const adb = "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.measify.pianolune signatures do not match newer version; ignoring!]";
+    expect(androidInstallHint(adb)).toMatch(/Uninstall it first/);
+    expect(androidInstallHint("Success")).toBeUndefined();
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").hint).toMatch(/app uninstall/);
+  });
+});

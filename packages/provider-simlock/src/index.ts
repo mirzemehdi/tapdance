@@ -23,7 +23,7 @@ export {
   androidSdk,
   type ProfileRecord,
 } from "./profile-provider.js";
-export { fromAgentDeviceError } from "./agent-device-errors.js";
+export { androidInstallHint, fromAgentDeviceError } from "./agent-device-errors.js";
 export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";
 export { releaseStaleDeviceClaims, agentDeviceCli, simlockHomeDir, type StaleClaimReport, type StaleClaimOptions } from "./stale-claims.js";
 export { checkBuildRequest, runBuild, FailureDigest, isNotableBuildLine, hostSimulatorArch, hostNetworkHint, XCODE_SETTING_KEYS, normalizeRepo, buildCacheDir, spawnRunner, deployKeyFor, gitEnv, gitAuthHint, buildKey, type BuildRequest, type BuildSettings, type BuildResult, type CommandRunner } from "./build.js";
