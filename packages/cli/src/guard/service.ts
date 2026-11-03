@@ -312,6 +312,7 @@ export async function prepareLinuxUserServices(out: { progress: (m: string) => v
     const self = await runCommand("loginctl", ["enable-linger", user]);
     if (!(await lingering())) await runCommand("sudo", ["-n", "loginctl", "enable-linger", user]);
     if (await lingering()) out.progress(`Turned on linger for ${user}: the worker and guard keep running after you log out and start at boot`);
+    else if ((await runCommand("systemctl", ["is-enabled", "tapdance-user-manager.service"])).ok) out.progress(`${user} cannot linger (logind cannot look the account up); tapdance-user-manager.service starts its user manager at boot instead`);
     else out.warn(`Could not turn on linger for ${user} (${self.out.split("\n")[0] ?? "loginctl failed"}): the worker and guard stop when you log out. Run \`sudo loginctl enable-linger ${user}\`.`);
   }
   const runtime = `/run/user/${process.getuid?.() ?? 0}`;

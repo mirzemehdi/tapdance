@@ -126,7 +126,7 @@ export async function installGuardAsService(o: { allowAdminAccount?: boolean; ke
   if (o.keepAwake && platform === "linux") {
     notes.push('--keep-awake has no effect on Linux. Keep the machine awake with: systemd-inhibit --what=idle:sleep --why="tapdance worker guard" sleep infinity');
   }
-  if (platform === "linux") notes.push("To keep it running after you log out (or on a headless server): loginctl enable-linger $USER");
+
   notes.push("The service runs this Node.js and this Tapdance build by absolute path: install it again after moving the checkout or upgrading Node.js.");
   const answering = policy.listen.port === 0 ? false : await waitForGuard(url, 20_000);
   return { ...installed, url, answering, notes };

@@ -585,14 +585,14 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .command("enable")
     .description("Allow builds from these repositories (git mode): the agent sends a repo and ref, this machine fetches and builds it")
     .requiredOption("--repo <url>", "repository allowed to be built (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
-    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`, e.g. a fine-grained read-only token), deploy-key (`host builds key`), or none; a repository's own key from `host builds key --repo` is used whenever it exists", "none")
+    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`, e.g. a fine-grained read-only token), deploy-key (`host builds key`), or none; a repository's own key from `host builds key --repo` is used whenever it exists (default: keep the current setting, else none)")
     .option("--protected-ref <branch>", "only build commits already on this branch of the remote, e.g. main (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
-    .option("--timeout-minutes <n>", "longest build", "45")
+    .option("--timeout-minutes <n>", "longest build (default: keep the current setting, else 45)")
     .option("--allow-admin-account", "accept the risk of building on an administrator account")
-    .action(async (o: { repo: string[]; gitAuth: string; protectedRef?: string[]; timeoutMinutes: string; allowAdminAccount?: boolean }) => {
+    .action(async (o: { repo: string[]; gitAuth?: string; protectedRef?: string[]; timeoutMinutes?: string; allowAdminAccount?: boolean }) => {
       const out = output(globals());
       try {
-        if (!["none", "gh", "deploy-key"].includes(o.gitAuth)) throw new TapdanceError("USAGE", "--git-auth must be gh, deploy-key or none");
+        if (o.gitAuth !== undefined && !["none", "gh", "deploy-key"].includes(o.gitAuth)) throw new TapdanceError("USAGE", "--git-auth must be gh, deploy-key or none");
         for (const repo of o.repo) if (!/^(https:\/\/|ssh:\/\/|git@)/.test(repo)) throw new TapdanceError("USAGE", `${repo} is not an https:// or ssh git URL`);
         if (osPlatform() === "darwin" && (await isMacAdmin()) && !o.allowAdminAccount) {
           throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
@@ -602,17 +602,19 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const { path } = await loadPolicy();
         const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
         raw["allow"] = { ...(raw["allow"] ?? {}), builds: true };
-        const current = (raw["builds"] ?? {}) as { repos?: string[] };
+        // Options left out keep what an earlier `host builds enable` set (adding a repository must not
+        // turn a private repository's git auth back to none).
+        const current = (raw["builds"] ?? {}) as { repos?: string[]; gitAuth?: string; timeoutMinutes?: number };
         raw["builds"] = {
           ...current,
           repos: [...new Set([...(current.repos ?? []), ...o.repo])],
-          gitAuth: o.gitAuth,
+          gitAuth: o.gitAuth ?? current.gitAuth ?? "none",
           ...(o.protectedRef?.length ? { protectedRefs: o.protectedRef } : {}),
-          timeoutMinutes: Number(o.timeoutMinutes),
+          timeoutMinutes: o.timeoutMinutes !== undefined ? Number(o.timeoutMinutes) : (current.timeoutMinutes ?? 45),
         };
         const policy = GuardPolicySchema.parse(raw);
         await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
-        const notes = await buildPrerequisites(o.gitAuth, policy.builds.repos);
+        const notes = await buildPrerequisites(policy.builds.gitAuth, policy.builds.repos);
         const restarted = await restartGuardIfIdle(out);
         out.result({ builds: policy.builds, restarted, notes }, () =>
           [

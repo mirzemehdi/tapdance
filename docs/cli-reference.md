@@ -2260,10 +2260,12 @@ Options:
                             machine's `gh auth`, e.g. a fine-grained read-only
                             token), deploy-key (`host builds key`), or none; a
                             repository's own key from `host builds key --repo`
-                            is used whenever it exists (default: "none")
+                            is used whenever it exists (default: keep the
+                            current setting, else none)
   --protected-ref <branch>  only build commits already on this branch of the
                             remote, e.g. main (repeatable)
-  --timeout-minutes <n>     longest build (default: "45")
+  --timeout-minutes <n>     longest build (default: keep the current setting,
+                            else 45)
   --allow-admin-account     accept the risk of building on an administrator
                             account
   -h, --help                display help for command

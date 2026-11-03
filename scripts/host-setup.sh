@@ -101,6 +101,11 @@ jdk_ok() {
 cmdline_ok() { [[ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]]; }
 pkg_ok() { [[ -d "$SDK/$1" ]]; }
 image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
+# The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
+emulator_libs_ok() {
+  [[ "$OS" == Linux && -x "$SDK/emulator/emulator" ]] || return 0
+  ! "$SDK/emulator/emulator" -version 2>&1 | grep -q "error while loading shared libraries"
+}
 tailscale_bin() {
   command -v tailscale 2>/dev/null && return
   [[ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && echo /Applications/Tailscale.app/Contents/MacOS/Tailscale && return
@@ -132,6 +137,7 @@ check_all() {
   [[ "$OS" == Linux && ! -e /dev/kvm ]] && no_kvm=1
   if (( ! no_kvm )); then
     pkg_ok emulator || MISSING+=("emulator")
+    emulator_libs_ok || { MISSING+=("emulator-libs"); SUDO_STEPS+=("emulator-libs"); }
     (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
   fi
   tailscale_bin >/dev/null || { MISSING+=("tailscale"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("tailscale"); }
@@ -162,6 +168,7 @@ describe() {
     system-image) echo "Android system image $IMAGE (sdkmanager, about 1.5 GB)" ;;
     tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
     kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
+    emulator-libs) echo "system libraries the Android emulator needs (libpulse, libxkbfile, libXi, libSM, libICE; sudo)" ;;
     poweroff-rule) echo "a sudoers rule that lets $(id -un) run only /usr/bin/systemctl poweroff, so the guard can stop this cloud VM when it sits idle (sudo; /etc/sudoers.d/tapdance-poweroff, checked with visudo)" ;;
   esac
 }
@@ -272,6 +279,13 @@ install_system_packages() {
   else die "install ${pkgs[*]} with your package manager, then run this script again"; fi
 }
 
+install_emulator_libs() {
+  if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6
+  elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y pulseaudio-libs libxkbfile libXi libSM libICE
+  elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm libpulse libxkbfile libxi libsm libice
+  else die "install the libraries \`$SDK/emulator/emulator -version\` reports missing, then run this script again"; fi
+}
+
 install_tailscale() {
   if [[ "$OS" == Darwin ]]; then
     if command -v brew >/dev/null 2>&1; then brew install --cask tailscale
@@ -355,6 +369,7 @@ if (( ! SKIP_PREREQ )); then
         android-cmdline-tools) node_ok || install_node; install_cmdline_tools ;;
         git|unzip) install_system_packages "$m" ;;
         tailscale) install_tailscale ;;
+        emulator-libs) install_emulator_libs ;;
         kvm-group)
           sudo usermod -aG kvm "$(id -un)"
           # The group applies to new logins only; an ACL lets this login and its running systemd user
@@ -370,6 +385,8 @@ if (( ! SKIP_PREREQ )); then
     pkg_ok emulator || SDK_PKGS+=("emulator")
     (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
     (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
+    # The emulator just installed may need system libraries this machine lacks.
+    emulator_libs_ok || install_emulator_libs
     write_env_file
     check_all
     for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
