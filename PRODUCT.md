@@ -202,6 +202,7 @@ phase by phase (§19).
 | G-05 | iOS docs: `docs/ios/overview.md`, `local-mac-worker.md`, `scaleway-mac.md`, `macstadium.md`, `aws-ec2-mac.md`, `simulator-management.md`, `remote-browser-access.md`, `xcode-cloud-integration.md` — prerequisites, Xcode versions, runtimes, Apple account, registration, network, leasing, artifacts, troubleshooting, costs and allocation terms (Scaleway minimum rental, AWS dedicated-host minimums). Do not imply any VPS can host iOS. | I11 |
 | G-06 | Scaleway Mac mini (M2, 16 GB, 256 GB) is the first documented cloud Mac; MacStadium and AWS EC2 Mac documented as manual options; never store AWS credentials in plaintext. | I4 |
 | G-07 | Cost guardrails for a cloud device host: the host powers itself off after a set idle time with no lease, request or build, and optionally stops taking leases past an uptime cap; Linux only (never a Mac), with one fixed stop command allowed by one sudoers rule; plus VM-level caps that work without Tapdance (run-time cap, stop schedule, budget alert). | C (phase 2) |
+| G-08 | A person who rents a cloud VM for Tapdance never keeps paying for it unnoticed: on a detected cloud VM, `host up` and `host status` say that it bills while running and its disk even when stopped, and where to read how to delete it; the reference Terraform can delete the VM and its disk at a run-time limit (ephemeral mode for test hosts); a read-only leftovers check lists what can still bill in a project and fails while anything is left; the docs give a tear-down checklist. No cloud credentials or SDKs in `packages/`. | C (phase 2) |
 
 ## 15. Documentation and open-source quality
 
@@ -227,6 +228,7 @@ phase by phase (§19).
 | Q-09 | Proof — AXe on a real Mac: discover via Simlock, lease, UDID, AXe inspect, tap by label, text, screenshot, MP4, artifacts to VPS, release. | X |
 | Q-10 | Proof — Android CLI on an N2 worker with a Simlock-assigned emulator, routed from a different VPS: layout, interactions, annotated screenshots, results back. Genuine CLI, not mocks. | N |
 | Q-11 | Run tests at every stage; keep the project buildable; never skip failing tests silently. | B15, B16 |
+| Q-12 | A field-test kit for cloud Android hosts: a runbook any agent can follow end to end with the owner's checkpoints (cloud resources, SDK licences, credentials), CLI and MCP checklist drivers that time each step and refuse the owner's own Tapdance home, an evidence template, and a mandatory teardown that ends with the leftovers check passing. | C (phase 2) |
 
 ## 17. Ways of working (owner's notes)
 

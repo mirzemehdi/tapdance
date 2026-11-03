@@ -100,7 +100,7 @@ row says so.
 | 3 | Gateway on the VPS (procedure 4, VPS steps) | VPS | Yes, if it needs Caddy/DNS or Tailscale changes |
 | 4 | Laptop worker, Q-06 (procedure 4) | VPS + owner's laptop | Yes: the owner runs the laptop steps |
 | 5 | Mac worker, Q-08 (procedure 6) | VPS + owner's Mac | Yes |
-| 6 | Google Cloud N2, Q-05/Q-07 (procedure 5) | VPS + N2 VM | **Yes: it costs money.** Get approval for the project, region and how long it may run |
+| 6 | Google Cloud N2, Q-05/Q-07 (procedure 5; step by step in [field-test-cloud-android.md](field-test-cloud-android.md)) | VPS + N2 VM | **Yes: it costs money.** Get approval for the project, region and how long it may run, and tear it down at the end |
 | 7 | Android CLI on the N2, Q-10 (procedure 8) | N2 VM | Yes (installing the Android CLI there) |
 | 8 | AXe, Q-09 (procedure 7) | Owner's Mac | Yes (trusting the AXe Homebrew tap) |
 | 9 | Summary issue | VPS | No |
@@ -149,8 +149,13 @@ Follow each procedure in [e2e-procedures.md](e2e-procedures.md) step by step. Wh
   `WORKER_OFFLINE`, `NO_CAPACITY`, `HUMAN_HELD`). If it still fails, capture everything, file an
   issue (section 4), and decide whether the rest of the scenario can continue.
 - Release every lease when a scenario ends (`tapdance device release`), even after a failure.
-- If the owner approved cloud resources, remind them to destroy them at the end, and say how long
-  they ran.
+- If the owner approved cloud resources, follow
+  [field-test-cloud-android.md](field-test-cloud-android.md): keep a log of every resource you create,
+  tear everything down at the end (also after a failure), run
+  `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` until it exits 0, and tell the owner the final
+  state, how long it ran and what it cost.
+- The checklists in [`scripts/field-test/`](../../scripts/field-test/README.md) run the CLI and MCP
+  checks against a connected host and time each step.
 
 To check the MCP side as a real agent would, register the server (`claude mcp add tapdance --
 tapdance mcp` for Claude Code), restart your session, and use the tools yourself:

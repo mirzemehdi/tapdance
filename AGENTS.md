@@ -29,6 +29,7 @@ Read these before changing anything, in this order:
 | `packages/mcp/src` | MCP tool definitions and server instructions (`tools.ts`) and transports (`server.ts`). |
 | `packages/cli/src` | The `tapdance` commands (`commands-*.ts`), the browser viewer, `tapdance report`, and the worker guard for device-only mode (`guard/`: `policy.ts`, `rules.ts`, `server.ts`, `guard.test.ts`). |
 | `scripts/gen-cli-index.mjs` | Generates the command index at the end of `docs/cli-reference.md` from `--help`. |
+| `scripts/field-test/` | Dev tooling for field tests: the CLI and MCP checklist drivers and their JSON checklists. Not shipped. |
 | `examples/` | Small demo apps used for real-device runs (`ios-demo`, `android-demo`). |
 | `docs/` | User docs, ADR, test procedures, `docs/testing/evidence/`. |
 | `infrastructure/` | Reference Terraform and scripts. Nothing in `packages/` may depend on it. |
@@ -144,6 +145,21 @@ Change them **in the same change** as the code:
 - add a dependency (check its license and maintenance, pin an exact version, and add it to
   `NOTICE.md`);
 - change the public surface: CLI command names, MCP tool names or inputs, SDK signatures, config keys.
+
+## Cloud resources for tests
+
+When the owner approves creating cloud resources for a test (a Google Cloud VM, a project, a budget):
+
+- Follow [docs/testing/field-test-cloud-android.md](docs/testing/field-test-cloud-android.md): ephemeral
+  mode (`on_run_limit = "DELETE"` with `max_run_hours`), a budget alert, and its checkpoints.
+- Record each resource you create (name, when, how to delete it) as you create it.
+- Never end a session leaving billable resources behind unless the owner said to keep them. Tear down
+  with `terraform destroy`, then run `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` until it
+  exits 0.
+- Tell the owner the final state: what was created and deleted, the leftovers check's result, what is
+  theirs to remove (Tailscale machine, GitHub token, project), and the estimated cost.
+- Cloud credentials are the owner's: never ask for, print or store them, and never add a cloud SDK or
+  credential handling to `packages/` (invariant 6).
 
 ## Style
 

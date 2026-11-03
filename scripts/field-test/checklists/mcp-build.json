@@ -1,0 +1,8 @@
+[
+  { "tool": "lease_device", "args": { "platform": "android" }, "label": "lease", "stopOnFail": true },
+  { "tool": "build_app", "args": { "repo": "${BUILD_REPO}", "ref": "${BUILD_REF}", "dir": "${BUILD_DIR}" }, "optional": ["BUILD_DIR"], "label": "build_app", "requires": ["BUILD_REPO", "BUILD_REF"], "timeoutSec": 2400 },
+  { "tool": "launch_app", "args": { "app_id": "${APP_ID}" }, "label": "launch" },
+  { "tool": "inspect_screen", "args": { "compact": true }, "label": "inspect" },
+  { "tool": "take_screenshot", "args": { "note": "built on the host" }, "label": "screenshot" },
+  { "tool": "release_device", "label": "release" }
+]

@@ -4,7 +4,8 @@
 # subnet; firewall rules that allow only IAP SSH; Cloud NAT for outbound traffic (or an ephemeral
 # external IP); a service account with logging/monitoring only; and one N2 VM running Ubuntu
 # 24.04 with a startup script that prepares KVM and copies helper scripts.
-# Cost guards: a per-boot run-time cap that stops the VM (max_run_hours, on by default: 8 h), and
+# Cost guards: a per-boot run-time cap that stops the VM (max_run_hours, on by default: 8 h; with
+# on_run_limit = "DELETE" it deletes the VM and its disk instead, for test hosts), and
 # optionally a scheduled stop (stop_schedule) and a budget with alert e-mails (budget_amount_usd).
 #
 # It does NOT install Tapdance, Tailscale or a pairing token: no secret may be in Terraform state or
@@ -236,8 +237,9 @@ resource "google_compute_instance" "worker" {
     automatic_restart   = true
     preemptible         = false
 
-    # Per-boot hard cap (max_run_hours): Compute Engine stops, never deletes, the VM.
-    instance_termination_action = local.max_run_seconds > 0 ? "STOP" : null
+    # Per-boot hard cap (max_run_hours): Compute Engine stops the VM, or with on_run_limit = "DELETE"
+    # deletes it together with its boot disk (auto_delete above), so nothing of it bills afterwards.
+    instance_termination_action = local.max_run_seconds > 0 ? var.on_run_limit : null
 
     dynamic "max_run_duration" {
       for_each = local.max_run_seconds > 0 ? [local.max_run_seconds] : []
@@ -256,6 +258,17 @@ resource "google_compute_instance" "worker" {
     enable-oslogin         = "TRUE"
     block-project-ssh-keys = "TRUE"
     startup-script         = local.startup_script
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.on_run_limit != "DELETE" || local.max_run_seconds > 0
+      error_message = "on_run_limit = \"DELETE\" needs max_run_hours of 1 or more: without a run-time limit nothing ever deletes the VM."
+    }
+    precondition {
+      condition     = var.on_run_limit != "DELETE" || !var.deletion_protection
+      error_message = "on_run_limit = \"DELETE\" cannot delete a VM with deletion_protection = true. Turn one of them off."
+    }
   }
 
   depends_on = [

@@ -11,8 +11,14 @@ script on it, and connect the agent's machine over Tailscale. Requirements G-01 
 > idle stop powering the VM off, and a start back to ready in 54 s
 > ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the gcloud-by-hand route, a
 > Linux VPS as the agent's machine, a successful build on the VM, a Spot VM, other machine types, the
-> uptime cap, `terraform destroy`, the snapshot commands under [Parking the VM](#parking-the-vm). Prices
+> uptime cap, `terraform destroy`, the snapshot commands under [Parking the VM](#parking-the-vm), and the
+> guardrails added after that run: Terraform's ephemeral mode (`on_run_limit = "DELETE"`), the leftovers
+> check `infrastructure/scripts/gcp-leftovers.sh` and the `cloud VM:` cost line of `host up`. Prices
 > are estimates from Google's published rates. See [STATUS.md](../../STATUS.md).
+>
+> **For a test run** (an agent or you trying Tapdance for a few hours), follow
+> [field-test-cloud-android.md](../testing/field-test-cloud-android.md): ephemeral mode, a budget alert,
+> the checklists, and a teardown that ends with nothing left that bills.
 
 ## The path at a glance
 
@@ -253,12 +259,16 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    devices:   android 34 (google_apis_playstore)
    self-test: PASS (android lease, screenshot ok)
    cost guard: idle stop after 30 min, uptime cap off
+   cloud VM:  Google Cloud, billed while running; its disk bills even when stopped. Delete it when you are done: see docs/deployment/google-cloud-n2.md#tear-down
    on the agent machine:  tapdance connect https://tapdance-n2.tail1234.ts.net:4720 < pairing-gcp-n2-1.token
    ```
 
 On the tested VM, the run that passed took **2 min 44 s**, including the emulator libraries, `host up`,
 the first cold emulator boot and the self-test. Earlier attempts had already downloaded Node.js, the JDK,
 the SDK and the system image; a first run downloads those too (not timed).
+
+The `cloud VM:` line appears on any detected cloud VM (in `tapdance host status` too), because a VM
+keeps costing money until it is deleted, not only while it runs.
 
 Running the script or `host up` again is safe: finished steps are left as they are. The pairing
 question is asked on your terminal even though the script came through `curl`. Every option of `host up` is in
@@ -366,7 +376,7 @@ first.
 | Stop hosting, keep the VM running | `tapdance host pause` on the VM; later `tapdance host resume` | The guard, the Tailscale exposure, the worker and its emulators stop, and nothing starts at boot. The pairing is kept. |
 | Stop the VM | `gcloud compute instances stop tapdance-n2 --zone=us-central1-a` | vCPU and RAM billing stops; **the disk keeps billing**. Leases on it end. |
 | Start it again | `gcloud compute instances start tapdance-n2 --zone=us-central1-a` | The worker and guard start at boot (linger, or `tapdance-user-manager.service` for OS Login accounts), and Tailscale comes back with its `serve` setting; the endpoint and token stay the same. Check with `tapdance doctor` on the agent's machine. On the tested VM: `RUNNING` after 12 s, the guard answered over Tailscale after 48 s, `doctor` passed after 54 s; the first lease then cold-booted an emulator (154 s). |
-| Delete everything | See [Teardown](#teardown) | |
+| Delete everything | See [Tear down](#tear-down) | |
 
 ### What still bills when the VM is stopped
 
@@ -384,7 +394,7 @@ first.
 | --- | --- | --- |
 | **Stopped** (`gcloud compute instances stop`, or the idle stop) | The 64 GB boot disk: about USD 0.21 a day (USD 6.40–7 a month) | `gcloud compute instances start`: ready in about a minute (54 s measured) |
 | **Snapshot, then delete the VM** | The snapshot, for the data actually used: about USD 1 a month for about 20 GB | Recreate the VM from the snapshot (below): a few minutes, same Tailscale name and pairing |
-| **Destroyed** (`terraform destroy`, or [Teardown](#teardown)) | Nothing | Start over from [Create the VM](#create-the-vm) and pair again |
+| **Destroyed** (`terraform destroy`, or [Tear down](#tear-down)) | Nothing | Start over from [Create the VM](#create-the-vm) and pair again |
 
 Snapshot and delete (not yet run; the zone and names are this guide's):
 
@@ -418,6 +428,32 @@ machine keeps working until it expires.
 
 ## Cost guardrails
 
+### What can still cost money
+
+Go through this list whenever you stop using the VM. Each item bills on its own:
+
+- [ ] **The VM while it runs**: about USD 0.19-0.21 an hour for an `n2-standard-4`, used or not.
+- [ ] **The boot disk, even while the VM is stopped**: about USD 6.40-7 a month for 64 GB, until the disk
+  is deleted. Stopping is not deleting.
+- [ ] **Snapshots, machine images and custom images** you made (for example when
+  [parking](#parking-the-vm)).
+- [ ] **A reserved static IP**, and on the default Terraform route the **Cloud NAT** gateway
+  ([what still bills](#what-still-bills-when-the-vm-is-stopped)).
+- [ ] **Traffic** from the VM to the agent's machine (the live viewer most of all).
+
+When you are done: `terraform destroy`, then `bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>`,
+which lists anything from this list still in the project and exits 0 only when nothing is left
+([Tear down](#tear-down)). A Google Cloud **budget only e-mails**; it cannot stop or cap Compute Engine.
+Set one anyway, always (`budget_amount_usd`), so a forgotten VM shows up in your inbox.
+
+**For a test host, use ephemeral mode:** `on_run_limit = "DELETE"` with `max_run_hours` set and
+`tapdance host up --idle-stop off`. Compute Engine then deletes the VM and its disk when the time is up,
+so the most a forgotten test VM can cost is `max_run_hours` of running. The idle stop is off because a
+poweroff from inside the VM stops it instead, which clears the countdown and leaves a disk that bills.
+For a host you keep, use the default `STOP` with the idle stop below.
+
+### The layers
+
 > **Status: the idle stop is proven on a real N2 VM.** The CLI keepalive released the last lease, and
 > 30 minutes later the guard powered the VM off (`TERMINATED`); compute billing stopped
 > ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). The uptime cap is unit-tested only; the Terraform run-time
@@ -433,7 +469,7 @@ layers keep a forgotten VM from running on. Each one catches what the layer abov
 | Lease | Idle release | 30 min (`session.idleReleaseMinutes`) | The keepalive and the MCP server release a lease nobody has used for this long. Not with `device lease --hold`. | The agent machine's config ([configuration](../configuration.md#session-and-lease)) |
 | Host | Idle stop | 30 min on a detected cloud VM | The guard powers the VM off when nothing has used it for this long. | `tapdance host up --idle-stop <minutes\|off>` |
 | Host | Uptime cap | Off | Past the cap the guard takes no new leases, and powers the VM off once the last one ends. | `tapdance host up --max-uptime <hours\|off>` |
-| VM | Run-time cap | 8 h (Terraform `max_run_hours`) | Compute Engine stops the VM 8 hours after each start, whatever runs on it. | Terraform |
+| VM | Run-time cap | 8 h (Terraform `max_run_hours`), stop (`on_run_limit`) | Compute Engine stops the VM 8 hours after each start, whatever runs on it; with `on_run_limit = "DELETE"` it deletes the VM and its disk instead (ephemeral mode, for test hosts). | Terraform |
 | VM | Stop schedule | Off (`stop_schedule`) | Compute Engine stops the VM at a set time, for example every evening. | Terraform |
 | Billing | Budget | Off (`budget_amount_usd`) | E-mails at 50%, 90% and 100% of a monthly amount. **Stops nothing.** | Terraform |
 
@@ -493,6 +529,15 @@ cost_guards` shows which are on.
   route, `gcloud compute instances create` takes `--max-run-duration=8h
   --instance-termination-action=STOP` for the same cap (older gcloud versions have these flags under
   `gcloud beta`; check `--help`).
+- **`on_run_limit`** (default `"STOP"`): what happens at `max_run_hours`. `"DELETE"` is **ephemeral
+  mode**: Compute Engine deletes the VM and its boot disk (`auto_delete` is on), so nothing of the VM
+  bills afterwards and everything on it is lost. The network, firewall rules, service account and budget
+  stay until `terraform destroy` (they cost nothing; Cloud NAT does, so use `assign_external_ip = true`
+  for a test host). Terraform refuses `"DELETE"` without `max_run_hours` or with `deletion_protection`.
+  The countdown only runs while the VM runs: turn the guard's idle stop off (`--idle-stop off`), or an
+  idle poweroff leaves a stopped VM with its disk. After the deletion Terraform still lists the VM, and
+  `terraform plan` would create it again; run `terraform destroy`. gcloud route:
+  `--instance-termination-action=DELETE`. Not yet run on a real VM.
 - **`stop_schedule`** (default off) and **`schedule_time_zone`** (default `UTC`): a cron schedule at
   which Compute Engine stops the VM, for example `"0 20 * * *"` for 20:00 every day. A scheduled stop
   can begin up to 15 minutes late. It only stops; starting stays up to you. Terraform also grants the
@@ -504,6 +549,8 @@ cost_guards` shows which are on.
   this sends alerts and stops nothing. Creating it needs Billing Account Administrator or Billing
   Account Costs Manager on the billing account.
 
+For a host you keep:
+
 ```hcl
 # terraform.tfvars (never commit it)
 project_id         = "my-project"
@@ -513,6 +560,21 @@ schedule_time_zone = "Europe/Berlin"
 budget_amount_usd  = 50
 billing_account    = "XXXXXX-XXXXXX-XXXXXX"
 ```
+
+For a test host (ephemeral; with `host up --idle-stop off`):
+
+```hcl
+# terraform.tfvars (never commit it)
+project_id         = "my-project"
+assign_external_ip = true      # no Cloud NAT to leave behind
+max_run_hours      = 6
+on_run_limit       = "DELETE"
+budget_amount_usd  = 10
+billing_account    = "XXXXXX-XXXXXX-XXXXXX"
+```
+
+`terraform output cost_guards` shows the settings; `terraform output teardown` prints every step that
+leaves nothing billing.
 
 ### When the VM has stopped
 
@@ -551,25 +613,45 @@ person did (the VM's audit logs in the Google Cloud console show the stop).
 With the setup script: `bash -s -- --label gcp-n2-1 --max-uptime 7` (the idle stop comes by default). On a
 VM that is already set up: `tapdance host up --label gcp-n2-1 --max-uptime 7`.
 
-## Teardown
+## Tear down
 
-Terraform route, from `infrastructure/terraform/google-cloud-n2`:
+Do all of it when you are done; a stopped VM still bills for its disk.
 
-```bash
-terraform destroy
-```
+1. Terraform route, from `infrastructure/terraform/google-cloud-n2` (or `terraform output destroy_command`
+   from anywhere). Run it also after ephemeral mode deleted the VM: the network, service account and
+   budget stay until then.
 
-gcloud route:
+   ```bash
+   terraform destroy
+   ```
 
-```bash
-gcloud compute instances delete tapdance-n2 --zone=us-central1-a
-gcloud compute firewall-rules delete tapdance-host-ssh-iap
-gcloud compute disks list        # nothing named tapdance-n2 should be left
-```
+   gcloud route:
 
-The boot disk is deleted with the VM (auto-delete is on by default). Then remove the machine from your
-tailnet in the [Tailscale admin console](https://login.tailscale.com/admin/machines). The token saved on
-the agent's machine stops working with the VM; nothing else needs revoking.
+   ```bash
+   gcloud compute instances delete tapdance-n2 --zone=us-central1-a
+   gcloud compute firewall-rules delete tapdance-host-ssh-iap
+   ```
+
+   The boot disk is deleted with the VM (auto-delete is on by default). Delete snapshots or images you
+   made for [parking](#parking-the-vm) as well.
+2. Check that nothing is left that bills. It lists VMs in any state, disks, snapshots, machine and custom
+   images, reserved addresses, routers and NAT gateways, forwarding rules and storage buckets, with a cost
+   hint for each, and exits 0 only when there are none (1: something is left; 2: it could not check). It
+   only reads; it never deletes.
+
+   ```bash
+   bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>
+   ```
+
+3. If the project was made only for Tapdance, you can delete it as a whole:
+   `bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID> --delete-project` prints the command (it does
+   not run it).
+4. Remove the machine from your tailnet in the
+   [Tailscale admin console](https://login.tailscale.com/admin/machines), and delete any GitHub token you
+   gave the VM for installs from CI or builds. The token saved on the agent's machine stops working with
+   the VM; nothing else needs revoking.
+
+`gcp-leftovers.sh` has been tested only against a stand-in for `gcloud`, not yet on a real project.
 
 ## Speed on n2-standard-4
 
@@ -658,7 +740,7 @@ nested virtualization.
 | `tapdance connect` says the address did not answer | The agent's machine is not in the same tailnet, or the guard is not running. | `tailscale status` on both machines; `tapdance host status` on the VM. |
 | `tailscale status` shows the VM's connection as `relay` | No direct path through Cloud NAT; traffic goes through Tailscale's relays. | It works, more slowly. The gcloud route (external IP) usually connects directly. |
 | A lease waits and then fails with no capacity | One emulator at a time on this VM. | Release the other lease, or use a larger VM after benchmarking. |
-| The VM stopped by itself, it never stops when idle, or leases are refused past the uptime cap | The cost guards. | See [When the VM has stopped](#when-the-vm-has-stopped) and the [cost guard rows](../troubleshooting.md#cost-guard-on-a-cloud-host-unit-tested-only) in troubleshooting. |
+| The VM stopped by itself, it never stops when idle, or leases are refused past the uptime cap | The cost guards. | See [When the VM has stopped](#when-the-vm-has-stopped) and the [cost guard rows](../troubleshooting.md#cost-guard-on-a-cloud-host) in troubleshooting. |
 
 ## Alternative: join a gateway
 

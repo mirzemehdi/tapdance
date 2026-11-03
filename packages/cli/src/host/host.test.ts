@@ -3,6 +3,7 @@ import { TapdanceError, type DoctorCheck } from "@tapdance/sdk";
 import {
   assertHostPlatform,
   cloudCheck,
+  cloudCostNote,
   defaultLabel,
   describeCatalog,
   detectCloudVm,
@@ -104,6 +105,18 @@ describe("cloud VM detection", () => {
     expect(cloudCheck("Hetzner", false)).toMatchObject({ status: "fail", detail: expect.stringContaining("cannot host Android emulators") });
     expect(cloudCheck("Google Cloud", true)?.status).toBe("pass");
     expect(cloudCheck(undefined, false)).toBeUndefined();
+  });
+
+  it("tells the person on a cloud VM that it bills, that a stopped disk still bills, and where tear-down is", () => {
+    const google = cloudCostNote("Google Cloud");
+    expect(google).toBe(
+      "Google Cloud, billed while running; its disk bills even when stopped. Delete it when you are done: see docs/deployment/google-cloud-n2.md#tear-down",
+    );
+    expect(cloudCostNote("AWS EC2")).toContain("AWS EC2, billed while running; its disk bills even when stopped");
+    expect(cloudCostNote("AWS EC2")).toContain("docs/deployment/self-hosted-overview.md#when-you-are-done-with-a-rented-machine");
+    // A bare hypervisor may be a VM on someone's own computer: the wording is conditional.
+    expect(cloudCostNote("a virtual machine")).toMatch(/^if this VM is rented from a cloud/);
+    expect(cloudCostNote(undefined)).toBeUndefined();
   });
 });
 
@@ -258,6 +271,12 @@ describe("rendering", () => {
     ]);
     const withCost = renderReadyBlock({ endpoint: "http://127.0.0.1:4720", tokenPath: "/h/p.token", devices: "android 34", selfTest: "PASS", costGuard: "idle stop after 30 min, uptime cap off" });
     expect(withCost.split("\n")).toContain("cost guard: idle stop after 30 min, uptime cap off");
+    expect(withCost).not.toContain("cloud VM:");
+    const onCloud = renderReadyBlock({ endpoint: "http://127.0.0.1:4720", tokenPath: "/h/p.token", devices: "android 34", selfTest: "PASS", costGuard: "idle stop after 30 min, uptime cap off", cloudCost: cloudCostNote("Google Cloud")! });
+    const lines = onCloud.split("\n");
+    expect(lines).toContain(`cloud VM:  ${cloudCostNote("Google Cloud")}`);
+    // Right after the cost guard, before the connect line.
+    expect(lines.indexOf(`cloud VM:  ${cloudCostNote("Google Cloud")}`)).toBe(lines.indexOf("cost guard: idle stop after 30 min, uptime cap off") + 1);
   });
 
   it("tags a token with a short fingerprint and finds a clipboard tool (#22)", () => {
