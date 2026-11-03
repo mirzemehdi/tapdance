@@ -485,7 +485,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--intent-component <component>", "Android: component, e.g. com.example/.MainActivity")
     .option("--intent-extra <key=value>", "Android: string extra (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
     .option("--locale <locale>", "run the app in this language, e.g. de-DE (iOS: launch arguments; Android 13+: the app's own locale)")
-    .action(async (appId: string, o: { relaunch?: boolean; url?: string; arg?: string[]; intentAction?: string; intentData?: string; intentComponent?: string; intentExtra?: string[]; locale?: string }) =>
+    .option("--console", "iOS: relaunch with the app's stdout/stderr (print, println) captured; `logs --app` then includes them")
+    .action(async (appId: string, o: { relaunch?: boolean; url?: string; arg?: string[]; intentAction?: string; intentData?: string; intentComponent?: string; intentExtra?: string[]; locale?: string; console?: boolean }) =>
       run(globals(), async (t, out) => {
         if (o.intentAction || o.intentData || o.intentComponent) {
           const extras = Object.fromEntries((o.intentExtra ?? []).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)]));
@@ -496,7 +497,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           out.result(r, () => r.message);
           return;
         }
-        const r = await t.launchApp(appId, { ...(o.relaunch ? { relaunch: true } : {}), ...(o.url ? { url: o.url } : {}), ...(o.arg?.length ? { args: o.arg } : {}), ...(o.locale ? { locale: o.locale } : {}) });
+        const r = await t.launchApp(appId, { ...(o.relaunch ? { relaunch: true } : {}), ...(o.url ? { url: o.url } : {}), ...(o.arg?.length ? { args: o.arg } : {}), ...(o.locale ? { locale: o.locale } : {}), ...(o.console ? { console: true } : {}) });
         out.result(r, () => r.message);
       }),
     );

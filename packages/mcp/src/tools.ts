@@ -228,6 +228,7 @@ export const TOOLS: ToolDefinition[] = [
         url: z.string().url().max(2048).optional().describe("Deep link to open in the app."),
         args: z.array(z.string().max(1024)).max(32).optional().describe("Launch arguments passed to the app process."),
         locale: z.string().max(20).optional().describe("Run the app in this language, e.g. \"de-DE\" (iOS: -AppleLanguages/-AppleLocale; Android 13+: the app's own locale, then a relaunch)."),
+        console: z.boolean().optional().describe("iOS: relaunch with the app's stdout/stderr captured (print, Kotlin println: not in the system log); get_logs with app_id then includes them."),
         intent: z
           .object({
             action: z.string().max(256).optional(),
@@ -251,6 +252,7 @@ export const TOOLS: ToolDefinition[] = [
           ...(a["url"] ? { url: a["url"] as string } : {}),
           ...(a["args"] ? { args: a["args"] as string[] } : {}),
         ...(a["locale"] ? { locale: a["locale"] as string } : {}),
+          ...(a["console"] ? { console: true } : {}),
         })),
         next: "inspect_screen",
       });

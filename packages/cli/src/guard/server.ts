@@ -7,7 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { checkBuildRequest, crashReportsDir, listCrashReports, parseExecStream, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
+import { checkBuildRequest, clearConsole, consolePaths, crashReportsDir, listCrashReports, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
 
@@ -509,6 +509,46 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             await decide("allow", { command: `build ${request.platform} ${request.repo}@${request.ref}`, leaseId: r.leaseId });
             await runBuildRoute(res, r.leaseId, request, decide);
+            return;
+          }
+          if (r.action === "console-launch" || r.action === "console-read") {
+            // An iOS app's stdout/stderr (print, println), captured in files the guard chooses (#59).
+            const area = r.action === "console-launch" ? "interaction" : "logs";
+            if (!policy.allow[area]) {
+              await decide("deny", { reason: `${area} off`, leaseId: r.leaseId, command: r.action });
+              return send(res, 403, "FORBIDDEN", policyOff(area, r.action === "console-launch" ? "Launching apps" : "Logs"));
+            }
+            const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${r.leaseId}`, { headers: upstreamHeaders });
+            const lease = detail.ok ? ((await detail.json()) as { lease?: { platform?: string } }).lease : undefined;
+            if (lease?.platform !== "ios") {
+              await decide("deny", { reason: "console capture is for iOS simulators", leaseId: r.leaseId });
+              return send(res, 400, "NOT_SUPPORTED", "Console capture is for iOS simulators; on Android, logs --app reads logcat");
+            }
+            const dir = join(guardDir(env), "console");
+            if (r.action === "console-read") {
+              const lines = Number(new URL(path, "http://guard").searchParams.get("lines") ?? "200");
+              await decide("allow", { command: "console read", leaseId: r.leaseId });
+              res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+              res.end(JSON.stringify(await readConsole(dir, r.leaseId, Number.isFinite(lines) ? lines : 200)));
+              return;
+            }
+            const raw = await readBody(req, 64 * 1024);
+            const body = (raw ? JSON.parse(raw.toString("utf8")) : {}) as { appId?: unknown; args?: unknown };
+            const appId = typeof body.appId === "string" ? body.appId : "";
+            const args = Array.isArray(body.args) ? body.args : [];
+            if (!/^[A-Za-z][A-Za-z0-9_.-]{0,254}$/.test(appId) || args.length > 32 || args.some((a) => typeof a !== "string" || a.length > 1024 || a.includes("\u0000") || a.startsWith("--std"))) {
+              await decide("deny", { reason: "bad console launch", leaseId: r.leaseId });
+              return send(res, 400, "USAGE", "console launch takes an app id and up to 32 plain launch arguments");
+            }
+            await mkdir(dir, { recursive: true, mode: 0o700 });
+            await clearConsole(dir, r.leaseId);
+            const p = consolePaths(dir, r.leaseId);
+            const cmd = deviceCommands.ios.launchWithConsole(appId, p.stdout, p.stderr, args as string[]);
+            await decide("allow", { command: `launch ${appId} with console`, leaseId: r.leaseId });
+            const launched = await execUpstream(r.leaseId, "simctl", cmd.args);
+            if (launched.exitCode !== 0) return send(res, 502, "DEVICE_ERROR", `Launching ${appId} failed: ${(launched.stderr || launched.stdout).trim().slice(0, 300)}`);
+            res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
+            res.end(JSON.stringify({ launched: appId }));
             return;
           }
           if (r.action === "crashes") {

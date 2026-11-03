@@ -194,6 +194,26 @@ export class SimlockHttp {
     return Buffer.from(await response.arrayBuffer());
   }
 
+  /** A worker guard's console route: relaunch the app with its stdout/stderr captured on the host (#59). */
+  async consoleLaunch(leaseId: string, appId: string, args: string[] = []): Promise<void> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/console`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ appId, args }),
+      timeoutMs: 120_000,
+    });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw consoleUnsupported();
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/console");
+  }
+
+  /** The captured stdout/stderr of the last `launch --console`, last `lines` lines of each. */
+  async console(leaseId: string, lines: number): Promise<{ stdout: string[]; stderr: string[]; captured: boolean }> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/console?lines=${lines}`, { timeoutMs: 60_000 });
+    if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw consoleUnsupported();
+    if (!response.ok) throw await toError(response, "/v1/leases/{id}/console");
+    return (await response.json()) as { stdout: string[]; stderr: string[]; captured: boolean };
+  }
+
   /** A worker guard's crash reports for the lease's simulator (#59). */
   async crashes(leaseId: string, appId?: string): Promise<CrashReportInfo[]> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/crashes${appId ? `?${new URLSearchParams({ app: appId })}` : ""}`, { timeoutMs: 60_000 });
@@ -271,6 +291,12 @@ export class SimlockHttp {
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/exec");
     return parseExecStream(await response.text());
   }
+}
+
+function consoleUnsupported(): TapdanceError {
+  return new TapdanceError("NOT_SUPPORTED", "This endpoint cannot capture an iOS app's console", {
+    hint: "A remote simulator's console comes through a worker in device-only mode (tapdance worker guard), or run Tapdance on the Mac itself.",
+  });
 }
 
 function crashesUnsupported(): TapdanceError {

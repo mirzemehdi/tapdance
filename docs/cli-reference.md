@@ -309,7 +309,7 @@ notification permission, so on emulator images, which allow it). Other Android s
 
 ```text
 tapdance app install <path> [--app-id <id>]
-tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]...
+tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]... [--locale <l>] [--console]
                      [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
 tapdance app kill <appId>
@@ -338,6 +338,13 @@ simulator's terminate.
 `launch --locale de-DE` runs the app in that language: on iOS through the launch arguments
 `-AppleLanguages (de)` and `-AppleLocale de_DE`, on Android 13+ by setting the app's own locale (`cmd
 locale set-app-locales`) and relaunching it.
+
+`launch --console` (iOS) relaunches the app with its stdout and stderr written to files on the Mac:
+`print` and Kotlin's `println` go to stdout, which the simulator's system log does not keep.
+`tapdance logs --app <id>` then adds the captured lines after the system log (stdout, then stderr). Each
+launch starts a fresh capture; through a worker guard the guard chooses the files (one pair per lease,
+under `~/.tapdance/worker/console`) and only the lease's token can read them. On Android, `println`
+and `Log` lines are already in logcat.
 
 `build` (through a worker guard whose owner turned builds on) builds the app on the machine that runs
 the leased device, from an allow-listed git repository and ref, and installs it on the lease; the log
@@ -1303,6 +1310,9 @@ Options:
   --locale <locale>               run the app in this language, e.g. de-DE (iOS:
                                   launch arguments; Android 13+: the app's own
                                   locale)
+  --console                       iOS: relaunch with the app's stdout/stderr
+                                  (print, println) captured; `logs --app` then
+                                  includes them
   -h, --help                      display help for command
 ```
 

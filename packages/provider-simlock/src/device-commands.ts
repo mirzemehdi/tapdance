@@ -219,6 +219,13 @@ export const ios = {
   listApps(): DeviceCommand {
     return { tool: "simctl", args: ["listapps"] };
   },
+  /**
+   * Relaunches an app with its stdout and stderr in files on the Mac (#59): `print`/`println` go to
+   * stdout, which the system log does not keep. Simlock puts the simulator after the options.
+   */
+  launchWithConsole(appId: string, stdoutPath: string, stderrPath: string, args: string[] = []): DeviceCommand {
+    return { tool: "simctl", args: ["launch", "--terminate-running-process", `--stdout=${stdoutPath}`, `--stderr=${stderrPath}`, appId, ...args] };
+  },
   statusBarList(): DeviceCommand {
     return { tool: "simctl", args: ["status_bar", "list"] };
   },

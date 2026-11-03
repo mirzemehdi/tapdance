@@ -185,6 +185,10 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   policy switch that is already on; an upload refused by the guard arrives as FORBIDDEN, not DEVICE_ERROR.
 - Fixed (self-test B2): on Android, `ui tap --settle-ms` summarised the status bar first and counted a
   clock tick as "screen changed"; the status bar is left out of both.
+- Added (#59): `app launch <id> --console` (MCP `launch_app console`) on iOS relaunches the app with its
+  stdout and stderr captured on the Mac, and `logs --app` adds them: `print`/`println` lines (for
+  Pianolune: its `Api: REQUEST/RESPONSE` lines) that the system log never has. Through a worker guard,
+  `POST/GET /v1/leases/<id>/console`, files chosen by the guard.
 
 ### Not yet proven
 

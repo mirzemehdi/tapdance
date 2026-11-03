@@ -579,7 +579,7 @@ export class Tapdance {
    * Launches an app. `locale` (e.g. "de-DE") runs it in that language: iOS through the launch
    * arguments -AppleLanguages/-AppleLocale, Android 13+ by setting the app's own locale first.
    */
-  async launchApp(appId: string, options: { relaunch?: boolean; url?: string; args?: string[]; locale?: string } = {}): Promise<ActionResult> {
+  async launchApp(appId: string, options: { relaunch?: boolean; url?: string; args?: string[]; locale?: string; console?: boolean } = {}): Promise<ActionResult> {
     await this.guardHuman();
     const { locale, ...launch } = options;
     if (!locale) return this.onDevice((handle, provider) => provider.launchApp(handle, appId, launch));

@@ -69,7 +69,8 @@ export interface DeviceProvider {
   release(handle: LeaseHandle): Promise<{ released: boolean; unreachable?: boolean }>;
 
   installApp(handle: LeaseHandle, appPath: string, options?: CallOptions & { appId?: string }): Promise<AppInstallResult>;
-  launchApp(handle: LeaseHandle, appId: string, options?: { relaunch?: boolean; url?: string; args?: string[] }): Promise<ActionResult>;
+  /** `console` (iOS): relaunch with the app's stdout/stderr captured, for logs --app. */
+  launchApp(handle: LeaseHandle, appId: string, options?: { relaunch?: boolean; url?: string; args?: string[]; console?: boolean }): Promise<ActionResult>;
   stopApp(handle: LeaseHandle, appId: string): Promise<ActionResult>;
   listApps(handle: LeaseHandle): Promise<string[]>;
 

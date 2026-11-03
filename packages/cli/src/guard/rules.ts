@@ -15,7 +15,7 @@ export type Route =
   | { kind: "identity" }
   | { kind: "status" }
   | { kind: "catalog" }
-  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" | "crashes"; crashName?: string }
+  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" | "crashes" | "console-launch" | "console-read"; crashName?: string }
   | { kind: "rpc" }
   | { kind: "agent-device-health" }
   | { kind: "upload"; path: string }
@@ -38,6 +38,11 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
     const name = crash[2] === undefined ? undefined : decodeURIComponent(crash[2]);
     if (name !== undefined && name !== "latest" && !/^[A-Za-z0-9 _.+-]{1,200}\.ips$/.test(name)) return deny("crash report names are plain .ips file names");
     return { ok: true, value: { kind: "lease", leaseId: crash[1]!, action: "crashes", ...(name !== undefined ? { crashName: name } : {}) } };
+  }
+  const consoleRoute = /^\/v1\/leases\/([^/]+)\/console$/.exec(path);
+  if (consoleRoute && (method === "POST" || method === "GET")) {
+    if (!LEASE.test(consoleRoute[1]!)) return deny("unknown lease id format");
+    return { ok: true, value: { kind: "lease", leaseId: consoleRoute[1]!, action: method === "POST" ? "console-launch" : "console-read" } };
   }
   const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files|build))?$/.exec(path);
   if (lease) {

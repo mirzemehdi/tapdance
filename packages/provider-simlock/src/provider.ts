@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { extname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { createAgentDeviceClient, type AgentDeviceClient } from "agent-device";
@@ -39,6 +40,7 @@ import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
 import { releaseStaleDeviceClaims } from "./stale-claims.js";
 import { crashReportsDir, listCrashReports, readCrashReport, summarizeCrash } from "./crash-reports.js";
+import { clearConsole, consolePaths, readConsole } from "./console-capture.js";
 import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockWorker } from "./http.js";
@@ -597,9 +599,10 @@ export class SimlockProvider implements DeviceProvider {
     }
   }
 
-  async launchApp(handle: LeaseHandle, appId: string, options: { relaunch?: boolean; url?: string; args?: string[] } = {}): Promise<ActionResult> {
+  async launchApp(handle: LeaseHandle, appId: string, options: { relaunch?: boolean; url?: string; args?: string[]; console?: boolean } = {}): Promise<ActionResult> {
     checkAppId(appId);
     if (options.args?.some((a) => typeof a !== "string" || a.length > 1024 || a.includes("\u0000"))) throw new TapdanceError("USAGE", "Launch arguments must be short plain strings");
+    if (options.console) return this.launchWithConsole(handle, appId, options.args ?? []);
     try {
       await this.agentClient(handle).apps.open({
         app: appId,
@@ -1070,8 +1073,46 @@ export class SimlockProvider implements DeviceProvider {
     if (options.appId) args.push("--predicate", iosAppPredicate(options.appId, await this.iosExecutable(handle, options.appId)));
     const result = await this.execOn(handle, "simctl", args, 180_000);
     const out = toLogResult("simulator log (last 3 min)", result.stdout, lines);
-    if (options.appId) out.lines.push("Note: the system log has the app's os_log/NSLog lines; print/println output goes to stdout, which a launched app does not keep.");
+    if (options.appId) {
+      // print/println go to stdout, which the system log does not keep: add what `launch --console` captured.
+      const console = await this.consoleOf(handle, lines);
+      if (console.captured) {
+        out.lines.push(`── stdout (since app launch --console, last ${console.stdout.length} lines) ──`, ...console.stdout);
+        if (console.stderr.length > 0) out.lines.push(`── stderr (last ${console.stderr.length} lines) ──`, ...console.stderr);
+      } else {
+        out.lines.push(`Note: print/println output is not in the system log. Relaunch with \`tapdance app launch ${options.appId} --console\` (MCP launch_app console: true) to capture it.`);
+      }
+    }
     return capNote(out, options.lines);
+  }
+
+  /** Where this machine keeps captured app consoles (local mode). */
+  private consoleDir(): string {
+    return join(homedir(), ".tapdance", "console");
+  }
+
+  /** iOS: relaunches the app with its stdout and stderr captured on the Mac; `logs --app` reads them (#59). */
+  private async launchWithConsole(handle: LeaseHandle, appId: string, args: string[]): Promise<ActionResult> {
+    if (handle.platform !== "ios") {
+      throw new TapdanceError("NOT_SUPPORTED", "Console capture is for the iOS simulator", { hint: "On Android, an app's println and Log lines are in logcat already: `tapdance logs --app <id>`." });
+    }
+    if (this.isLocal()) {
+      const dir = this.consoleDir();
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await clearConsole(dir, handle.leaseId);
+      const p = consolePaths(dir, handle.leaseId);
+      const cmd = deviceCommands.ios.launchWithConsole(appId, p.stdout, p.stderr, args);
+      const r = await this.execOn(handle, cmd.tool, cmd.args, 60_000);
+      if (r.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Launching ${appId} with its console failed: ${(r.stderr || r.stdout).trim().slice(0, 300)}`);
+    } else {
+      await this.http.consoleLaunch(handle.leaseId, appId, args);
+    }
+    return { ok: true, message: `Launched ${appId} with its console captured (print/println); read it with \`tapdance logs --app ${appId}\`` };
+  }
+
+  /** The captured console of the last `launch --console` on this lease. */
+  private async consoleOf(handle: LeaseHandle, lines: number): Promise<{ stdout: string[]; stderr: string[]; captured: boolean }> {
+    return this.isLocal() ? readConsole(this.consoleDir(), handle.leaseId, lines) : this.http.console(handle.leaseId, lines).catch(() => ({ stdout: [], stderr: [], captured: false }));
   }
 
   /** An installed iOS app's executable name (its process name in the log), from simctl listapps. */

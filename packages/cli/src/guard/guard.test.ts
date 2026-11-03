@@ -717,6 +717,25 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.mallory.secret, "GET", `/v1/leases/${A}/crashes`)).status).toBe(404);
   });
 
+  it("21. an iOS app's console: launched with stdout/stderr in files the guard picks, read back by the owner only (#59)", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    const launch = await t.call(t.alice.secret, "POST", `/v1/leases/${A}/console`, { appId: "com.measify.pianolune", args: ["-flag"] });
+    expect(launch.status).toBe(200);
+    const sent = JSON.parse(t.upstream.seen.filter((x) => x.path.endsWith("/exec")).at(-1)!.body) as { tool: string; args: string[] };
+    expect(sent.tool).toBe("simctl");
+    expect(sent.args.slice(0, 2)).toEqual(["launch", "--terminate-running-process"]);
+    const out = join(t.home, "worker", "console", `${A}.out.log`);
+    expect(sent.args).toContain(`--stdout=${out}`);
+    expect(sent.args.slice(-2)).toEqual(["com.measify.pianolune", "-flag"]);
+    // A caller cannot point the output elsewhere.
+    expect((await t.call(t.alice.secret, "POST", `/v1/leases/${A}/console`, { appId: "com.x", args: ["--stdout=/etc/x"] })).status).toBe(400);
+    await writeFile(out, "Api: REQUEST https://api.pianolune.com/v1/import\nApi: RESPONSE 200 OK\n");
+    const read = (await (await t.call(t.alice.secret, "GET", `/v1/leases/${A}/console?lines=1`)).json()) as { stdout: string[]; captured: boolean };
+    expect(read).toMatchObject({ stdout: ["Api: RESPONSE 200 OK"], captured: true });
+    expect((await t.call(t.mallory.secret, "GET", `/v1/leases/${A}/console`)).status).toBe(404);
+  });
+
   it("19. agent-device's diagnostics for a failed request reach only the session's owner", async () => {
     const t = await setup();
     await t.allocate(t.alice.secret, A);
