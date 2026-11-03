@@ -32,9 +32,12 @@ agent uses (only the network hop differs).
 | A18 (#59) | Crash reports | Partial | `device crashes` through the guard answers correctly; the same code lists the two real Pianolune reports for that simulator and none for another. No new crash happened during the lease (the download did not crash this time). |
 | A22 (#47) | Files push and pull | Pass | `device pull --files song.mid` saved a `.mid`. |
 | A23 | Text size while the app runs | Pass (after a fix) | `accessibility-extra-extra-extra-large` applied live; a read now prints "Text size is …". |
-| B1 | `app build` Android | Fail (host setup) | `> [CXX1300] CMake '3.31.6' was not found in SDK`: the host has no CMake. The error now ends with the `sdkmanager "cmake;3.31.6"` command (acd285d). |
+| B1 | `app build` Android | Pass (after host setup) | First run: `> [CXX1300] CMake '3.31.6' was not found in SDK`; the error now ends with the `sdkmanager "cmake;3.31.6"` command and says only the host owner can install it. After the owner installed CMake: `BUILD SUCCESSFUL in 3m 26s`, installed and launched (209 s in all). |
+| B2 | `app kill` in portrait and landscape, relaunch, Lesson 1 | Pass | "Ended … like a user (pid 6346 gone)" and "(pid 6781 gone)"; after onboarding, Lesson 1 shows "Waiting for E" and the piano keyboard. Found and fixed: the `--settle-ms` summary began with the status bar ("1:01 · Android System notification …"), and a clock tick counted as "screen changed"; the status bar is now left out. |
 | B3 | `ui sequence` 0/3000/6000 ms | Pass | actualMs 20.8 / 3067.4 / 6027.3. |
 | B4 | `record start`, about 3 minutes with the screen moving, `record stop` | Pass | 184 s of wall time gave a 170.5 s file (ffprobe). Android's `screenrecord` writes a frame only when the screen changes, so a still stretch at the end is not in the file: that explains run 4's 87.7 s for 125 s. |
+| B5 | Import → Files → `ui tap --text test.musicxml` | Pass | The picker (DocumentsUI) ignored the first tap; it was repeated as a raw input event and the file was chosen ("Make my lessons"). |
+| B6 | Airplane mode on, import, back online | Pass | `ping 8.8.8.8`: "Network is unreachable"; Pianolune: "We couldn’t reach the server". Airplane off: ping answers, and "Try again" goes on ("this takes a few seconds"). |
 | B7 | Orientation read, font scale | Pass | "The screen is portrait (1080×2400)"; `settings put system font_scale 2.0` read back 2.0; text size reads "Text size is large". |
 | B8 | Notifications through the guard | Pass | Post, `list` ("com.android.shell: Practice — Time to play"), open and close the shade, permission reset for Chrome. |
 | B9 | TalkBack | Not on this image | The `google_apis` image has no TalkBack package (the Play image has Google's accessibility suite). Labels come from `ui inspect`. |
@@ -48,6 +51,5 @@ agent uses (only the network hop differs).
 
 - A4, A14, A15, A16, A17 (stdout), A19, A20, A21: not built. A15 (the clock) and A16 (offline) cannot be
   done per simulator, because the simulator uses the Mac's clock and network.
-- B1, B2, B5, B6: the host has no CMake 3.31.6, so the Android build stops.
 - B10: needs a person to sign in a license tester.
 

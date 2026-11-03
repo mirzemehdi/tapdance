@@ -1446,7 +1446,9 @@ function toLogResult(source: string, text: string, lines: number): LogResult {
 
 /** What a screen shows, without positions: equal fingerprints mean nothing visible changed but layout. */
 export function screenFingerprint(elements: UiElement[]): string {
+  // Android's status bar clock ticks every minute; it is not the app's screen.
   return elements
+    .filter((e) => !(e.identifier ?? "").startsWith("com.android.systemui:"))
     .map((e) => [e.role, e.label ?? "", e.value ?? "", e.identifier ?? "", e.enabled === false ? "off" : "", (e.states ?? []).join(",")].join("|"))
     .join("\n");
 }

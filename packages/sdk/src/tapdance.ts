@@ -130,8 +130,19 @@ export function summarize(record: SessionRecord, status?: LeaseStatus, holdUntil
  * session and nothing else: there is no way to pass a device or lease id in.
  */
 /** The screen's content without positions (see SimlockProvider's stable wait). */
-function fingerprintOf(elements: Array<{ role: string; label?: string; value?: string; identifier?: string; states?: string[] }>): string {
-  return elements.map((e) => [e.role, e.label ?? "", e.value ?? "", e.identifier ?? "", (e.states ?? []).join(",")].join("|")).join("\n");
+/**
+ * Android's status bar (clock, signal, battery, notification icons) sits in every full inspect. It is
+ * not the app's screen: a clock tick must not count as "screen changed", nor head its summary.
+ */
+export function isStatusBar(e: { label?: string; identifier?: string; depth?: number }): boolean {
+  return (e.identifier ?? "").startsWith("com.android.systemui:") || ((e.depth ?? 0) === 0 && / notification: /.test(e.label ?? ""));
+}
+
+function fingerprintOf(elements: Array<{ role: string; label?: string; value?: string; identifier?: string; states?: string[]; depth?: number }>): string {
+  return elements
+    .filter((e) => !isStatusBar(e))
+    .map((e) => [e.role, e.label ?? "", e.value ?? "", e.identifier ?? "", (e.states ?? []).join(",")].join("|"))
+    .join("\n");
 }
 
 export class Tapdance {
@@ -615,7 +626,7 @@ export class Tapdance {
     await this.waitFor({ kind: "stable" }, Math.min(options.settleMs, 30_000)).catch(() => undefined);
     const after = await this.inspect({ interactiveOnly: false });
     const changed = fingerprintOf(after.elements) !== before;
-    const screen = after.elements.filter((e) => e.label).slice(0, 5).map((e) => e.label!);
+    const screen = after.elements.filter((e) => e.label && !isStatusBar(e)).slice(0, 5).map((e) => e.label!);
     return { ...result, screenChanged: changed || result.screenChanged === true, screen };
   }
 

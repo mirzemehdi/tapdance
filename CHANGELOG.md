@@ -183,6 +183,8 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   limit. It is now kept for another release. A token whose scopes refuse an area that the policy allows
   is told so, with the `worker guard pair --scope` that would allow it, instead of being sent to a
   policy switch that is already on; an upload refused by the guard arrives as FORBIDDEN, not DEVICE_ERROR.
+- Fixed (self-test B2): on Android, `ui tap --settle-ms` summarised the status bar first and counted a
+  clock tick as "screen changed"; the status bar is left out of both.
 
 ### Not yet proven
 
