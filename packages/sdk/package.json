@@ -2,7 +2,7 @@
   "name": "@tapdance/sdk",
   "version": "0.1.0",
   "description": "Programmatic Tapdance API: session-scoped device control for agents and tools.",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
