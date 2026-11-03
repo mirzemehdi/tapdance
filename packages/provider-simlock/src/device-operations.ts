@@ -250,13 +250,28 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       }
       if (value === "landscape") value = "landscape-left";
       const command = ctx.client.command as unknown as { orientation: (o: unknown) => Promise<unknown> };
-      // agent-device confirms the rotation within a short budget that a busy emulator can miss once.
-      await agentDevice("orientation", () => command.orientation({ orientation: value, ...scope })).catch(async (error: unknown) => {
-        if (!(error instanceof TapdanceError) || !/timed out/i.test(error.message)) throw error;
-        await new Promise((r) => setTimeout(r, 1500));
-        await agentDevice("orientation", () => command.orientation({ orientation: value, ...scope }));
-      });
-      return { ok: true, message: `Rotated to ${value}` };
+      // agent-device confirms the rotation within a short budget that a busy emulator can miss, e.g.
+      // right after `app kill` pressed Home (#65): try again with longer pauses, and in the end trust
+      // the screen's shape over the confirmation.
+      let last: unknown;
+      for (const pause of [0, 1500, 3000]) {
+        if (pause) await new Promise((r) => setTimeout(r, pause));
+        try {
+          await agentDevice("orientation", () => command.orientation({ orientation: value, ...scope }));
+          return { ok: true, message: `Rotated to ${value}` };
+        } catch (error) {
+          if (!(error instanceof TapdanceError) || !/timed out|could not confirm/i.test(error.message)) throw error;
+          last = error;
+        }
+      }
+      const snap = (await ctx.client.capture.snapshot({ interactiveOnly: true, ...scope } as never).catch(() => undefined)) as { viewport?: { width?: number; height?: number } } | undefined;
+      const w = snap?.viewport?.width;
+      const h = snap?.viewport?.height;
+      const wanted = value.startsWith("landscape") ? "landscape" : "portrait";
+      if (w && h && (w > h ? "landscape" : "portrait") === wanted) {
+        return { ok: true, message: `Rotated to ${value} (the device was slow to confirm; the screen is ${wanted}, ${w}×${h})` };
+      }
+      throw last;
     }
     case "browser-first-run": {
       if (!isAndroid) throw notSupported("browser-first-run is Android only (Safari has no first-run screens on the simulator)");

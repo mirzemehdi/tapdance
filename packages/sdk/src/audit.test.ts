@@ -44,4 +44,24 @@ describe("accessibility audit (#60)", () => {
     );
     expect(r.findings.map((f) => f.ref)).toEqual(["@e2"]);
   });
+
+  it("does not flag exactly 48 dp, nor controls nested in a bigger row (#64)", () => {
+    const r = auditScreen(
+      { viewport: { width: 1080, height: 2400 }, truncated: false, warnings: [], elements: [el("@e1", "button", { label: "Play", rect: { x: 0, y: 0, width: 996, height: 126 } })] },
+      "android",
+    );
+    expect(r.findings).toEqual([]);
+    const ios = auditScreen(
+      { viewport: { width: 402, height: 874 }, truncated: false, warnings: [], elements: [
+        el("@e1", "switch", { label: "Bold Text", value: "0", rect: { x: 16, y: 100, width: 370, height: 52 }, depth: 0 }),
+        el("@e2", "switch", { value: "0", rect: { x: 320, y: 110, width: 51, height: 31 }, depth: 1 }),
+        el("@e3", "switch", { label: "Larger Text", value: "0", rect: { x: 16, y: 160, width: 370, height: 52 }, depth: 0 }),
+        el("@e4", "switch", { value: "0", rect: { x: 320, y: 170, width: 51, height: 31 }, depth: 1 }),
+        el("@e5", "button", { label: "Bold Text", rect: { x: 30, y: 116, width: 71, height: 20 }, depth: 1 }),
+      ] },
+      "ios",
+    );
+    expect(ios.findings).toEqual([]);
+    expect(ios.checked).toBe(2);
+  });
 });

@@ -315,7 +315,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           : await execUpstream(leaseId, "adb", ["install", "-r", "-t", result.artifact]);
       if (install.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Installing the build failed: ${(install.stderr || install.stdout).trim().split("\n").slice(-3).join(" ")}`);
       await decide("allow", { command: `build installed ${result.sha}`, leaseId });
-      line({ result: { sha: result.sha, seconds: result.seconds, artifact: result.artifact.split(sep).pop(), installed: true } });
+      line({ result: { sha: result.sha, seconds: result.seconds, artifact: result.artifact.split(sep).pop(), installed: true, ...(result.reused ? { reused: true } : {}) } });
     } catch (error) {
       const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", (error as Error).message);
       await decide("deny", { reason: `build failed: ${e.message}`, leaseId });

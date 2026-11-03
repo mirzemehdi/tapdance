@@ -11,6 +11,31 @@ function platformArg(value: string | undefined): Platform {
   throw new TapdanceError("USAGE", `--platform must be android or ios${value ? `, not "${value}"` : ""}`);
 }
 
+/**
+ * Settings people (and checklists) ask for that a simulator or emulator cannot do, or that have another
+ * name here (#62): why not, and what to use instead.
+ */
+const SETTING_ALTERNATIVES: Record<string, { why: string; instead: string }> = {
+  time: {
+    why: "The device clock cannot be set per lease on the iOS simulator: it uses the Mac's clock",
+    instead: "Test date rules with a debug date in the app. Android emulator (google_apis image, which has root): `tapdance device shell -- settings put global auto_time 0`, then `tapdance device shell -- su 0 date MMDDhhmmYY`.",
+  },
+  voiceover: {
+    why: "The iOS simulator has no VoiceOver",
+    instead: "Check what VoiceOver would meet with `tapdance ui audit` (unlabelled controls, small targets, duplicate labels) and the labels in `tapdance ui inspect`.",
+  },
+  talkback: {
+    why: "TalkBack is not a Tapdance setting; it is on Play images (Google's accessibility suite), not on google_apis",
+    instead: "On a Play image: `tapdance device shell -- settings put secure enabled_accessibility_services com.google.android.marvin.talkback/com.google.android.marvin.talkback.TalkBackService` and `-- settings put secure accessibility_enabled 1`. On any image, `tapdance ui audit` checks what TalkBack would meet.",
+  },
+  locale: {
+    why: "The device language is the `language` setting (iOS); on Android an app's own locale is set when it starts",
+    instead: "iOS: `tapdance device setting language de-DE`. Android 13+: `tapdance app launch <appId> --locale de-DE`.",
+  },
+};
+SETTING_ALTERNATIVES["clock"] = SETTING_ALTERNATIVES["time"]!;
+SETTING_ALTERNATIVES["date"] = SETTING_ALTERNATIVES["time"]!;
+
 function intArg(name: string, value: string | undefined, min: number, max: number): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
@@ -221,6 +246,15 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
 
   device
+    .command("storekit [action] [file]")
+    .description("Not available: StoreKit configuration files need Xcode's scheme; says what to use instead")
+    .action(() => {
+      throw new TapdanceError("NOT_SUPPORTED", "StoreKit configuration files (.storekit) cannot be loaded into a simulator outside Xcode: Xcode attaches them when it launches the app from a scheme", {
+        hint: "Test purchases in the sandbox: the agent asks a person to sign in a Sandbox account with `tapdance device request-human --reason \"Sign in a Sandbox Apple ID: Settings › App Store › Sandbox Account\"`, then buys through the sheet (docs/guides/purchase-testing.md). Android: a license tester on a Play image.",
+      });
+    });
+
+  device
     .command("links")
     .description("Links apps asked the system to open lately (mailto:, App Store, Settings, web): scheme, URL and whether anything opened it; checks a link-out on a simulator without Mail")
     .option("--minutes <n>", "how far back to look (1-30)", "5")
@@ -371,6 +405,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--lon <longitude>", "for `setting location`", Number)
     .action(async (name: string, value: string | undefined, o: { app?: string; permission?: string; lat?: number; lon?: number }) =>
       run(globals(), async (t, out) => {
+        const instead = SETTING_ALTERNATIVES[name.toLowerCase()];
+        if (instead) throw new TapdanceError("NOT_SUPPORTED", instead.why, { hint: instead.instead });
         if (!(DEVICE_SETTINGS as readonly string[]).includes(name)) throw new TapdanceError("USAGE", `Unknown setting "${name}"`, { hint: `One of: ${DEVICE_SETTINGS.join(", ")}` });
         const r = await t.device({
           kind: "setting",
@@ -556,7 +592,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           { verbose: o.verbose === true },
         );
         if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-        out.result(r, () => `Built ${r.artifact} from ${r.sha.slice(0, 12)} in ${r.seconds} s and installed it${o.launch ? `; launched ${o.launch}` : ""}`);
+        out.result(r, () => `${r.reused ? "Reused the earlier build" : "Built"} ${r.artifact} from ${r.sha.slice(0, 12)} in ${r.seconds} s and installed it${o.launch ? `; launched ${o.launch}` : ""}`);
       }),
     );
   app

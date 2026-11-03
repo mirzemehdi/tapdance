@@ -283,6 +283,8 @@ export interface AppBuildResult {
   /** File name of the built .app or .apk (it stays on the host). */
   artifact: string;
   installed: boolean;
+  /** The same commit and settings were built before on the host; that build was installed (#61). */
+  reused?: boolean;
 }
 
 /** One tap of a timed sequence: `t` ms after the start, at (x, y); `hold` ms makes it a long press. */

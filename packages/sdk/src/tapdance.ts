@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import {
   LocalArtifactStore,
@@ -135,6 +135,37 @@ export function summarize(record: SessionRecord, status?: LeaseStatus, holdUntil
  * Android's status bar (clock, signal, battery, notification icons) sits in every full inspect. It is
  * not the app's screen: a clock tick must not count as "screen changed", nor head its summary.
  */
+
+/**
+ * A video that finished downloading: it has stopped growing and is a whole MP4, whose top-level boxes
+ * run exactly to the end of the file and include the `moov` index (a cut download does not).
+ */
+async function settledFile(path: string): Promise<boolean> {
+  const size = async () => (await stat(path).catch(() => undefined))?.size ?? 0;
+  const first = await size();
+  if (first < 16) return false;
+  await new Promise((r) => setTimeout(r, 1500));
+  if ((await size()) !== first) return false;
+  return completeMp4(await readFile(path));
+}
+
+/** Walks an MP4's top-level boxes: whole, ending at the end of the file, with a `moov` index. */
+export function completeMp4(bytes: Buffer): boolean {
+  let at = 0;
+  let moov = false;
+  while (at + 8 <= bytes.length) {
+    let size = bytes.readUInt32BE(at);
+    const type = bytes.toString("latin1", at + 4, at + 8);
+    if (size === 1) {
+      if (at + 16 > bytes.length) return false;
+      size = Number(bytes.readBigUInt64BE(at + 8));
+    } else if (size === 0) size = bytes.length - at;
+    if (size < 8) return false;
+    if (type === "moov") moov = true;
+    at += size;
+  }
+  return moov && at === bytes.length;
+}
 
 export function isStatusBar(e: { label?: string; identifier?: string; depth?: number }): boolean {
   return (e.identifier ?? "").startsWith("com.android.systemui:") || ((e.depth ?? 0) === 0 && / notification: /.test(e.label ?? ""));
@@ -735,6 +766,18 @@ export class Tapdance {
         ]);
       } catch (error) {
         if (error instanceof TapdanceError && error.code === "LEASE_LOST") throw error;
+        // The stop reported an error, but the video can already be on disk, complete (#63: a 123 s
+        // MP4 saved, then "terminated"). A file that is there and not growing is the recording.
+        const saved = record.recording.path;
+        if (await settledFile(saved)) {
+          await this.store.update(this.session.id, (r) => {
+            const { recording: _, ...rest } = r;
+            return rest;
+          });
+          const kept = await this.artifacts.record({ kind: "recording", path: saved, sessionId: this.session.id, leaseId: handle.leaseId, note: `the stop reported: ${(error as Error).message}` });
+          this.progress(`The stop reported "${(error as Error).message}", but the video was saved; check it plays to the end`);
+          return { ...kept, extra: [] };
+        }
         // Forget the recording, or start_recording would be refused for the rest of the lease.
         await this.store
           .update(this.session.id, (r) => {

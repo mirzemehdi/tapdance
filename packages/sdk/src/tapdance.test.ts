@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, loadConfig, renewIfDue, runKeepalive, type LeaseHandle } from "./index.js";
 import { FakeProvider } from "./testing.js";
+import { completeMp4 } from "./tapdance.js";
 
 async function setup(sessionId = "s1", provider = new FakeProvider()) {
   const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
@@ -122,6 +123,23 @@ describe("Tapdance session scoping", () => {
     provider.failNext("stopRecording", new TapdanceError("DEVICE_ERROR", "recorder crashed"));
     expect((await t.release()).released).toBe(true);
     expect(await t.current()).toBeUndefined();
+  });
+
+  it("a stop that errors after the video was saved keeps the video (#63)", async () => {
+    const { t, provider } = await setup();
+    await t.lease({ platform: "android" });
+    const started = await t.startRecording();
+    const box = (type: string, body = Buffer.alloc(0)) => Buffer.concat([Buffer.from([0, 0, 0, 8 + body.length]), Buffer.from(type, "latin1"), body]);
+    const mp4 = Buffer.concat([box("ftyp", Buffer.from("isom0000")), box("mdat", Buffer.alloc(40, 1)), box("moov", Buffer.alloc(16))]);
+    await writeFile(started.path, mp4);
+    provider.failNext("stopRecording", new Error("terminated"));
+    const stopped = await t.stopRecording();
+    expect(stopped).toMatchObject({ kind: "recording", note: "the stop reported: terminated" });
+    expect(stopped.bytes).toBe(mp4.length);
+    // A cut download (no moov, or boxes running past the end) is not taken for the recording.
+    expect(completeMp4(mp4.subarray(0, mp4.length - 10))).toBe(false);
+    expect(completeMp4(Buffer.concat([box("ftyp"), box("mdat", Buffer.alloc(20))]))).toBe(false);
+    await expect(t.stopRecording()).rejects.toMatchObject({ code: "USAGE" });
   });
 
   it("a failed stop does not wedge recording", async () => {

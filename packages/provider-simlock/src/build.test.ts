@@ -2,13 +2,13 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCacheDir, checkBuildRequest, FailureDigest, hostSimulatorArch, isNotableBuildLine, missingSdkHint, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
+import { buildCacheDir, checkBuildRequest, FailureDigest, hostNetworkHint, hostSimulatorArch, isNotableBuildLine, missingSdkHint, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
 
 const SHA = "a".repeat(40);
 const settings: BuildSettings = { repos: ["https://github.com/acme/pianolune.git"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 };
 
 /** A fake git + xcodebuild + gradle: records commands and lays out what each would leave on disk. */
-function fakeRunner(root: string, opts: { onMain?: boolean; xcodeFails?: string[] } = {}): { run: CommandRunner; calls: string[] } {
+function fakeRunner(root: string, opts: { onMain?: boolean; xcodeFails?: string[]; fetchFails?: boolean } = {}): { run: CommandRunner; calls: string[] } {
   const calls: string[] = [];
   const run: CommandRunner = async (command, args, o) => {
     calls.push([command.split("/").pop(), ...args.filter((a) => !a.startsWith(root))].join(" "));
@@ -18,7 +18,11 @@ function fakeRunner(root: string, opts: { onMain?: boolean; xcodeFails?: string[
       await mkdir(join(src, "iosApp", "iosApp.xcodeproj"), { recursive: true });
       await writeFile(join(src, "gradlew"), "#!/bin/sh\n");
     }
-    if (command === "git" && args.includes("rev-parse")) return { code: args.some((a) => a.startsWith("origin/main")) ? 0 : 1, output: `${SHA}\n` };
+    if (command === "git" && args.includes("fetch") && opts.fetchFails) {
+      o.onLine("fatal: unable to access 'https://github.com/acme/pianolune/': Could not resolve host: github.com");
+      return { code: 128, output: "fatal: unable to access 'https://github.com/acme/pianolune/': Could not resolve host: github.com" };
+    }
+    if (command === "git" && args.includes("rev-parse")) return { code: args.some((a) => a.startsWith("origin/main") || a.startsWith(SHA.slice(0, 7))) ? 0 : 1, output: `${SHA}\n` };
     if (command === "git" && args.includes("merge-base")) return { code: opts.onMain === false ? 1 : 0, output: "" };
     if (command === "xcodebuild" && opts.xcodeFails) {
       for (const l of opts.xcodeFails) o.onLine(l);
@@ -59,7 +63,9 @@ describe("builds on the host (#45)", () => {
     const lines: string[] = [];
     const r = await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, (l) => lines.push(l), run);
     expect(r.sha).toBe(SHA);
-    expect(r.artifact).toBe(join(buildCacheDir(root, "https://github.com/acme/pianolune"), "DerivedData", "Build", "Products", "Debug-iphonesimulator", "iosApp.app"));
+    // Built into DerivedData, then kept outside it (the next build overwrites DerivedData).
+    expect(r.artifact.startsWith(join(buildCacheDir(root, "https://github.com/acme/pianolune"), "kept"))).toBe(true);
+    expect(r.artifact.endsWith(join("iosApp.app"))).toBe(true);
     expect(calls[0]).toMatch(/^git clone --no-checkout --filter=blob:none https:\/\/github.com\/acme\/pianolune/);
     expect(calls).toContain(`git -C checkout --force --detach ${SHA}`);
     const xcode = calls.find((c) => c.startsWith("xcodebuild"))!;
@@ -79,7 +85,8 @@ describe("builds on the host (#45)", () => {
     const root = await mkdtemp(join(tmpdir(), "td-build-"));
     const { run, calls } = fakeRunner(root);
     const r = await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "android" }, settings, root, () => undefined, run);
-    expect(r.artifact.endsWith(join("androidApp", "build", "outputs", "apk", "debug", "androidApp-debug.apk"))).toBe(true);
+    expect(r.artifact.includes(join("kept"))).toBe(true);
+    expect(r.artifact.endsWith("androidApp-debug.apk")).toBe(true);
     expect(calls.some((c) => c.startsWith("gradlew assembleDebug --console=plain"))).toBe(true);
   });
 
@@ -156,5 +163,35 @@ describe("builds on the host (#45)", () => {
     expect(missingSdkHint("No version of NDK matched the requested version 27.0.12077973")).toContain('sdkmanager "ndk;27.0.12077973"');
     expect(missingSdkHint("Failed to find target with hash string 'android-35'")).toContain('sdkmanager "platforms;android-35"');
     expect(missingSdkHint("e: Unresolved reference")).toBeUndefined();
+  });
+
+  it("names a host network failure, builds a known commit from the cache, and reuses a build (#61)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    // First build: clone and build; the result is kept.
+    const first = fakeRunner(root);
+    const built = await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, () => undefined, first.run);
+    expect(built.reused).toBeUndefined();
+    expect(built.artifact).toContain(join("kept"));
+    // Same commit and settings: reused, no xcodebuild.
+    const again = fakeRunner(root);
+    const lines: string[] = [];
+    const reused = await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, (l) => lines.push(l), again.run);
+    expect(reused).toMatchObject({ sha: SHA, reused: true, artifact: built.artifact });
+    expect(again.calls.some((c) => c.startsWith("xcodebuild"))).toBe(false);
+    expect(lines.some((l) => l.startsWith("Reusing the build of"))).toBe(true);
+    // The host is offline: a branch cannot be trusted from the cache, and the error says whose network.
+    const offline = fakeRunner(root, { fetchFails: true });
+    const error = (await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, () => undefined, offline.run).catch((e: unknown) => e)) as Error & { hint?: string; details?: Record<string, unknown> };
+    expect(error.message).toContain("fatal: unable to access");
+    expect(error.message).toContain("Could not resolve host: github.com");
+    expect(error.hint).toMatch(/host's network, not yours/);
+    expect(error.details?.["reason"]).toBe("HOST_NETWORK");
+    // …but a commit id it already has still builds (here: reused) with a warning.
+    const warned: string[] = [];
+    const bySha = await runBuild({ repo: "https://github.com/acme/pianolune", ref: SHA, platform: "ios" }, settings, root, (l) => warned.push(l), fakeRunner(root, { fetchFails: true }).run);
+    expect(bySha.sha).toBe(SHA);
+    expect(warned.some((l) => l.startsWith("warning: git fetch failed"))).toBe(true);
+    expect(hostNetworkHint("BUILD FAILED: Could not GET 'https://dl.google.com/x.pom'")).toBeDefined();
+    expect(hostNetworkHint("e: Unresolved reference")).toBeUndefined();
   });
 });

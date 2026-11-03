@@ -192,6 +192,12 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   guard's `PATH` or `JAVA_HOME`; `host builds enable` checks git, Xcode, Java and `gh`.
 - **Android:** `./gradlew assembleDebug` (`--gradle-task`, `--dir` for the folder with `gradlew`); the
   newest APK under `build/outputs/apk` is installed.
+- **Reuse:** the last builds are kept per commit and settings (the newest three per repository, under
+  `kept/` in the build cache). Asking for the same commit and settings again installs that build in
+  seconds (`Reused the earlier build …`); every lease is a fresh device, so this is the common case.
+- **Offline host:** when the host cannot reach the git server, a full commit id it already has still
+  builds from its cache with a warning; a branch name does not (the cached branch may be behind). The
+  error names git's own `fatal:` line and says the host's network is at fault.
 - **Limits:** one build at a time, `--timeout-minutes` (45 by default), the build log streams to the
   agent with secrets redacted. The CLI shows steps, errors and the outcome (`--verbose` for every
   line); a failed build's error names its cause: compiler errors, Gradle's "What went wrong" and the

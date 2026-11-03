@@ -935,6 +935,9 @@ Commands:
   clipboard <action> [text]         Read (get) or write (set <text>) the device
                                     clipboard: paste flows, checking what a Copy
                                     button copied
+  storekit [action] [file]          Not available: StoreKit configuration files
+                                    need Xcode's scheme; says what to use
+                                    instead
   links [options]                   Links apps asked the system to open lately
                                     (mailto:, App Store, Settings, web): scheme,
                                     URL and whether anything opened it; checks a
@@ -1031,6 +1034,18 @@ Usage: tapdance device clipboard [options] <action> [text]
 
 Read (get) or write (set <text>) the device clipboard: paste flows, checking
 what a Copy button copied
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance device storekit`
+
+```text
+Usage: tapdance device storekit [options] [action] [file]
+
+Not available: StoreKit configuration files need Xcode's scheme; says what to
+use instead
 
 Options:
   -h, --help  display help for command

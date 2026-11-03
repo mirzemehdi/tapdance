@@ -1074,7 +1074,8 @@ export class SimlockProvider implements DeviceProvider {
       // takes longer, and the file would be lost. Fetch the same artifact with more time (#51).
       const artifactId = (error as { details?: { artifactId?: unknown } }).details?.artifactId;
       const path = typeof token?.["path"] === "string" ? token["path"] : undefined;
-      if (/download timed out/i.test(String((error as Error).message)) && typeof artifactId === "string" && path && !this.isLocal()) {
+      // A cut stream (undici's "terminated", a reset) is the same story as a timeout (#63).
+      if (/download timed out|terminated|ECONNRESET|socket hang up|other side closed|aborted/i.test(String((error as Error).message)) && typeof artifactId === "string" && path && !this.isLocal()) {
         const d = this.data(handle);
         await this.http.downloadArtifact(artifactId, { leaseId: handle.leaseId, tenant: d.tenant }, path, 30 * 60_000);
         return { path, extraPaths: [] };

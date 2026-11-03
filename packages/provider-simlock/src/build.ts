@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, readdir, stat } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { TapdanceError } from "@tapdance/core";
 
 /**
@@ -44,6 +44,8 @@ export interface BuildResult {
   /** The built .app or .apk on this machine. */
   artifact: string;
   seconds: number;
+  /** The same commit and settings were built before: that build was installed again (#61). */
+  reused?: boolean;
 }
 
 /** Runs one command; resolves with its exit code and output (lines also go to `onLine`). */
@@ -167,10 +169,11 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     if (r.code !== 0) {
       // The cause is often hundreds of lines above the end (#53): name it in the message itself.
       const cause = digest.lines();
-      const fix = missingSdkHint(cause.join("\n"));
+      const offline = hostNetworkHint(cause.join("\n"));
+      const fix = offline ?? missingSdkHint(cause.join("\n"));
       throw new TapdanceError("DEVICE_ERROR", `${what} failed (exit ${r.code})${cause.length > 0 ? `:\n  ${cause.join("\n  ")}` : ""}`, {
         ...(fix ? { hint: fix } : {}),
-        details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n") },
+        details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n"), ...(offline ? { reason: "HOST_NETWORK" } : {}) },
       });
     }
     return r.output;
@@ -182,7 +185,14 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     await step("git", ["clone", "--no-checkout", "--filter=blob:none", req.repo, src], "git clone");
   } else {
     await git(["remote", "set-url", "origin", req.repo], "git remote set-url");
-    await git(["fetch", "--prune", "--tags", "origin", "+refs/heads/*:refs/remotes/origin/*"], "git fetch");
+    try {
+      await git(["fetch", "--prune", "--tags", "origin", "+refs/heads/*:refs/remotes/origin/*"], "git fetch");
+    } catch (error) {
+      // The host cannot reach the remote (#61). A commit id it already has can still be built: a
+      // branch name cannot, because the cached branch may be behind the remote.
+      if (!/^[0-9a-f]{7,40}$/i.test(req.ref) || !(await resolveRef(src, req.ref, env, run, left))) throw error;
+      onLine(`warning: git fetch failed (${(error as Error).message.split("\n").slice(-1)[0]!.trim()}); building ${req.ref} from this host's cache`);
+    }
   }
   // 2. The exact commit: a branch on the remote first, else a tag or a sha.
   const sha = await resolveRef(src, req.ref, env, run, left);
@@ -201,6 +211,14 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
       });
     }
   }
+  // The same commit and settings built before: install that build again (every lease is a fresh device,
+  // so an agent rebuilds the same commit often; #61).
+  const key = buildKey(sha, req);
+  const kept = await keptBuild(cache, key);
+  if (kept) {
+    onLine(`Reusing the build of ${sha.slice(0, 12)} made ${kept.builtAt} (same commit and settings)`);
+    return { sha, artifact: kept.artifact, seconds: Math.round((Date.now() - started) / 1000), reused: true };
+  }
   await git(["checkout", "--force", "--detach", sha], "git checkout");
   await git(["clean", "-ffd"], "git clean");
   if (existsSync(join(src, ".gitmodules"))) {
@@ -211,9 +229,57 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     );
   }
 
-  const artifact = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step);
-  onLine(`Built ${relative(cache, artifact)}`);
+  const built = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step);
+  onLine(`Built ${relative(cache, built)}`);
+  const artifact = await keepBuild(cache, key, built).catch(() => built);
   return { sha, artifact, seconds: Math.round((Date.now() - started) / 1000) };
+}
+
+/** What makes two builds the same: the commit and every input that changes the result. */
+export function buildKey(sha: string, req: BuildRequest): string {
+  const inputs = [sha, req.platform, req.project ?? "", req.scheme ?? "", req.configuration ?? "", (req.xcodeSettings ?? []).join(" "), req.gradleTask ?? "", req.dir ?? ""];
+  return createHash("sha256").update(inputs.join("\u0000")).digest("hex").slice(0, 16);
+}
+
+/** The kept build for `key`, if its artifact is still there. */
+async function keptBuild(cache: string, key: string): Promise<{ artifact: string; builtAt: string } | undefined> {
+  try {
+    const manifest = JSON.parse(await readFile(join(cache, "kept", "builds.json"), "utf8")) as Record<string, { artifact: string; builtAt: string }>;
+    const entry = manifest[key];
+    return entry && existsSync(entry.artifact) ? entry : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Copies a finished build out of DerivedData / Gradle's outputs (the next build overwrites those) and
+ * records it. Keeps the newest few, so a host does not fill up with old builds.
+ */
+async function keepBuild(cache: string, key: string, built: string, keep = 3): Promise<string> {
+  const dir = join(cache, "kept");
+  const target = join(dir, key, basename(built));
+  await rm(join(dir, key), { recursive: true, force: true });
+  await mkdir(join(dir, key), { recursive: true, mode: 0o700 });
+  await cp(built, target, { recursive: true, verbatimSymlinks: true });
+  const path = join(dir, "builds.json");
+  const manifest = (await readFile(path, "utf8").then((t) => JSON.parse(t) as Record<string, { artifact: string; builtAt: string }>).catch(() => ({}))) as Record<string, { artifact: string; builtAt: string }>;
+  manifest[key] = { artifact: target, builtAt: new Date().toISOString() };
+  const stale = Object.entries(manifest)
+    .sort((a, b) => b[1].builtAt.localeCompare(a[1].builtAt))
+    .slice(keep);
+  for (const [k] of stale) {
+    delete manifest[k];
+    await rm(join(dir, k), { recursive: true, force: true });
+  }
+  await writeFile(path, JSON.stringify(manifest, null, 2), { mode: 0o600 });
+  return target;
+}
+
+/** A step failed because this host cannot reach the network (#61): say whose problem it is. */
+export function hostNetworkHint(text: string): string | undefined {
+  if (!/Could not resolve host|Failed to connect|Connection (timed out|refused)|Network is unreachable|Temporary failure in name resolution|Could not resolve hostname|unable to access .*: (SSL|OpenSSL)|Could not GET|Connect timed out|UnknownHostException/i.test(text)) return undefined;
+  return "The host that builds cannot reach the network for this (DNS or connection to the git server or package repository). This is the host's network, not yours: only the host owner can fix it, e.g. check on the host `dscacheutil -q host -a name github.com`. A commit id the host built or fetched before still builds from its cache: pass --ref <full sha>.";
 }
 
 async function resolveRef(src: string, ref: string, env: NodeJS.ProcessEnv, run: CommandRunner, left: () => number): Promise<string | undefined> {
@@ -302,7 +368,7 @@ export class FailureDigest {
     } else if (/^The following build commands failed:/.test(line)) {
       this.push(this.blocks, line, 30);
       this.capture = { end: (l) => l.trim() === "" || /^\(\d+ failures?\)/.test(l.trim()), left: 10 };
-    } else if (/(^|\s)(fatal )?error: /i.test(line) || /^e: /.test(line) || /^> Task \S+ FAILED/.test(line)) {
+    } else if (/(^|\s)(fatal )?error: /i.test(line) || /^fatal: /.test(line) || /^e: /.test(line) || /^> Task \S+ FAILED/.test(line)) {
       this.push(this.errors, line.trim(), 12);
     }
   }
@@ -342,7 +408,9 @@ export function isNotableBuildLine(line: string): boolean {
   return (
     /^\$ /.test(line) ||
     /^(Building|Built) /.test(line) ||
-    /^warning: some submodules/.test(line) ||
+    /^warning: (some submodules|git fetch failed)/.test(line) ||
+    /^Reusing the build of /.test(line) ||
+    /^fatal: /.test(line) ||
     /(^|\s)(fatal )?error: /i.test(line) ||
     /^e: /.test(line) ||
     /\*\* (BUILD|ARCHIVE) (SUCCEEDED|FAILED) \*\*/.test(line) ||

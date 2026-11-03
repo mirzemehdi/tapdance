@@ -679,6 +679,19 @@ describe("iOS gaps (#48-#50)", () => {
     expect(e.code).toBe("LEASE_LOST");
     expect(e.hint).toMatch(/lease again/);
   });
+  it("retries a rotation the device was slow to confirm, then trusts the screen's shape (#65)", async () => {
+    const { runDeviceOperation } = await import("./device-operations.js");
+    const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554" } as never;
+    const slow = { code: "COMMAND_FAILED", message: "orientation landscape-left could not confirm the display rotation: adb timed out after 1ms" };
+    let calls = 0;
+    const flaky = { command: { orientation: async () => { if (++calls < 3) throw slow; return {}; } }, capture: { snapshot: async () => ({}) } };
+    const r = await runDeviceOperation({ client: flaky as never, scope: {}, exec: (async () => ({ exitCode: 0, stdout: "", stderr: "" })) as never, local: true }, handle, { kind: "setting", change: { name: "orientation", value: "landscape" } });
+    expect(r.message).toBe("Rotated to landscape-left");
+    expect(calls).toBe(3);
+    const neverConfirms = { command: { orientation: async () => { throw slow; } }, capture: { snapshot: async () => ({ viewport: { width: 2400, height: 1080 } }) } };
+    const turned = await runDeviceOperation({ client: neverConfirms as never, scope: {}, exec: (async () => ({ exitCode: 0, stdout: "", stderr: "" })) as never, local: true }, handle, { kind: "setting", change: { name: "orientation", value: "landscape" } });
+    expect(turned.message).toMatch(/slow to confirm; the screen is landscape/);
+  }, 20_000);
   it("filters iOS logs by the app's executable, without case (#59)", () => {
     const plist = `{\n    "com.measify.pianolune" =     {\n        ApplicationType = User;\n        CFBundleDisplayName = Pianolune;\n        CFBundleExecutable = Pianolune;\n    };\n}`;
     expect(parseSimctlApps(plist)).toEqual([{ bundleId: "com.measify.pianolune", name: "Pianolune", executable: "Pianolune", user: true }]);

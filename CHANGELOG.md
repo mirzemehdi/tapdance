@@ -209,6 +209,21 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   portrait` opened it from the Home Screen. Timed iOS steps can drag (`toX`/`toY`), and with
   `--orientation` nothing is read from the app first.
 
+### Self-test run 5 (issues #61–#65)
+
+- Fixed (#61): a build whose `git fetch` failed said only "git fetch failed (exit 128)"; the message now
+  ends with git's `fatal:` line and says the host's network is at fault (details.reason HOST_NETWORK). A
+  full commit id the host already has builds from its cache when the fetch fails, and builds are kept
+  per commit and settings, so the same request reinstalls the earlier build in seconds.
+- Fixed (#62): `device setting time|clock|date|voiceover|talkback|locale` and `device storekit` answer
+  NOT_SUPPORTED with why and what to use instead, not "Unknown setting".
+- Fixed (#63): `record stop` exited 7 ("terminated") although the video was saved complete. A cut
+  download is fetched again with Tapdance's long download, and a complete MP4 already on disk is kept.
+- Fixed (#64): `ui audit` flagged Android targets of exactly 48 dp, iOS controls inside a bigger row,
+  and their "0" values as duplicates; sizes are compared in whole dp and nested controls are left out.
+- Fixed (#65): rotating an Android emulator right after `app kill` failed with "adb timed out after
+  1ms"; it now tries three times with longer pauses and trusts the screen's shape in the end.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

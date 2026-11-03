@@ -252,7 +252,7 @@ export class SimlockHttp {
    * A worker guard's build route: builds on the host and installs on the lease, streaming log lines
    * to `onLine`. Answers the result, or throws the build's error.
    */
-  async build(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 4 * 3_600_000): Promise<{ sha: string; seconds: number; artifact: string; installed: boolean }> {
+  async build(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 4 * 3_600_000): Promise<{ sha: string; seconds: number; artifact: string; installed: boolean; reused?: boolean }> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/build`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -264,7 +264,7 @@ export class SimlockHttp {
     }
     if (!response.ok || !response.body) throw await toError(response, "/v1/leases/{id}/build");
     let buffer = "";
-    let result: { sha: string; seconds: number; artifact: string; installed: boolean } | undefined;
+    let result: { sha: string; seconds: number; artifact: string; installed: boolean; reused?: boolean } | undefined;
     const decoder = new TextDecoder();
     for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
       buffer += decoder.decode(chunk, { stream: true });

@@ -46,10 +46,12 @@ function descendantLabel(elements: UiElement[], index: number): string | undefin
 
 export function auditScreen(screen: ScreenInspection, platform: "ios" | "android"): AuditReport {
   const elements = screen.elements;
-  // Android rects are pixels: approximate the density from the short side of a phone (about 411 dp).
+  // Android rects are pixels; a phone is about 411 dp wide (Pixel 7: 1080 px at 2.625). Sizes are
+  // compared in whole dp, so a target of exactly 48 dp passes (#64).
   const vp = screen.viewport;
-  const minTarget = platform === "ios" ? IOS_MIN_PT : ANDROID_MIN_DP * (vp ? Math.min(vp.width, vp.height) / 411 : 2.625);
-  const unit = platform === "ios" ? "pt" : "px";
+  const density = platform === "ios" ? 1 : vp ? Math.min(vp.width, vp.height) / 411.4 : 2.625;
+  const minTarget = platform === "ios" ? IOS_MIN_PT : ANDROID_MIN_DP;
+  const unit = platform === "ios" ? "pt" : "dp";
   const findings: AuditFinding[] = [];
   const of = (e: UiElement, rule: AuditRule, severity: AuditFinding["severity"], detail: string): AuditFinding => ({
     rule,
@@ -61,19 +63,29 @@ export function auditScreen(screen: ScreenInspection, platform: "ios" | "android
     ...(e.rect ? { rect: e.rect } : {}),
     detail,
   });
+  const area = (e: UiElement) => (e.rect ? e.rect.width * e.rect.height : 0);
+  const inside = (a: UiElement, b: UiElement) =>
+    !!a.rect && !!b.rect && a.rect.x >= b.rect.x && a.rect.y >= b.rect.y && a.rect.x + a.rect.width <= b.rect.x + b.rect.width && a.rect.y + a.rect.height <= b.rect.y + b.rect.height;
+  const candidates = elements.filter((e) => !(e.identifier ?? "").startsWith("com.android.systemui:") && CONTROL.test(e.role) && e.enabled !== false);
+  // A control inside a bigger one (the switch inside its Settings row) is part of that row to a screen
+  // reader and to a finger: the row is what gets announced and touched (#64).
+  const nested = new Set(candidates.filter((e) => candidates.some((o) => o !== e && area(o) > area(e) && inside(e, o))));
   const controls: Array<{ e: UiElement; spoken?: string }> = [];
   elements.forEach((e, i) => {
     if ((e.identifier ?? "").startsWith("com.android.systemui:")) return;
     if (CONTROL.test(e.role) && e.enabled !== false) {
+      if (nested.has(e)) return;
       const spoken = e.label?.trim() || e.value?.trim() || e.placeholder?.trim() || descendantLabel(elements, i);
       controls.push({ e, ...(spoken ? { spoken } : {}) });
       if (!spoken) {
         findings.push(of(e, "unlabelled-control", "error", `A ${e.role} with nothing to announce${e.identifier ? ` (only the id "${e.identifier}", which a screen reader does not read)` : ""}: give it an accessibility label.`));
       }
-      if (e.rect && e.rect.width > 0 && e.rect.height > 0 && (e.rect.width < minTarget || e.rect.height < minTarget)) {
-        findings.push(of(e, "small-target", "warning", `Touch target ${Math.round(e.rect.width)}×${Math.round(e.rect.height)} ${unit}, under the ${platform === "ios" ? "44 pt" : "48 dp"} minimum.`));
+      if (e.rect && e.rect.width > 0 && e.rect.height > 0) {
+        const w = Math.round(e.rect.width / density);
+        const h = Math.round(e.rect.height / density);
+        if (w < minTarget || h < minTarget) findings.push(of(e, "small-target", "warning", `Touch target ${w}×${h} ${unit}, under the ${minTarget} ${unit} minimum.`));
       }
-    } else if (IMAGE.test(e.role) && !e.label?.trim() && e.rect && e.rect.width >= 24 && e.rect.height >= 24) {
+    } else if (IMAGE.test(e.role) && !e.label?.trim() && e.rect && e.rect.width >= 24 * density && e.rect.height >= 24 * density) {
       findings.push(of(e, "unlabelled-image", "info", "An image with no label: fine if it is decorative (hide it from assistive technology), otherwise describe it."));
     }
   });
@@ -84,8 +96,6 @@ export function auditScreen(screen: ScreenInspection, platform: "ios" | "android
     byLabel.set(key, [...(byLabel.get(key) ?? []), e]);
   }
   // A row and the button inside it with the same label are one control to a screen reader.
-  const inside = (a: UiElement, b: UiElement) =>
-    !!a.rect && !!b.rect && a.rect.x >= b.rect.x && a.rect.y >= b.rect.y && a.rect.x + a.rect.width <= b.rect.x + b.rect.width && a.rect.y + a.rect.height <= b.rect.y + b.rect.height;
   for (const [label, all] of byLabel) {
     const same = all.filter((e) => !all.some((o) => o !== e && inside(e, o)));
     if (same.length < 2) continue;
