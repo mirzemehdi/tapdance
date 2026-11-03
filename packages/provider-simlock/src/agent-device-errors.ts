@@ -45,6 +45,8 @@ const OWNED_BY = /device \S+ is owned by session/i;
 const DEAD_OWNER = /can no longer release|device release .*--stale/i;
 /** `details.reason` of a TapdanceError for a device blocked by a dead session's claim. */
 export const STALE_CLAIM_REASON = "STALE_DEVICE_CLAIM";
+/** `details.reason` when agent-device's daemon on the host did not answer one call (#67). */
+export const DAEMON_UNAVAILABLE_REASON = "DAEMON_UNAVAILABLE";
 const STALE_CLAIM_HINT =
   "An earlier session's claim on this device outlived its worker process. Lease again: a worker guard clears such claims before each lease. On the worker machine, `tapdance worker cleanup` clears them by hand.";
 
@@ -68,6 +70,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   let retryable: boolean | undefined;
   let staleClaim = false;
   let noBackendHint = false;
+  let daemonBusy = false;
 
   if (LEASE_GONE.test(message) || (rawCode === "UNAUTHORIZED" && LEASE_GONE_REASONS.has(reason))) code = "LEASE_LOST";
   else if (/refused: simlock picks the device|refused: no device leased/i.test(message)) {
@@ -85,7 +88,14 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     code = "WORKER_OFFLINE";
     retryable = true;
   } else if (/not available on this simlock|try again/i.test(message)) code = "PROVIDER_UNAVAILABLE";
-  else if (/ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up|ETIMEDOUT/i.test(message)) code = "PROVIDER_UNREACHABLE";
+  else if (/Remote daemon is unavailable/i.test(message)) {
+    // agent-device's daemon on the host did not answer this once (busy, or restarting) (#67).
+    code = "PROVIDER_UNREACHABLE";
+    retryable = true;
+    hint = "The host's device daemon did not answer this call; run it again. If it keeps happening, the worker on the host restarted or is overloaded: check `tapdance doctor`.";
+    noBackendHint = true;
+    daemonBusy = true;
+  } else if (/ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up|ETIMEDOUT/i.test(message)) code = "PROVIDER_UNREACHABLE";
   else if (/timed out waiting for a device/i.test(message)) code = "NO_CAPACITY";
   else if (/^refused by simlock:/i.test(message)) {
     // Simlock's allocate refusals all arrive as INVALID_ARGS; the text says which kind.
@@ -120,6 +130,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   if (rawCode) details["backendCode"] = rawCode;
   if (reason) details["reason"] = reason;
   if (staleClaim) details["reason"] = STALE_CLAIM_REASON;
+  if (daemonBusy) details["reason"] = DAEMON_UNAVAILABLE_REASON;
   if (rawCode === "AMBIGUOUS_MATCH") {
     const candidates = candidateLabels(backendDetails);
     if (candidates.length > 0) details["candidates"] = candidates;

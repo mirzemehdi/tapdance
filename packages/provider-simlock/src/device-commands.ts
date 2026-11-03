@@ -224,9 +224,10 @@ export const ios = {
    * stdout, which the system log does not keep. Simlock puts the simulator after the options.
    */
   /** Launch Services' lines about URLs apps asked to open, over the last `minutes` (#60). */
-  linkLog(minutes: number): DeviceCommand {
-    const m = Math.max(1, Math.min(30, Math.round(minutes)));
-    return { tool: "simctl", args: ["spawn", "log", "show", "--last", `${m}m`, "--style", "compact", "--predicate", 'subsystem == "com.apple.launchservices" AND eventMessage CONTAINS "URL"'] };
+  linkLog(minutes: number, unit: "m" | "s" = "m"): DeviceCommand {
+    const m = unit === "s" ? Math.max(5, Math.min(59, Math.round(minutes))) : Math.max(1, Math.min(30, Math.round(minutes)));
+    // [c]: Launch Services writes both "open URL" and "handle url scheme" (#68).
+    return { tool: "simctl", args: ["spawn", "log", "show", "--last", `${m}${unit}`, "--style", "compact", "--predicate", 'subsystem == "com.apple.launchservices" AND eventMessage CONTAINS[c] "url"'] };
   },
   launchWithConsole(appId: string, stdoutPath: string, stderrPath: string, args: string[] = []): DeviceCommand {
     return { tool: "simctl", args: ["launch", "--terminate-running-process", `--stdout=${stdoutPath}`, `--stderr=${stderrPath}`, appId, ...args] };

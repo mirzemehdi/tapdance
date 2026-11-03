@@ -679,6 +679,32 @@ describe("iOS gaps (#48-#50)", () => {
     expect(e.code).toBe("LEASE_LOST");
     expect(e.hint).toMatch(/lease again/);
   });
+  it("reads a filled field back and fills it slower when characters were dropped (#58)", async () => {
+    const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "ios", deviceId: "U", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "ios:mobile:U", tenant: "local", runId: "r", clientId: "c" } } as never;
+    const make = (shown: string[]) => {
+      const delays: Array<number | undefined> = [];
+      const p = new (class extends SimlockProvider {
+        protected override agentClient() {
+          return { interactions: { fill: async (o: { delayMs?: number }) => (delays.push(o.delayMs), { message: "filled" }) } } as never;
+        }
+        override async inspect() {
+          return { elements: [{ ref: "@e8", role: "text-view", label: "Code", identifier: "settings_code_field", value: shown.shift() ?? "" }], truncated: false, warnings: [] };
+        }
+      })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+      return { p, delays };
+    };
+    const text = "WRONGCODE1 Für Elise 2026";
+    const fixed = make(["WRONGCOE1 FDr Elise 026", text]);
+    const r = await fixed.p.typeText(handle, text, { kind: "id", id: "settings_code_field" });
+    expect(fixed.delays).toEqual([undefined, 80]);
+    expect(r.message).toMatch(/with 80 ms between keystrokes/);
+    const never = make(["WRONGCOE1", "WRONGCOE1", "WRONGCOE1"]);
+    await expect(never.p.typeText(handle, text, { kind: "id", id: "settings_code_field" })).rejects.toThrow(/The field reads "WRONGCOE1"/);
+    expect(never.delays).toEqual([undefined, 80, 150]);
+    const asked = make(["WRONGCOE1"]);
+    await expect(asked.p.typeText(handle, text, { kind: "id", id: "settings_code_field" }, { delayMs: 40 })).rejects.toThrow(/even at 40 ms/);
+  });
+
   it("retries a rotation the device was slow to confirm, then trusts the screen's shape (#65)", async () => {
     const { runDeviceOperation } = await import("./device-operations.js");
     const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554" } as never;

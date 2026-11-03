@@ -224,6 +224,19 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (#65): rotating an Android emulator right after `app kill` failed with "adb timed out after
   1ms"; it now tries three times with longer pauses and trusts the screen's shape in the end.
 
+### Self-test run 5b (issues #58, #66–#68)
+
+- Fixed (#58): a Compose field could report "Filled 25 chars" while holding other text; the field is now
+  read back after a fill, refilled at 80 ms and 150 ms between keystrokes, and the fill fails with what
+  the field shows if it still differs. On iOS a settled tap that opened a link in Safari no longer leaves
+  your app in front: Safari is brought back and the reply says so.
+- Fixed (#66): an Android build that Gradle found up to date failed with "no new .apk was found"; the
+  APK on disk is installed.
+- Fixed (#67): "Remote daemon is unavailable" for one call is retried once after a short pause, and the
+  hint no longer names agent-device internals.
+- Fixed (#68): `device links` showed web links as a bare `https:`: the log filter missed Launch
+  Services' "url scheme" lines (case); the app that took the link shows again.
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

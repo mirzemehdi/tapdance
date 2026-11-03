@@ -316,7 +316,14 @@ export class Tapdance {
   private async onDevice<T>(fn: (handle: LeaseHandle, provider: DeviceProvider, record: SessionRecord) => Promise<T>): Promise<T> {
     const { record, provider } = await this.active();
     try {
-      const result = await fn(record.handle, provider, record);
+      // The host's device daemon can miss one call (#67): the call never reached the device, so run it
+      // once more after a short pause before failing the agent's step.
+      const result = await fn(record.handle, provider, record).catch(async (error: unknown) => {
+        if (!(error instanceof TapdanceError) || error.details?.["reason"] !== "DAEMON_UNAVAILABLE") throw error;
+        this.progress("The host's device daemon did not answer; trying again");
+        await new Promise((r) => setTimeout(r, 1500));
+        return fn(record.handle, provider, record);
+      });
       await this.store
         .update(this.session.id, (r) => (r.handle.leaseId === record.handle.leaseId ? { ...r, lastUsedAt: new Date().toISOString() } : undefined))
         .catch(() => undefined);

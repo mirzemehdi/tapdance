@@ -41,6 +41,7 @@ import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.
 import { releaseStaleDeviceClaims } from "./stale-claims.js";
 import { crashReportsDir, listCrashReports, readCrashReport, summarizeCrash } from "./crash-reports.js";
 import { clearConsole, consolePaths, readConsole } from "./console-capture.js";
+import { parseIosLinkLog, type OpenedLink } from "./links.js";
 import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, viewportFromConfig, type InputConfig, type PlayedTap } from "./touch-sequence.js";
 import { WebSocket } from "ws";
 import * as deviceCommands from "./device-commands.js";
@@ -737,6 +738,18 @@ export class SimlockProvider implements DeviceProvider {
       const raw = await this.rawTap(handle, { x: Math.round(out.point.x), y: Math.round(out.point.y) }, target);
       return { ...raw, warning: "This system screen ignored the first tap; it was repeated as a raw input event" };
     }
+    // A tap that opened a link in another app (Safari) looks like "same screen": the settle step read
+    // the session's app, which brings it back to the front (#58). Put the app that took the link back.
+    if (handle.platform === "ios" && unchanged && target.kind !== "point") {
+      const opened = await this.linkOpenedJustNow(handle).catch(() => undefined);
+      if (opened?.handler) {
+        await this.launchApp(handle, opened.handler).catch(() => undefined);
+        return {
+          ...out,
+          message: `${out.message}; it opened ${opened.url ?? `a ${opened.scheme}: link`} in ${opened.handler}, which is in front now (read it with \`ui inspect --app ${opened.handler}\`)`,
+        };
+      }
+    }
     // An iOS switch row reports the whole row as the switch, so its centre lands on the label and the
     // toggle does not move (#58). Tap the control itself, at the row's trailing edge.
     if (handle.platform === "ios" && unchanged && out.point && target.kind !== "point") {
@@ -756,6 +769,22 @@ export class SimlockProvider implements DeviceProvider {
       (e) => /switch|toggle/i.test(e.role) && e.rect && e.rect.width > 120 && point.x >= e.rect.x && point.x <= e.rect.x + e.rect.width && point.y >= e.rect.y && point.y <= e.rect.y + e.rect.height,
     );
     return row?.rect ? switchKnobPoint(row.rect) : undefined;
+  }
+
+  /** A link another app took during this tap and its settle: the last 10 s of Launch Services' log. */
+  private async linkOpenedJustNow(handle: LeaseHandle): Promise<OpenedLink | undefined> {
+    const cmd = deviceCommands.ios.linkLog(10, "s");
+    const r = await this.execOn(handle, cmd.tool, cmd.args, 30_000);
+    return parseIosLinkLog(r.stdout).filter((l) => l.handled === true && l.handler).at(-1);
+  }
+
+  /** What a text field shows now, or undefined when it cannot be read (a secure field, no match). */
+  private async fieldValue(handle: LeaseHandle, target: ElementTarget): Promise<string | undefined> {
+    if (target.kind === "point") return undefined;
+    const { elements } = await this.inspect(handle, { interactiveOnly: false });
+    const field = elements.find((e) => matchesTarget(e, target) && /text|field|search|edit/i.test(e.role)) ?? elements.find((e) => matchesTarget(e, target));
+    if (!field || /secure|password/i.test(field.role) || /^[•●*]+$/.test(field.value ?? "")) return undefined;
+    return field.value ?? "";
   }
 
   /**
@@ -969,15 +998,29 @@ export class SimlockProvider implements DeviceProvider {
     const fill = (extra: { delayMs?: number }) => client.interactions.fill({ ...toAgentDeviceTarget(target!), text, settle: true, ...extra, ...this.scope(handle) } as never);
     try {
       if (target !== undefined) {
-        try {
-          return actionResult((await fill(delay)) as never, `Filled ${describe(target)}`);
-        } catch (error) {
-          // A field that drops fast keystrokes (Compose Multiplatform on iOS, #58) fails agent-device's
-          // read-back; filling replaces the content, so one slower retry is safe.
-          if (options.delayMs !== undefined || !/mismatch|read.?back|delay-?ms/i.test(`${(error as Error).message} ${JSON.stringify((error as { details?: unknown }).details ?? {})}`)) throw error;
-          const r = actionResult((await fill({ delayMs: 80 })) as never, `Filled ${describe(target)}`);
-          return { ...r, message: `${r.message} (retried with 80 ms between keystrokes after the field dropped characters)` };
+        // A field that drops fast keystrokes (Compose Multiplatform on iOS) can fail agent-device's
+        // read-back, or pass it and still hold other text (#58: "Filled 25 chars", field "WRONGCOE1 FDr
+        // Elise 026"). Read the field back ourselves; filling replaces the content, so slower retries are
+        // safe. The caller's own --delay-ms is tried as given.
+        const delays = options.delayMs !== undefined ? [delay.delayMs!] : [undefined, 80, 150];
+        let last: ActionResult | undefined;
+        let shows: string | undefined;
+        for (const [i, d] of delays.entries()) {
+          try {
+            last = actionResult((await fill(d === undefined ? {} : { delayMs: d })) as never, `Filled ${describe(target)}`);
+          } catch (error) {
+            if (i === delays.length - 1 || !/mismatch|read.?back|delay-?ms/i.test(`${(error as Error).message} ${JSON.stringify((error as { details?: unknown }).details ?? {})}`)) throw error;
+            continue;
+          }
+          shows = await this.fieldValue(handle, target).catch(() => undefined);
+          if (shows === undefined || sameText(shows, text)) {
+            return i === 0 ? last : { ...last, message: `${last.message} (with ${d} ms between keystrokes: the field dropped characters when typed faster)` };
+          }
         }
+        throw new TapdanceError("DEVICE_ERROR", `The field reads "${shows}", not the ${text.length} characters typed, even at ${delays.at(-1) ?? 0} ms between keystrokes`, {
+          hint: "Tap the field, clear it and type in shorter parts, or try a larger --delay-ms. A keyboard tutorial or suggestion bar over the field can eat keystrokes: dismiss it first.",
+          details: { typed: text, fieldNow: shows },
+        });
       }
       const result = await client.interactions.type({ text, ...delay, ...this.scope(handle) } as never);
       return actionResult(result as never, `Typed ${text.length} characters`);
@@ -1568,6 +1611,11 @@ export function validateAppPath(appPath: string, platform: Platform, physical: b
 function clampLines(lines: number): number {
   if (!Number.isInteger(lines) || lines < 1) return 200;
   return Math.min(lines, 5000);
+}
+
+/** Whether a field's text is what was typed (ignoring surrounding space and Unicode form). */
+export function sameText(shown: string, typed: string): boolean {
+  return shown.normalize("NFC").trim() === typed.normalize("NFC").trim();
 }
 
 /** Where an iOS switch row's toggle sits: 42 pt in from its trailing edge, vertically centred. */

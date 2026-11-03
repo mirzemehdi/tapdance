@@ -244,7 +244,7 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
 
 const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
 const LINES = /^[1-9][0-9]{0,3}$/;
-const DURATION = /^[1-9][0-9]?m$/;
+const DURATION = /^[1-9][0-9]?[ms]$/;
 /** The only log predicates Tapdance generates (see provider-simlock), with the app id slot validated. */
 const PREDICATE = /^[A-Za-z0-9_.()" =[\]-]+$/;
 

@@ -450,8 +450,10 @@ async function buildAndroid(req: BuildRequest, src: string, step: Step): Promise
   await chmod(gradlew, 0o755);
   const startedAt = Date.now();
   await step(gradlew, [req.gradleTask ?? "assembleDebug", "--console=plain"], "gradle", dir);
-  const apk = await newestApk(dir, startedAt - 5_000);
-  if (!apk) throw new TapdanceError("DEVICE_ERROR", "Gradle finished but no new .apk was found under build/outputs/apk");
+  // A Gradle run that found everything up to date writes no new APK (#66): the newest one on disk is
+  // the build of this commit, since the checkout just ran.
+  const apk = (await newestApk(dir, startedAt - 5_000)) ?? (await newestApk(dir, 0));
+  if (!apk) throw new TapdanceError("DEVICE_ERROR", "Gradle finished but no .apk was found under build/outputs/apk", { hint: "Pass the Gradle task that assembles an APK (--gradle-task :app:assembleDebug) and the folder with gradlew (--dir)." });
   return apk;
 }
 
