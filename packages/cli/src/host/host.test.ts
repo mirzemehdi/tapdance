@@ -27,6 +27,10 @@ import {
   linuxEmulatorSettings,
   parseLinger,
   serveNeedsOperator,
+  parseIdleStop,
+  parseMaxUptime,
+  resolveHostStop,
+  describeIdle,
 } from "./plan.js";
 
 /** Pure parts of `host up/status/down` and `connect`. No test here runs tailscale, launchctl, Simlock or a device. */
@@ -175,6 +179,59 @@ describe("pairing and rerun commands", () => {
     // The "run this again" hint keeps --warm (it used to drop it).
     expect(hostUpCommand({ warm: "android=0" }, { allowAdminAccount: true })).toBe("tapdance host up --allow-admin-account --warm android=0");
     expect(hostUpCommand({})).toBe("tapdance host up");
+    expect(hostUpCommand({ idleStop: "off", maxUptime: "12" })).toBe("tapdance host up --idle-stop off --max-uptime 12");
+  });
+});
+
+describe("cost guard options", () => {
+  const usage = (fn: () => unknown) => {
+    try {
+      fn();
+    } catch (e) {
+      return e as TapdanceError;
+    }
+    throw new Error("did not throw");
+  };
+
+  it("parses --idle-stop and --max-uptime: off, 0, numbers in range; refuses the rest with USAGE", () => {
+    expect(parseIdleStop("off")).toBe(0);
+    expect(parseIdleStop("OFF")).toBe(0);
+    expect(parseIdleStop("0")).toBe(0);
+    expect(parseIdleStop("30")).toBe(30);
+    expect(parseIdleStop("1440")).toBe(1440);
+    expect(parseMaxUptime("12")).toBe(12);
+    expect(parseMaxUptime("off")).toBe(0);
+    for (const bad of ["1441", "-5", "30m", "1.5", "", "never", "99999"]) expect(usage(() => parseIdleStop(bad)).code).toBe("USAGE");
+    for (const bad of ["721", "8h", "-1"]) expect(usage(() => parseMaxUptime(bad)).code).toBe("USAGE");
+  });
+
+  it("defaults idle stop to 30 min on a detected cloud VM only, and records it", () => {
+    expect(resolveHostStop({ platform: "linux", cloudVm: "Google Cloud" })).toEqual({ idleMinutes: 30, maxUptimeHours: 0, idleSource: "cloud default", write: true, changed: true });
+    expect(resolveHostStop({ platform: "linux" })).toEqual({ idleMinutes: 0, maxUptimeHours: 0, idleSource: "off", write: false, changed: false });
+  });
+
+  it("keeps what the policy holds, and a flag wins over both", () => {
+    const current = { idleMinutes: 0, maxUptimeHours: 6 };
+    expect(resolveHostStop({ platform: "linux", cloudVm: "Google Cloud", current })).toMatchObject({ idleMinutes: 0, maxUptimeHours: 6, idleSource: "policy", write: false, changed: false });
+    expect(resolveHostStop({ platform: "linux", cloudVm: "Google Cloud", idleStop: "off" })).toMatchObject({ idleMinutes: 0, idleSource: "flag", write: true, changed: false });
+    expect(resolveHostStop({ platform: "linux", current, idleStop: "45", maxUptime: "off" })).toMatchObject({ idleMinutes: 45, maxUptimeHours: 0, write: true, changed: true });
+    expect(resolveHostStop({ platform: "linux", current: { idleMinutes: 45, maxUptimeHours: 0 }, idleStop: "45" })).toMatchObject({ write: true, changed: false });
+  });
+
+  it("refuses to turn either limit on for a Mac (it never powers off); off is accepted", () => {
+    const e = usage(() => resolveHostStop({ platform: "darwin", idleStop: "30" }));
+    expect(e.code).toBe("USAGE");
+    expect(e.message).toContain("never does to a Mac");
+    expect(usage(() => resolveHostStop({ platform: "darwin", maxUptime: "8" })).code).toBe("USAGE");
+    expect(resolveHostStop({ platform: "darwin", idleStop: "off", cloudVm: "a virtual machine" })).toMatchObject({ idleMinutes: 0, write: false });
+  });
+
+  it("says how long the host has been idle from the guard's last check, if recent", () => {
+    const now = Date.parse("2026-11-03T12:00:00Z");
+    expect(describeIdle({ checkedAt: "2026-11-03T11:59:30Z", lastActivityAt: "2026-11-03T11:47:00Z", leases: 0 }, now)).toBe("idle 12 min");
+    expect(describeIdle({ checkedAt: "2026-11-03T11:59:30Z", lastActivityAt: "2026-11-03T11:59:30Z", leases: 2 }, now)).toBe("in use (2 lease(s))");
+    expect(describeIdle({ checkedAt: "2026-11-03T11:00:00Z", lastActivityAt: "2026-11-03T10:00:00Z" }, now)).toBeUndefined();
+    expect(describeIdle(undefined, now)).toBeUndefined();
   });
 });
 
@@ -196,6 +253,8 @@ describe("rendering", () => {
       "self-test: PASS (screenshot ok)",
       "on the agent machine:  tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-vps.token",
     ]);
+    const withCost = renderReadyBlock({ endpoint: "http://127.0.0.1:4720", tokenPath: "/h/p.token", devices: "android 34", selfTest: "PASS", costGuard: "idle stop after 30 min, uptime cap off" });
+    expect(withCost.split("\n")).toContain("cost guard: idle stop after 30 min, uptime cap off");
   });
 
   it("tags a token with a short fingerprint and finds a clipboard tool (#22)", () => {

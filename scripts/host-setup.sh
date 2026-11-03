@@ -17,8 +17,9 @@
 #      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there (you log in in the app);
 #                Linux: tailscale.com's installer, then `sudo tailscale up --operator=$USER`, which
 #                prints a login link (asked first), so the guard can be served without root.
-#    Only system packages (Linux: git, unzip; Tailscale) and the kvm group use sudo, and only after you
-#    said yes. Everything else goes into your home folder.
+#    Only system packages (Linux: git, unzip; Tailscale), the kvm group and, on a Linux cloud VM, a
+#    sudoers rule that allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle)
+#    use sudo, and only after you said yes. Everything else goes into your home folder.
 # 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, corepack pnpm,
 #    build, a link in ~/.local/bin), then runs `tapdance host up` with your other arguments.
 #
@@ -106,6 +107,15 @@ tailscale_bin() {
   return 1
 }
 
+# A Linux cloud VM, from the DMI strings (Google Cloud names itself "Google"; the rest are common clouds).
+cloud_vm() {
+  [[ "$OS" == Linux ]] || return 1
+  local dmi; dmi="$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null || true)"
+  [[ "$dmi" =~ Google|Amazon|EC2|Microsoft|DigitalOcean|Hetzner|OpenStack|Scaleway|Vultr|Linode|Akamai|Oracle|Alibaba ]]
+}
+# The guard's cost guard powers an idle cloud VM off with `sudo -n /usr/bin/systemctl poweroff`.
+poweroff_rule_ok() { sudo -n -l /usr/bin/systemctl poweroff >/dev/null 2>&1; }
+
 MISSING=(); SUDO_STEPS=(); NOTES=()
 check_all() {
   MISSING=(); SUDO_STEPS=(); NOTES=()
@@ -131,6 +141,9 @@ check_all() {
     elif [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
       MISSING+=("kvm-group"); SUDO_STEPS+=("kvm-group")
     fi
+    if [[ -e /dev/kvm ]] && cloud_vm && command -v sudo >/dev/null 2>&1 && ! poweroff_rule_ok; then
+      MISSING+=("poweroff-rule"); SUDO_STEPS+=("poweroff-rule")
+    fi
   fi
   if [[ "$OS" == Darwin ]] && ! xcrun simctl help >/dev/null 2>&1; then
     NOTES+=("Xcode (optional, for iOS simulators): install it from the App Store; Android works without it")
@@ -149,6 +162,7 @@ describe() {
     system-image) echo "Android system image $IMAGE (sdkmanager, about 1.5 GB)" ;;
     tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
     kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
+    poweroff-rule) echo "a sudoers rule that lets $(id -un) run only /usr/bin/systemctl poweroff, so the guard can stop this cloud VM when it sits idle (sudo; /etc/sudoers.d/tapdance-poweroff, checked with visudo)" ;;
   esac
 }
 
@@ -265,6 +279,21 @@ install_tailscale() {
   fi
 }
 
+# Linux cloud VM: let this user power the machine off (and nothing else as root), so the guard's cost
+# guard (`tapdance host up --idle-stop`) can stop an idle VM. Written under a name sudo ignores (it has
+# a dot), checked with visudo, then moved into place: a bad file never reaches sudo's include dir.
+install_poweroff_rule() {
+  local rule; rule="$(id -un) ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff"
+  local staged=/etc/sudoers.d/tapdance-poweroff.new
+  printf '%s\n' "$rule" > "$TMP/tapdance-poweroff"
+  if sudo install -m 440 -o root -g root "$TMP/tapdance-poweroff" "$staged" && sudo visudo -cf "$staged" >/dev/null; then
+    sudo mv "$staged" /etc/sudoers.d/tapdance-poweroff
+  else
+    sudo rm -f "$staged"
+    NOTES+=("poweroff rule: not installed (visudo refused it); the guard cannot stop this VM when idle until you add: $rule")
+  fi
+}
+
 # Linux: join the tailnet (tailscale up prints a login link to open in any browser) and make this user
 # the operator, since tailscaled lets only root and the operator run `tailscale serve`.
 linux_tailscale() {
@@ -330,6 +359,7 @@ if (( ! SKIP_PREREQ )); then
           if ! { command -v setfacl >/dev/null 2>&1 && sudo setfacl -m "u:$(id -un):rw" /dev/kvm; }; then
             NOTES+=("log out and back in so the kvm group applies, then run this script again")
           fi ;;
+        poweroff-rule) install_poweroff_rule ;;
       esac
     done
     SDK_PKGS=()
@@ -340,7 +370,7 @@ if (( ! SKIP_PREREQ )); then
     write_env_file
     check_all
     for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
-    remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group ]] || remaining+=("$m"); done
+    remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group || "$m" == poweroff-rule ]] || remaining+=("$m"); done
     (( ${#remaining[@]} == 0 )) || die "still missing after installing: ${remaining[*]}"
   fi
   (( CHECK )) || linux_tailscale

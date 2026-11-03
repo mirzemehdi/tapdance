@@ -22,6 +22,7 @@ import { readSecret, tokenOrigin } from "./commands-setup.js";
 import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, workerRunning, workerServiceInstalled } from "./commands-worker.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
+import { HOST_STOP_COMMAND, HOST_STOP_SUDO_CHECK, describeHostStop, hostStopApplies, sudoersInstallCommand, sudoersRule } from "./guard/host-stop.js";
 import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
 import {
   assertHostPlatform,
@@ -50,6 +51,8 @@ import {
   parseWarm,
   parseLinger,
   serveNeedsOperator,
+  resolveHostStop,
+  describeIdle,
   type HostUpOptions,
   type StepRef,
 } from "./host/plan.js";
@@ -152,6 +155,44 @@ async function ensureLinger(out: Output): Promise<void> {
   out.warn(`Could not turn on linger for ${user} (${r.out.split("\n")[0] ?? "loginctl failed"}): the worker and guard stop when you log out. Run \`sudo loginctl enable-linger ${user}\`.`);
 }
 
+/** sudo lets this account run the cost guard's stop command without a password. */
+async function hostStopAllowed(): Promise<boolean> {
+  return (await runCommand("sudo", [...HOST_STOP_SUDO_CHECK])).ok;
+}
+
+/** Says, once, how to let the guard power this machine off. host up goes on either way. */
+function warnHostStopNotAllowed(out: Output): void {
+  const user = userInfo().username;
+  out.warn(
+    [
+      `The cost guard cannot power this machine off yet: sudo does not let ${user} run \`${HOST_STOP_COMMAND.join(" ")}\` without a password. Allow exactly that command with this sudoers rule:`,
+      `  ${sudoersRule(user)}`,
+      "Install it with:",
+      `  ${sudoersInstallCommand(user)}`,
+      "Until then the guard logs the failed stop once an hour and the machine keeps running (and billing).",
+    ].join("\n"),
+  );
+}
+
+/**
+ * Writes `policy.hostStop` when `host up` chose a value (a flag, or the cloud default) and checks that
+ * sudo allows the stop command. Returns the settings the guard runs with.
+ */
+async function applyHostStop(out: Output, choice: ReturnType<typeof resolveHostStop>, platform: "darwin" | "linux"): Promise<{ idleMinutes: number; maxUptimeHours: number } | undefined> {
+  const { policy, path } = await loadPolicy();
+  if (choice.write) {
+    const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    raw["hostStop"] = { idleMinutes: choice.idleMinutes, maxUptimeHours: choice.maxUptimeHours };
+    await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
+  }
+  const settings = choice.write ? { idleMinutes: choice.idleMinutes, maxUptimeHours: choice.maxUptimeHours } : policy.hostStop;
+  if (hostStopApplies(settings, platform)) {
+    out.progress(`Cost guard: ${describeHostStop(settings, platform)}${choice.idleSource === "cloud default" ? " (the default on a cloud VM; --idle-stop off turns it off)" : ""}`);
+    if (!(await hostStopAllowed())) warnHostStopNotAllowed(out);
+  }
+  return settings;
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   const cmd = clipboardCommand(osPlatform(), (bin) => findOnPath(bin, process.env["PATH"] ?? "", existsSync) !== undefined);
   if (!cmd) return false;
@@ -206,6 +247,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .option("--skip-self-test", "do not lease a device through the guard at the end")
     .option("--scope <areas>", "limit the pairing token to these policy areas, e.g. interaction,inspection,screenshots,streaming,input (no install: it cannot put apps on the devices)")
     .option("--warm <counts>", "booted spare devices kept ready for fast leases, per platform, e.g. android=1,ios=0 (0 frees the memory; default: Simlock keeps one per device kind used)")
+    .option("--idle-stop <minutes|off>", "Linux cloud VMs: power the machine off after this many minutes with no lease, request or build (default on a detected cloud VM: 30; elsewhere off; refused on macOS)")
+    .option("--max-uptime <hours|off>", "Linux cloud VMs: after this many hours up, take no new leases and power off when the last one ends (default off; refused on macOS)")
     .option("-y, --yes", "approve pairing without a prompt (you are at this machine)")
     .action(async (o: HostUpOptions) => {
       const g = globals();
@@ -213,6 +256,16 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       try {
         const platform = assertHostPlatform(osPlatform());
         const label = sanitizeLabel(o.label ?? defaultLabel(hostname())) || "host";
+        // Decided before anything changes, so a bad or refused value stops here.
+        const currentStop = (await loadPolicy()).policy.hostStop;
+        const cloudVm = platform === "linux" ? detectCloudVm(readDmi()) : undefined;
+        const costChoice = resolveHostStop({
+          ...(o.idleStop !== undefined ? { idleStop: o.idleStop } : {}),
+          ...(o.maxUptime !== undefined ? { maxUptime: o.maxUptime } : {}),
+          ...(currentStop ? { current: currentStop } : {}),
+          ...(cloudVm !== undefined ? { cloudVm } : {}),
+          platform,
+        });
 
         const prereq = await step(out, "prerequisites", async () => {
           const checks = await prerequisiteChecks(platform);
@@ -255,16 +308,25 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const port = policy.listen.port;
         const localUrl = `http://${policy.listen.host}:${port}`;
 
-        await step(out, "guard service", async () => {
+        const hostStop = await step(out, "guard service", async () => {
+          const settings = await applyHostStop(out, costChoice, platform);
           const r = await installGuardAsService({ allowAdminAccount: Boolean(o.allowAdminAccount), keepAwake: Boolean(o.keepAwake) });
           out.progress(r.unchanged ? `Already installed and running (${r.file}); left as is` : `Installed ${r.file}`);
           for (const n of r.notes) out.progress(dim(n));
+          // A running guard reads its policy at start: restart it for a new cost guard setting.
+          if (r.unchanged && costChoice.changed) {
+            if (await restartGuardIfIdle(out)) {
+              out.progress("Restarted the guard with the new cost guard setting");
+              if (!(await waitForGuard(localUrl, 15_000))) out.warn(`The guard does not answer on ${localUrl} after its restart; check \`tapdance host status\`.`);
+            } else out.warn(`The new cost guard setting applies when the guard restarts: \`systemctl --user restart ${GUARD_SYSTEMD_UNIT}\` once no lease is running.`);
+          }
           if (platform === "linux") await ensureLinger(out);
           if (!r.answering) {
             const log = r.log ? await readFile(r.log, "utf8").catch(() => "") : (await runCommand("journalctl", ["--user", "-u", "tapdance-guard.service", "-n", "30", "--no-pager"])).out;
             const runs = [process.execPath, CLI_ENTRY, "worker", "guard", "start", ...(o.allowAdminAccount ? ["--allow-admin-account"] : [])];
             throw commandFailed(runs, log, `The guard service is installed but does not answer on ${r.url}`, r.log ? `Read ${r.log}; fix what it reports, then run \`${hostUpCommand(o)}\` again.` : `Read \`journalctl --user -u tapdance-guard.service\`, then run \`${hostUpCommand(o)}\` again.`);
           }
+          return settings;
         });
 
         const tokenPath = pairingTokenPath(guardDir(), label);
@@ -367,8 +429,9 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         });
 
         await step(out, "summary", async () => undefined);
-        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label };
-        out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios }, () =>
+        const costGuard = describeHostStop(hostStop, platform);
+        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label, costGuard };
+        out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios, hostStop: hostStop ?? { idleMinutes: 0, maxUptimeHours: 0 } }, () =>
           [
             renderReadyBlock(block),
             dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host warm android=0,ios=0. Stop everything: tapdance host pause.`),
@@ -686,6 +749,21 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const service = await guardServiceState(servicePlatform(), homedir(), { run: runCommand, uid: process.getuid?.() ?? 0 });
         const answering = port !== 0 && (await waitForGuard(localUrl, 0));
         rows.push({ step: "guard service", ok: service.installed && answering, detail: `${service.installed ? "installed" : "not installed"}, ${service.detail}; ${answering ? `answers on ${localUrl}` : "not answering"}` });
+        {
+          const on = hostStopApplies(policy.hostStop, platform);
+          const allowed = on ? await hostStopAllowed() : true;
+          const seen = on ? (JSON.parse(await readFile(join(guardDir(), "host-stop.json"), "utf8").catch(() => "null")) as Parameters<typeof describeIdle>[0]) : undefined;
+          const idle = on ? describeIdle(seen ?? undefined, Date.now()) : undefined;
+          rows.push({
+            step: "cost guard",
+            ok: allowed,
+            detail: [
+              describeHostStop(policy.hostStop, platform),
+              ...(idle ? [idle] : []),
+              ...(on && !allowed ? [`sudo does not allow \`${HOST_STOP_COMMAND.join(" ")}\`: add the rule \`${sudoersRule(userInfo().username)}\` (tapdance host up prints how)`] : []),
+            ].join("; "),
+          });
+        }
         const paired = await pairings();
         const age = (iso: string) => `${Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 86_400_000))} d old`;
         rows.push({

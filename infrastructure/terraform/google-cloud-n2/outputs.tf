@@ -66,6 +66,15 @@ output "delete_command" {
   value       = "terraform destroy   # then on the gateway: tapdance simlock --gateway token list ; tapdance simlock --gateway token revoke <id>"
 }
 
+output "cost_guards" {
+  description = "What bounds this VM's cost: the per-boot run-time cap (Compute Engine stops the VM), the scheduled stop, and the budget (alerts only)."
+  value = {
+    max_run_hours = local.max_run_seconds > 0 ? "stops ${local.max_run_seconds / 3600} h after each start" : "off"
+    stop_schedule = var.stop_schedule != null ? "${var.stop_schedule} (${var.schedule_time_zone}; can start up to 15 min late)" : "off"
+    budget        = var.budget_amount_usd != null ? "USD ${floor(var.budget_amount_usd)}/month, alerts at 50/90/100% (never stops the VM)" : "off"
+  }
+}
+
 output "cost_note" {
   description = "Rough cost, as estimated in November 2026. Check the pricing pages before relying on it."
   value       = <<-EOT

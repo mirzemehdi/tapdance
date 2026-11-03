@@ -18,3 +18,13 @@ provider "google" {
   region  = var.region
   zone    = var.zone
 }
+
+# Only for the budget (budget_amount_usd): the Billing Budgets API refuses user credentials unless
+# requests name a quota project (billing_project + user_project_override, per the provider's docs).
+provider "google" {
+  alias                 = "billing"
+  project               = var.project_id
+  region                = var.region
+  billing_project       = var.project_id
+  user_project_override = true
+}

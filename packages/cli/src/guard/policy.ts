@@ -84,6 +84,19 @@ export const GuardPolicySchema = z
         tokenDays: z.number().int().min(1).max(90).default(7),
       })
       .default({ maxSessions: 1, maxLeaseMinutes: 60, maxUploadMB: 512, tokenDays: 7 }),
+    /**
+     * Cost guard for a host on a cloud VM (Linux only; ignored on macOS): power the machine off after
+     * `idleMinutes` without a lease, guard request or build, and stop taking leases once it has been up
+     * `maxUptimeHours`, powering off when the last lease ends. 0 turns each off. Absent: off, and
+     * `tapdance host up` may set its cloud default. The stop command is fixed (guard/host-stop.ts).
+     */
+    hostStop: z
+      .object({
+        idleMinutes: z.number().int().min(0).max(1440).default(0),
+        maxUptimeHours: z.number().int().min(0).max(720).default(0),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
