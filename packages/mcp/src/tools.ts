@@ -211,10 +211,34 @@ export const TOOLS: ToolDefinition[] = [
     name: "install_app",
     title: "Install an app",
     description:
-      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (.ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps.",
-    input: z.object({ path: z.string().min(1).max(4096).describe("Absolute or working-directory-relative path to the .apk or .app."), app_id: appId.optional() }).strict(),
+      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (or a .zip/.tar holding one; .ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps. Android only, instead of path: from_ci {repo, artifact, run?, branch?} has the device's host download an APK the user's CI built (a GitHub Actions artifact) with the host's own read-only GitHub credentials and install it; you never need a GitHub token and the APK does not travel through this machine. The host's owner allow-lists the repository; a refusal names what to ask for.",
+    input: z
+      .object({
+        path: z.string().min(1).max(4096).optional().describe("Absolute or working-directory-relative path to the .apk or .app. Give path or from_ci."),
+        app_id: appId.optional(),
+        from_ci: z
+          .object({
+            repo: z.string().min(1).max(300).describe("GitHub repository, owner/repo (or its https://github.com URL), on the host's allow-list."),
+            artifact: z.string().regex(/^(?![-.])[A-Za-z0-9._-]{1,100}$/).describe("The artifact's name, as actions/upload-artifact names it."),
+            run: z.string().regex(/^[1-9][0-9]{0,19}$/).optional().describe("Workflow run id. Default: the newest successful run on branch."),
+            branch: z.string().min(1).max(200).optional().describe("Take the newest successful run on this branch. Default: the repository's default branch."),
+          })
+          .strict()
+          .optional()
+          .describe("Android only: install an APK from the user's GitHub Actions run instead of a local path."),
+      })
+      .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    run: async (t, a) => json({ installed: await t.installApp(confinePath(a["path"] as string), a["app_id"] as string | undefined), next: "launch_app" }),
+    run: async (t, a) => {
+      const ci = a["from_ci"] as { repo: string; artifact: string; run?: string; branch?: string } | undefined;
+      if ((a["path"] === undefined) === (ci === undefined)) throw new TapdanceError("USAGE", "Give exactly one of path and from_ci");
+      if (ci) {
+        if (a["app_id"] !== undefined) throw new TapdanceError("USAGE", "app_id goes with path, not from_ci");
+        if (ci.run !== undefined && ci.branch !== undefined) throw new TapdanceError("USAGE", "from_ci takes run or branch, not both");
+        return json({ installed: await t.installFromCi(ci), next: "launch_app (list_apps shows the package name if you do not know it)" });
+      }
+      return json({ installed: await t.installApp(confinePath(a["path"] as string), a["app_id"] as string | undefined), next: "launch_app" });
+    },
   },
   {
     name: "launch_app",

@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
 import {
+  BRANCH_NAME,
   BUILD_FILE_MAX_BYTES,
   addBuildFile,
+  artifactCacheBytes,
+  githubRepo,
   describeBadHealth,
   listAllBuildFiles,
   normalizeRepo,
@@ -789,6 +792,90 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       }
     });
 
+  // ------------------------------------------------------------------ installs from CI
+  const artifacts = host.command("artifacts").description("Let the agent install Android APKs your CI built (GitHub Actions artifacts), downloaded by this machine with its own gh (off by default)");
+  artifacts
+    .command("enable")
+    .description("Allow installs from these repositories' GitHub Actions artifacts: this machine downloads them with its `gh auth` and installs the APK on the agent's Android lease")
+    .requiredOption("--repo <owner/repo>", "GitHub repository (owner/repo or its https://github.com URL), repeatable", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--branch <name>", "only artifacts of runs on this branch, e.g. main (repeatable; replaces the list)", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--max-mb <n>", "largest artifact and APK, in MB (default 512)")
+    .action(async (o: { repo: string[]; branch?: string[]; maxMb?: string }) => {
+      const out = output(globals());
+      try {
+        const repos = o.repo.map((r) => githubRepo(r));
+        for (const b of o.branch ?? []) if (!BRANCH_NAME.test(b)) throw new TapdanceError("USAGE", `${b} is not a git branch name`);
+        const maxMB = o.maxMb === undefined ? undefined : Number(o.maxMb);
+        if (maxMB !== undefined && !(Number.isInteger(maxMB) && maxMB >= 1 && maxMB <= 4096)) throw new TapdanceError("USAGE", "--max-mb must be a whole number from 1 to 4096");
+        const { path } = await loadPolicy();
+        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        raw["allow"] = { ...(raw["allow"] ?? {}), artifacts: true };
+        const current = (raw["artifacts"] ?? {}) as { repos?: string[] };
+        const merged = [...(current.repos ?? [])];
+        for (const r of repos) if (!merged.some((m) => m.toLowerCase() === r.toLowerCase())) merged.push(r);
+        raw["artifacts"] = {
+          ...current,
+          repos: merged,
+          ...(o.branch?.length ? { branches: [...new Set(o.branch)] } : {}),
+          ...(maxMB !== undefined ? { maxMB } : {}),
+        };
+        const policy = GuardPolicySchema.parse(raw);
+        await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+        const gh = await ghStatus();
+        const notes = gh.ok ? [] : [gh.note];
+        const restarted = await restartGuardIfIdle(out);
+        out.result({ artifacts: policy.artifacts, ghReady: gh.ok, restarted, notes }, () =>
+          [
+            `Installs from CI allowed from: ${policy.artifacts.repos.join(", ")}${policy.artifacts.branches.length ? ` (only runs on ${policy.artifacts.branches.join(", ")})` : " (any branch of the repository itself, not forks)"}; up to ${policy.artifacts.maxMB} MB`,
+            ...notes.map((n) => yellow(n)),
+            "This machine downloads the artifact with its own gh and installs the APK on the agent's Android lease; nothing from the repository runs here. Use a fine-grained, read-only token (Actions: read, Contents: read) for these repositories only.",
+            restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running: run this command again then.",
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  artifacts
+    .command("disable")
+    .description("Turn installs from CI off (the allow-list is kept)")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const { path } = await loadPolicy();
+        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        raw["allow"] = { ...(raw["allow"] ?? {}), artifacts: false };
+        await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
+        const restarted = await restartGuardIfIdle(out);
+        out.result({ artifacts: false, restarted }, () => `Installs from CI are off${restarted ? "; the guard restarted" : ". Restart the guard to apply it when no test is running"}.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  artifacts
+    .command("status")
+    .description("Show whether installs from CI are on, the allowed repositories and branches, the download cache and whether this machine's gh is signed in")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const { policy } = await loadPolicy();
+        const cache = join(guardDir(), "artifacts");
+        const cacheBytes = await artifactCacheBytes(cache);
+        const gh = await ghStatus();
+        out.result({ enabled: policy.allow.artifacts, ...policy.artifacts, cache, cacheBytes, ghReady: gh.ok }, () =>
+          [
+            `Installs from CI: ${policy.allow.artifacts ? green("on") : "off"}`,
+            `Repositories: ${policy.artifacts.repos.length ? policy.artifacts.repos.join(", ") : "none"}`,
+            `Branches: ${policy.artifacts.branches.length ? policy.artifacts.branches.join(", ") : "any (runs of the repository itself, not forks)"}; largest artifact ${policy.artifacts.maxMB} MB`,
+            `gh: ${gh.ok ? green("signed in") : yellow(gh.note)}`,
+            `Cache: ${cache} (${(cacheBytes / 1024 / 1024).toFixed(1)} MB; the newest 3 downloads per repository are kept; delete the folder to free disk)`,
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
   host
     .command("token")
     .description("Hand a pairing token to the agent: copy it to the clipboard (default) or show it once")
@@ -1079,6 +1166,18 @@ async function buildPrerequisites(gitAuth: string, repos: string[] = []): Promis
     if (keyless.length > 0) notes.push(`No deploy key yet for ${keyless.join(", ")}: run \`tapdance host builds key --repo <url>\` for each and add it to that repository.`);
   }
   return notes;
+}
+
+/** Whether this machine's gh is installed and signed in (installs from CI download with it). */
+async function ghStatus(): Promise<{ ok: true } | { ok: false; note: string }> {
+  const r = await runCommand("gh", ["auth", "status"]).catch(() => ({ ok: false, out: "" }));
+  if (r.ok) return { ok: true };
+  return {
+    ok: false,
+    note: /ENOENT|not found|could not start/i.test(r.out) || r.out === ""
+      ? "gh is not installed or does not run here: install GitHub's CLI (https://cli.github.com), then `gh auth login --with-token` with a fine-grained, read-only token (Actions: read, Contents: read)."
+      : "`gh auth status` fails: run `gh auth login --with-token` on this machine with a fine-grained, read-only token (Actions: read, Contents: read) for the allowed repositories.",
+  };
 }
 
 /**

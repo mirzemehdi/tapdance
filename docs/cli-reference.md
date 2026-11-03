@@ -324,7 +324,8 @@ notification permission, so on emulator images, which allow it). Other Android s
 ### `app`
 
 ```text
-tapdance app install <path> [--app-id <id>]
+tapdance app install <path> [--app-id <id>] [--launch <appId>]
+tapdance app install --from-ci <owner/repo> --artifact <name> [--run <id> | --branch <name>] [--launch <appId>]
 tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]... [--locale <l>] [--console]
                      [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
@@ -342,6 +343,14 @@ this machine. An `.aab` is first turned into a universal APK with
 `bundletool` on `PATH`), signed with the Android debug keystore; without bundletool it is refused with
 `APP_PATH_INVALID` and an install hint. An `.ipa` on a simulator is refused. `--app-id` gives the
 package or bundle id when the backend needs it.
+
+`install --from-ci` (Android leases only) installs an APK that your CI built instead of a local file:
+the device's host downloads the GitHub Actions artifact `--artifact` with its own `gh` login and
+installs its newest `.apk`. `--run` names the workflow run; otherwise the host takes the newest
+successful run on `--branch` (default: the repository's default branch) that has the artifact. Give a
+path or `--from-ci`, not both. It needs a worker guard whose owner allowed the repository with
+`tapdance host artifacts enable`; iOS leases are refused with `NOT_SUPPORTED`. This has only been
+tested with a fake `gh` and a fake device.
 
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
 opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
@@ -571,6 +580,7 @@ to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
 | `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--allow-admin-account]` / `host builds disable` / `host builds status` / `host builds key` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `key` creates a read-only deploy key and prints its public half. `enable` and `disable` restart the guard when no lease is running. |
+| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>]` / `host artifacts disable` / `host artifacts status` | Let the agent install Android APKs your CI built (`app install --from-ci`): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in. `enable` and `disable` restart the guard when no lease is running. Tested with a fake `gh` only. |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -1311,8 +1321,13 @@ Options:
   -h, --help                display help for command
 
 Commands:
-  install [options] <path>  Upload and install an .apk (Android) or simulator
-                            .app (iOS)
+  install [options] [path]  Upload and install an app: Android .apk or .aab (an
+                            .aab becomes a universal APK with bundletool on this
+                            machine); iOS simulator .app bundle, or a .zip or
+                            .tar holding one (.ipa on a physical iPhone only).
+                            With --from-ci instead of a path: the device's host
+                            downloads an Android APK from a GitHub Actions
+                            artifact with its own credentials and installs it
   launch [options] <appId>  Launch an installed app
   uninstall <appId>         Remove an installed app
   clear <appId>             Clear an app's data (first-launch state); iOS also:
@@ -1333,13 +1348,27 @@ Commands:
 ### `tapdance app install`
 
 ```text
-Usage: tapdance app install [options] <path>
+Usage: tapdance app install [options] [path]
 
-Upload and install an .apk (Android) or simulator .app (iOS)
+Upload and install an app: Android .apk or .aab (an .aab becomes a universal APK
+with bundletool on this machine); iOS simulator .app bundle, or a .zip or .tar
+holding one (.ipa on a physical iPhone only). With --from-ci instead of a path:
+the device's host downloads an Android APK from a GitHub Actions artifact with
+its own credentials and installs it
 
 Options:
-  --app-id <id>  package / bundle id, when the backend needs it
-  -h, --help     display help for command
+  --app-id <id>      package / bundle id, when the backend needs it
+  --from-ci <repo>   Android: install from the user's CI instead of a path: a
+                     GitHub repository (owner/repo or URL) on the host's
+                     allow-list (`tapdance host artifacts enable`)
+  --artifact <name>  with --from-ci: the artifact's name
+                     (actions/upload-artifact name)
+  --run <id>         with --from-ci: the workflow run id (default: the newest
+                     successful run on --branch)
+  --branch <name>    with --from-ci: take the newest successful run on this
+                     branch (default: the repository's default branch)
+  --launch <appId>   launch this app once it is installed
+  -h, --help         display help for command
 ```
 
 ### `tapdance app launch`
@@ -2129,6 +2158,9 @@ Commands:
                            restarts the worker only when nothing is leased
   builds                   Let the agent build apps on this machine from
                            allow-listed git repositories (off by default)
+  artifacts                Let the agent install Android APKs your CI built
+                           (GitHub Actions artifacts), downloaded by this
+                           machine with its own gh (off by default)
   token [options]          Hand a pairing token to the agent: copy it to the
                            clipboard (default) or show it once
   status                   Show the state of each `host up` step on this machine
@@ -2327,6 +2359,69 @@ Commands:
   remove [options] <path-in-repo>  Remove a build file; the next build runs
                                    without it
   help [command]                   display help for command
+```
+
+### `tapdance host artifacts`
+
+```text
+Usage: tapdance host artifacts [options] [command]
+
+Let the agent install Android APKs your CI built (GitHub Actions artifacts),
+downloaded by this machine with its own gh (off by default)
+
+Options:
+  -h, --help        display help for command
+
+Commands:
+  enable [options]  Allow installs from these repositories' GitHub Actions
+                    artifacts: this machine downloads them with its `gh auth`
+                    and installs the APK on the agent's Android lease
+  disable           Turn installs from CI off (the allow-list is kept)
+  status            Show whether installs from CI are on, the allowed
+                    repositories and branches, the download cache and whether
+                    this machine's gh is signed in
+  help [command]    display help for command
+```
+
+### `tapdance host artifacts enable`
+
+```text
+Usage: tapdance host artifacts enable [options]
+
+Allow installs from these repositories' GitHub Actions artifacts: this machine
+downloads them with its `gh auth` and installs the APK on the agent's Android
+lease
+
+Options:
+  --repo <owner/repo>  GitHub repository (owner/repo or its https://github.com
+                       URL), repeatable
+  --branch <name>      only artifacts of runs on this branch, e.g. main
+                       (repeatable; replaces the list)
+  --max-mb <n>         largest artifact and APK, in MB (default 512)
+  -h, --help           display help for command
+```
+
+### `tapdance host artifacts disable`
+
+```text
+Usage: tapdance host artifacts disable [options]
+
+Turn installs from CI off (the allow-list is kept)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host artifacts status`
+
+```text
+Usage: tapdance host artifacts status [options]
+
+Show whether installs from CI are on, the allowed repositories and branches, the
+download cache and whether this machine's gh is signed in
+
+Options:
+  -h, --help  display help for command
 ```
 
 ### `tapdance host token`

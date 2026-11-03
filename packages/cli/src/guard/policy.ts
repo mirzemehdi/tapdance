@@ -46,6 +46,13 @@ export const GuardPolicySchema = z
          * machine as this account. Off by default; `tapdance host builds enable`.
          */
         builds: z.boolean().default(false),
+        /**
+         * Download an APK the user's CI built (a GitHub Actions artifact of an allow-listed repository)
+         * with this machine's `gh auth` and install it on an Android lease. Nothing from the repository
+         * runs here. Off by default; `tapdance host artifacts enable`. Not a token scope: a token also
+         * needs `install`.
+         */
+        artifacts: z.boolean().default(false),
       })
       .default({
         install: true,
@@ -63,6 +70,7 @@ export const GuardPolicySchema = z
         deviceShell: true,
         physicalDevices: false,
         builds: false,
+        artifacts: false,
       }),
     /** Builds on this machine (`allow.builds`): which repositories, which refs, how to reach them. */
     builds: z
@@ -76,6 +84,17 @@ export const GuardPolicySchema = z
         timeoutMinutes: z.number().int().min(1).max(240).default(45),
       })
       .default({ repos: [], protectedRefs: [], gitAuth: "none", timeoutMinutes: 45 }),
+    /** Installs from CI (`allow.artifacts`): which GitHub repositories and branches, and how large. */
+    artifacts: z
+      .object({
+        /** GitHub repositories (owner/repo or https://github.com/owner/repo) whose Actions artifacts may be installed. */
+        repos: z.array(z.string().min(1).max(300)).max(100).default([]),
+        /** When set, only artifacts of runs whose head branch is listed. */
+        branches: z.array(z.string().regex(/^(?![-/.])(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]{1,200}$/)).max(50).default([]),
+        /** The largest artifact (zip) and APK, in MB. */
+        maxMB: z.number().int().min(1).max(4096).default(512),
+      })
+      .default({ repos: [], branches: [], maxMB: 512 }),
     limits: z
       .object({
         maxSessions: z.number().int().min(1).max(16).default(1),
@@ -144,14 +163,20 @@ export interface GuardToken {
 export function scopedPolicy(policy: GuardPolicy, token: GuardToken | undefined): GuardPolicy {
   if (!token?.scopes) return policy;
   const allow = Object.fromEntries(
-    Object.entries(policy.allow).map(([area, on]) => [area, on && (area === "physicalDevices" ? on : token.scopes!.includes(area))]),
+    Object.entries(policy.allow).map(([area, on]) => [area, on && (OWNER_ONLY_SWITCHES.includes(area) ? on : token.scopes!.includes(area))]),
   ) as GuardPolicy["allow"];
   return { ...policy, allow };
 }
 
-/** The scope names a token can be issued with: the policy's allow switches except physicalDevices. */
+/**
+ * Switches only the host owner sets, never a token scope: physical phones, and installs from CI (which
+ * a token reaches through its `install` scope).
+ */
+const OWNER_ONLY_SWITCHES = ["physicalDevices", "artifacts"];
+
+/** The scope names a token can be issued with: the policy's allow switches except the owner-only ones. */
 export function scopeNames(): string[] {
-  return Object.keys(GuardPolicySchema.parse({}).allow).filter((k) => k !== "physicalDevices");
+  return Object.keys(GuardPolicySchema.parse({}).allow).filter((k) => !OWNER_ONLY_SWITCHES.includes(k));
 }
 
 const hash = (secret: string) => createHash("sha256").update(secret).digest("hex");
