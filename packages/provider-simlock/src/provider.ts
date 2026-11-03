@@ -688,10 +688,14 @@ export class SimlockProvider implements DeviceProvider {
     const axe = this.axeFor(handle);
     if (axe) return axe.inspect(handle.deviceId, options.interactiveOnly ?? true);
     try {
-      const snap = await this.agentClient(handle).capture.snapshot({
-        interactiveOnly: options.interactiveOnly ?? true,
-        ...this.scope(handle),
-      } as never);
+      const read = () => this.agentClient(handle).capture.snapshot({ interactiveOnly: options.interactiveOnly ?? true, ...this.scope(handle) } as never);
+      // On an emulator just handed out, agent-device's snapshot helper can fail its first start
+      // (INSTRUMENTATION_FAILED) and work a moment later: read once more before reporting it.
+      const snap = await read().catch(async (error: unknown) => {
+        if (handle.platform !== "android" || !/INSTRUMENTATION_FAILED|snapshot helper failed/i.test(String((error as Error)?.message ?? error))) throw error;
+        await new Promise((r) => setTimeout(r, 1500));
+        return read();
+      });
       const raw = snap as unknown as {
         nodes?: Array<Record<string, unknown>>;
         truncated?: boolean;
