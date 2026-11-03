@@ -23,8 +23,8 @@ on iOS 18.5, created by Simlock.
 | pnpm | 10.20.0 | Used to build | Needed only to build from source. |
 | [AXe](https://github.com/cameroncooke/AXe) | 1.8.0 | Tested | Release tarball, Xcode 26.5, iOS 26.5 simulator: install, launch, inspect, type, tap, wait, screenshot, MP4 ([evidence](testing/evidence/2026-11-01-axe.md)). |
 | [Google's Android CLI](https://developer.android.com/tools/agents/android-cli) | 1.1.16717390 | Tested | `--version`, `layout --flat` on a leased emulator via `--device` ([evidence](testing/evidence/2026-11-01-android.md)). |
-| Android SDK, emulator, system images | any | **Untested** | Android end to end has not run: the test Mac lacks the SDK command-line tools Simlock needs. |
-| Linux worker with KVM (e.g. Google Cloud N2) | Ubuntu 24.04 planned | **Untested** | Terraform and scripts exist under `infrastructure/`; nothing provisioned. |
+| Android SDK, emulator, system images | emulator 37.2.13, API 34 images (`google_apis`, `google_apis_playstore`) | Tested | On the test Mac (arm64, [evidence](testing/evidence/2026-11-01-android.md)) and on a Google Cloud N2 VM (x86_64, installed by `scripts/host-setup.sh`, [evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| Linux host with KVM: Google Cloud N2 | `n2-standard-4`, Ubuntu 24.04, nested virtualization | Tested | Terraform module, `scripts/host-setup.sh`, `host up` and `connect` from a Mac; CLI and MCP checklists with a real app ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). Other KVM hosts (bare metal, OVH) untested. |
 | [Maestro](https://github.com/mobile-dev-inc/maestro) | any | **Untested** | Registered for pass-through. |
 | [fastlane](https://github.com/fastlane/fastlane) | any | **Untested** | Registered for pass-through. |
 | Cloud Macs (Scaleway, MacStadium, AWS EC2 Mac) | | **Untested** | Documentation only. |
