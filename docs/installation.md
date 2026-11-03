@@ -161,6 +161,8 @@ on the agent's machine, `tapdance connect` uses it.
   Written, not yet run end to end.
 
 The agent's machine needs only Node.js and Tapdance (this page) and must be in the same tailnet.
+To get a private app onto the host, see [build in CI, test with Tapdance](guides/ci-builds.md) and
+[private repositories](guides/private-repositories.md).
 
 ## Next
 
