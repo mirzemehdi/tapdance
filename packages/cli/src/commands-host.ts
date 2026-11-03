@@ -45,6 +45,7 @@ import {
   defaultLabel,
   describeCatalog,
   detectCloudVm,
+  cloudCostNote,
   findOnPath,
   formatStepFailure,
   hostEndpoint,
@@ -428,7 +429,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
 
         await step(out, "summary", async () => undefined);
         const costGuard = describeHostStop(hostStop, platform);
-        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label, costGuard };
+        const cloudCost = cloudCostNote(cloudVm);
+        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label, costGuard, ...(cloudCost ? { cloudCost } : {}) };
         out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios, hostStop: hostStop ?? { idleMinutes: 0, maxUptimeHours: 0 } }, () =>
           [
             renderReadyBlock(block),
@@ -929,6 +931,10 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
               ...(on && !allowed ? [`sudo does not allow \`${HOST_STOP_COMMAND.join(" ")}\`: add the rule \`${sudoersRule(userInfo().username)}\` (tapdance host up prints how)`] : []),
             ].join("; "),
           });
+        }
+        if (platform === "linux") {
+          const cloudCost = cloudCostNote(detectCloudVm(readDmi()));
+          if (cloudCost) rows.push({ step: "cloud VM", ok: true, detail: cloudCost });
         }
         const paired = await pairings();
         const age = (iso: string) => `${Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 86_400_000))} d old`;

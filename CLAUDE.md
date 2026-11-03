@@ -28,6 +28,10 @@ repository, and they apply to Claude Code in full.
 - **No AI attribution.** Commit messages, PR descriptions, code, docs and evidence records carry no
   `Co-Authored-By` line for Claude, no "Generated with Claude Code" footer and no mention of an AI
   agent. Commit only when the owner asks, with the owner's own git identity.
+- **Cloud resources for tests** (only after the owner approves them): follow
+  `docs/testing/field-test-cloud-android.md`, record each resource you create, and never end a session
+  leaving billable resources. Tear down, run `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` until
+  it exits 0, and tell the owner the final state and cost. See AGENTS.md, "Cloud resources for tests".
 - **Never print or commit tokens.** Simlock secrets start with `slk_`, worker-guard tokens with `tdg_`. Do not echo
   `~/.tapdance/credentials.json`, Simlock token output or `asc` credentials into the conversation or
   into files.

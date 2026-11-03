@@ -13,3 +13,5 @@ terraform.tfvars
 coverage/
 examples/*/build/
 .claude/worktrees/
+tapdance.plan
+*.tfplan

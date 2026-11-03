@@ -184,13 +184,37 @@ variable "grant_logging_roles" {
 # when idle (`tapdance host up --idle-stop`); these work even when the guard does not run.
 
 variable "max_run_hours" {
-  description = "Per-boot hard cap: Compute Engine STOPS (never deletes) the VM this many hours after each start. The countdown starts when the VM is RUNNING, restarts at every start and is cleared by a stop; a reboot inside the VM does not reset it. The boot disk is kept (and still billed). 0 or null turns it off. Google allows 30 seconds to 120 days; here 1 to 2880 whole hours. Sets scheduling.max_run_duration with instance_termination_action = \"STOP\" (standard provisioning; GA in hashicorp/google 6.x). A running lease is cut off when the cap hits."
+  description = "Per-boot hard cap: Compute Engine stops the VM (or, with on_run_limit = \"DELETE\", deletes it and its boot disk) this many hours after each start. The countdown starts when the VM is RUNNING, restarts at every start and is cleared by a stop; a reboot inside the VM does not reset it. With STOP the boot disk is kept (and still billed). 0 or null turns it off. Google allows 30 seconds to 120 days; here 1 to 2880 whole hours. Sets scheduling.max_run_duration with instance_termination_action = on_run_limit (standard provisioning; GA in hashicorp/google 6.x). A running lease is cut off when the cap hits."
   type        = number
   default     = 8
 
   validation {
     condition     = var.max_run_hours == null ? true : (var.max_run_hours == 0 || (var.max_run_hours >= 1 && var.max_run_hours <= 2880 && floor(var.max_run_hours) == var.max_run_hours))
     error_message = "max_run_hours must be 0 or null (off), or a whole number of hours from 1 to 2880 (120 days)."
+  }
+}
+
+variable "on_run_limit" {
+  description = <<-EOT
+    What Compute Engine does when max_run_hours is reached (scheduling.instance_termination_action).
+    "STOP" (default): the VM stops and its boot disk is kept, and billed, until you delete it.
+    "DELETE" (ephemeral mode, for test hosts): the VM and its boot disk (auto_delete = true) are deleted,
+    so nothing of the VM bills afterwards; everything on the disk is lost. The network, firewall rules,
+    service account and budget stay until terraform destroy (they cost nothing; with Cloud NAT, see its
+    pricing page, or set assign_external_ip = true for a test host so no NAT exists).
+    The countdown only runs while the VM is RUNNING. A poweroff from inside the VM (the Tapdance guard's
+    idle stop) stops the VM and clears the countdown, which leaves a stopped VM whose disk bills. On a
+    test host in ephemeral mode, run `tapdance host up --idle-stop off` so the run-time limit, not the
+    idle stop, ends the VM.
+    After a DELETE, terraform state still lists the VM: terraform plan wants to create it again. Run
+    terraform destroy to remove the rest, then infrastructure/scripts/gcp-leftovers.sh.
+  EOT
+  type        = string
+  default     = "STOP"
+
+  validation {
+    condition     = contains(["STOP", "DELETE"], var.on_run_limit)
+    error_message = "on_run_limit must be STOP or DELETE."
   }
 }
 
