@@ -388,4 +388,6 @@ if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
   say "use it as the agent's machine instead: tapdance connect <host endpoint> < pairing-<label>.token"
   exit 0
 fi
+# Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
+if [[ ! -t 0 && -r /dev/tty ]]; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"

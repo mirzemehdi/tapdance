@@ -235,10 +235,8 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    on the agent machine:  tapdance connect https://tapdance-n2.tail1234.ts.net:4720 < pairing-gcp-n2-1.token
    ```
 
-Running the script or `host up` again is safe: finished steps are left as they are. If `host up`
-stops at the pairing step with "Pairing must be approved at this machine's terminal" (the script's
-input is the `curl` pipe, not your keyboard), run `~/.local/bin/tapdance host up --label gcp-n2-1` in
-the same shell and answer the question. Every option of `host up` is in
+Running the script or `host up` again is safe: finished steps are left as they are. The pairing
+question is asked on your terminal even though the script came through `curl`. Every option of `host up` is in
 [one-command host](one-command-host.md#options).
 
 ## Copy the token to the agent machine
@@ -388,7 +386,7 @@ nested virtualization.
 | The worker and guard stop when you close SSH, or do not come back after a VM restart | Linger is off; `host up` warned "Could not turn on linger". | `sudo loginctl enable-linger $USER`, then `tapdance host up --label gcp-n2-1` again. `loginctl show-user $USER --property=Linger` should print `Linger=yes`. |
 | `host up` fails at the tailscale step: "tailscale serve refused this user" (Access denied) | On Linux only root and the tailnet's operator may change `tailscale serve`. | `sudo tailscale set --operator=$USER`, then `host up` again. |
 | `host up` warns Tailscale is not logged in, and the endpoint stays on loopback | The VM is not in your tailnet. | `sudo tailscale up --operator=$USER`, open the link, then `host up` again. |
-| `host up` stops at pairing: "Pairing must be approved at this machine's terminal" | It ran from the `curl` pipe, which cannot answer the question. | `~/.local/bin/tapdance host up --label gcp-n2-1` in the same shell. |
+| `host up` stops at pairing: "Pairing must be approved at this machine's terminal" | It ran without a terminal (for example `gcloud compute ssh --command …` without `-t`). | Run it in an interactive SSH session, or pass `--yes` if you are the owner. |
 | `No space left on device`, or `INSUFFICIENT_DISK_SPACE` | The boot disk is full. | `df -h /` to check. Grow the disk with `gcloud compute disks resize tapdance-n2 --size=100GB --zone=us-central1-a` and restart the VM (Ubuntu's cloud image grows the file system at boot). On the Terraform route, read the plan before changing `boot_disk_size_gb`: it can replace the VM. |
 | `LICENSE_NOT_ACCEPTED` on `devices install` | An SDK licence not accepted yet. | `sdkmanager --licenses` on the VM. |
 | `tapdance connect` says the address did not answer | The agent's machine is not in the same tailnet, or the guard is not running. | `tailscale status` on both machines; `tapdance host status` on the VM. |
