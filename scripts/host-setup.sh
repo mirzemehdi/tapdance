@@ -104,7 +104,9 @@ image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
 # The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
 emulator_libs_ok() {
   [[ "$OS" == Linux && -x "$SDK/emulator/emulator" ]] || return 0
-  ! "$SDK/emulator/emulator" -version 2>&1 | grep -q "error while loading shared libraries"
+  # Captured first: with pipefail, `grep -q` closing the pipe early would make the check pass.
+  local out; out="$("$SDK/emulator/emulator" -version 2>&1 || true)"
+  [[ "$out" != *"error while loading shared libraries"* ]]
 }
 tailscale_bin() {
   command -v tailscale 2>/dev/null && return
