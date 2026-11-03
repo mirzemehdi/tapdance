@@ -322,7 +322,7 @@ run (those settings live in `~/.tapdance/config.json`). Full threat model:
 | Reference | [CLI reference](docs/cli-reference.md), [MCP server and tools](docs/mcp.md), [configuration](docs/configuration.md), [external tools](docs/tools.md), [scenarios](docs/scenarios.md), [compatibility matrix](docs/compatibility.md) |
 | Agent setup | [Claude Code](docs/agents/claude-code.md), [Codex](docs/agents/codex.md), [Cursor](docs/agents/cursor.md) |
 | Platforms | [Android](docs/platforms/android.md) (image tiers), [iOS](docs/platforms/ios.md) |
-| Guides | [Testing in-app purchases](docs/guides/purchase-testing.md) |
+| Guides | [Testing in-app purchases](docs/guides/purchase-testing.md), [build in CI, test with Tapdance](docs/guides/ci-builds.md), [private repositories for builds on the host](docs/guides/private-repositories.md) |
 | Security | [Threat model](docs/security/threat-model.md), [personal Mac and the worker guard](docs/security/personal-mac.md), [security policy](SECURITY.md) |
 | Architecture | [Architecture decision record](docs/architecture-decision.md) |
 | Deployment | [Local](docs/deployment/local.md), [one-command host](docs/deployment/one-command-host.md), [self-hosted overview](docs/deployment/self-hosted-overview.md), [laptop as a worker](docs/deployment/laptop-worker.md), [Google Cloud N2](docs/deployment/google-cloud-n2.md), [OVH Public Cloud](docs/deployment/ovh-public-cloud.md), [dedicated Linux server](docs/deployment/dedicated-linux-server.md), [worker security](docs/deployment/worker-security.md), [browser access](docs/deployment/browser-access.md) |

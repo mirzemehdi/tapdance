@@ -70,6 +70,33 @@ For a Google Cloud VM see also [the N2 guide's table](deployment/google-cloud-n2
 | `host up` stops at pairing: "Pairing must be approved at this machine's terminal", right after `curl … host-setup.sh \| bash` | The script's input is the `curl` pipe, so the question cannot be answered. | Run `~/.local/bin/tapdance host up` with the same options in the same terminal. |
 | `No space left on device` during an install, or `INSUFFICIENT_DISK_SPACE` | The disk is full: the SDK, system images and Simlock's emulators (`~/.simlock/devices`) need tens of GB. | `df -h ~` to check. Grow the disk (Google Cloud: `gcloud compute disks resize`, then restart the VM), or remove system images you do not use with `sdkmanager --uninstall`. |
 
+## Cost guard on a cloud host (unit-tested only)
+
+The guard's idle stop and uptime cap (`tapdance host up --idle-stop`, `--max-uptime`), and the Terraform
+run-time cap and stop schedule. See [cost guardrails](deployment/google-cloud-n2.md#cost-guardrails).
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| The VM stopped by itself; `tapdance doctor` on the agent's machine cannot reach the guard | A cost guard stopped it: the guard's idle stop or uptime cap, the Terraform `max_run_hours` cap (8 h after each start by default) or `stop_schedule`. | Start it again: `gcloud compute instances start tapdance-n2 --zone=us-central1-a`. The endpoint and token stay the same. On the VM, `tapdance host status` shows the cost guard setting and `tapdance worker guard audit` lists a guard stop as `TIMER host-stop` with its reason; no such entry means the VM-level cap, the schedule or a person stopped it. |
+| `host up` warns "The cost guard cannot power this machine off yet: sudo does not let … run `sudo -n /usr/bin/systemctl poweroff` without a password"; `host status` shows the cost guard row failing; the VM never stops when idle | The sudoers rule for the stop command is missing (`host-setup.sh` installs it only on a detected cloud VM, after asking). The guard logs the failed stop once an hour and the VM keeps running. | Install the rule `host up` prints, which allows only that command: `echo '<you> ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff' \| sudo tee /etc/sudoers.d/tapdance-poweroff && sudo chmod 440 /etc/sudoers.d/tapdance-poweroff && sudo visudo -cf /etc/sudoers.d/tapdance-poweroff`. Or run `host-setup.sh` again. |
+| `NO_CAPACITY` "This host has run longer than its uptime cap (N h) and takes no new leases; it powers off once the running leases end" | The owner set `--max-uptime` (`hostStop.maxUptimeHours` in `~/.tapdance/worker/policy.json`). Running leases go on. | Wait for the VM to stop and start it again (the count starts again at boot), or on the VM raise or turn off the cap: `tapdance host up --max-uptime off`. |
+| `USAGE` "--idle-stop and --max-uptime power the machine off, which Tapdance never does to a Mac" | Both flags are for Linux cloud VMs. | On a Mac, stop hosting with `tapdance host pause`. |
+| The VM stops while you are still working with it | Nothing counted as use for the idle time: no lease, no open request with a valid token, no build. A warm spare does not count. | Keep a lease while you work, or raise the idle time: `tapdance host up --idle-stop 60` (or `off`). |
+
+## Builds on the host
+
+See [builds on the host](deployment/one-command-host.md#builds-on-the-host) and
+[private repositories](guides/private-repositories.md).
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `git clone failed` or `git fetch failed`, with a hint that starts "This host could not sign in to …" | The repository is private and the host's git credentials do not reach it: no `gh` login, an expired token, a token without that repository, a deploy key not added, or an `https://` URL with a deploy key. | Only the host's owner can fix it. Use a fine-grained read-only token (`gh auth login --with-token`, then `tapdance host builds enable --repo <https url> --git-auth gh`), a deploy key (`tapdance host builds key --repo <url>` and build with the ssh URL), or build elsewhere and `tapdance app install`. See [private repositories](guides/private-repositories.md). |
+| `FORBIDDEN` "… is not on this host's build allow-list" | The repository, or that form of its URL, is not allowed. `https://` and ssh URLs of one repository are separate entries. | The owner runs `tapdance host builds enable --repo <url>` with the exact URL the agent uses. |
+| "warning: some submodules could not be fetched …; building without them" | A submodule the host's credentials do not reach (another repository for a deploy key, an ssh URL with `gh`). | Nothing if the app does not need it. Otherwise add that repository to the fine-grained token. |
+| `USAGE` "Build file path … is absolute", "… contains ..", "… is one of git's own files (.git, .gitmodules)" or "… has characters that are not allowed" | `host builds files add` takes a path inside the repository: no leading `/` or `~`, no `..`, nothing in `.git`, no `.gitmodules`, letters, digits, space and `_ . + @ , = -` only. | Give the path relative to the repository root, e.g. `androidApp/google-services.json`. |
+| `FORBIDDEN` "Host build file … was not copied: …" | At that commit, the repository has a symlink or a folder where the build file goes, or a folder that is a symlink leading outside the checkout. | The owner removes or moves the build file: `tapdance host builds files remove --repo <url> <path>`, then adds it at another path. |
+| `CONFIG_INVALID` "Host build file … is missing or changed on disk since it was added" | Its stored copy under `~/.tapdance/worker/builds/files/` was changed or deleted. | Add it again: `tapdance host builds files add --repo <url> <path> --from <file>`. |
+
 ## Configuration and tokens
 
 | Error | Cause | Fix |

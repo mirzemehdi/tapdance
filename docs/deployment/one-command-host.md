@@ -66,6 +66,8 @@ once), and `connect` prints the same fingerprint so you can compare.
 | `--keep-awake` | macOS: run the guard under `caffeinate -i` (see [Keep the guard running](../security/personal-mac.md#keep-the-guard-running)). |
 | `--repair` | Revoke the pairing with this label and issue a new token. |
 | `--skip-self-test` | Do not lease a device at the end. |
+| `--idle-stop <minutes\|off>` | Linux cloud VMs: power the machine off after this many minutes with no lease, guard request or build. 30 by default on a detected cloud VM, off elsewhere; refused on macOS. Needs a sudoers rule for `systemctl poweroff`, which `host up` prints when it is missing. See [cost guardrails](google-cloud-n2.md#cost-guardrails). |
+| `--max-uptime <hours\|off>` | Linux cloud VMs: after this many hours up, take no new leases and power off when the last one ends. Off by default; refused on macOS. |
 | `-y, --yes` | Approve the pairing without a prompt. You are the owner, at this machine. |
 
 ### The administrator question
@@ -178,9 +180,10 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
 - **Source:** git only for now. The host clones the repository once into
   `~/.tapdance/worker/builds/<repo>/` and fetches only what changed on later builds; DerivedData and the
   Gradle caches stay there, so rebuilds are incremental. `host builds status` shows the cache path.
-- **Access:** credentials stay on the host. `--git-auth gh` uses the host's `gh auth`; `--git-auth
-  deploy-key` uses a read-only key from `tapdance host builds key` (add its public half to the
-  repository; use ssh URLs); `none` for public repositories.
+- **Access:** credentials stay on the host. `--git-auth gh` uses the host's `gh auth`; a read-only
+  deploy key from `tapdance host builds key --repo <url>` (add its public half to the repository; use
+  ssh URLs) is used for that repository whenever it exists; `none` for public repositories. See
+  [private repositories](#private-repositories) below.
 - **Which code:** only repositories on the allow-list. With `--protected-ref main` the host builds only
   commits already on `main` of the remote, so a compromised agent with push rights cannot get an
   unreviewed branch built. The reply and the audit log name the exact commit.
@@ -222,6 +225,23 @@ a branch on an allow-listed repository instead (with protected refs, merge it fi
 the build failed in its Kotlin framework step on the simulator arch (#53, fixed, waiting for a re-run). The steps are also
 unit-tested with a fake git, Xcode and Gradle.
 
+### Private repositories
+
+Three ways, from most to least access on the host. Each is described step by step, with what a
+compromised host would give away, in [private repositories](../guides/private-repositories.md).
+
+| Way | Commands on the host | Covers |
+| --- | --- | --- |
+| A fine-grained, read-only GitHub token (recommended on a cloud VM) | `gh auth login --with-token`, then `tapdance host builds enable --repo https://github.com/acme/app --git-auth gh` | The repositories you select, and GitHub submodules among them |
+| A deploy key per repository | `tapdance host builds key --repo git@github.com:acme/app.git`, add the public key read-only, then `host builds enable --repo git@github.com:acme/app.git` | That one repository |
+| No repository access | None: build in CI or on the agent's machine, then `tapdance app install` ([build in CI](../guides/ci-builds.md)) | Nothing on the host |
+
+Files a repository keeps out of git (`google-services.json`, `local.properties`, `.env`) can be added
+on the host as **build files**: `tapdance host builds files add --repo <url> <path-in-repo> --from <file>`
+(`list`, `remove`). Only the owner can add or read them; agents cannot. They are copied into the
+checkout for the build and removed after it, at most 1 MB each and 50 per repository. Credentials for a
+private Gradle registry go in the hosting account's `~/.gradle/gradle.properties`.
+
 ## Starting from nothing: `scripts/host-setup.sh`
 
 On a Mac or Linux machine with nothing installed:
@@ -245,7 +265,9 @@ The script (`set -euo pipefail`):
    `~/Library/Java/JavaVirtualMachines` (macOS) or `~/.local/share/tapdance/jdk`; Google's command-line
    tools (SHA-1 from Google's repository XML), then `sdkmanager` for platform-tools, emulator and the
    system image, **accepting the Android SDK licenses**, into `~/Library/Android/sdk` or `~/Android/Sdk`.
-   Only Linux system packages (git, unzip), Tailscale and the kvm group use `sudo`. Tailscale comes from
+   Only Linux system packages (git, unzip), Tailscale, the kvm group and, on a Linux cloud VM, a
+   sudoers rule that allows only `/usr/bin/systemctl poweroff` (in `/etc/sudoers.d/tapdance-poweroff`,
+   checked with `visudo`, so `--idle-stop` can stop an idle VM) use `sudo`. Tailscale comes from
    Homebrew (`brew install --cask tailscale`) on macOS, where you log in in the app, or tailscale.com's
    installer on Linux. It writes `~/.tapdance/env.sh` (PATH, `JAVA_HOME`, `ANDROID_HOME`) and sources it
    from your `.zshrc`/`.bashrc`, and on Linux also from `~/.profile`, so commands run over SSH

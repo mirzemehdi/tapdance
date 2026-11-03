@@ -52,4 +52,6 @@ of Mac paths, port forwarding, profiles written to Mac paths, macOS privacy perm
 - Builds on the host from a client's source: Xcode run-script phases and Gradle build scripts run any
   command, so building is code execution on the Mac by design. The first build mode (git, issue #45)
   is built with that in mind: off by default, repositories on an allow-list, optional protected refs.
-  See [one-command host](../deployment/one-command-host.md#builds-on-the-host).
+  See [one-command host](../deployment/one-command-host.md#builds-on-the-host). What a host that builds
+  private repositories keeps, and what leaks if it is compromised:
+  [private repositories](../guides/private-repositories.md#if-the-host-is-compromised).

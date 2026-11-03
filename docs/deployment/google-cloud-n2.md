@@ -203,8 +203,10 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    [developer.android.com/studio/terms](https://developer.android.com/studio/terms) if you have not.
    Everything goes into your home folder, checked against its publisher's checksum, except the steps
    that need `sudo`: git and unzip (the Terraform startup script already installed them), the Tailscale
-   installer, and the kvm group. For `/dev/kvm` it adds you to the `kvm` group and sets an ACL on
-   `/dev/kvm`, so you need not log out and back in.
+   installer, the kvm group, and a sudoers rule that lets your user run only
+   `/usr/bin/systemctl poweroff`, so the guard can stop the VM when it sits idle
+   ([cost guardrails](#cost-guardrails)). For `/dev/kvm` it adds you to the `kvm` group and sets an ACL
+   on `/dev/kvm`, so you need not log out and back in.
 2. **It logs the VM into your tailnet.** It asks first, then runs `sudo tailscale up --operator=$USER`,
    which prints a link ("To authenticate, visit: …"). Open it in a browser on any computer and log in
    to the tailnet your agent's machine is in. `--operator` lets your user run `tailscale serve` without
@@ -219,7 +221,7 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    | prerequisites | Checks the SDK, the image and KVM; reports the VM "with /dev/kvm (nested virtualization is on)". |
    | account | Refuses root. |
    | worker | The bundled Simlock worker as a systemd user service, with `android.emulator.headless` on because the VM has no display. |
-   | guard service | `tapdance-guard.service`, a systemd user unit, answering on `127.0.0.1:4720`. It turns on **linger** for your user, so the worker and guard keep running after you close SSH and start at boot. |
+   | guard service | `tapdance-guard.service`, a systemd user unit, answering on `127.0.0.1:4720`. It turns on **linger** for your user, so the worker and guard keep running after you close SSH and start at boot. On a cloud VM it also turns on the idle stop: 30 minutes without use powers the VM off ([cost guardrails](#cost-guardrails)). |
    | pairing | Asks you to approve the pairing, then writes the token to `~/.tapdance/worker/pairing-gcp-n2-1.token` (mode 600). The token is never printed. |
    | tailscale | `tailscale serve` on port 4720 of the VM's MagicDNS name: `https://…` with HTTPS Certificates, `http://…` (inside the tailnet's encryption) without. |
    | self-test | Through the guard: leases an Android emulator, takes a screenshot, releases it. The first boot under nested virtualization can take several minutes. |
@@ -232,6 +234,7 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    token:     saved to /home/you/.tapdance/worker/pairing-gcp-n2-1.token (mode 600), fingerprint 3fa9c2. Copy it: tapdance host token --label gcp-n2-1
    devices:   android 34 (google_apis_playstore)
    self-test: PASS (android lease, screenshot ok)
+   cost guard: idle stop after 30 min, uptime cap off
    on the agent machine:  tapdance connect https://tapdance-n2.tail1234.ts.net:4720 < pairing-gcp-n2-1.token
    ```
 
@@ -304,6 +307,14 @@ Add the MCP server that `connect` printed to your agent: [Claude Code](../agents
 [Codex](../agents/codex.md), [Cursor](../agents/cursor.md). The agent then uses the same tools as
 anywhere else (`lease_device`, `install_app`, `take_screenshot`, …).
 
+### Getting your app onto the VM
+
+The simplest path keeps your source code off the VM: build the APK on the agent's machine or in CI and
+install it with `tapdance app install` ([build in CI, test with Tapdance](../guides/ci-builds.md)). The
+VM can also build from a repository ([builds on the host](one-command-host.md#builds-on-the-host)); for
+a private repository, read [private repositories](../guides/private-repositories.md) first, including
+what a compromised VM would give away.
+
 ## Stop, start, delete
 
 | You want to | Run | What happens |
@@ -325,7 +336,135 @@ anywhere else (`lease_device`, `install_app`, `take_screenshot`, …).
 
 ## Cost guardrails
 
-(being added: idle stop and uptime cap; see STATUS.md)
+> **Status: unit-tested; being proven on a real N2 VM in phase 2.** Neither the guard's idle stop nor
+> the Terraform caps have stopped a real VM yet.
+
+An `n2-standard-4` bills about USD 0.19 an hour while it runs, whether an agent uses it or not. Three
+layers keep a forgotten VM from running on. Each one catches what the layer above it misses.
+
+| Layer | Guard | Default | What it does | Set it with |
+| --- | --- | --- | --- | --- |
+| Lease | Lease TTL | 30 min (`session.defaultTtlMinutes`); the guard caps each lease at 60 min (`limits.maxLeaseMinutes`) | A lease that nobody renews ends on its own. | The agent machine's config; the VM's `~/.tapdance/worker/policy.json` |
+| Lease | Keepalive | On, renewing for up to 240 min (`session.maxSessionMinutes`) | Renews a CLI lease in the background, then lets it expire. | The agent machine's config |
+| Lease | Idle release | 30 min (`session.idleReleaseMinutes`) | The keepalive and the MCP server release a lease nobody has used for this long. Not with `device lease --hold`. | The agent machine's config ([configuration](../configuration.md#session-and-lease)) |
+| Host | Idle stop | 30 min on a detected cloud VM | The guard powers the VM off when nothing has used it for this long. | `tapdance host up --idle-stop <minutes\|off>` |
+| Host | Uptime cap | Off | Past the cap the guard takes no new leases, and powers the VM off once the last one ends. | `tapdance host up --max-uptime <hours\|off>` |
+| VM | Run-time cap | 8 h (Terraform `max_run_hours`) | Compute Engine stops the VM 8 hours after each start, whatever runs on it. | Terraform |
+| VM | Stop schedule | Off (`stop_schedule`) | Compute Engine stops the VM at a set time, for example every evening. | Terraform |
+| Billing | Budget | Off (`budget_amount_usd`) | E-mails at 50%, 90% and 100% of a monthly amount. **Stops nothing.** | Terraform |
+
+### Host level: idle stop and uptime cap
+
+The worker guard on the VM checks once a minute. It counts as use:
+
+- a lease that Simlock reports, including leases made on the VM itself (the `host up` self-test, an
+  agent running there);
+- a request to the guard with a valid token, for as long as it stays open (a viewer's input socket
+  too);
+- a build on the host.
+
+Health checks and requests without a valid token do not count, and neither does a warm spare: a booted
+emulator with no lease does not keep the VM up. The countdown starts when the guard starts, so a VM you
+start and then leave alone stops again after the idle time.
+
+- **Idle stop** (`--idle-stop`): `host up` turns it on with 30 minutes when it detects a cloud VM, and
+  says so ("Cost guard: idle stop after 30 min, uptime cap off (the default on a cloud VM; --idle-stop
+  off turns it off)"). Elsewhere it is off unless you pass the flag.
+- **Uptime cap** (`--max-uptime`): measured from boot, so it starts again at every start. Once it has
+  passed, a new lease is refused with `NO_CAPACITY` ("This host has run longer than its uptime cap …").
+  Leases that are running go on; the VM powers off when none is left.
+- **Linux only.** On a Mac, `host up` refuses both flags: Tapdance never powers a Mac off. Use
+  `tapdance host pause` there.
+- **The stop command is fixed:** `sudo -n /usr/bin/systemctl poweroff`. Nothing a client or a
+  repository sends can change it. It needs one sudoers rule, which `scripts/host-setup.sh` installs on a
+  Linux cloud VM after asking (in `/etc/sudoers.d/tapdance-poweroff`, checked with `visudo`). The rule
+  lets your user run that one command as root and nothing else:
+
+  ```text
+  you ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff
+  ```
+
+  Without it, `host up` prints the rule and the command that installs it, `host status` shows the cost
+  guard row as failing, and the guard logs the failed stop once an hour while the VM keeps running (and
+  billing).
+- **Where it is kept:** `hostStop` (`idleMinutes`, `maxUptimeHours`) in `~/.tapdance/worker/policy.json`
+  on the VM. Running `host up` again keeps it; pass a flag to change it. `host up` restarts the guard to
+  apply a change when no lease is running, and tells you when it could not.
+- **What it did:** `tapdance host status` shows the setting and how long the VM has been idle
+  ("idle stop after 30 min, uptime cap off; idle 12 min"). `tapdance worker guard audit` lists each stop
+  as a `TIMER host-stop` entry with its reason.
+
+A poweroff from inside the VM stops the instance the same way `gcloud compute instances stop` does:
+the disk and everything on it stay.
+
+### VM level: Terraform
+
+These work even when Tapdance does not run on the VM. The Terraform module sets them
+([`variables.tf`](../../infrastructure/terraform/google-cloud-n2/variables.tf)); `terraform output
+cost_guards` shows which are on.
+
+- **`max_run_hours`** (default `8`): Compute Engine stops the VM this many hours after each start. The
+  count starts again at every start; a reboot inside the VM does not reset it. It stops, never deletes:
+  the boot disk stays (and bills). It also cuts off a running lease. `0` turns it off. On the gcloud
+  route, `gcloud compute instances create` takes `--max-run-duration=8h
+  --instance-termination-action=STOP` for the same cap (older gcloud versions have these flags under
+  `gcloud beta`; check `--help`).
+- **`stop_schedule`** (default off) and **`schedule_time_zone`** (default `UTC`): a cron schedule at
+  which Compute Engine stops the VM, for example `"0 20 * * *"` for 20:00 every day. A scheduled stop
+  can begin up to 15 minutes late. It only stops; starting stays up to you. Terraform also grants the
+  Compute Engine Service Agent `roles/compute.instanceAdmin.v1` on the project, which Google requires for
+  schedules. **Set it when you create the VM:** changing it later recreates the VM, which wipes the boot
+  disk.
+- **`budget_amount_usd`** (default off) with **`billing_account`**: a monthly budget that e-mails the
+  billing account's admins at 50%, 90% and 100%. Google Cloud budgets cannot cap Compute Engine spend:
+  this sends alerts and stops nothing. Creating it needs Billing Account Administrator or Billing
+  Account Costs Manager on the billing account.
+
+```hcl
+# terraform.tfvars (never commit it)
+project_id         = "my-project"
+max_run_hours      = 8
+stop_schedule      = "0 20 * * *"
+schedule_time_zone = "Europe/Berlin"
+budget_amount_usd  = 50
+billing_account    = "XXXXXX-XXXXXX-XXXXXX"
+```
+
+### When the VM has stopped
+
+A stopped VM still bills for its boot disk: about USD 0.10/GB-month for `pd-balanced`, so 64 GB is about
+USD 6.40 a month. An ephemeral external IP costs nothing while the VM is stopped. On the Terraform route,
+check what Cloud NAT costs; see [what still bills](#what-still-bills-when-the-vm-is-stopped).
+
+To start it again, from the computer where you run `gcloud` (the agent cannot: it has no Google Cloud
+credentials, by design):
+
+```bash
+gcloud compute instances start tapdance-n2 --zone=us-central1-a
+```
+
+`terraform output start_command` prints the same for the Terraform route. With linger on, the worker and
+guard start at boot and Tailscale comes back under the same MagicDNS name, so the endpoint and token on
+the agent's machine keep working; run `tapdance doctor` there to check. (Not yet observed on a real VM.)
+The token still expires on its own date. Start the VM when the agent is about to use it: after the idle
+time without use, it stops again.
+
+To see why it stopped, run `tapdance host status` and `tapdance worker guard audit` on the VM. A
+`TIMER host-stop` entry means the guard stopped it; no entry means the run-time cap, the schedule or a
+person did (the VM's audit logs in the Google Cloud console show the stop).
+
+### Recommended settings for one developer
+
+| Setting | Value | Why |
+| --- | --- | --- |
+| `max_run_hours` | `8` (the default) | A forgotten start costs at most about 8 × USD 0.19 ≈ USD 1.55 in `us-central1`. |
+| `host up --idle-stop` | `30` (the default on a cloud VM) | The VM stops half an hour after the agent is done. |
+| `host up --max-uptime` | `7` | One hour below `max_run_hours`: new leases stop first, so the hard stop does not cut a test in half. |
+| `stop_schedule` | The end of your working day, in your time zone | Catches a VM that something kept busy. Set it when you create the VM. |
+| `budget_amount_usd` | About USD 50 | Working hours cost about USD 41 a month in `us-central1`; an alert above that means something ran on. |
+
+With the setup script: `bash -s -- --label gcp-n2-1 --max-uptime 7` (the idle stop comes by default). On a
+VM that is already set up: `tapdance host up --label gcp-n2-1 --max-uptime 7`.
 
 ## Teardown
 
@@ -392,6 +531,7 @@ nested virtualization.
 | `tapdance connect` says the address did not answer | The agent's machine is not in the same tailnet, or the guard is not running. | `tailscale status` on both machines; `tapdance host status` on the VM. |
 | `tailscale status` shows the VM's connection as `relay` | No direct path through Cloud NAT; traffic goes through Tailscale's relays. | It works, more slowly. The gcloud route (external IP) usually connects directly. |
 | A lease waits and then fails with no capacity | One emulator at a time on this VM. | Release the other lease, or use a larger VM after benchmarking. |
+| The VM stopped by itself, it never stops when idle, or leases are refused past the uptime cap | The cost guards. | See [When the VM has stopped](#when-the-vm-has-stopped) and the [cost guard rows](../troubleshooting.md#cost-guard-on-a-cloud-host-unit-tested-only) in troubleshooting. |
 
 ## Alternative: join a gateway
 
