@@ -268,6 +268,18 @@ Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
   and `--max-uptime <hours>` stops new leases past a cap; `host-setup.sh` adds the one sudoers rule for
   `systemctl poweroff`; the Terraform module sets `max_run_hours` (8), and optionally `stop_schedule` and
   a budget alert. The idle stop powered the N2 VM off for real; the uptime cap is unit-tested.
+- Added: cloud cost guardrails, not yet run on a cloud. On a detected cloud VM, `host up`'s ready block
+  and `host status` say that the VM bills while running and its disk even when stopped, and link the
+  tear-down steps. The Terraform module's `on_run_limit = "DELETE"` (ephemeral mode) deletes the VM and
+  its disk at `max_run_hours`, and new outputs print the destroy command, the leftovers check and every
+  tear-down step. `infrastructure/scripts/gcp-leftovers.sh <project>` lists what can still bill in a
+  project (VMs in any state, disks, snapshots, images, addresses, routers and NATs) and exits non-zero
+  while anything is left; `--delete-project` only prints the command.
+- Added: a field-test kit for cloud Android hosts:
+  [field-test-cloud-android.md](docs/testing/field-test-cloud-android.md) (checkpoints, costs, the VPS
+  variant, an evidence template and a mandatory teardown) and `scripts/field-test/` (CLI and MCP
+  checklist drivers with timed PASS/FAIL tables). AGENTS.md and CLAUDE.md tell agents to leave no
+  billable resources behind.
 - Added: install from CI. `app install --from-ci <owner/repo> --artifact <name>` and MCP `install_app`
   `from_ci` have the device's host download a GitHub Actions artifact with its own `gh` and install the
   APK; the owner allows repositories with `host artifacts enable`. Ran with the CLI and MCP on the N2 VM.

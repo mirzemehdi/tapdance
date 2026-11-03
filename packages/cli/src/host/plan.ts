@@ -109,6 +109,26 @@ export function cloudCheck(vm: string | undefined, devKvm: boolean): DoctorCheck
   };
 }
 
+/** Where to read how to delete a host VM so nothing is left billing. */
+export const TEARDOWN_DOCS = {
+  google: "docs/deployment/google-cloud-n2.md#tear-down",
+  other: "docs/deployment/self-hosted-overview.md#when-you-are-done-with-a-rented-machine",
+} as const;
+
+/**
+ * The plain cost line `host up` and `host status` show on a detected VM: people who rent a VM for a
+ * test may not know that it bills while running and that its disk bills even when stopped. A bare
+ * hypervisor name may be a local VM, so that wording is conditional. Undefined when not a VM.
+ */
+export function cloudCostNote(vm: string | undefined): string | undefined {
+  if (vm === undefined) return undefined;
+  if (vm === "a virtual machine") {
+    return `if this VM is rented from a cloud, it is billed while running and its disk usually bills even when stopped. Delete it when you are done: see ${TEARDOWN_DOCS.other}`;
+  }
+  const docs = vm === "Google Cloud" ? TEARDOWN_DOCS.google : TEARDOWN_DOCS.other;
+  return `${vm}, billed while running; its disk bills even when stopped. Delete it when you are done: see ${docs}`;
+}
+
 // ------------------------------------------------------------------ Linux hosts
 
 /**
@@ -355,6 +375,8 @@ export interface ReadyBlock {
   selfTest: string;
   /** The cost guard, e.g. "idle stop after 30 min, uptime cap off". Shown when given. */
   costGuard?: string;
+  /** On a detected VM: what still bills and where to read how to delete it (cloudCostNote). */
+  cloudCost?: string;
 }
 
 export type WarmCounts = { android?: number; ios?: number };
@@ -410,6 +432,7 @@ export function renderReadyBlock(r: ReadyBlock & { fingerprint?: string; label?:
     `devices:   ${r.devices}`,
     `self-test: ${r.selfTest}`,
     ...(r.costGuard ? [`cost guard: ${r.costGuard}`] : []),
+    ...(r.cloudCost ? [`cloud VM:  ${r.cloudCost}`] : []),
     `on the agent machine:  tapdance connect ${r.endpoint} < ${file}`,
   ].join("\n");
 }

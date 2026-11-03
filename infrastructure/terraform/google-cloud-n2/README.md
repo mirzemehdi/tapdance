@@ -11,8 +11,8 @@ installs everything and runs `tapdance host up`, and the agent's machine connect
 > `assign_external_ip = true`, `boot_disk_size_gb = 64`, `max_run_hours` at its default of 8). The VM
 > then hosted Android emulators for an agent on a Mac
 > ([evidence](../../../docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the Cloud NAT
-> default (`assign_external_ip = false`), `create_project`, `stop_schedule` and
-> `terraform destroy`. See [STATUS.md](../../../STATUS.md) (rows G-01, G-02, G-07, Q-05).
+> default (`assign_external_ip = false`), `create_project`, `stop_schedule`, ephemeral mode
+> (`on_run_limit = "DELETE"`) and `terraform destroy`. See [STATUS.md](../../../STATUS.md) (rows G-01, G-02, G-07, Q-05).
 
 The step-by-step guide (prerequisites, IAM, the setup script, connecting the agent, costs,
 troubleshooting) is [docs/deployment/google-cloud-n2.md](../../../docs/deployment/google-cloud-n2.md).
@@ -202,6 +202,10 @@ machine type, share your numbers in an issue.
 | `assign_external_ip` | `false` | `true` gives the VM an ephemeral external IP and skips Cloud NAT. Inbound stays closed. |
 | `ssh_members` | `[]` | Principals that may SSH in with sudo. |
 | `grant_logging_roles` | `true` | Log and metric writer roles for the VM's service account. |
+| `max_run_hours` | `8` | Compute Engine ends the VM this many hours after each start. `0` or `null`: off. |
+| `on_run_limit` | `"STOP"` | What happens at `max_run_hours`: `"STOP"` keeps the stopped VM and its disk (which bills); `"DELETE"` (ephemeral mode, for test hosts) deletes the VM and its boot disk. Needs `max_run_hours` and no `deletion_protection`. Use it with `tapdance host up --idle-stop off`: an idle poweroff from inside the VM clears the countdown and leaves a stopped VM. |
+| `stop_schedule`, `schedule_time_zone` | `null`, `UTC` | A cron schedule that stops the VM. Changing it later recreates the VM. |
+| `budget_amount_usd` | `null` | A monthly budget with alert e-mails (alerts only; it never stops the VM). Needs `billing_account`. |
 
 ## Outputs
 
@@ -212,6 +216,10 @@ machine type, share your numbers in an issue.
 | `next_steps` | Steps 3–7 above with your names filled in. |
 | `stop_command`, `start_command` | `gcloud compute instances stop/start …`. |
 | `delete_command` | `terraform destroy`, plus removing the VM from your tailnet. |
+| `destroy_command` | `terraform -chdir=<this folder> destroy`, to run from anywhere. |
+| `leftovers_check` | `bash <repo>/infrastructure/scripts/gcp-leftovers.sh <project>`: lists what can still bill; exit 0 means nothing. |
+| `teardown` | Every step that leaves nothing billing: destroy, the leftovers check, the Tailscale machine, tokens, the project. |
+| `cost_guards` | Which cost guards are on, and whether the run-time cap stops or deletes the VM. |
 | `cost_note` | The estimate below, with your disk size. |
 
 ## Cost (estimates, November 2026)
@@ -253,8 +261,15 @@ terraform destroy
   and its emulators; `tapdance host resume` starts them again.
 - **Deleting** with `terraform destroy` removes the VM, disk, network, NAT and service account. It
   does not disable the APIs, and it will not delete a project it created while
-  `project_deletion_policy = "PREVENT"`. Afterwards remove the VM from your tailnet in the Tailscale
-  admin console; the token on the agent's machine stops working with the VM.
+  `project_deletion_policy = "PREVENT"`. Then run the leftovers check
+  (`bash ../../scripts/gcp-leftovers.sh <PROJECT_ID>`, or `terraform output leftovers_check` before you
+  destroy): it lists VMs in any state, disks, snapshots, images, addresses, routers and NATs, and exits 0
+  only when nothing is left. Afterwards remove the VM from your tailnet in the Tailscale admin console;
+  the token on the agent's machine stops working with the VM.
+- **Ephemeral mode** (`on_run_limit = "DELETE"`): Compute Engine deletes the VM and its disk at
+  `max_run_hours`. The rest stays until `terraform destroy`, and Terraform's state still lists the VM,
+  so `terraform plan` would create it again: destroy instead. For test runs, see
+  [field-test-cloud-android.md](../../../docs/testing/field-test-cloud-android.md).
 
 ## Security
 

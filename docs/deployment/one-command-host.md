@@ -67,7 +67,7 @@ once), and `connect` prints the same fingerprint so you can compare.
 | `--keep-awake` | macOS: run the guard under `caffeinate -i` (see [Keep the guard running](../security/personal-mac.md#keep-the-guard-running)). |
 | `--repair` | Revoke the pairing with this label and issue a new token. |
 | `--skip-self-test` | Do not lease a device at the end. |
-| `--idle-stop <minutes\|off>` | Linux cloud VMs: power the machine off after this many minutes with no lease, guard request or build. 30 by default on a detected cloud VM, off elsewhere; refused on macOS. Needs a sudoers rule for `systemctl poweroff`, which `host up` prints when it is missing. See [cost guardrails](google-cloud-n2.md#cost-guardrails). |
+| `--idle-stop <minutes\|off>` | Linux cloud VMs: power the machine off after this many minutes with no lease, guard request or build. 30 by default on a detected cloud VM, off elsewhere; refused on macOS. Needs a sudoers rule for `systemctl poweroff`, which `host up` prints when it is missing. See [cost guardrails](google-cloud-n2.md#cost-guardrails). On a short-lived test VM that Terraform deletes at a time limit, pass `off`: an idle poweroff would stop the VM instead and leave its disk billing ([field test](../testing/field-test-cloud-android.md)). |
 | `--max-uptime <hours\|off>` | Linux cloud VMs: after this many hours up, take no new leases and power off when the last one ends. Off by default; refused on macOS. |
 | `-y, --yes` | Approve the pairing without a prompt. You are the owner, at this machine. |
 

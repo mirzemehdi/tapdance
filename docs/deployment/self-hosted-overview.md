@@ -162,6 +162,25 @@ public address. Use one of:
 - **Tailscale** (or WireGuard, or an SSH tunnel). Tapdance treats `*.ts.net` names and the
   `100.64.0.0/10`, `10/8`, `172.16/12`, `192.168/16` ranges as private.
 
+## When you are done with a rented machine
+
+A cloud VM or rented server bills while it runs, and on most clouds its disk bills even while the VM
+is stopped: stopping is not deleting. `tapdance host up` and `tapdance host status` print a `cloud VM:`
+line on a detected cloud VM to remind you. When you no longer need the host:
+
+1. Delete the VM **and its disks** in your provider's console or with its CLI (or `terraform destroy`
+   if you made it with Terraform). Also delete snapshots, images and reserved IP addresses you made for
+   it.
+2. Check in the provider's console or billing page that nothing from it is left. On Google Cloud,
+   `bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` lists what can still bill and exits 0 only
+   when nothing is left ([Google Cloud N2: tear down](google-cloud-n2.md#tear-down)).
+3. Remove the machine from your tailnet in the
+   [Tailscale admin console](https://login.tailscale.com/admin/machines), and revoke any token you gave
+   it (for example a GitHub token for installs from CI).
+
+Most providers' budget alerts only send e-mails; set one anyway. A Mac or a server you own costs
+nothing extra here: stop hosting with `tapdance host pause` or `tapdance host down`.
+
 ## What has been tested
 
 From [STATUS.md](../../STATUS.md):

@@ -66,10 +66,32 @@ output "delete_command" {
   value       = "terraform destroy   # then remove the VM in the Tailscale admin console (Machines)"
 }
 
+output "destroy_command" {
+  description = "Delete everything this configuration created, from any directory. Run it when you are done, also after on_run_limit = DELETE removed the VM (the network, service account and budget stay until then)."
+  value       = "terraform -chdir=${abspath(path.root)} destroy"
+}
+
+output "leftovers_check" {
+  description = "Run after terraform destroy: lists anything in the project that can still bill (VMs in any state, disks, snapshots, images, addresses, routers and NATs) and exits non-zero if something is left."
+  value       = "bash ${abspath("${path.module}/../../scripts/gcp-leftovers.sh")} ${local.project_id}"
+}
+
+output "teardown" {
+  description = "Every step that leaves nothing billing. See docs/deployment/google-cloud-n2.md#tear-down."
+  value       = <<-EOT
+    1. terraform -chdir=${abspath(path.root)} destroy
+    2. bash ${abspath("${path.module}/../../scripts/gcp-leftovers.sh")} ${local.project_id}
+       It must exit 0 (nothing left that bills).
+    3. Remove the VM in the Tailscale admin console (Machines): https://login.tailscale.com/admin/machines
+    4. Delete the copies of the pairing token on the agent's machine, and any GitHub token you gave the VM.
+    ${var.create_project ? "5. This configuration created the project; to remove it as well: gcloud projects delete ${local.project_id}" : "5. Optional, when the project held nothing else: gcloud projects delete ${local.project_id}"}
+  EOT
+}
+
 output "cost_guards" {
   description = "What bounds this VM's cost: the per-boot run-time cap (Compute Engine stops the VM), the scheduled stop, and the budget (alerts only)."
   value = {
-    max_run_hours = local.max_run_seconds > 0 ? "stops ${local.max_run_seconds / 3600} h after each start" : "off"
+    max_run_hours = local.max_run_seconds > 0 ? "${var.on_run_limit == "DELETE" ? "deletes the VM and its disk" : "stops the VM (its disk keeps billing)"} ${local.max_run_seconds / 3600} h after each start" : "off"
     stop_schedule = var.stop_schedule != null ? "${var.stop_schedule} (${var.schedule_time_zone}; can start up to 15 min late)" : "off"
     budget        = var.budget_amount_usd != null ? "USD ${floor(var.budget_amount_usd)}/month, alerts at 50/90/100% (never stops the VM)" : "off"
   }
