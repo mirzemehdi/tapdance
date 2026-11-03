@@ -717,7 +717,13 @@ describe("iOS gaps (#48-#50)", () => {
     const neverConfirms = { command: { orientation: async () => { throw slow; } }, capture: { snapshot: async () => ({ viewport: { width: 2400, height: 1080 } }) } };
     const turned = await runDeviceOperation({ client: neverConfirms as never, scope: {}, exec: (async () => ({ exitCode: 0, stdout: "", stderr: "" })) as never, local: true }, handle, { kind: "setting", change: { name: "orientation", value: "landscape" } });
     expect(turned.message).toMatch(/slow to confirm; the screen is landscape/);
-  }, 20_000);
+    // The Pixel launcher never rotates: say so instead of a timeout; a locked app gets the reason.
+    const portraitScreen = { command: { orientation: async () => { throw slow; } }, capture: { snapshot: async () => ({ viewport: { width: 1080, height: 2400 } }) } };
+    const focused = (pkg: string) => (async () => ({ exitCode: 0, stdout: `  mCurrentFocus=Window{abc u0 ${pkg}/${pkg}.Main}\n`, stderr: "" })) as never;
+    const home = await runDeviceOperation({ client: portraitScreen as never, scope: {}, exec: focused("com.google.android.apps.nexuslauncher"), local: true }, handle, { kind: "setting", change: { name: "orientation", value: "landscape" } });
+    expect(home.message).toMatch(/Home Screen \(com.google.android.apps.nexuslauncher\) does not rotate/);
+    await expect(runDeviceOperation({ client: portraitScreen as never, scope: {}, exec: focused("com.example.portraitonly"), local: true }, handle, { kind: "setting", change: { name: "orientation", value: "landscape" } })).rejects.toThrow(/com.example.portraitonly stays portrait/);
+  }, 40_000);
   it("filters iOS logs by the app's executable, without case (#59)", () => {
     const plist = `{\n    "com.measify.pianolune" =     {\n        ApplicationType = User;\n        CFBundleDisplayName = Pianolune;\n        CFBundleExecutable = Pianolune;\n    };\n}`;
     expect(parseSimctlApps(plist)).toEqual([{ bundleId: "com.measify.pianolune", name: "Pianolune", executable: "Pianolune", user: true }]);

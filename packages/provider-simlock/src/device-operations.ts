@@ -271,6 +271,19 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       if (w && h && (w > h ? "landscape" : "portrait") === wanted) {
         return { ok: true, message: `Rotated to ${value} (the device was slow to confirm; the screen is ${wanted}, ${w}×${h})` };
       }
+      // The screen did not turn. On Android the Home Screen (the launcher) never rotates, so there is
+      // nothing to confirm (#65): the rotation is set and applies to the next app that can rotate.
+      if (isAndroid) {
+        const front = /mCurrentFocus=Window\{\S+ \S+ ([A-Za-z][A-Za-z0-9_.]*)\//.exec((await ctx.exec(android.focusedWindow()).catch(() => ({ stdout: "" }))).stdout)?.[1];
+        if (front && /launcher/i.test(front)) {
+          return { ok: true, message: `Set the rotation to ${value}; the Home Screen (${front}) does not rotate, so it stays portrait until an app that can rotate is in front` };
+        }
+        if (front) {
+          throw new TapdanceError("DEVICE_ERROR", `The screen did not turn to ${value}: ${front} stays ${wanted === "landscape" ? "portrait" : "landscape"}`, {
+            hint: "That app is probably locked to one orientation (its manifest's screenOrientation). Rotate while an app that supports both is in front.",
+          });
+        }
+      }
       throw last;
     }
     case "browser-first-run": {

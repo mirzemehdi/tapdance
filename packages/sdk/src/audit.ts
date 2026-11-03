@@ -80,7 +80,10 @@ export function auditScreen(screen: ScreenInspection, platform: "ios" | "android
       if (!spoken) {
         findings.push(of(e, "unlabelled-control", "error", `A ${e.role} with nothing to announce${e.identifier ? ` (only the id "${e.identifier}", which a screen reader does not read)` : ""}: give it an accessibility label.`));
       }
-      if (e.rect && e.rect.width > 0 && e.rect.height > 0) {
+      // A row cut off by the top or bottom edge (scrolled half out) reports only its visible part: its
+      // size says nothing (#69). Full-width rows touch the side edges anyway, so those do not count.
+      const clipped = !!vp && !!e.rect && (e.rect.y <= 0 || e.rect.y + e.rect.height >= vp.height - 1);
+      if (e.rect && e.rect.width > 0 && e.rect.height > 0 && !clipped) {
         const w = Math.round(e.rect.width / density);
         const h = Math.round(e.rect.height / density);
         if (w < minTarget || h < minTarget) findings.push(of(e, "small-target", "warning", `Touch target ${w}×${h} ${unit}, under the ${minTarget} ${unit} minimum.`));

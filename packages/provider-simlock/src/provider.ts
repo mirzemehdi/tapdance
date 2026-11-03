@@ -775,7 +775,10 @@ export class SimlockProvider implements DeviceProvider {
   private async linkOpenedJustNow(handle: LeaseHandle): Promise<OpenedLink | undefined> {
     const cmd = deviceCommands.ios.linkLog(10, "s");
     const r = await this.execOn(handle, cmd.tool, cmd.args, 30_000);
-    return parseIosLinkLog(r.stdout).filter((l) => l.handled === true && l.handler).at(-1);
+    // Only the latest request counts: an earlier link in the window is not this tap's (#70: a mailto
+    // tap was reported as an https link opened a few seconds before).
+    const latest = parseIosLinkLog(r.stdout).at(-1);
+    return latest?.handled === true && latest.handler ? latest : undefined;
   }
 
   /** What a text field shows now, or undefined when it cannot be read (a secure field, no match). */
@@ -964,6 +967,12 @@ export class SimlockProvider implements DeviceProvider {
         // agent-device's alert lookup can miss a system alert that its own snapshot shows (iOS
         // location prompts, #50): read it from the screen before answering "none".
         return action === "get" ? ((await this.alertFromScreen(handle).catch(() => undefined)) ?? { present: false }) : { present: false };
+      }
+      // accept/dismiss with no alert on screen: agent-device's runner can wait for one until its
+      // watchdog and answer "main thread execution timed out", which reads like a broken device.
+      if (action !== "get" && /main thread execution timed out|MAIN_THREAD_TIMEOUT|still finishing a previous command/i.test(`${mapped.message} ${JSON.stringify(mapped.details ?? {})}`)) {
+        const onScreen = await this.alertFromScreen(handle).catch(() => undefined);
+        if (!onScreen) return { present: false };
       }
       throw mapped;
     }

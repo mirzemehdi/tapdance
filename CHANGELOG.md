@@ -237,6 +237,18 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (#68): `device links` showed web links as a bare `https:`: the log filter missed Launch
   Services' "url scheme" lines (case); the app that took the link shows again.
 
+### Self-test run 6 (issues #65, #69, #70)
+
+- Fixed (#65): rotating an Android emulator on the Home Screen failed with "adb timed out after 1ms":
+  the Pixel launcher does not rotate, so there is nothing to confirm. Tapdance now says the rotation is
+  set and the Home Screen stays portrait; an app locked to one orientation gets that reason instead.
+- Fixed (#69): `ui audit` judged the size of rows cut off by the top or bottom edge by their visible
+  part only; those are no longer measured.
+- Fixed (#70): after a `mailto:` tap, the link check could report an earlier web link from the same few
+  seconds and bring Safari forward; only the latest link request counts now.
+- Fixed: `ui alert accept`/`dismiss` with no alert on screen answered "main thread execution timed out";
+  it now answers "No alert".
+
 ### Not yet proven
 
 Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,

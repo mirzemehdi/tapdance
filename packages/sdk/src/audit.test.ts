@@ -64,4 +64,16 @@ describe("accessibility audit (#60)", () => {
     expect(ios.findings).toEqual([]);
     expect(ios.checked).toBe(2);
   });
+
+  it("does not judge the size of a row cut off at the top or bottom edge (#69)", () => {
+    const r = auditScreen(
+      { viewport: { width: 402, height: 874 }, truncated: false, warnings: [], elements: [
+        el("@e1", "cell", { label: "Half out at the bottom", rect: { x: 16, y: 860, width: 370, height: 14 } }),
+        el("@e2", "cell", { label: "Half out at the top", rect: { x: 16, y: 0, width: 370, height: 20 } }),
+        el("@e3", "cell", { label: "Really short", rect: { x: 16, y: 400, width: 370, height: 20 } }),
+      ] },
+      "ios",
+    );
+    expect(r.findings.map((f) => f.ref)).toEqual(["@e3"]);
+  });
 });
