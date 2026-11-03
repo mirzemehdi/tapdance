@@ -29,3 +29,4 @@ export { TOOLS as TOOL_REGISTRY, findTool, runTool, toolStatus, locate, type Too
 export { isPrivateHost, TESTED_SIMLOCK_VERSION, readLocalProfile, defaultProfilePath, deviceCommands, type SimlockConnection, type DeviceCommand } from "@tapdance/provider-simlock";
 export { createProfile, editProfile, deleteProfile, listProfiles, installedImages, type ProfileCreateOptions } from "./profiles.js";
 export { PROFILE_PROVIDER, type ProfileRecord } from "@tapdance/provider-simlock";
+export { auditScreen, type AuditReport, type AuditFinding, type AuditRule } from "./audit.js";

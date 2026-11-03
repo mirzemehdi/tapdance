@@ -37,6 +37,7 @@ import {
   type DeviceOperationResult, type TimedTap, type AppBuildRequest, type AppBuildResult } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
 import { PROFILE_PROVIDER, ProfileProvider, isNotableBuildLine } from "@tapdance/provider-simlock";
+import { auditScreen, type AuditReport } from "./audit.js";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
 import { homedir, tmpdir } from "node:os";
@@ -134,6 +135,7 @@ export function summarize(record: SessionRecord, status?: LeaseStatus, holdUntil
  * Android's status bar (clock, signal, battery, notification icons) sits in every full inspect. It is
  * not the app's screen: a clock tick must not count as "screen changed", nor head its summary.
  */
+
 export function isStatusBar(e: { label?: string; identifier?: string; depth?: number }): boolean {
   return (e.identifier ?? "").startsWith("com.android.systemui:") || ((e.depth ?? 0) === 0 && / notification: /.test(e.label ?? ""));
 }
@@ -610,6 +612,16 @@ export class Tapdance {
       provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}), ...(options.system ? { system: true } : {}), ...(options.appId ? { appId: options.appId } : {}) }),
     );
     return options.compact ? { ...screen, elements: compactElements(screen.elements) } : screen;
+  }
+
+  /**
+   * An accessibility audit of the screen (#60): unlabelled controls, small touch targets, controls
+   * announced alike, unlabelled images, from the accessibility tree. `appId` audits another app.
+   */
+  async audit(options: { appId?: string } = {}): Promise<AuditReport> {
+    const { record } = await this.active();
+    const screen = await this.inspect({ interactiveOnly: false, ...(options.appId ? { appId: options.appId } : {}) });
+    return auditScreen(screen, record.handle.platform === "ios" ? "ios" : "android");
   }
 
   /**

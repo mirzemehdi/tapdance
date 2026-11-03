@@ -537,6 +537,15 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "audit_screen",
+    title: "Accessibility audit",
+    description:
+      "Check the screen as VoiceOver or TalkBack would meet it: controls with nothing to announce (error), touch targets under 44 pt (iOS) or 48 dp (Android), several controls announced alike, unlabelled images (info: fine if decorative). From the accessibility tree; it cannot judge colour contrast or clipped text. Use it where a manual test would turn VoiceOver on: the iOS simulator has no VoiceOver. app_id audits another app.",
+    input: z.object({ app_id: appId.optional() }).strict(),
+    annotations: { readOnlyHint: true },
+    run: async (t, a) => json(await t.audit(a["app_id"] ? { appId: a["app_id"] as string } : {})),
+  },
+  {
     name: "inspect_screen",
     title: "Inspect the screen",
     description:

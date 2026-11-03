@@ -194,6 +194,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   worker guard (`POST /v1/leases/<id>/touches`) or by Tapdance in local mode. Measured on an iPhone 17
   simulator: 14 taps at 250 ms, largest start drift 4 ms; timed taps on Pianolune's buttons landed in
   portrait and landscape. `--orientation` for apps that force landscape-right.
+- Added (#60): `ui audit` / MCP `audit_screen`, an accessibility check from the accessibility tree
+  (unlabelled controls, small touch targets, controls announced alike, unlabelled images), for what a
+  manual test would do with VoiceOver, which the iOS simulator does not have.
+- Fixed (#58): `ui tap --text` on a row below the fold or under a toolbar failed; it now scrolls the
+  text into view (and matches text that is part of a label) and taps it there.
 
 ### Not yet proven
 

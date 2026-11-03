@@ -718,6 +718,15 @@ export class SimlockProvider implements DeviceProvider {
           return { ...actionResult(result, `Tapped ${describe(target)} at (${point.x}, ${point.y})`), warning: "The keyboard covered the target's usual tap path; it was tapped at its centre instead" };
         }
       }
+      // Text that is not on screen, or sits under a toolbar, is where a person would scroll first
+      // (#58: a row below the fold in Settings › Apps). Scroll it into view and tap it there.
+      if (target.kind === "text" && (mapped.code === "ELEMENT_NOT_FOUND" || /covered|occlud|toolbar|off-?screen/i.test(mapped.message))) {
+        const found = await this.scrollIntoView(handle, target.text).catch(() => undefined);
+        if (found?.point) {
+          const result = await this.agentClient(handle).interactions.press({ x: found.point.x, y: found.point.y, ...(options.settle === false ? {} : { settle: true }), ...this.scope(handle) } as never);
+          return { ...actionResult(result as never, `Tapped ${describe(target)} at (${found.point.x}, ${found.point.y})`), warning: /after 0 swipe/.test(found.message) ? `No element had exactly that text; tapped the one whose label contains it (${found.message.replace(/ after 0 swipe\(s\) \w+$/, "")})` : `It was not on screen; ${found.message.toLowerCase()} first` };
+        }
+      }
       throw mapped;
     }
     // Some system surfaces (the file picker, the share sheet) drop the automation helper's touch
@@ -747,6 +756,25 @@ export class SimlockProvider implements DeviceProvider {
       (e) => /switch|toggle/i.test(e.role) && e.rect && e.rect.width > 120 && point.x >= e.rect.x && point.x <= e.rect.x + e.rect.width && point.y >= e.rect.y && point.y <= e.rect.y + e.rect.height,
     );
     return row?.rect ? switchKnobPoint(row.rect) : undefined;
+  }
+
+  /**
+   * Scrolls until text is on screen and clear of a bottom toolbar: down the list first, then back up.
+   * Answers where to tap it.
+   */
+  private async scrollIntoView(handle: LeaseHandle, text: string): Promise<ActionResult | undefined> {
+    for (const [direction, finger] of [["down", "up"], ["up", "down"]] as const) {
+      const found = await this.swipeUntil(handle, direction, finger, text, undefined).catch(() => undefined);
+      if (!found?.point) continue;
+      // A row found right at the bottom can still sit under a tab bar or toolbar: one more pass up.
+      const { viewport } = await this.inspect(handle, { interactiveOnly: true });
+      if (viewport && found.point.y > viewport.height - 120 && finger === "up") {
+        await this.agentClient(handle).interactions.scroll({ direction: "down", amount: 0.3, settle: true, ...this.scope(handle) } as never).catch(() => undefined);
+        return (await this.swipeUntil(handle, direction, finger, text, undefined).catch(() => undefined)) ?? found;
+      }
+      return found;
+    }
+    return undefined;
   }
 
   /** Taps through Android's input service (`adb shell input tap`), like a finger would. */

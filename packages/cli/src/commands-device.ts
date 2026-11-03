@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Command } from "commander";
 import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
-import { bold, dim, green, table, yellow } from "./output.js";
+import { bold, dim, green, red, table, yellow } from "./output.js";
 
 function platformArg(value: string | undefined): Platform {
   if (value === "android" || value === "ios") return value;
@@ -566,6 +566,22 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
 
   // ------------------------------------------------------------- UI
   const ui = program.command("ui").description("Inspect and drive the leased device's UI");
+  ui.command("audit")
+    .description("Accessibility audit of the screen: unlabelled controls, small touch targets, controls announced alike, unlabelled images (what VoiceOver or TalkBack would trip over)")
+    .option("--app <appId>", "audit this app instead of the session's (switches to it as it is)")
+    .action(async (o: { app?: string }) =>
+      run(globals(), async (t, out) => {
+        const r = await t.audit(o.app ? { appId: o.app } : {});
+        out.result(r, () =>
+          [
+            `${r.app ?? "screen"}: ${r.checked} controls checked, ${r.findings.length} finding(s)`,
+            ...r.findings.map((f) => `${f.severity === "error" ? red("error") : f.severity === "warning" ? yellow("warn ") : dim("info ")} ${f.rule} ${bold(f.ref)} [${f.role}]${f.label ? ` "${f.label}"` : ""}${f.identifier ? dim(` #${f.identifier}`) : ""}: ${f.detail}`),
+          ].join("\n"),
+        );
+        if (r.findings.some((f) => f.severity === "error")) process.exitCode = 1;
+      }),
+    );
+
   ui.command("inspect")
     .description("List on-screen elements with refs, roles and labels")
     .option("--all", "include non-interactive elements")

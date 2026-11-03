@@ -359,7 +359,8 @@ the apps the automation backend sees.
 ### `ui`
 
 ```text
-tapdance ui inspect [--all] [--compact] [--bounds] [--system]
+tapdance ui inspect [--all] [--compact] [--bounds] [--system] [--app <id>]
+tapdance ui audit [--app <id>]
 tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>] [--inject]
 tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>] [--delay-ms <ms>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
@@ -378,7 +379,8 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 | Command | Notes |
 | --- | --- |
 | `ui inspect` | `--app <id>` switches to that app as it is (no relaunch) and reads it: on iOS every read brings the session's app to the front, so after a link-out use `--app com.apple.mobilesafari`, and for the Home Screen `--app com.apple.springboard`; later reads stay on it until you launch your app. Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
-| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). |
+| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). A `--text` target that is not on screen, or not tappable where it is (under a toolbar), is scrolled into view first (down the list, then up) and tapped where it then is; text that is only part of a label matches too, and the reply says so. |
+| `ui audit` | Accessibility check of the screen, from the accessibility tree: controls with nothing to announce (error, exit 1), touch targets under 44 pt (iOS) or 48 dp (Android), several controls announced alike, unlabelled images (info: fine if decorative). The iOS simulator has no VoiceOver, so this is how an agent checks "every control is announced"; it cannot judge colour contrast or clipped text. |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). A fill that drops characters is retried once at 80 ms on its own and says so. |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
@@ -1417,6 +1419,10 @@ Options:
   -h, --help                 display help for command
 
 Commands:
+  audit [options]            Accessibility audit of the screen: unlabelled
+                             controls, small touch targets, controls announced
+                             alike, unlabelled images (what VoiceOver or
+                             TalkBack would trip over)
   inspect [options]          List on-screen elements with refs, roles and labels
   tap [options]              Tap one element
   swipe [options]            Swipe by finger direction (up scrolls content down)
@@ -1434,6 +1440,21 @@ Commands:
   key <key>                  Press back, home, enter, dismiss_keyboard or
                              app_switcher
   help [command]             display help for command
+```
+
+### `tapdance ui audit`
+
+```text
+Usage: tapdance ui audit [options]
+
+Accessibility audit of the screen: unlabelled controls, small touch targets,
+controls announced alike, unlabelled images (what VoiceOver or TalkBack would
+trip over)
+
+Options:
+  --app <appId>  audit this app instead of the session's (switches to it as it
+                 is)
+  -h, --help     display help for command
 ```
 
 ### `tapdance ui inspect`
