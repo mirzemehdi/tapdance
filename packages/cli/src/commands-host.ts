@@ -1144,7 +1144,8 @@ async function buildPrerequisites(gitAuth: string, repos: string[] = []): Promis
   const notes: string[] = [];
   if (!(await runCommand("git", ["--version"])).ok) notes.push("git is not installed: builds cannot fetch anything.");
   if (osPlatform() === "darwin" && !(await runCommand("xcodebuild", ["-version"])).ok) notes.push("xcodebuild is not available: iOS builds need Xcode.");
-  if (!(await runCommand("java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
+  const javaHome = process.env["JAVA_HOME"];
+  if (!(await runCommand(javaHome ? join(javaHome, "bin", "java") : "java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
   if (gitAuth === "gh" && !(await runCommand("gh", ["auth", "status"])).ok) notes.push("`gh auth status` fails: run `gh auth login` on this machine.");
   if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) {
     const keyless = repos.filter((r) => !existsSync(repoKeyPath(join(guardDir(), "builds"), r)));
@@ -1176,9 +1177,12 @@ async function restartGuardIfIdle(out: ReturnType<typeof output>): Promise<boole
     return false;
   }
   const uid = process.getuid?.() ?? 0;
+  // Over a non-interactive ssh command systemctl --user needs the user manager's bus set up first.
+  if (osPlatform() === "linux") await prepareLinuxUserServices(out).catch(() => undefined);
   const r =
     osPlatform() === "darwin"
       ? await runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${GUARD_LAUNCHD_LABEL}`])
       : await runCommand("systemctl", ["--user", "restart", GUARD_SYSTEMD_UNIT]);
+  if (!r.ok) out.warn(`Could not restart the guard: ${r.out.split("\n")[0] ?? ""}`);
   return r.ok;
 }

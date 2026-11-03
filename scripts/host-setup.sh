@@ -337,7 +337,7 @@ write_env_file() {
     echo "# Written by Tapdance's host-setup.sh: tools it installed in your home folder."
     echo "export PATH=\"$BIN_DIR:$SHARE/node/bin:$SDK/platform-tools:$SDK/emulator:$SDK/cmdline-tools/latest/bin:\$PATH\""
     echo "export ANDROID_HOME=\"$SDK\""
-    local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; fi
+    local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; echo "export PATH=\"$home/bin:\$PATH\""; fi
   } > "$ENV_FILE"
   local rcs=("$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")")
   # Ubuntu's .bashrc stops early in non-interactive shells: .profile serves `bash -lc` over ssh.
