@@ -272,9 +272,22 @@ export interface ServiceState {
   detail: string;
 }
 
+/**
+ * Points `systemctl --user` at the account's user manager when it runs but this process has no login
+ * session (a command over ssh): sets XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS if they are missing.
+ * Starts nothing; prepareLinuxUserServices does that.
+ */
+export function useUserBus(uid: number, env: NodeJS.ProcessEnv = process.env): void {
+  const runtime = `/run/user/${uid}`;
+  if (!existsSync(`${runtime}/bus`)) return;
+  if (!env["XDG_RUNTIME_DIR"]) env["XDG_RUNTIME_DIR"] = runtime;
+  if (!env["DBUS_SESSION_BUS_ADDRESS"]) env["DBUS_SESSION_BUS_ADDRESS"] = `unix:path=${runtime}/bus`;
+}
+
 export async function guardServiceState(platform: ServicePlatform, home: string, io: ServiceIo): Promise<ServiceState> {
   const { file } = guardServicePaths(platform, home);
   const installed = existsSync(file);
+  if (platform === "linux") useUserBus(io.uid);
   if (platform === "darwin") {
     const r = await io.run("launchctl", ["print", `gui/${io.uid}/${GUARD_LAUNCHD_LABEL}`]);
     const running = r.ok && /^\s*state = running/m.test(r.out);
@@ -324,6 +337,5 @@ export async function prepareLinuxUserServices(out: { progress: (m: string) => v
       hint: `Run \`sudo loginctl enable-linger ${user}\` (it starts the user manager and keeps it running), then this command again. For an account logind cannot look up (Google Cloud OS Login), scripts/host-setup.sh installs a boot unit that starts it instead.`,
     });
   }
-  if (!process.env["XDG_RUNTIME_DIR"]) process.env["XDG_RUNTIME_DIR"] = runtime;
-  if (!process.env["DBUS_SESSION_BUS_ADDRESS"]) process.env["DBUS_SESSION_BUS_ADDRESS"] = `unix:path=${runtime}/bus`;
+  useUserBus(process.getuid?.() ?? 0);
 }
