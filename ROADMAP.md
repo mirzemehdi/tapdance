@@ -72,7 +72,7 @@ fastlane is ⏸ for iOS: `asc` already covers App Store Connect.
 | Item | State | IDs |
 | --- | --- | --- |
 | Multiple device pools, scheduling | 🟡 Simlock's queue and warm pool per gateway | Y-17 |
-| BYOI provisioning (GCP N2, Android) | 🟡 Terraform + scripts written; being proven ([hosting plan](docs/hosting-plan.md) stage 2) | G-01, G-02 |
+| BYOI provisioning (GCP N2, Android) | ✅ Terraform, `host-setup.sh`, `host up` and `connect` run on a real N2 VM ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md), [hosting plan](docs/hosting-plan.md) stage 2); provisioning is still by hand | G-01, G-02 |
 | Rented Mac for iOS (Scaleway first) | ⬜ docs written, not run ([hosting plan](docs/hosting-plan.md) stage 3) | G-05, G-06 |
 | One agent across a Linux and a Mac host | ⬜ ([hosting plan](docs/hosting-plan.md) stage 4) | Y-17 |
 | Browser console (many sessions) | ⬜ | V-* |

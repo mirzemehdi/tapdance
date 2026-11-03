@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { TapdanceError, redactSecrets } from "@tapdance/sdk";
+import { parseLinger } from "../host/plan.js";
 
 /**
  * Keeps the worker guard running as a login service of the worker account: a LaunchAgent on macOS,
@@ -270,9 +272,22 @@ export interface ServiceState {
   detail: string;
 }
 
+/**
+ * Points `systemctl --user` at the account's user manager when it runs but this process has no login
+ * session (a command over ssh): sets XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS if they are missing.
+ * Starts nothing; prepareLinuxUserServices does that.
+ */
+export function useUserBus(uid: number, env: NodeJS.ProcessEnv = process.env): void {
+  const runtime = `/run/user/${uid}`;
+  if (!existsSync(`${runtime}/bus`)) return;
+  if (!env["XDG_RUNTIME_DIR"]) env["XDG_RUNTIME_DIR"] = runtime;
+  if (!env["DBUS_SESSION_BUS_ADDRESS"]) env["DBUS_SESSION_BUS_ADDRESS"] = `unix:path=${runtime}/bus`;
+}
+
 export async function guardServiceState(platform: ServicePlatform, home: string, io: ServiceIo): Promise<ServiceState> {
   const { file } = guardServicePaths(platform, home);
   const installed = existsSync(file);
+  if (platform === "linux") useUserBus(io.uid);
   if (platform === "darwin") {
     const r = await io.run("launchctl", ["print", `gui/${io.uid}/${GUARD_LAUNCHD_LABEL}`]);
     const running = r.ok && /^\s*state = running/m.test(r.out);
@@ -294,4 +309,33 @@ export async function waitForGuard(url: string, timeoutMs: number, fetchImpl: ty
     if (Date.now() >= deadline) return false;
     await new Promise((r) => setTimeout(r, 500));
   }
+}
+
+/**
+ * Linux: the worker and guard run as systemd user units. They need the account's systemd user manager,
+ * which a non-interactive SSH command (`gcloud compute ssh --command`, a script over ssh) does not start,
+ * and they stop at logout or never start at boot unless the account lingers. Turns linger on (as the
+ * user, else with passwordless sudo), waits for the user manager's bus, and points this process (and the
+ * Simlock and systemctl it runs) at it when XDG_RUNTIME_DIR is not set.
+ */
+export async function prepareLinuxUserServices(out: { progress: (m: string) => void; warn: (m: string) => void }): Promise<void> {
+  const user = userInfo().username;
+  const lingering = async () => parseLinger((await runCommand("loginctl", ["show-user", user, "--property=Linger"])).out) === true;
+  if (!(await lingering())) {
+    const self = await runCommand("loginctl", ["enable-linger", user]);
+    if (!(await lingering())) await runCommand("sudo", ["-n", "loginctl", "enable-linger", user]);
+    if (await lingering()) out.progress(`Turned on linger for ${user}: the worker and guard keep running after you log out and start at boot`);
+    else if ((await runCommand("systemctl", ["is-enabled", "tapdance-user-manager.service"])).ok) out.progress(`${user} cannot linger (logind cannot look the account up); tapdance-user-manager.service starts its user manager at boot instead`);
+    else out.warn(`Could not turn on linger for ${user} (${self.out.split("\n")[0] ?? "loginctl failed"}): the worker and guard stop when you log out. Run \`sudo loginctl enable-linger ${user}\`.`);
+  }
+  const runtime = `/run/user/${process.getuid?.() ?? 0}`;
+  // logind cannot look up some accounts (Google Cloud OS Login): start the user manager directly.
+  if (!existsSync(`${runtime}/bus`)) await runCommand("sudo", ["-n", "systemctl", "start", `user@${process.getuid?.() ?? 0}.service`]);
+  for (let i = 0; i < 60 && !existsSync(`${runtime}/bus`); i++) await new Promise((r) => setTimeout(r, 250));
+  if (!existsSync(`${runtime}/bus`)) {
+    throw new TapdanceError("HOST_CHECK_FAILED", `No systemd user manager runs for ${user} (${runtime}/bus is missing), so the worker cannot be installed as a service`, {
+      hint: `Run \`sudo loginctl enable-linger ${user}\` (it starts the user manager and keeps it running), then this command again. For an account logind cannot look up (Google Cloud OS Login), scripts/host-setup.sh installs a boot unit that starts it instead.`,
+    });
+  }
+  useUserBus(process.getuid?.() ?? 0);
 }

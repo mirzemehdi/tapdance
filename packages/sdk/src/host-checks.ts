@@ -30,6 +30,25 @@ export interface KvmReport {
   devKvmAccess: boolean;
   kvmOk?: string;
   emulatorAccel?: string;
+  /** `emulator -version` output when it failed (it starts the emulator's QEMU, which needs system libraries). */
+  emulatorRun?: string;
+}
+
+/** The Debian/Ubuntu package for each system library the emulator's QEMU loads that minimal cloud images lack. */
+const EMULATOR_LIB_PACKAGES: Record<string, string> = {
+  "libpulse.so.0": "libpulse0",
+  "libxkbfile.so.1": "libxkbfile1",
+  "libXi.so.6": "libxi6",
+  "libSM.so.6": "libsm6",
+  "libICE.so.6": "libice6",
+};
+
+/** All packages the emulator needs on a minimal Ubuntu: installing them together avoids one lease failure per library. */
+export const EMULATOR_APT_PACKAGES = Object.values(EMULATOR_LIB_PACKAGES);
+
+/** The library named in a loader error such as "error while loading shared libraries: libpulse.so.0: cannot open …". */
+export function missingSharedLibrary(output: string): string | undefined {
+  return /error while loading shared libraries: ([^:\s]+):/.exec(output)?.[1];
 }
 
 /** Hardware acceleration facts for a Linux host. Never guesses: each field is measured. */
@@ -57,6 +76,8 @@ export async function probeKvm(sdk?: string): Promise<KvmReport> {
   if (sdk && existsSync(join(sdk, "emulator/emulator"))) {
     const accel = await cmd(join(sdk, "emulator/emulator"), ["-accel-check"]);
     report.emulatorAccel = accel.out.split("\n").filter(Boolean).slice(-2).join(" ");
+    const run = await cmd(join(sdk, "emulator/emulator"), ["-version"]);
+    if (!run.ok) report.emulatorRun = run.out.split("\n").filter(Boolean).slice(-2).join(" ");
   }
   return report;
 }
@@ -96,6 +117,18 @@ export function kvmChecks(report: KvmReport): DoctorCheck[] {
       status: ok ? "pass" : "fail",
       detail: report.emulatorAccel,
       ...(ok ? {} : { fix: "Do not run the emulator without acceleration; fix KVM first." }),
+    });
+  }
+  if (report.emulatorRun !== undefined) {
+    const lib = missingSharedLibrary(report.emulatorRun);
+    checks.push({
+      id: "host.kvm.emulator-libs",
+      title: "Android Emulator runs",
+      status: "fail",
+      detail: lib ? `the emulator cannot start: system library ${lib} is missing` : report.emulatorRun,
+      fix: lib
+        ? `Install the libraries the emulator needs (minimal cloud images lack them): sudo apt-get install -y ${EMULATOR_APT_PACKAGES.join(" ")} (Fedora: sudo dnf install -y pulseaudio-libs libxkbfile libXi libSM libICE)`
+        : "Run `$ANDROID_HOME/emulator/emulator -version` and fix what it reports.",
     });
   }
   return checks;

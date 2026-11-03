@@ -324,7 +324,8 @@ notification permission, so on emulator images, which allow it). Other Android s
 ### `app`
 
 ```text
-tapdance app install <path> [--app-id <id>]
+tapdance app install <path> [--app-id <id>] [--launch <appId>]
+tapdance app install --from-ci <owner/repo> --artifact <name> [--run <id> | --branch <name>] [--launch <appId>]
 tapdance app launch <appId> [--relaunch] [--url <url>] [--arg <arg>]... [--locale <l>] [--console]
                      [--intent-action <a>] [--intent-data <uri>] [--intent-component <c>] [--intent-extra <k=v>]...
 tapdance app stop <appId>
@@ -342,6 +343,18 @@ this machine. An `.aab` is first turned into a universal APK with
 `bundletool` on `PATH`), signed with the Android debug keystore; without bundletool it is refused with
 `APP_PATH_INVALID` and an install hint. An `.ipa` on a simulator is refused. `--app-id` gives the
 package or bundle id when the backend needs it.
+
+`install --from-ci` (Android leases only) installs an APK that your CI built instead of a local file:
+the device's host downloads the GitHub Actions artifact `--artifact` with its own `gh` login and
+installs its newest `.apk`. `--run` names the workflow run; otherwise the host takes the newest
+successful run on `--branch` (default: the repository's default branch) that has the artifact. Give a
+path or `--from-ci`, not both. It needs a worker guard whose owner allowed the repository with
+`tapdance host artifacts enable`; iOS leases are refused with `NOT_SUPPORTED`. Ran on a Google Cloud N2
+host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). For example:
+
+```bash
+tapdance app install --from-ci acme/app --artifact app-debug --launch com.acme.app
+```
 
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
 opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
@@ -394,10 +407,10 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 
 | Command | Notes |
 | --- | --- |
-| `ui inspect` | `--app <id>` switches to that app as it is (no relaunch) and reads it: on iOS every read brings the session's app to the front, so after a link-out use `--app com.apple.mobilesafari`, and for the Home Screen `--app com.apple.springboard`; later reads stay on it until you launch your app. Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. |
+| `ui inspect` | `--app <id>` switches to that app as it is (no relaunch) and reads it: on iOS every read brings the session's app to the front, so after a link-out use `--app com.apple.mobilesafari`, and for the Home Screen `--app com.apple.springboard`; later reads stay on it until you launch your app. Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. On Android the header names the app whose elements are on screen: when none belong to the session's app (the launcher after Back), it names that app instead and a note says the session's app is not in front. |
 | `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). A `--text` target that is not on screen, or not tappable where it is (under a toolbar), is scrolled into view first (down the list, then up) and tapped where it then is; text that is only part of a label matches too, and the reply says so. On iOS, a settled tap that changed nothing and opened a link in another app (Safari) puts that app back in front (the settle read had brought your app back) and says so. |
 | `ui audit` | Accessibility check of the screen, from the accessibility tree: controls with nothing to announce (error, exit 1), touch targets under 44 pt (iOS) or 48 dp (Android), several controls announced alike, unlabelled images (info: fine if decorative). The iOS simulator has no VoiceOver, so this is how an agent checks "every control is announced"; it cannot judge colour contrast or clipped text. Controls cut off by a screen or list edge or under a tab/navigation bar are not judged; the summary line names them so you can scroll them into view. |
-| `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). After a fill, Tapdance reads the field back: if it does not hold exactly the typed text, it fills again at 80 ms and then 150 ms between keystrokes, and fails with what the field shows if it still differs (secure fields are not read back). |
+| `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. On Android, typing without a target fails (`ELEMENT_NOT_FOUND`) when the screen shows that no text field has focus, instead of reporting characters that went nowhere; pass `--text`, `--ref` or `--id`. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). After a fill, Tapdance reads the field back: if it does not hold exactly the typed text, it fills again at 80 ms and then 150 ms between keystrokes, and fails with what the field shows if it still differs (secure fields are not read back). |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
 | `ui sequence` | Timed taps next to the device, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). **Android:** one shell script inside the emulator; each tap starts in the background at its time (Android's `input` then takes a few tens of ms to deliver it); through a worker guard it needs `allow.deviceShell`. **iOS:** touches through the simulator's input channel (what the live viewer uses, not XCTest, whose taps take 300–450 ms each), scheduled on the Mac: by the worker guard (`allow.interaction` and `allow.input`) or by Tapdance itself in local mode; x and y are the points `ui inspect --bounds` shows. In landscape the device is taken as turned `landscape-left` (Tapdance's "landscape", and what most apps that force landscape use); `--orientation landscape-right` for the other way. With `--orientation` given, nothing is read from the app first (a read brings the session's app to the front), so use `--orientation portrait` for taps outside your app: a banner, Notification Center, the Home Screen. On iOS a step with `toX`/`toY` is a drag to that point over `hold` ms (default 250): a swipe at a set time. The reply gives every tap's `actualMs` and `driftMs`. `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. |
@@ -558,19 +571,22 @@ Runs the Simlock 0.4.0 CLI bundled with Tapdance, for operators. Put `--` before
 ## Hosting for a remote agent
 
 One command per side for device-only mode: `host up` on the Mac or Linux machine that runs the
-devices, `connect` on the machine where the agent runs. **Built and unit-tested only; not yet run end
-to end** ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-host.md](deployment/one-command-host.md).
+devices, `connect` on the machine where the agent runs. Run end to end on the owner's Mac and on a
+Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); `pause`,
+`resume` and `down --all` are unit-tested only ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-host.md](deployment/one-command-host.md).
 
 ### `host`
 
 | Command | Meaning |
 | --- | --- |
-| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line, a security note on what the token allows, and on Tailscale a suggested ACL). `--scope` limits a newly issued pairing token to those policy areas (see [threat model](security/threat-model.md)). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
-| `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, pairings, Tailscale) and the endpoint. |
+| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>] [--idle-stop <minutes\|off>] [--max-uptime <hours\|off>] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`, which on Linux without a display also sets headless emulators with the `swiftshader_indirect` GPU mode; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with the hostname or `--label`, approved at a terminal or with `--yes`, written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line, a security note on what the token allows, and on Tailscale a suggested ACL). `--scope` limits a newly issued pairing token to those policy areas (see [threat model](security/threat-model.md)). `--idle-stop` and `--max-uptime` set the cost guard (`hostStop` in the guard policy; Linux only, refused on macOS): power the machine off after that many minutes with no lease, guard request or build (30 by default on a detected cloud VM, off elsewhere), and after that many hours up take no new leases and power off when the last one ends (off by default). The stop command is fixed (`sudo -n /usr/bin/systemctl poweroff`); when sudo does not allow it, `host up` prints the one sudoers rule to add. A changed setting restarts an idle guard; the ready block shows it on a `cost guard:` line ([cost guardrails](deployment/google-cloud-n2.md#cost-guardrails)). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, cost guard, pairings, Tailscale) and the endpoint. The cost guard row shows the idle stop and uptime cap, how long the host has been idle, and fails when sudo does not allow the stop command. |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
-| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--allow-admin-account]` / `host builds disable` / `host builds status` / `host builds key` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `key` creates a read-only deploy key and prints its public half. `enable` and `disable` restart the guard when no lease is running. |
+| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--allow-admin-account]` / `host builds disable` / `host builds status` / `host builds key [--repo <url>]` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it. `key` creates a read-only deploy key and prints its public half; with `--repo` the key is for that repository only and its builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `status` lists each repository with its deploy key and number of build files. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
+| `host builds files add --repo <url> <path-in-repo> [--from <file>]` / `host builds files list [--repo <url>]` / `host builds files remove --repo <url> <path-in-repo>` | Build files: config a repository keeps out of git (`google-services.json`, `local.properties`, `.env`), copied into the checkout before each build of that repository and removed after it. `add` reads `--from` or stdin (at most 1 MB, 50 files per repository) and refuses absolute paths, `..`, `.git` and `.gitmodules`; `list` shows path, size and the start of the sha256, never the content. Owner-only: no guard route or MCP tool reads or writes them. |
+| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>]` / `host artifacts disable` / `host artifacts status` | Let the agent install Android APKs your CI built (`app install --from-ci`): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in. `enable` and `disable` restart the guard when no lease is running. Ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -1311,8 +1327,13 @@ Options:
   -h, --help                display help for command
 
 Commands:
-  install [options] <path>  Upload and install an .apk (Android) or simulator
-                            .app (iOS)
+  install [options] [path]  Upload and install an app: Android .apk or .aab (an
+                            .aab becomes a universal APK with bundletool on this
+                            machine); iOS simulator .app bundle, or a .zip or
+                            .tar holding one (.ipa on a physical iPhone only).
+                            With --from-ci instead of a path: the device's host
+                            downloads an Android APK from a GitHub Actions
+                            artifact with its own credentials and installs it
   launch [options] <appId>  Launch an installed app
   uninstall <appId>         Remove an installed app
   clear <appId>             Clear an app's data (first-launch state); iOS also:
@@ -1333,13 +1354,27 @@ Commands:
 ### `tapdance app install`
 
 ```text
-Usage: tapdance app install [options] <path>
+Usage: tapdance app install [options] [path]
 
-Upload and install an .apk (Android) or simulator .app (iOS)
+Upload and install an app: Android .apk or .aab (an .aab becomes a universal APK
+with bundletool on this machine); iOS simulator .app bundle, or a .zip or .tar
+holding one (.ipa on a physical iPhone only). With --from-ci instead of a path:
+the device's host downloads an Android APK from a GitHub Actions artifact with
+its own credentials and installs it
 
 Options:
-  --app-id <id>  package / bundle id, when the backend needs it
-  -h, --help     display help for command
+  --app-id <id>      package / bundle id, when the backend needs it
+  --from-ci <repo>   Android: install from the user's CI instead of a path: a
+                     GitHub repository (owner/repo or URL) on the host's
+                     allow-list (`tapdance host artifacts enable`)
+  --artifact <name>  with --from-ci: the artifact's name
+                     (actions/upload-artifact name)
+  --run <id>         with --from-ci: the workflow run id (default: the newest
+                     successful run on --branch)
+  --branch <name>    with --from-ci: take the newest successful run on this
+                     branch (default: the repository's default branch)
+  --launch <appId>   launch this app once it is installed
+  -h, --help         display help for command
 ```
 
 ### `tapdance app launch`
@@ -2129,6 +2164,9 @@ Commands:
                            restarts the worker only when nothing is leased
   builds                   Let the agent build apps on this machine from
                            allow-listed git repositories (off by default)
+  artifacts                Let the agent install Android APKs your CI built
+                           (GitHub Actions artifacts), downloaded by this
+                           machine with its own gh (off by default)
   token [options]          Hand a pairing token to the agent: copy it to the
                            clipboard (default) or show it once
   status                   Show the state of each `host up` step on this machine
@@ -2146,26 +2184,34 @@ Worker, guard service, pairing, Tailscale and a self-test, step by step; prints
 a block to paste to the agent's machine
 
 Options:
-  --label <name>         name for the control machine's pairing (default: this
-                         machine's hostname)
-  --allow-admin-account  run the guard from an administrator account (not
-                         recommended)
-  --no-tailscale         do not expose the guard with `tailscale serve`; the
-                         endpoint stays on loopback
-  --keep-awake           macOS: run the guard under `caffeinate -i` so idle
-                         sleep does not take it offline
-  --repair               revoke the existing pairing with this label and issue a
-                         new token
-  --skip-self-test       do not lease a device through the guard at the end
-  --scope <areas>        limit the pairing token to these policy areas, e.g.
-                         interaction,inspection,screenshots,streaming,input (no
-                         install: it cannot put apps on the devices)
-  --warm <counts>        booted spare devices kept ready for fast leases, per
-                         platform, e.g. android=1,ios=0 (0 frees the memory;
-                         default: Simlock keeps one per device kind used)
-  -y, --yes              approve pairing without a prompt (you are at this
-                         machine)
-  -h, --help             display help for command
+  --label <name>             name for the control machine's pairing (default:
+                             this machine's hostname)
+  --allow-admin-account      run the guard from an administrator account (not
+                             recommended)
+  --no-tailscale             do not expose the guard with `tailscale serve`; the
+                             endpoint stays on loopback
+  --keep-awake               macOS: run the guard under `caffeinate -i` so idle
+                             sleep does not take it offline
+  --repair                   revoke the existing pairing with this label and
+                             issue a new token
+  --skip-self-test           do not lease a device through the guard at the end
+  --scope <areas>            limit the pairing token to these policy areas, e.g.
+                             interaction,inspection,screenshots,streaming,input
+                             (no install: it cannot put apps on the devices)
+  --warm <counts>            booted spare devices kept ready for fast leases,
+                             per platform, e.g. android=1,ios=0 (0 frees the
+                             memory; default: Simlock keeps one per device kind
+                             used)
+  --idle-stop <minutes|off>  Linux cloud VMs: power the machine off after this
+                             many minutes with no lease, request or build
+                             (default on a detected cloud VM: 30; elsewhere off;
+                             refused on macOS)
+  --max-uptime <hours|off>   Linux cloud VMs: after this many hours up, take no
+                             new leases and power off when the last one ends
+                             (default off; refused on macOS)
+  -y, --yes                  approve pairing without a prompt (you are at this
+                             machine)
+  -h, --help                 display help for command
 ```
 
 ### `tapdance host pause`
@@ -2225,10 +2271,15 @@ Commands:
   enable [options]  Allow builds from these repositories (git mode): the agent
                     sends a repo and ref, this machine fetches and builds it
   disable           Turn builds off (the allow-list is kept)
-  status            Show whether builds are on, the allowed repositories and the
-                    build cache size
-  key               Create a read-only deploy key for --git-auth deploy-key and
-                    print its public half to add to the repository
+  status            Show whether builds are on, the allowed repositories (with
+                    their deploy key and build files) and the build cache
+  key [options]     Create a read-only deploy key and print its public half to
+                    add to the repository; --repo makes one for that repository
+                    only (GitHub accepts a deploy key on one repository)
+  files             Files this machine copies into the checkout before each
+                    build of a repository: config kept out of git
+                    (google-services.json, local.properties, .env). Only you add
+                    or read them; agents cannot
   help [command]    display help for command
 ```
 
@@ -2243,11 +2294,15 @@ this machine fetches and builds it
 Options:
   --repo <url>              repository allowed to be built (repeatable)
   --git-auth <mode>         how git reaches private repositories: gh (this
-                            machine's `gh auth`), deploy-key (`host builds
-                            key`), or none (default: "none")
+                            machine's `gh auth`, e.g. a fine-grained read-only
+                            token), deploy-key (`host builds key`), or none; a
+                            repository's own key from `host builds key --repo`
+                            is used whenever it exists (default: keep the
+                            current setting, else none)
   --protected-ref <branch>  only build commits already on this branch of the
                             remote, e.g. main (repeatable)
-  --timeout-minutes <n>     longest build (default: "45")
+  --timeout-minutes <n>     longest build (default: keep the current setting,
+                            else 45)
   --allow-admin-account     accept the risk of building on an administrator
                             account
   -h, --help                display help for command
@@ -2269,7 +2324,8 @@ Options:
 ```text
 Usage: tapdance host builds status [options]
 
-Show whether builds are on, the allowed repositories and the build cache size
+Show whether builds are on, the allowed repositories (with their deploy key and
+build files) and the build cache
 
 Options:
   -h, --help  display help for command
@@ -2280,8 +2336,97 @@ Options:
 ```text
 Usage: tapdance host builds key [options]
 
-Create a read-only deploy key for --git-auth deploy-key and print its public
-half to add to the repository
+Create a read-only deploy key and print its public half to add to the
+repository; --repo makes one for that repository only (GitHub accepts a deploy
+key on one repository)
+
+Options:
+  --repo <url>  the repository this key is for; its builds use it whatever
+                --git-auth says
+  -h, --help    display help for command
+```
+
+### `tapdance host builds files`
+
+```text
+Usage: tapdance host builds files [options] [command]
+
+Files this machine copies into the checkout before each build of a repository:
+config kept out of git (google-services.json, local.properties, .env). Only you
+add or read them; agents cannot
+
+Options:
+  -h, --help                       display help for command
+
+Commands:
+  add [options] <path-in-repo>     Add or replace a build file: its content
+                                   comes from --from or stdin (at most 1 MB, 50
+                                   files per repository)
+  list [options]                   List build files: path, size and the start of
+                                   the sha256, never their content
+  remove [options] <path-in-repo>  Remove a build file; the next build runs
+                                   without it
+  help [command]                   display help for command
+```
+
+### `tapdance host artifacts`
+
+```text
+Usage: tapdance host artifacts [options] [command]
+
+Let the agent install Android APKs your CI built (GitHub Actions artifacts),
+downloaded by this machine with its own gh (off by default)
+
+Options:
+  -h, --help        display help for command
+
+Commands:
+  enable [options]  Allow installs from these repositories' GitHub Actions
+                    artifacts: this machine downloads them with its `gh auth`
+                    and installs the APK on the agent's Android lease
+  disable           Turn installs from CI off (the allow-list is kept)
+  status            Show whether installs from CI are on, the allowed
+                    repositories and branches, the download cache and whether
+                    this machine's gh is signed in
+  help [command]    display help for command
+```
+
+### `tapdance host artifacts enable`
+
+```text
+Usage: tapdance host artifacts enable [options]
+
+Allow installs from these repositories' GitHub Actions artifacts: this machine
+downloads them with its `gh auth` and installs the APK on the agent's Android
+lease
+
+Options:
+  --repo <owner/repo>  GitHub repository (owner/repo or its https://github.com
+                       URL), repeatable
+  --branch <name>      only artifacts of runs on this branch, e.g. main
+                       (repeatable; replaces the list)
+  --max-mb <n>         largest artifact and APK, in MB (default 512)
+  -h, --help           display help for command
+```
+
+### `tapdance host artifacts disable`
+
+```text
+Usage: tapdance host artifacts disable [options]
+
+Turn installs from CI off (the allow-list is kept)
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance host artifacts status`
+
+```text
+Usage: tapdance host artifacts status [options]
+
+Show whether installs from CI are on, the allowed repositories and branches, the
+download cache and whether this machine's gh is signed in
 
 Options:
   -h, --help  display help for command

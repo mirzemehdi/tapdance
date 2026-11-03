@@ -1,46 +1,74 @@
 # Self-hosted setups: the moving parts
 
 This page explains the machines involved when your coding agent and your devices live on different
-computers, how data flows between them, and what has been tested. Pick a concrete guide afterwards:
+computers, how data flows between them, and what has been tested.
 
-| Worker you have | Guide |
+## Two ways to connect them
+
+| | Device-only host (**recommended**) | Gateway (alternative) |
+| --- | --- | --- |
+| Setup | `tapdance host up` on the host, `tapdance connect` on the agent's machine | `tapdance gateway setup` on the agent's VPS, `tapdance worker login --accept-gateway-exec` on each worker |
+| What the agent reaches | Only the [worker guard](../security/personal-mac.md) on the host, which allows a fixed device API | The gateway, which gets **command execution** on every joined worker |
+| Network | Your tailnet (Tailscale); nothing public | The worker dials out to the gateway over `wss://` (TLS) or a private network |
+| Fits | One host per agent machine: your Mac, a Linux machine with KVM, a cloud VM | Several workers behind one queue, on machines dedicated to being workers |
+| Proven | `host up` on the owner's Mac; an agent on a Linux VPS tested a real app through it over Tailscale ([field runs](../testing/evidence/2026-11-02-vps-field-runs.md)). Not yet on a Linux host. | Gateway and worker on **one** Mac only ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)); never across two machines. |
+
+Pick a guide:
+
+| Host you have | Guide |
 | --- | --- |
-| Your own laptop or Mac | [Laptop as a worker](laptop-worker.md) |
+| Your own Mac, or a Linux machine with KVM | [One-command host](one-command-host.md) |
 | A Google Cloud VM | [Google Cloud N2](google-cloud-n2.md) |
 | An OVHcloud Public Cloud instance | [OVHcloud Public Cloud](ovh-public-cloud.md) |
 | A rented or owned Linux server | [Dedicated Linux server](dedicated-linux-server.md) |
 | A cloud Mac (iOS) | [iOS overview](../ios/overview.md) |
-
-Read [worker security](worker-security.md) before you join any machine to a gateway.
+| Several workers behind one gateway | [Laptop as a worker](laptop-worker.md) (gateway mode) |
 
 **A personal Mac should not join a gateway.** `tapdance worker login --accept-gateway-exec` gives the
-gateway, and every agent token it issues, command execution on the Mac. On a Mac you also use for
-yourself, use device-only mode instead: `tapdance worker guard` in front of the local worker, reached
-from the control machine over a private network such as Tailscale, with `provider: "self-hosted"` and
-the guard's URL as `endpoint`. It gives up the fleet features (one gateway, many workers, one queue).
-See [personal-mac.md](../security/personal-mac.md); it was verified on one Mac, and Tailscale
-exposure is untested.
+gateway, and every agent token it issues, command execution on the Mac. Read
+[worker security](worker-security.md) before you join any machine to a gateway.
 
 ## The roles
 
 | Role | What it is | Runs | Needs KVM? |
 | --- | --- | --- | --- |
-| **Developer VPS / control machine** | Where your coding agent (Claude Code, Codex, Cursor, …) runs and your app is built. | Tapdance CLI and MCP server, your build tools. Usually also the gateway. | **No** |
-| **Gateway** | A [Simlock](https://github.com/callstackincubator/simlock) daemon in gateway mode. It owns no devices. It keeps the queue, the leases and the list of workers, and routes each request to the right worker. | `simlock --gateway` (Tapdance bundles it). Node.js 22.13+. | **No** |
-| **Worker** | A machine that owns devices: your laptop, a Mac, a KVM Linux VM or server. It dials out to the gateway. | A Simlock worker daemon plus [agent-device](https://github.com/callstack/agent-device). Android SDK and/or Xcode. | Linux workers: **yes**. macOS uses Apple's Hypervisor framework. |
+| **Developer VPS / control machine** | Where your coding agent (Claude Code, Codex, Cursor, …) runs and your app is built. | Tapdance CLI and MCP server, your build tools. In the gateway model, usually also the gateway. | **No** |
+| **Worker guard** | Device-only mode: the one endpoint a remote agent reaches on a host, in front of the host's own worker. It allows a fixed device API and refuses everything else. | `tapdance worker guard start`, as a login service set up by `tapdance host up`. | — |
+| **Gateway** (alternative) | A [Simlock](https://github.com/callstackincubator/simlock) daemon in gateway mode. It owns no devices. It keeps the queue, the leases and the list of workers, and routes each request to the right worker. | `simlock --gateway` (Tapdance bundles it). Node.js 22.13+. | **No** |
+| **Worker** (the host) | A machine that owns devices: your laptop, a Mac, a KVM Linux VM or server. In device-only mode the agent reaches it through the guard; in the gateway model it dials out to the gateway. | A Simlock worker daemon plus [agent-device](https://github.com/callstack/agent-device). Android SDK and/or Xcode. | Linux workers: **yes**. macOS uses Apple's Hypervisor framework. |
 | **Emulator / simulator** | The device itself. Simlock creates it from an installed system image or runtime, leases it, wipes it on release. | Android Emulator (macOS or Linux) or iOS Simulator (macOS only). | — |
 | **Developer's browser** | Where a person watches the device and takes over. | Any browser with WebCodecs, on any computer. | No |
 
 Two consequences matter most:
 
 - **Your coding VPS needs no KVM.** It never runs an emulator. Any ordinary VPS works for the agent
-  and the gateway (requirement P-07).
+  (and the gateway, if you use one) (requirement P-07).
 - **iOS needs a Mac worker.** No Linux machine, VPS or KVM host can run the iOS Simulator.
 
-The gateway can run on the developer VPS (the simplest choice, and what `tapdance gateway setup`
-does), or on a separate small server. Both are fine; the rest of this page assumes it shares the VPS.
+## Device-only host: how the pieces connect
 
-## How the pieces connect
+```text
+Agent's machine (VPS or laptop, no KVM)
+  coding agent
+    -> tapdance mcp / CLI   (provider "self-hosted", endpoint = the guard's tailnet address)
+         -> https://<host>.<tailnet>.ts.net:4720   (tailscale serve on the host)
+Host (Mac, Linux machine with KVM, N2 VM)
+  worker guard :4720  (device-only policy, its own revocable tokens)
+    -> Simlock worker on loopback
+         -> agent-device daemon, adb + Android Emulator, or simctl + iOS Simulator
+```
+
+- **Nothing is public.** The guard listens on loopback; `tailscale serve` makes it reachable inside
+  your tailnet only. The agent's token is a guard token from `host up`, not a Simlock token.
+- **Uploads, screenshots, recordings and logs** travel the same way as through a gateway, and land
+  under `artifacts.directory/<session>/` on the agent's machine.
+- Setup and day-to-day commands: [one-command host](one-command-host.md).
+
+## Gateway (alternative): how the pieces connect
+
+The gateway can run on the developer VPS (the simplest choice, and what `tapdance gateway setup`
+does), or on a separate small server. Both are fine; the rest of this section assumes it shares the
+VPS.
 
 ```text
 Developer VPS (no KVM)
@@ -81,7 +109,7 @@ Developer's browser (any computer)
   proxied by `tapdance view` on the VPS. The browser never sees a Simlock token and never talks to
   ADB. See [browser access](browser-access.md).
 
-## Tokens
+## Gateway tokens
 
 | Token | Made with | Held by | Gives |
 | --- | --- | --- | --- |
@@ -93,7 +121,7 @@ Simlock stores only hashes of tokens on the gateway. A token works only on the d
 Give each concurrent agent its own agent token: Simlock treats one token as one requester, and by
 default a requester holds one lease at a time.
 
-## Setup at a glance
+## Gateway setup at a glance
 
 On the VPS:
 
@@ -136,19 +164,20 @@ public address. Use one of:
 
 ## What has been tested
 
-From [STATUS.md](../../STATUS.md), as of 2026-11-01:
+From [STATUS.md](../../STATUS.md):
 
 | Path | Status |
 | --- | --- |
+| Device-only host (`host up` + `connect`), agent on a Linux VPS, host on a Mac, over Tailscale | **Run by the owner**: about a day of Android and iOS testing of a real app with the CLI ([field runs](../testing/evidence/2026-11-02-vps-field-runs.md)), and a tool self-test through the guard ([evidence](../testing/evidence/2026-11-03-selftest-through-guard.md)). An MCP client on the VPS was not used. |
+| `host up` on a Linux host or a cloud VM | **Run** on a fresh Google Cloud N2 VM with `scripts/host-setup.sh`, driven from a Mac with `connect` ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| Google Cloud N2 host | **Run once end to end**: Terraform, setup, CLI and MCP checklists, viewer, installs from CI, idle stop and restart ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). |
 | Gateway + joined worker on **one** Mac | **Verified**: CLI loop, MCP over stdio and the viewer in a real browser all worked through the gateway ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). |
-| Gateway + worker on two machines | **Not tested.** Same code path, but no real network between them yet; Q-06 is pending a real VPS and laptop. |
+| Gateway + worker on two machines | **Not tested.** Same code path, but no real network between them yet; Q-06 is pending. |
 | `tapdance gateway setup` on a VPS | Run on macOS only; **not run on a Linux VPS**. |
 | `tapdance worker login` across machines | Implemented, **not run across machines**. |
-| Android end to end | Implemented, **not run** (no Android command-line tools on the test Mac). |
-| Google Cloud N2 worker | Terraform and scripts written, **nothing provisioned**. |
-| Browser viewer | Stream, input and take-over verified **on one Mac** (scripted, and in a real browser through a gateway on that Mac); not yet used from another computer. |
+| Android end to end | **Verified on a Mac** ([evidence](../testing/evidence/2026-11-01-android.md)) and on a Linux host, a Google Cloud N2 VM ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| Browser viewer | Stream, input and take-over verified **on one Mac** (scripted, and in a real browser through a gateway on that Mac); see STATUS.md V-02 for use over a tailnet. |
 | Streamable HTTP MCP (`tapdance mcp --http`) | **Partly verified**: 401 without the token, tools listed, `list_devices` and `get_device_status` worked; a full device loop over HTTP not run. |
-| Device-only mode (`tapdance worker guard`) | **Verified on one Mac**: the full MCP loop through the guard against a real simulator ([evidence](../testing/evidence/2026-11-01-worker-guard.md)). The dedicated worker account script and exposure over Tailscale are **not tested**. |
 | Windows as a worker | Not supported (Simlock runs on macOS and Linux only). |
 
 If you try any of these, please file what happened with `tapdance report`.

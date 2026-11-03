@@ -15,7 +15,7 @@ export type Route =
   | { kind: "identity" }
   | { kind: "status" }
   | { kind: "catalog" }
-  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" | "crashes" | "console-launch" | "console-read" | "touches"; crashName?: string }
+  | { kind: "lease"; leaseId: string; action: "get" | "delete" | "exec" | "stream" | "input" | "events" | "files-put" | "files-get" | "build" | "ci-install" | "crashes" | "console-launch" | "console-read" | "touches"; crashName?: string }
   | { kind: "rpc" }
   | { kind: "agent-device-health" }
   | { kind: "upload"; path: string }
@@ -49,7 +49,7 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
     if (!LEASE.test(consoleRoute[1]!)) return deny("unknown lease id format");
     return { ok: true, value: { kind: "lease", leaseId: consoleRoute[1]!, action: method === "POST" ? "console-launch" : "console-read" } };
   }
-  const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files|build))?$/.exec(path);
+  const lease = /^\/v1\/leases\/([^/]+)(?:\/(exec|stream|input|events|files|build|ci-install))?$/.exec(path);
   if (lease) {
     const leaseId = lease[1]!;
     if (!LEASE.test(leaseId)) return deny("unknown lease id format");
@@ -62,6 +62,8 @@ export function routeOf(method: string, rawPath: string): Decision<Route> {
     if (sub === "files" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "files-put" } };
     if (sub === "files" && method === "GET") return { ok: true, value: { kind: "lease", leaseId, action: "files-get" } };
     if (sub === "build" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "build" } };
+    // An APK from the user's CI, fetched by this host with its own gh (allow.artifacts + install).
+    if (sub === "ci-install" && method === "POST") return { ok: true, value: { kind: "lease", leaseId, action: "ci-install" } };
     return deny("lease route not allowed");
   }
   if (path === "/v1/agent-device/rpc" && method === "POST") return { ok: true, value: { kind: "rpc" } };

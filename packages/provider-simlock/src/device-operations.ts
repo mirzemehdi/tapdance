@@ -254,7 +254,11 @@ async function setting(ctx: DeviceOperationContext, handle: LeaseHandle, change:
       // right after `app kill` pressed Home (#65): try again with longer pauses, and in the end trust
       // the screen's shape over the confirmation.
       let last: unknown;
-      for (const pause of [0, 1500, 3000]) {
+      // The Home Screen never rotates, so its confirmation never comes: with the launcher in front one
+      // attempt is enough (three cost ~50 s on a nested-virtualization emulator).
+      const focusedFirst = isAndroid ? /mCurrentFocus=Window\{\S+ \S+ ([A-Za-z][A-Za-z0-9_.]*)\//.exec((await ctx.exec(android.focusedWindow()).catch(() => ({ stdout: "" }))).stdout)?.[1] : undefined;
+      const pauses = focusedFirst && /launcher/i.test(focusedFirst) ? [0] : [0, 1500, 3000];
+      for (const pause of pauses) {
         if (pause) await new Promise((r) => setTimeout(r, pause));
         try {
           await agentDevice("orientation", () => command.orientation({ orientation: value, ...scope }));

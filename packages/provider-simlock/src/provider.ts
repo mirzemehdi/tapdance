@@ -35,6 +35,8 @@ import {
   type DeviceOperationResult,
   type AppBuildRequest,
   type AppBuildResult,
+  type AppCiInstallRequest,
+  type AppCiInstallResult,
 } from "@tapdance/core";
 import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
@@ -199,6 +201,10 @@ export class SimlockProvider implements DeviceProvider {
         const cap = status.capacity?.[platform];
         const limit = cap?.limit ?? 0;
         const tool = status.host?.tools?.find((t) => t.platform === platform);
+        if (iosNeedsMac(platform, status.host?.os)) {
+          checks.push({ id: "simlock.capacity.ios", title: "iOS simulators available", status: "skip", detail: `not on this host: it runs ${status.host?.os}, and iOS simulators need a Mac` });
+          continue;
+        }
         if (limit > 0 && offered && !offered.has(platform)) {
           checks.push({
             id: `simlock.capacity.${platform}`,
@@ -326,7 +332,8 @@ export class SimlockProvider implements DeviceProvider {
       .filter((d) => filter.platform === undefined || d.platform === filter.platform);
     const notes: string[] = [];
     for (const c of capacity) {
-      if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
+      if (iosNeedsMac(c.platform, status.host?.os)) notes.push(`No ios here: this host runs ${status.host?.os}, and iOS simulators need a Mac host.`);
+      else if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
       else if (!entries.some((e) => e.platform === c.platform && (e.models.length > 0 || e.osVersions.length > 0))) {
         notes.push(`${c.platform} is not available right now: the worker offers no ${c.platform} device, so leases are refused. ${notOfferedFix(c.platform)}`);
       }
@@ -411,6 +418,22 @@ export class SimlockProvider implements DeviceProvider {
       });
     }
     return this.http.build(handle.leaseId, { ...request, platform: handle.platform }, onLine);
+  }
+
+  async installFromCi(handle: LeaseHandle, request: AppCiInstallRequest, onLine: (line: string) => void): Promise<AppCiInstallResult> {
+    this.data(handle);
+    if (handle.platform !== "android") {
+      throw new TapdanceError("NOT_SUPPORTED", "Installing from CI works for Android leases only", {
+        hint: "For an iOS simulator, build a simulator .app (xcodebuild -sdk iphonesimulator) and upload it with `tapdance app install <path>`, or build it on the host with `tapdance app build`.",
+      });
+    }
+    if (this.isLocal()) {
+      throw new TapdanceError("NOT_SUPPORTED", "Installs from CI go through a worker guard", {
+        hint: "On this machine, download the artifact yourself (gh run download <run-id> -n <artifact>) and run `tapdance app install <path>`.",
+      });
+    }
+    const body: Record<string, unknown> = { repo: request.repo, artifact: request.artifact, ...(request.run ? { run: request.run } : {}), ...(request.branch ? { branch: request.branch } : {}) };
+    return this.http.ciInstall(handle.leaseId, body, onLine);
   }
 
   /** Runs adb/simctl against the leased device (Simlock's lease exec puts the device in). */
@@ -665,10 +688,14 @@ export class SimlockProvider implements DeviceProvider {
     const axe = this.axeFor(handle);
     if (axe) return axe.inspect(handle.deviceId, options.interactiveOnly ?? true);
     try {
-      const snap = await this.agentClient(handle).capture.snapshot({
-        interactiveOnly: options.interactiveOnly ?? true,
-        ...this.scope(handle),
-      } as never);
+      const read = () => this.agentClient(handle).capture.snapshot({ interactiveOnly: options.interactiveOnly ?? true, ...this.scope(handle) } as never);
+      // On an emulator just handed out, agent-device's snapshot helper can fail its first start
+      // (INSTRUMENTATION_FAILED) and work a moment later: read once more before reporting it.
+      const snap = await read().catch(async (error: unknown) => {
+        if (handle.platform !== "android" || !/INSTRUMENTATION_FAILED|snapshot helper failed/i.test(String((error as Error)?.message ?? error))) throw error;
+        await new Promise((r) => setTimeout(r, 1500));
+        return read();
+      });
       const raw = snap as unknown as {
         nodes?: Array<Record<string, unknown>>;
         truncated?: boolean;
@@ -681,12 +708,20 @@ export class SimlockProvider implements DeviceProvider {
       // Refs pinned to this snapshot (`@e7~s4`): agent-device then refuses one the screen has
       // since replaced instead of acting on whatever element now has that number.
       const generation = typeof raw.refsGeneration === "number" && Number.isInteger(raw.refsGeneration) ? raw.refsGeneration : undefined;
+      // agent-device names the session's app even when another app (the launcher after Back) is in
+      // front. On Android the elements carry their package, so name the app they belong to (#73).
+      const sessionApp = raw.appBundleId ?? raw.appName;
+      const front = handle.platform === "android" ? frontApp(raw.nodes ?? [], sessionApp) : sessionApp;
+      const warnings = (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w)));
+      if (front && sessionApp && front !== sessionApp) {
+        warnings.unshift(`${front} is in front, not the session's app ${sessionApp}. Bring it back with \`tapdance app launch ${sessionApp}\` (MCP launch_app) if that is the app you meant.`);
+      }
       return {
-        ...(raw.appBundleId ?? raw.appName ? { app: (raw.appBundleId ?? raw.appName) as string } : {}),
+        ...(front ? { app: front } : {}),
         ...(raw.viewport?.width && raw.viewport.height ? { viewport: { width: raw.viewport.width, height: raw.viewport.height } } : {}),
         elements: (raw.nodes ?? []).map((node) => pinRef(toUiElement(node), generation)),
         truncated: raw.truncated ?? false,
-        warnings: (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w))),
+        warnings,
       };
     } catch (error) {
       throw fromAgentDeviceError(error, "inspect");
@@ -825,6 +860,14 @@ export class SimlockProvider implements DeviceProvider {
       throw new TapdanceError("ELEMENT_NOT_FOUND", `No element with bounds matches ${describe(target)}`, { hint: "Run `tapdance ui inspect --bounds` and tap by coordinates (--x/--y)." });
     }
     return { x: Math.round(match.rect.x + match.rect.width / 2), y: Math.round(match.rect.y + match.rect.height / 2) };
+  }
+
+  /** Whether an editable element has input focus, from one snapshot; undefined when it cannot tell (#72). */
+  private async editableHasFocus(handle: LeaseHandle): Promise<boolean | undefined> {
+    const snap = (await this.agentClient(handle)
+      .capture.snapshot({ interactiveOnly: true, ...this.scope(handle) } as never)
+      .catch(() => undefined)) as { nodes?: Array<Record<string, unknown>> } | undefined;
+    return snap ? editableFocus(snap.nodes ?? []) : undefined;
   }
 
   /** The package of the focused Android window, from the window manager. */
@@ -1005,6 +1048,11 @@ export class SimlockProvider implements DeviceProvider {
     const client = this.agentClient(handle);
     const delay = options.delayMs !== undefined ? { delayMs: Math.max(0, Math.min(1000, Math.round(options.delayMs))) } : {};
     const fill = (extra: { delayMs?: number }) => client.interactions.fill({ ...toAgentDeviceTarget(target!), text, settle: true, ...extra, ...this.scope(handle) } as never);
+    // Without a target, Android's text input goes nowhere when no field has focus, and agent-device
+    // still answers "typed" (#72). Check the focus first; when the snapshot cannot tell, type as before.
+    if (target === undefined && handle.platform === "android" && (await this.editableHasFocus(handle)) === false) {
+      throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus, so nothing was typed", { hint: NO_FOCUS_HINT });
+    }
     try {
       if (target !== undefined) {
         // A field that drops fast keystrokes (Compose Multiplatform on iOS) can fail agent-device's
@@ -1036,9 +1084,7 @@ export class SimlockProvider implements DeviceProvider {
     } catch (error) {
       const mapped = fromAgentDeviceError(error, "type");
       if (mapped.code === "ELEMENT_NOT_FOUND" && target === undefined) {
-        throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus", {
-          hint: "Tap the field first, or pass a target so Tapdance fills that field.",
-        });
+        throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus", { hint: NO_FOCUS_HINT });
       }
       throw mapped;
     }
@@ -1675,6 +1721,46 @@ export const RAW_INPUT_APPS = new Set([
   "com.google.android.intentresolver",
 ]);
 
+const NO_FOCUS_HINT =
+  "Pass the field as a target so Tapdance focuses and fills it: --text, --ref or --id with `tapdance ui type` (MCP type_text: into_text, into_ref or into_id). Or tap the field first.";
+
+const EDITABLE_ROLE = /edit ?text|text ?field|search ?field|secure|text ?area|text-?input|combo ?box/i;
+
+/**
+ * From snapshot nodes: true when an editable element has input focus; false when the nodes report
+ * focus and no element has it; undefined when they carry no focus flags, or a focused element's kind
+ * is unclear.
+ */
+export function editableFocus(nodes: Array<Record<string, unknown>>): boolean | undefined {
+  if (!nodes.some((n) => typeof n["focused"] === "boolean")) return undefined;
+  const focused = nodes.filter((n) => n["focused"] === true);
+  const roleOf = (n: Record<string, unknown>) => ["type", "kind", "role"].map((k) => (typeof n[k] === "string" ? n[k] : "")).join(" ");
+  if (focused.some((n) => n["editable"] === true || EDITABLE_ROLE.test(roleOf(n)))) return true;
+  return focused.some((n) => n["editable"] !== false) ? undefined : false;
+}
+
+/** Packages that share the screen with any app, never "the app in front". */
+const NOT_FRONT_APP = /^(android|com\.android\.systemui)$|inputmethod/i;
+
+/**
+ * The Android app an agent-device snapshot shows (#73): the most common package among its elements
+ * (a node's `bundleId`, or the part of its `identifier` before `:id/`). The session's app stays the
+ * answer while any element belongs to it, and when no element names a package.
+ */
+export function frontApp(nodes: Array<Record<string, unknown>>, sessionApp: string | undefined): string | undefined {
+  const counts = new Map<string, number>();
+  for (const n of nodes) {
+    if (n["systemBar"] || n["systemChrome"]) continue;
+    const bundle = typeof n["bundleId"] === "string" && n["bundleId"] ? n["bundleId"] : undefined;
+    const pkg = bundle ?? (typeof n["identifier"] === "string" ? /^([A-Za-z]\w*(?:\.\w+)+):id\//.exec(n["identifier"])?.[1] : undefined);
+    if (pkg && !NOT_FRONT_APP.test(pkg)) counts.set(pkg, (counts.get(pkg) ?? 0) + 1);
+  }
+  if (sessionApp && counts.has(sessionApp)) return sessionApp;
+  let top: string | undefined;
+  for (const [pkg, c] of counts) if (top === undefined || c > counts.get(top)!) top = pkg;
+  return top ?? sessionApp;
+}
+
 /** The package in `mCurrentFocus` of `dumpsys window displays`. */
 export function focusedPackage(dumpsys: string): string | undefined {
   return /mCurrentFocus=Window\{\S+ \S+ ([A-Za-z][A-Za-z0-9_.]*)\//.exec(dumpsys)?.[1];
@@ -1696,6 +1782,11 @@ export function matchesTarget(el: UiElement, target: Exclude<ElementTarget, { ki
       return m[1] === "id" ? el.identifier === v : m[1] === "role" ? el.role === v : el.label === v || el.value === v;
     }
   }
+}
+
+/** A Linux (or other non-macOS) worker still reports iOS capacity, but can never run a simulator. */
+export function iosNeedsMac(platform: string, hostOs: string | undefined): boolean {
+  return platform === "ios" && hostOs !== undefined && hostOs !== "" && !/darwin|mac/i.test(hostOs);
 }
 
 /** What the worker's owner can do when a platform has capacity but no device on offer. */

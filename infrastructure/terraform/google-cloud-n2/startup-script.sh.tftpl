@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Tapdance N2 worker startup script (rendered by Terraform; runs as root at every boot).
+# Tapdance N2 host startup script (rendered by Terraform; runs as root at every boot).
 #
-# It prepares the machine only: KVM packages, the kvm udev rule, and the install scripts in
-# /opt/tapdance. It holds no secrets and never joins a gateway. Log: /var/log/tapdance-startup.log
-# and `sudo journalctl -u google-startup-scripts`.
+# It prepares the machine only: KVM packages, git/unzip/curl, the kvm udev rule, and helper scripts
+# in /opt/tapdance. It holds no secrets: Tapdance, Tailscale and the pairing token are set up by the
+# owner over IAP SSH with scripts/host-setup.sh. Log: /var/log/tapdance-startup.log and
+# `sudo journalctl -u google-startup-scripts`.
 #
 # Note for editors: Terraform's templatefile() treats dollar-brace sequences as template
 # interpolation, so this file uses plain $VAR shell syntax only.
@@ -49,10 +50,12 @@ fi
 
 install -d -m 0755 /etc/motd.d
 cat >/etc/motd.d/60-tapdance <<'EOF'
-Tapdance Android worker VM.
-  1. bash /opt/tapdance/install-android-worker.sh --accept-android-licenses
-     (only after reading the Android SDK licences; or omit the flag to be prompted)
-  2. tapdance worker login --accept-gateway-exec --gateway wss://<gateway> --label <name>   (token from a hidden prompt)
-  KVM diagnostics: bash /opt/tapdance/check-kvm.sh
+Tapdance Android host VM.
+  1. bash /opt/tapdance/check-kvm.sh        (must end with "KVM acceleration is usable")
+  2. curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label <agent-machine-name>
+     (asks before installing; saying yes accepts the Android SDK licences. It runs tapdance host up.)
+  3. Copy ~/.tapdance/worker/pairing-<name>.token to the agent's machine privately, then there:
+     tapdance connect <endpoint host up printed> < pairing-<name>.token
+  Guide: docs/deployment/google-cloud-n2.md
 EOF
 echo "=== tapdance startup done $(date -Is)"

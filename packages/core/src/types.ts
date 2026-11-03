@@ -287,6 +287,33 @@ export interface AppBuildResult {
   reused?: boolean;
 }
 
+/** An APK the user's CI built (a GitHub Actions artifact), fetched by the device's host with its own credentials. */
+export interface AppCiInstallRequest {
+  /** owner/repo or the repository's github.com URL; must be on the host's allow-list. */
+  repo: string;
+  /** The artifact's name (actions/upload-artifact `name`). */
+  artifact: string;
+  /** A workflow run id (digits); else the newest successful run on `branch`. */
+  run?: string;
+  /** Default: the repository's default branch. */
+  branch?: string;
+}
+
+export interface AppCiInstallResult {
+  /** owner/repo. */
+  repo: string;
+  runId: string;
+  /** The commit the run built. */
+  sha: string;
+  branch: string;
+  artifact: string;
+  /** The first 12 hex digits of the installed APK's sha256. */
+  apkSha256: string;
+  /** The host had downloaded this run's artifact before and used that copy. */
+  cached: boolean;
+  installed: boolean;
+}
+
 /** One tap of a timed sequence: `t` ms after the start, at (x, y); `hold` ms makes it a long press. */
 export interface TimedTap {
   t: number;

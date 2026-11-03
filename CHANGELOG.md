@@ -264,11 +264,67 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed: `ui alert accept`/`dismiss` with no alert on screen answered "main thread execution timed out";
   it now answers "No alert".
 
+### Phase 2: Android host on a Google Cloud N2 VM
+
+Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
+([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)).
+
+- Added: a cost guard for cloud device hosts. The worker guard powers a Linux cloud VM off after
+  `host up --idle-stop <minutes>` with no lease, request or build (30 by default on a detected cloud VM),
+  and `--max-uptime <hours>` stops new leases past a cap; `host-setup.sh` adds the one sudoers rule for
+  `systemctl poweroff`; the Terraform module sets `max_run_hours` (8), and optionally `stop_schedule` and
+  a budget alert. The idle stop powered the N2 VM off for real; the uptime cap is unit-tested.
+- Added: install from CI. `app install --from-ci <owner/repo> --artifact <name>` and MCP `install_app`
+  `from_ci` have the device's host download a GitHub Actions artifact with its own `gh` and install the
+  APK; the owner allows repositories with `host artifacts enable`. Ran with the CLI and MCP on the N2 VM.
+- Added: private-repository builds on the host: a deploy key per repository (`host builds key --repo`),
+  owner-only build files (`host builds files add/list/remove`), and a sign-in failure hint naming the
+  three ways out. With a fine-grained token, an Android build of a private repository ran on the N2 VM
+  (CLI and MCP); deploy keys and build files are unit-tested.
+- Added: Linux host support in `host up` and `host-setup.sh`: headless emulators with
+  `swiftshader_indirect` when there is no display, linger or a boot unit for the user manager, `tailscale
+  up --operator`, kvm access without logging out, the emulator's system libraries.
+- Added: docs: one path for a Google Cloud N2 host with measured numbers and a "parking the VM" table,
+  [build in CI, test with Tapdance](docs/guides/ci-builds.md),
+  [private repositories](docs/guides/private-repositories.md), and troubleshooting rows from the run.
+- Fixed: `host up` over non-interactive SSH failed with "Failed to connect to bus: No medium found"; it
+  turns on linger, waits for the user manager's bus and points `systemctl --user` at it.
+- Fixed: Google Cloud OS Login accounts cannot linger ("No such file or directory");
+  `host-setup.sh` installs `tapdance-user-manager.service` to start the user manager at boot.
+- Fixed: the emulator did not start on Ubuntu's cloud image (missing `libpulse0 libxkbfile1 libxi6
+  libsm6 libice6`); new host check `host.kvm.emulator-libs`, and `host-setup.sh` installs them and no
+  longer hides the check under `pipefail`.
+- Fixed: `host-setup.sh` detected a terminal that was not there; it now opens `/dev/tty`, and through
+  `curl | bash` `host up` gets the terminal so the pairing can be approved.
+- Fixed: restarting the guard over SSH (after `host builds` or `host artifacts enable`) failed silently,
+  and `host status` over SSH said "Failed to connect to bus".
+- Fixed: `doctor` failed (exit 10) on a Linux worker because iOS was missing; it is skipped with "needs
+  a Mac".
+- Fixed: rotation with the launcher in front made three attempts (50 s on a nested emulator); now one
+  (17 s).
+- Fixed: the first inspect after a fresh lease failed with `INSTRUMENTATION_FAILED`; it is retried once.
+- Fixed: `host builds enable` reset `--git-auth` and `--timeout-minutes`; the build JDK check ignored
+  `JAVA_HOME`; `env.sh` did not put the JDK on `PATH`; the MCP outside-the-project hint now covers
+  `push_file`.
+- Fixed: Android install refusals (`INSTALL_FAILED_UPDATE_INCOMPATIBLE` from a CI build or a host build
+  with another debug key, `INSTALL_FAILED_VERSION_DOWNGRADE`, `INSTALL_FAILED_INSUFFICIENT_STORAGE`) name
+  the fix, for uploads, installs from CI and builds on the host.
+- Fixed: on a VM without a GPU the emulator's `-gpu auto` kept it at 136–165 % CPU when idle and
+  screen-changing taps took 3.4–7.9 s; headless Linux hosts now use `swiftshader_indirect` (about 0 %
+  idle, taps 2.2–2.6 s on the N2 VM).
+- Fixed (#72): on Android, `ui type` and MCP `type_text` without a target answered "Typed N chars" when
+  no text field had focus and nothing was typed. When the screen shows no focused field, they now fail
+  with `ELEMENT_NOT_FOUND` and a hint to pass the field (`--text`/`--ref`/`--id`, MCP
+  `into_text`/`into_ref`/`into_id`); when the screen does not say, they type as before.
+- Fixed (#73): on Android, `ui inspect` and MCP `inspect_screen` named the session's app while the
+  launcher was in front. When no element on screen belongs to the session's app, the app most elements
+  belong to is named instead, with a note that the session's app is not in front.
+
 ### Not yet proven
 
-Android end to end, two machines over a real network, Google Cloud N2, cloud Macs, AXe, Google's Android CLI,
-a full device loop over Streamable HTTP MCP, installing a custom app through a gateway, the guard's
-LaunchAgent / systemd unit, and `host up` / `connect`.
+A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,
+a full device loop over Streamable HTTP MCP, installing a custom app through a gateway, `host up` on a
+fresh Mac, a successful iOS build on the host, and a coding agent as the MCP client.
 See [STATUS.md](STATUS.md).
 
 [0.1.0]: https://github.com/mirzemehdi/tapdance

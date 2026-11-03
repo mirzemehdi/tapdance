@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { TapdanceError, type ErrorCode } from "@tapdance/core";
 import type { CrashReportInfo } from "./crash-reports.js";
 import type { PlayedTap } from "./touch-sequence.js";
-import type { TimedTap } from "@tapdance/core";
+import type { AppCiInstallResult, TimedTap } from "@tapdance/core";
 
 /** Status → Tapdance code for Simlock's JSON errors (`{"error":{"code","message"}}`). */
 const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
@@ -263,8 +263,38 @@ export class SimlockHttp {
       throw new TapdanceError("NOT_SUPPORTED", "This endpoint cannot build apps", { hint: "Builds run on a worker in device-only mode (tapdance worker guard) whose owner turned them on: tapdance host builds enable." });
     }
     if (!response.ok || !response.body) throw await toError(response, "/v1/leases/{id}/build");
+    return this.readResultStream(response, onLine, "build");
+  }
+
+  /**
+   * A worker guard's install-from-CI route: the host fetches a GitHub Actions artifact with its own gh
+   * and installs its APK on the lease, streaming progress to `onLine`.
+   */
+  async ciInstall(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 30 * 60_000): Promise<AppCiInstallResult> {
+    const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/ci-install`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      timeoutMs,
+    });
+    if (response.status === 404) {
+      const text = await response.text().catch(() => "");
+      // Simlock itself, or a guard from before this route, does not know it.
+      if (!(response.headers.get("content-type") ?? "").includes("json") || /"NOT_ALLOWED"/.test(text)) {
+        throw new TapdanceError("NOT_SUPPORTED", "This endpoint cannot install apps from CI", {
+          hint: "Installs from CI run on a worker in device-only mode (tapdance worker guard) whose owner turned them on: tapdance host artifacts enable --repo <owner/repo>. Without it, download the APK yourself and run tapdance app install <path>.",
+        });
+      }
+      throw await toError(new Response(text, { status: response.status, headers: response.headers }), "/v1/leases/{id}/ci-install");
+    }
+    if (!response.ok || !response.body) throw await toError(response, "/v1/leases/{id}/ci-install");
+    return this.readResultStream(response, onLine, "install from CI");
+  }
+
+  /** Reads a guard's NDJSON stream ({"log"}, then {"result"} or {"error"}). */
+  private async readResultStream<T>(response: Response, onLine: (line: string) => void, what: string): Promise<T> {
     let buffer = "";
-    let result: { sha: string; seconds: number; artifact: string; installed: boolean; reused?: boolean } | undefined;
+    let result: T | undefined;
     const decoder = new TextDecoder();
     for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
       buffer += decoder.decode(chunk, { stream: true });
@@ -280,7 +310,7 @@ export class SimlockHttp {
         }
       }
     }
-    if (!result) throw new TapdanceError("PROVIDER_UNREACHABLE", "The build stream ended without a result");
+    if (!result) throw new TapdanceError("PROVIDER_UNREACHABLE", `The ${what} stream ended without a result`);
     return result;
   }
 

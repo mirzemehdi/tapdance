@@ -1,15 +1,17 @@
-# Tapdance Android worker on a Google Cloud N2 VM with nested virtualization.
+# Tapdance Android host on a Google Cloud N2 VM with nested virtualization.
 #
 # Creates: (optionally) a project; the Compute/IAM/OS Login (and IAP) APIs; a dedicated VPC and
 # subnet; firewall rules that allow only IAP SSH; Cloud NAT for outbound traffic (or an ephemeral
 # external IP); a service account with logging/monitoring only; and one N2 VM running Ubuntu
-# 24.04 with a startup script that prepares KVM and copies the Tapdance install scripts.
+# 24.04 with a startup script that prepares KVM and copies helper scripts.
+# Cost guards: a per-boot run-time cap that stops the VM (max_run_hours, on by default: 8 h), and
+# optionally a scheduled stop (stop_schedule) and a budget with alert e-mails (budget_amount_usd).
 #
-# It does NOT install Tapdance or join a gateway: the gateway join token must never be in
-# Terraform state or instance metadata. You run the install script and `tapdance worker login`
-# yourself over IAP SSH. See README.md.
+# It does NOT install Tapdance, Tailscale or a pairing token: no secret may be in Terraform state or
+# instance metadata. You run scripts/host-setup.sh (which runs `tapdance host up`) yourself over IAP
+# SSH. See README.md.
 #
-# Not yet validated with `terraform validate` or applied anywhere. See STATUS.md (G-01, G-02).
+# Passes `terraform validate` (1.17); not yet applied anywhere. See STATUS.md (G-01, G-02).
 
 locals {
   project_id = var.create_project ? google_project.this[0].project_id : var.project_id
@@ -20,7 +22,16 @@ locals {
     "oslogin.googleapis.com",
     "cloudresourcemanager.googleapis.com",
   ]
-  services = concat(local.base_services, var.enable_iap_ssh ? ["iap.googleapis.com"] : [])
+  services = concat(
+    local.base_services,
+    var.enable_iap_ssh ? ["iap.googleapis.com"] : [],
+    var.budget_amount_usd != null ? ["billingbudgets.googleapis.com"] : [],
+  )
+
+  # Cost guards (variables.tf). 0 or null: off.
+  max_run_seconds = coalesce(var.max_run_hours, 0) * 3600
+  needs_number    = var.stop_schedule != null || var.budget_amount_usd != null
+  project_number  = local.needs_number ? data.google_project.this[0].number : null
 
   # Google's documented source range for IAP TCP forwarding.
   iap_source_range = "35.235.240.0/20"
@@ -224,7 +235,20 @@ resource "google_compute_instance" "worker" {
     on_host_maintenance = var.on_host_maintenance
     automatic_restart   = true
     preemptible         = false
+
+    # Per-boot hard cap (max_run_hours): Compute Engine stops, never deletes, the VM.
+    instance_termination_action = local.max_run_seconds > 0 ? "STOP" : null
+
+    dynamic "max_run_duration" {
+      for_each = local.max_run_seconds > 0 ? [local.max_run_seconds] : []
+      content {
+        seconds = max_run_duration.value
+      }
+    }
   }
+
+  # A scheduled stop (stop_schedule). Changing this list recreates the VM.
+  resource_policies = var.stop_schedule != null ? [google_compute_resource_policy.stop_schedule[0].self_link] : null
 
   # No secrets here: instance metadata is readable by anything on the VM and by anyone with
   # compute.instances.get on the project. The join token is typed over IAP SSH instead.
@@ -237,7 +261,84 @@ resource "google_compute_instance" "worker" {
   depends_on = [
     google_project_service.services,
     google_compute_router_nat.this,
+    google_project_iam_member.schedule_agent,
   ]
+}
+
+# ------------------------------------------------------------------ cost guards (optional)
+
+data "google_project" "this" {
+  count = local.needs_number ? 1 : 0
+
+  project_id = local.project_id
+}
+
+# Stops the VM on a cron schedule. Only stops; starting stays a deliberate act.
+resource "google_compute_resource_policy" "stop_schedule" {
+  count = var.stop_schedule != null ? 1 : 0
+
+  project     = local.project_id
+  name        = "${var.name}-stop-schedule"
+  region      = var.region
+  description = "Stops the Tapdance host VM on a schedule so it does not run (and bill) overnight."
+
+  instance_schedule_policy {
+    vm_stop_schedule {
+      schedule = var.stop_schedule
+    }
+    time_zone = var.schedule_time_zone
+  }
+
+  depends_on = [google_project_service.services]
+}
+
+# Instance schedules act as the Compute Engine Service Agent, which needs compute.instances.stop:
+# Google's documented grant is roles/compute.instanceAdmin.v1 on the project.
+resource "google_project_iam_member" "schedule_agent" {
+  count = var.stop_schedule != null ? 1 : 0
+
+  project = local.project_id
+  role    = "roles/compute.instanceAdmin.v1"
+  member  = "serviceAccount:service-${local.project_number}@compute-system.iam.gserviceaccount.com"
+}
+
+# Alerts only: a budget never stops or caps anything.
+resource "google_billing_budget" "this" {
+  count    = var.budget_amount_usd != null ? 1 : 0
+  provider = google.billing
+
+  billing_account = var.billing_account
+  display_name    = "${var.name} monthly budget"
+
+  budget_filter {
+    projects = ["projects/${local.project_number}"]
+  }
+
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = tostring(floor(var.budget_amount_usd))
+    }
+  }
+
+  threshold_rules {
+    threshold_percent = 0.5
+  }
+  threshold_rules {
+    threshold_percent = 0.9
+  }
+  threshold_rules {
+    threshold_percent = 1.0
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.billing_account != null
+      error_message = "budget_amount_usd needs billing_account (XXXXXX-XXXXXX-XXXXXX)."
+    }
+  }
+
+  depends_on = [google_project_service.services]
 }
 
 # ------------------------------------------------------------------ who may SSH in (optional)

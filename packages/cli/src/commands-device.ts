@@ -513,13 +513,28 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   // ------------------------------------------------------------- apps
   const app = program.command("app").description("Install, launch and stop apps on the leased device");
   app
-    .command("install <path>")
-    .description("Upload and install an .apk (Android) or simulator .app (iOS)")
+    .command("install [path]")
+    .description(
+      "Upload and install an app: Android .apk or .aab (an .aab becomes a universal APK with bundletool on this machine); iOS simulator .app bundle, or a .zip or .tar holding one (.ipa on a physical iPhone only). With --from-ci instead of a path: the device's host downloads an Android APK from a GitHub Actions artifact with its own credentials and installs it",
+    )
     .option("--app-id <id>", "package / bundle id, when the backend needs it")
-    .action(async (path: string, o: { appId?: string }) =>
+    .option("--from-ci <repo>", "Android: install from the user's CI instead of a path: a GitHub repository (owner/repo or URL) on the host's allow-list (`tapdance host artifacts enable`)")
+    .option("--artifact <name>", "with --from-ci: the artifact's name (actions/upload-artifact name)")
+    .option("--run <id>", "with --from-ci: the workflow run id (default: the newest successful run on --branch)")
+    .option("--branch <name>", "with --from-ci: take the newest successful run on this branch (default: the repository's default branch)")
+    .option("--launch <appId>", "launch this app once it is installed")
+    .action(async (path: string | undefined, o: { appId?: string; fromCi?: string; artifact?: string; run?: string; branch?: string; launch?: string }) =>
       run(globals(), async (t, out) => {
-        const r = await t.installApp(path, o.appId);
-        out.result({ installed: r }, () => `Installed ${r.appId ?? path}`);
+        const ci = checkInstallArgs(path, o);
+        if (ci) {
+          const r = await t.installFromCi(ci);
+          if (o.launch) await t.launchApp(o.launch, { relaunch: true });
+          out.result({ installed: r }, () => `Installed ${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, apk sha256 ${r.apkSha256}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`);
+          return;
+        }
+        const r = await t.installApp(path!, o.appId);
+        if (o.launch) await t.launchApp(o.launch, { relaunch: true });
+        out.result({ installed: r }, () => `Installed ${r.appId ?? path}${o.launch ? `; launched ${o.launch}` : ""}`);
       }),
     );
   app
@@ -834,4 +849,27 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         );
       }),
     );
+}
+
+/**
+ * `app install`: exactly one of a path and --from-ci; the CI flags only with --from-ci. Returns the CI
+ * request, or undefined for an install from a path.
+ */
+export function checkInstallArgs(
+  path: string | undefined,
+  o: { appId?: string; fromCi?: string; artifact?: string; run?: string; branch?: string },
+): { repo: string; artifact: string; run?: string; branch?: string } | undefined {
+  const usage = (message: string) =>
+    new TapdanceError("USAGE", message, { hint: "tapdance app install <path>, or tapdance app install --from-ci <owner/repo> --artifact <name> [--run <id> | --branch <name>]" });
+  if (o.fromCi === undefined) {
+    if (!path) throw usage("Give the app's path, or --from-ci with --artifact");
+    if (o.artifact !== undefined || o.run !== undefined || o.branch !== undefined) throw usage("--artifact, --run and --branch go with --from-ci");
+    return undefined;
+  }
+  if (path) throw usage("Give a path or --from-ci, not both");
+  if (o.appId !== undefined) throw usage("--app-id goes with a path, not --from-ci");
+  if (!o.artifact) throw usage("--from-ci needs --artifact <name>");
+  if (o.run !== undefined && o.branch !== undefined) throw usage("Pass --run or --branch, not both");
+  if (o.run !== undefined && !/^[1-9][0-9]{0,19}$/.test(o.run)) throw usage("--run must be a workflow run id (digits only)");
+  return { repo: o.fromCi, artifact: o.artifact, ...(o.run !== undefined ? { run: o.run } : {}), ...(o.branch !== undefined ? { branch: o.branch } : {}) };
 }

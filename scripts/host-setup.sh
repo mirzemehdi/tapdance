@@ -14,10 +14,12 @@
 #      Android   Google's command-line tools (repository XML SHA-1), then sdkmanager installs
 #                platform-tools, emulator and the system image -> ~/Library/Android/sdk or ~/Android/Sdk.
 #                Accepting the Android SDK licenses is part of this step.
-#      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there; Linux: tailscale.com's
-#                installer (it uses sudo). You log in yourself; the script prints how.
-#    Only system packages (Linux: git, unzip; Tailscale) and the kvm group use sudo, and only after you
-#    said yes. Everything else goes into your home folder.
+#      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there (you log in in the app);
+#                Linux: tailscale.com's installer, then `sudo tailscale up --operator=$USER`, which
+#                prints a login link (asked first), so the guard can be served without root.
+#    Only system packages (Linux: git, unzip; Tailscale), the kvm group and, on a Linux cloud VM, a
+#    sudoers rule that allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle)
+#    use sudo, and only after you said yes. Everything else goes into your home folder.
 # 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, corepack pnpm,
 #    build, a link in ~/.local/bin), then runs `tapdance host up` with your other arguments.
 #
@@ -99,11 +101,27 @@ jdk_ok() {
 cmdline_ok() { [[ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]]; }
 pkg_ok() { [[ -d "$SDK/$1" ]]; }
 image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
+# The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
+emulator_libs_ok() {
+  [[ "$OS" == Linux && -x "$SDK/emulator/emulator" ]] || return 0
+  # Captured first: with pipefail, `grep -q` closing the pipe early would make the check pass.
+  local out; out="$("$SDK/emulator/emulator" -version 2>&1 || true)"
+  [[ "$out" != *"error while loading shared libraries"* ]]
+}
 tailscale_bin() {
   command -v tailscale 2>/dev/null && return
   [[ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && echo /Applications/Tailscale.app/Contents/MacOS/Tailscale && return
   return 1
 }
+
+# A Linux cloud VM, from the DMI strings (Google Cloud names itself "Google"; the rest are common clouds).
+cloud_vm() {
+  [[ "$OS" == Linux ]] || return 1
+  local dmi; dmi="$(cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null || true)"
+  [[ "$dmi" =~ Google|Amazon|EC2|Microsoft|DigitalOcean|Hetzner|OpenStack|Scaleway|Vultr|Linode|Akamai|Oracle|Alibaba ]]
+}
+# The guard's cost guard powers an idle cloud VM off with `sudo -n /usr/bin/systemctl poweroff`.
+poweroff_rule_ok() { sudo -n -l /usr/bin/systemctl poweroff >/dev/null 2>&1; }
 
 MISSING=(); SUDO_STEPS=(); NOTES=()
 check_all() {
@@ -121,6 +139,7 @@ check_all() {
   [[ "$OS" == Linux && ! -e /dev/kvm ]] && no_kvm=1
   if (( ! no_kvm )); then
     pkg_ok emulator || MISSING+=("emulator")
+    emulator_libs_ok || { MISSING+=("emulator-libs"); SUDO_STEPS+=("emulator-libs"); }
     (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
   fi
   tailscale_bin >/dev/null || { MISSING+=("tailscale"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("tailscale"); }
@@ -129,6 +148,9 @@ check_all() {
       NOTES+=("KVM: /dev/kvm is missing, so Android emulators cannot run here (a cloud VM without nested virtualization, or virtualization off in the BIOS); the emulator and system image are skipped. This machine can still be a control machine: tapdance connect <host endpoint> < pairing-<label>.token")
     elif [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
       MISSING+=("kvm-group"); SUDO_STEPS+=("kvm-group")
+    fi
+    if [[ -e /dev/kvm ]] && cloud_vm && command -v sudo >/dev/null 2>&1 && ! poweroff_rule_ok; then
+      MISSING+=("poweroff-rule"); SUDO_STEPS+=("poweroff-rule")
     fi
   fi
   if [[ "$OS" == Darwin ]] && ! xcrun simctl help >/dev/null 2>&1; then
@@ -147,14 +169,19 @@ describe() {
     emulator) echo "Android emulator (sdkmanager)" ;;
     system-image) echo "Android system image $IMAGE (sdkmanager, about 1.5 GB)" ;;
     tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
-    kvm-group) echo "add $(id -un) to the kvm group (sudo; log out and in afterwards)" ;;
+    kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
+    emulator-libs) echo "system libraries the Android emulator needs (libpulse, libxkbfile, libXi, libSM, libICE; sudo)" ;;
+    poweroff-rule) echo "a sudoers rule that lets $(id -un) run only /usr/bin/systemctl poweroff, so the guard can stop this cloud VM when it sits idle (sudo; /etc/sudoers.d/tapdance-poweroff, checked with visudo)" ;;
   esac
 }
+
+# /dev/tty is "readable" by permissions even without a controlling terminal; opening it tells.
+have_tty() { { : < /dev/tty; } 2>/dev/null; }
 
 ask() {
   (( YES )) && return 0
   # Piped through curl, stdin is this script: ask on the terminal.
-  [[ -r /dev/tty ]] || die "no terminal to ask on; run again with --yes to install, or --check to only report"
+  have_tty || die "no terminal to ask on; run again with --yes to install, or --check to only report"
   printf '%s [y/N] ' "$1" > /dev/tty
   local answer; read -r answer < /dev/tty
   [[ "$answer" =~ ^[Yy] ]]
@@ -254,6 +281,13 @@ install_system_packages() {
   else die "install ${pkgs[*]} with your package manager, then run this script again"; fi
 }
 
+install_emulator_libs() {
+  if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6
+  elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y pulseaudio-libs libxkbfile libXi libSM libICE
+  elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm libpulse libxkbfile libxi libsm libice
+  else die "install the libraries \`$SDK/emulator/emulator -version\` reports missing, then run this script again"; fi
+}
+
 install_tailscale() {
   if [[ "$OS" == Darwin ]]; then
     if command -v brew >/dev/null 2>&1; then brew install --cask tailscale
@@ -261,7 +295,39 @@ install_tailscale() {
     NOTES+=("Tailscale: open the Tailscale app and log in, then run this script again to expose the guard")
   else
     curl -fsSL https://tailscale.com/install.sh | sh
-    NOTES+=("Tailscale: run \`sudo tailscale up\` and open the login link, then run this script again to expose the guard")
+  fi
+}
+
+# Linux cloud VM: let this user power the machine off (and nothing else as root), so the guard's cost
+# guard (`tapdance host up --idle-stop`) can stop an idle VM. Written under a name sudo ignores (it has
+# a dot), checked with visudo, then moved into place: a bad file never reaches sudo's include dir.
+install_poweroff_rule() {
+  local rule; rule="$(id -un) ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff"
+  local staged=/etc/sudoers.d/tapdance-poweroff.new
+  printf '%s\n' "$rule" > "$TMP/tapdance-poweroff"
+  if sudo install -m 440 -o root -g root "$TMP/tapdance-poweroff" "$staged" && sudo visudo -cf "$staged" >/dev/null; then
+    sudo mv "$staged" /etc/sudoers.d/tapdance-poweroff
+  else
+    sudo rm -f "$staged"
+    NOTES+=("poweroff rule: not installed (visudo refused it); the guard cannot stop this VM when idle until you add: $rule")
+  fi
+}
+
+# Linux: join the tailnet (tailscale up prints a login link to open in any browser) and make this user
+# the operator, since tailscaled lets only root and the operator run `tailscale serve`.
+linux_tailscale() {
+  [[ "$OS" == Linux ]] || return 0
+  local ts; ts="$(tailscale_bin)" || return 0
+  local me; me="$(id -un)"
+  if ! "$ts" status >/dev/null 2>&1; then
+    if ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
+      sudo "$ts" up --operator="$me"
+    else
+      NOTES+=("Tailscale: run \`sudo tailscale up --operator=$me\` and open the link, then run this script again to expose the guard")
+    fi
+  elif ! "$ts" debug prefs 2>/dev/null | grep -q "\"OperatorUser\": \"$me\""; then
+    say "letting $me run tailscale serve (sudo tailscale set --operator=$me)"
+    sudo "$ts" set --operator="$me"
   fi
 }
 
@@ -271,13 +337,17 @@ write_env_file() {
     echo "# Written by Tapdance's host-setup.sh: tools it installed in your home folder."
     echo "export PATH=\"$BIN_DIR:$SHARE/node/bin:$SDK/platform-tools:$SDK/emulator:$SDK/cmdline-tools/latest/bin:\$PATH\""
     echo "export ANDROID_HOME=\"$SDK\""
-    local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; fi
+    local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; echo "export PATH=\"$home/bin:\$PATH\""; fi
   } > "$ENV_FILE"
-  local rc; rc="$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")"
-  if ! grep -qs "tapdance/env.sh" "$rc"; then
-    printf '\n[ -f "%s" ] && . "%s"\n' "$ENV_FILE" "$ENV_FILE" >> "$rc"
-    say "added $ENV_FILE to $rc (new shells pick up the tools)"
-  fi
+  local rcs=("$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")")
+  # Ubuntu's .bashrc stops early in non-interactive shells: .profile serves `bash -lc` over ssh.
+  [[ "$OS" == Linux ]] && rcs+=("$HOME/.profile")
+  local rc; for rc in "${rcs[@]}"; do
+    if ! grep -qs "tapdance/env.sh" "$rc"; then
+      printf '\n[ -f "%s" ] && . "%s"\n' "$ENV_FILE" "$ENV_FILE" >> "$rc"
+      say "added $ENV_FILE to $rc (new shells pick up the tools)"
+    fi
+  done
   . "$ENV_FILE"
 }
 
@@ -301,7 +371,15 @@ if (( ! SKIP_PREREQ )); then
         android-cmdline-tools) node_ok || install_node; install_cmdline_tools ;;
         git|unzip) install_system_packages "$m" ;;
         tailscale) install_tailscale ;;
-        kvm-group) sudo usermod -aG kvm "$(id -un)"; NOTES+=("log out and back in so the kvm group applies, then run this script again") ;;
+        emulator-libs) install_emulator_libs ;;
+        kvm-group)
+          sudo usermod -aG kvm "$(id -un)"
+          # The group applies to new logins only; an ACL lets this login and its running systemd user
+          # manager (which starts the worker) use /dev/kvm now. A reboot drops the ACL; the group remains.
+          if ! { command -v setfacl >/dev/null 2>&1 && sudo setfacl -m "u:$(id -un):rw" /dev/kvm; }; then
+            NOTES+=("log out and back in so the kvm group applies, then run this script again")
+          fi ;;
+        poweroff-rule) install_poweroff_rule ;;
       esac
     done
     SDK_PKGS=()
@@ -309,12 +387,15 @@ if (( ! SKIP_PREREQ )); then
     pkg_ok emulator || SDK_PKGS+=("emulator")
     (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
     (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
+    # The emulator just installed may need system libraries this machine lacks.
+    emulator_libs_ok || install_emulator_libs
     write_env_file
     check_all
     for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
-    remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group ]] || remaining+=("$m"); done
+    remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group || "$m" == poweroff-rule ]] || remaining+=("$m"); done
     (( ${#remaining[@]} == 0 )) || die "still missing after installing: ${remaining[*]}"
   fi
+  (( CHECK )) || linux_tailscale
 elif (( CHECK )); then
   die "--check and --skip-prerequisites together check nothing"
 fi
@@ -359,4 +440,24 @@ if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
   say "use it as the agent's machine instead: tapdance connect <host endpoint> < pairing-<label>.token"
   exit 0
 fi
+# Linux: the worker and guard are systemd user units, so this account's user manager must run without a
+# login (after logout, at boot). Linger does that, but logind cannot look up some accounts (Google Cloud
+# OS Login users: "Could not enable linger: No such file or directory"); then a small system unit starts
+# the user manager at boot instead.
+linux_user_manager() {
+  [[ "$OS" == Linux && -e /dev/kvm ]] || return 0
+  local me uid; me="$(id -un)"; uid="$(id -u)"
+  lingers() { loginctl show-user "$me" --property=Linger 2>/dev/null | grep -q '=yes'; }
+  lingers && return 0
+  loginctl enable-linger "$me" 2>/dev/null || sudo loginctl enable-linger "$me" 2>/dev/null || true
+  lingers && { say "turned on linger for $me"; return 0; }
+  say "logind cannot keep $me lingering (an OS Login account?); starting its user manager from a system unit at boot"
+  printf '[Unit]\nDescription=Tapdance: user manager for %s (runs the worker and guard without a login)\nAfter=systemd-user-sessions.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/systemctl start user@%s.service\n\n[Install]\nWantedBy=multi-user.target\n' "$me" "$uid" \
+    | sudo tee /etc/systemd/system/tapdance-user-manager.service >/dev/null
+  sudo systemctl daemon-reload && sudo systemctl enable --now tapdance-user-manager.service
+}
+linux_user_manager
+
+# Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
+if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"

@@ -109,6 +109,34 @@ export function cloudCheck(vm: string | undefined, devKvm: boolean): DoctorCheck
   };
 }
 
+// ------------------------------------------------------------------ Linux hosts
+
+/**
+ * Simlock settings a Linux host needs for its emulators. Simlock opens an emulator window by default;
+ * on a machine with no display (a cloud VM, a server reached over SSH) that window cannot open and the
+ * emulator never boots, so it runs headless (`-no-window`).
+ */
+export function linuxEmulatorSettings(platform: string, env: Record<string, string | undefined>): Array<[string, string]> {
+  if (platform !== "linux" || env["DISPLAY"] || env["WAYLAND_DISPLAY"]) return [];
+  // Measured on a Google Cloud N2 VM (no GPU): with `-gpu auto` the idle emulator used 136–165% CPU and
+  // screen-changing taps took 3.4–7.9 s; with swiftshader_indirect it idled near 0% and taps took 2.2–2.6 s.
+  return [
+    ["android.emulator.headless", "true"],
+    ["android.emulator.gpu", "swiftshader_indirect"],
+  ];
+}
+
+/** Reads `loginctl show-user <user> --property=Linger`: undefined when the output is not that line. */
+export function parseLinger(raw: string): boolean | undefined {
+  const m = /^Linger=(yes|no)$/m.exec(raw);
+  return m ? m[1] === "yes" : undefined;
+}
+
+/** `tailscale serve` as a user who is not the tailnet's operator on Linux: tailscaled refuses it. */
+export function serveNeedsOperator(platform: string, output: string): boolean {
+  return platform === "linux" && /access denied|permission denied|--operator/i.test(output);
+}
+
 // ------------------------------------------------------------------ Tailscale
 
 /** Where a tailnet admin turns on MagicDNS and HTTPS Certificates. */
@@ -180,6 +208,78 @@ export function serveModeOf(raw: string, port: number): ServeMode | undefined {
   return tcp.HTTPS ? "https" : "http";
 }
 
+// ------------------------------------------------------------------ cost guard (hostStop)
+
+/** Idle minutes `host up` sets on a detected cloud VM when neither the flag nor the policy says. */
+export const CLOUD_IDLE_STOP_MINUTES = 30;
+
+function parseLimit(flag: string, value: string, unit: string, max: number): number {
+  const v = value.trim().toLowerCase();
+  if (v === "off" || v === "0") return 0;
+  if (/^\d{1,4}$/.test(v) && Number(v) >= 1 && Number(v) <= max) return Number(v);
+  throw new TapdanceError("USAGE", `${flag} "${value}" is not a number of ${unit} from 1 to ${max}, or off`, { hint: `Use ${flag} 30 (${unit}) or ${flag} off.` });
+}
+
+/** `--idle-stop <minutes|off>`: 0 is off. */
+export function parseIdleStop(value: string): number {
+  return parseLimit("--idle-stop", value, "minutes", 1440);
+}
+
+/** `--max-uptime <hours|off>`: 0 is off. */
+export function parseMaxUptime(value: string): number {
+  return parseLimit("--max-uptime", value, "hours", 720);
+}
+
+export interface HostStopChoice {
+  idleMinutes: number;
+  maxUptimeHours: number;
+  /** Where the idle setting came from. */
+  idleSource: "flag" | "policy" | "cloud default" | "off";
+  /** The policy file should record this choice (a flag was given, or the cloud default applies). */
+  write: boolean;
+  /** It differs from what the policy holds now, so a running guard needs a restart. */
+  changed: boolean;
+}
+
+/**
+ * What `host up` sets in `policy.hostStop`: a flag wins, then what the policy already holds, then on a
+ * detected cloud VM an idle stop of 30 minutes; elsewhere off. A Mac never powers itself off: turning
+ * either limit on there is refused.
+ */
+export function resolveHostStop(input: { idleStop?: string; maxUptime?: string; current?: { idleMinutes: number; maxUptimeHours: number }; cloudVm?: string; platform: "darwin" | "linux" }): HostStopChoice {
+  const idleFlag = input.idleStop === undefined ? undefined : parseIdleStop(input.idleStop);
+  const uptimeFlag = input.maxUptime === undefined ? undefined : parseMaxUptime(input.maxUptime);
+  const current = { idleMinutes: input.current?.idleMinutes ?? 0, maxUptimeHours: input.current?.maxUptimeHours ?? 0 };
+  if (input.platform === "darwin") {
+    if ((idleFlag ?? 0) > 0 || (uptimeFlag ?? 0) > 0) {
+      throw new TapdanceError("USAGE", "--idle-stop and --max-uptime power the machine off, which Tapdance never does to a Mac", {
+        hint: "They are for Linux cloud VMs. On a Mac, stop hosting with `tapdance host pause` instead.",
+      });
+    }
+    return { ...current, idleSource: input.current ? "policy" : "off", write: false, changed: false };
+  }
+  let idleMinutes: number;
+  let idleSource: HostStopChoice["idleSource"];
+  if (idleFlag !== undefined) [idleMinutes, idleSource] = [idleFlag, "flag"];
+  else if (input.current !== undefined) [idleMinutes, idleSource] = [current.idleMinutes, "policy"];
+  else if (input.cloudVm !== undefined) [idleMinutes, idleSource] = [CLOUD_IDLE_STOP_MINUTES, "cloud default"];
+  else [idleMinutes, idleSource] = [0, "off"];
+  const maxUptimeHours = uptimeFlag ?? current.maxUptimeHours;
+  const write = idleFlag !== undefined || uptimeFlag !== undefined || idleSource === "cloud default";
+  const changed = write && (idleMinutes !== current.idleMinutes || maxUptimeHours !== current.maxUptimeHours);
+  return { idleMinutes, maxUptimeHours, idleSource, write, changed };
+}
+
+/** "idle 12 min" from the guard's last check (host-stop.json), when that check is recent. */
+export function describeIdle(state: { checkedAt?: unknown; lastActivityAt?: unknown; leases?: unknown } | undefined, now: number): string | undefined {
+  if (!state || typeof state.checkedAt !== "string" || typeof state.lastActivityAt !== "string") return undefined;
+  const checked = Date.parse(state.checkedAt);
+  const last = Date.parse(state.lastActivityAt);
+  if (!Number.isFinite(checked) || !Number.isFinite(last) || now - checked > 5 * 60_000) return undefined;
+  if (typeof state.leases === "number" && state.leases > 0) return `in use (${state.leases} lease(s))`;
+  return `idle ${Math.max(0, Math.floor((checked - last) / 60_000))} min`;
+}
+
 // ------------------------------------------------------------------ pairing
 
 export function defaultLabel(hostname: string): string {
@@ -209,6 +309,10 @@ export interface HostUpOptions {
   warm?: string;
   /** `--scope interaction,inspection`: the pairing token's policy areas. */
   scope?: string;
+  /** `--idle-stop 30` or `off`: power a cloud VM off after this many idle minutes. */
+  idleStop?: string;
+  /** `--max-uptime 12` or `off`: stop taking leases after this many hours up, then power off. */
+  maxUptime?: string;
 }
 
 const shellWord = (s: string) => (/^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
@@ -226,6 +330,8 @@ export function hostUpCommand(o: HostUpOptions, add: Partial<HostUpOptions> = {}
     ...(m.skipSelfTest ? ["--skip-self-test"] : []),
     ...(m.warm ? [`--warm ${shellWord(m.warm)}`] : []),
     ...(m.scope ? [`--scope ${shellWord(m.scope)}`] : []),
+    ...(m.idleStop ? [`--idle-stop ${shellWord(m.idleStop)}`] : []),
+    ...(m.maxUptime ? [`--max-uptime ${shellWord(m.maxUptime)}`] : []),
     ...(m.yes ? ["--yes"] : []),
   ].join(" ");
 }
@@ -247,6 +353,8 @@ export interface ReadyBlock {
   tokenPath: string;
   devices: string;
   selfTest: string;
+  /** The cost guard, e.g. "idle stop after 30 min, uptime cap off". Shown when given. */
+  costGuard?: string;
 }
 
 export type WarmCounts = { android?: number; ios?: number };
@@ -301,6 +409,7 @@ export function renderReadyBlock(r: ReadyBlock & { fingerprint?: string; label?:
     `token:     saved to ${r.tokenPath} (mode 600)${r.fingerprint ? `, fingerprint ${r.fingerprint}` : ""}. Copy it: tapdance host token${r.label ? ` --label ${r.label}` : ""}`,
     `devices:   ${r.devices}`,
     `self-test: ${r.selfTest}`,
+    ...(r.costGuard ? [`cost guard: ${r.costGuard}`] : []),
     `on the agent machine:  tapdance connect ${r.endpoint} < ${file}`,
   ].join("\n");
 }

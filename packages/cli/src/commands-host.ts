@@ -1,10 +1,25 @@
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
-import { describeBadHealth } from "@tapdance/provider-simlock";
+import {
+  BRANCH_NAME,
+  BUILD_FILE_MAX_BYTES,
+  addBuildFile,
+  artifactCacheBytes,
+  githubRepo,
+  describeBadHealth,
+  listAllBuildFiles,
+  normalizeRepo,
+  readBuildFiles,
+  removeBuildFile,
+  repoIdentity,
+  repoKeyPath,
+  repoSlug,
+  type BuildFileEntry,
+} from "@tapdance/provider-simlock";
 import {
   Tapdance,
   TapdanceError,
@@ -22,7 +37,8 @@ import { readSecret, tokenOrigin } from "./commands-setup.js";
 import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, workerRunning, workerServiceInstalled } from "./commands-worker.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
-import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
+import { HOST_STOP_COMMAND, HOST_STOP_SUDO_CHECK, describeHostStop, hostStopApplies, sudoersInstallCommand, sudoersRule } from "./guard/host-stop.js";
+import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, prepareLinuxUserServices, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
 import {
   assertHostPlatform,
   cloudCheck,
@@ -48,6 +64,9 @@ import {
   tokenFingerprint,
   clipboardCommand,
   parseWarm,
+  serveNeedsOperator,
+  resolveHostStop,
+  describeIdle,
   type HostUpOptions,
   type StepRef,
 } from "./host/plan.js";
@@ -134,6 +153,44 @@ function findTailscale(): string | undefined {
 
 /** The pairing files `host up` wrote, with what the guard thinks of each token. */
 /** Puts text on the clipboard through the platform's tool (stdin, never argv). */
+/** sudo lets this account run the cost guard's stop command without a password. */
+async function hostStopAllowed(): Promise<boolean> {
+  return (await runCommand("sudo", [...HOST_STOP_SUDO_CHECK])).ok;
+}
+
+/** Says, once, how to let the guard power this machine off. host up goes on either way. */
+function warnHostStopNotAllowed(out: Output): void {
+  const user = userInfo().username;
+  out.warn(
+    [
+      `The cost guard cannot power this machine off yet: sudo does not let ${user} run \`${HOST_STOP_COMMAND.join(" ")}\` without a password. Allow exactly that command with this sudoers rule:`,
+      `  ${sudoersRule(user)}`,
+      "Install it with:",
+      `  ${sudoersInstallCommand(user)}`,
+      "Until then the guard logs the failed stop once an hour and the machine keeps running (and billing).",
+    ].join("\n"),
+  );
+}
+
+/**
+ * Writes `policy.hostStop` when `host up` chose a value (a flag, or the cloud default) and checks that
+ * sudo allows the stop command. Returns the settings the guard runs with.
+ */
+async function applyHostStop(out: Output, choice: ReturnType<typeof resolveHostStop>, platform: "darwin" | "linux"): Promise<{ idleMinutes: number; maxUptimeHours: number } | undefined> {
+  const { policy, path } = await loadPolicy();
+  if (choice.write) {
+    const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    raw["hostStop"] = { idleMinutes: choice.idleMinutes, maxUptimeHours: choice.maxUptimeHours };
+    await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
+  }
+  const settings = choice.write ? { idleMinutes: choice.idleMinutes, maxUptimeHours: choice.maxUptimeHours } : policy.hostStop;
+  if (hostStopApplies(settings, platform)) {
+    out.progress(`Cost guard: ${describeHostStop(settings, platform)}${choice.idleSource === "cloud default" ? " (the default on a cloud VM; --idle-stop off turns it off)" : ""}`);
+    if (!(await hostStopAllowed())) warnHostStopNotAllowed(out);
+  }
+  return settings;
+}
+
 async function copyToClipboard(text: string): Promise<boolean> {
   const cmd = clipboardCommand(osPlatform(), (bin) => findOnPath(bin, process.env["PATH"] ?? "", existsSync) !== undefined);
   if (!cmd) return false;
@@ -188,6 +245,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .option("--skip-self-test", "do not lease a device through the guard at the end")
     .option("--scope <areas>", "limit the pairing token to these policy areas, e.g. interaction,inspection,screenshots,streaming,input (no install: it cannot put apps on the devices)")
     .option("--warm <counts>", "booted spare devices kept ready for fast leases, per platform, e.g. android=1,ios=0 (0 frees the memory; default: Simlock keeps one per device kind used)")
+    .option("--idle-stop <minutes|off>", "Linux cloud VMs: power the machine off after this many minutes with no lease, request or build (default on a detected cloud VM: 30; elsewhere off; refused on macOS)")
+    .option("--max-uptime <hours|off>", "Linux cloud VMs: after this many hours up, take no new leases and power off when the last one ends (default off; refused on macOS)")
     .option("-y, --yes", "approve pairing without a prompt (you are at this machine)")
     .action(async (o: HostUpOptions) => {
       const g = globals();
@@ -195,6 +254,16 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       try {
         const platform = assertHostPlatform(osPlatform());
         const label = sanitizeLabel(o.label ?? defaultLabel(hostname())) || "host";
+        // Decided before anything changes, so a bad or refused value stops here.
+        const currentStop = (await loadPolicy()).policy.hostStop;
+        const cloudVm = platform === "linux" ? detectCloudVm(readDmi()) : undefined;
+        const costChoice = resolveHostStop({
+          ...(o.idleStop !== undefined ? { idleStop: o.idleStop } : {}),
+          ...(o.maxUptime !== undefined ? { maxUptime: o.maxUptime } : {}),
+          ...(currentStop ? { current: currentStop } : {}),
+          ...(cloudVm !== undefined ? { cloudVm } : {}),
+          platform,
+        });
 
         const prereq = await step(out, "prerequisites", async () => {
           const checks = await prerequisiteChecks(platform);
@@ -237,15 +306,25 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const port = policy.listen.port;
         const localUrl = `http://${policy.listen.host}:${port}`;
 
-        await step(out, "guard service", async () => {
+        const hostStop = await step(out, "guard service", async () => {
+          const settings = await applyHostStop(out, costChoice, platform);
+          if (platform === "linux") await prepareLinuxUserServices(out);
           const r = await installGuardAsService({ allowAdminAccount: Boolean(o.allowAdminAccount), keepAwake: Boolean(o.keepAwake) });
           out.progress(r.unchanged ? `Already installed and running (${r.file}); left as is` : `Installed ${r.file}`);
           for (const n of r.notes) out.progress(dim(n));
+          // A running guard reads its policy at start: restart it for a new cost guard setting.
+          if (r.unchanged && costChoice.changed) {
+            if (await restartGuardIfIdle(out)) {
+              out.progress("Restarted the guard with the new cost guard setting");
+              if (!(await waitForGuard(localUrl, 15_000))) out.warn(`The guard does not answer on ${localUrl} after its restart; check \`tapdance host status\`.`);
+            } else out.warn(`The new cost guard setting applies when the guard restarts: \`systemctl --user restart ${GUARD_SYSTEMD_UNIT}\` once no lease is running.`);
+          }
           if (!r.answering) {
             const log = r.log ? await readFile(r.log, "utf8").catch(() => "") : (await runCommand("journalctl", ["--user", "-u", "tapdance-guard.service", "-n", "30", "--no-pager"])).out;
             const runs = [process.execPath, CLI_ENTRY, "worker", "guard", "start", ...(o.allowAdminAccount ? ["--allow-admin-account"] : [])];
             throw commandFailed(runs, log, `The guard service is installed but does not answer on ${r.url}`, r.log ? `Read ${r.log}; fix what it reports, then run \`${hostUpCommand(o)}\` again.` : `Read \`journalctl --user -u tapdance-guard.service\`, then run \`${hostUpCommand(o)}\` again.`);
           }
+          return settings;
         });
 
         const tokenPath = pairingTokenPath(guardDir(), label);
@@ -306,6 +385,9 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           const args = tailscaleServeArgs(port, mode);
           const serve = await runCommand(bin, args);
           if (!serve.ok) {
+            if (serveNeedsOperator(platform, serve.out)) {
+              throw commandFailed([bin, ...args], serve.out, "tailscale serve refused this user", `On Linux only root and the tailnet's operator may change \`tailscale serve\`. Run \`sudo tailscale set --operator=$USER\` once, then \`${hostUpCommand(o)}\` again.`);
+            }
             throw commandFailed([bin, ...args], serve.out, "tailscale serve could not expose the guard", "Check `tailscale serve status`; on a tailnet with HTTPS certificates see https://tailscale.com/kb/1153/enabling-https. Or pass --no-tailscale.");
           }
           return hostEndpoint(state.dnsName, port, mode);
@@ -345,8 +427,9 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         });
 
         await step(out, "summary", async () => undefined);
-        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label };
-        out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios }, () =>
+        const costGuard = describeHostStop(hostStop, platform);
+        const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label, costGuard };
+        out.result({ ready: true, ...block, label, android: prereq.android, ios: prereq.ios, hostStop: hostStop ?? { idleMinutes: 0, maxUptimeHours: 0 } }, () =>
           [
             renderReadyBlock(block),
             dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host warm android=0,ios=0. Stop everything: tapdance host pause.`),
@@ -505,14 +588,14 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .command("enable")
     .description("Allow builds from these repositories (git mode): the agent sends a repo and ref, this machine fetches and builds it")
     .requiredOption("--repo <url>", "repository allowed to be built (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
-    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`), deploy-key (`host builds key`), or none", "none")
+    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`, e.g. a fine-grained read-only token), deploy-key (`host builds key`), or none; a repository's own key from `host builds key --repo` is used whenever it exists (default: keep the current setting, else none)")
     .option("--protected-ref <branch>", "only build commits already on this branch of the remote, e.g. main (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
-    .option("--timeout-minutes <n>", "longest build", "45")
+    .option("--timeout-minutes <n>", "longest build (default: keep the current setting, else 45)")
     .option("--allow-admin-account", "accept the risk of building on an administrator account")
-    .action(async (o: { repo: string[]; gitAuth: string; protectedRef?: string[]; timeoutMinutes: string; allowAdminAccount?: boolean }) => {
+    .action(async (o: { repo: string[]; gitAuth?: string; protectedRef?: string[]; timeoutMinutes?: string; allowAdminAccount?: boolean }) => {
       const out = output(globals());
       try {
-        if (!["none", "gh", "deploy-key"].includes(o.gitAuth)) throw new TapdanceError("USAGE", "--git-auth must be gh, deploy-key or none");
+        if (o.gitAuth !== undefined && !["none", "gh", "deploy-key"].includes(o.gitAuth)) throw new TapdanceError("USAGE", "--git-auth must be gh, deploy-key or none");
         for (const repo of o.repo) if (!/^(https:\/\/|ssh:\/\/|git@)/.test(repo)) throw new TapdanceError("USAGE", `${repo} is not an https:// or ssh git URL`);
         if (osPlatform() === "darwin" && (await isMacAdmin()) && !o.allowAdminAccount) {
           throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
@@ -522,17 +605,19 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const { path } = await loadPolicy();
         const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
         raw["allow"] = { ...(raw["allow"] ?? {}), builds: true };
-        const current = (raw["builds"] ?? {}) as { repos?: string[] };
+        // Options left out keep what an earlier `host builds enable` set (adding a repository must not
+        // turn a private repository's git auth back to none).
+        const current = (raw["builds"] ?? {}) as { repos?: string[]; gitAuth?: string; timeoutMinutes?: number };
         raw["builds"] = {
           ...current,
           repos: [...new Set([...(current.repos ?? []), ...o.repo])],
-          gitAuth: o.gitAuth,
+          gitAuth: o.gitAuth ?? current.gitAuth ?? "none",
           ...(o.protectedRef?.length ? { protectedRefs: o.protectedRef } : {}),
-          timeoutMinutes: Number(o.timeoutMinutes),
+          timeoutMinutes: o.timeoutMinutes !== undefined ? Number(o.timeoutMinutes) : (current.timeoutMinutes ?? 45),
         };
         const policy = GuardPolicySchema.parse(raw);
         await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
-        const notes = await buildPrerequisites(o.gitAuth);
+        const notes = await buildPrerequisites(policy.builds.gitAuth, policy.builds.repos);
         const restarted = await restartGuardIfIdle(out);
         out.result({ builds: policy.builds, restarted, notes }, () =>
           [
@@ -564,18 +649,31 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("status")
-    .description("Show whether builds are on, the allowed repositories and the build cache size")
+    .description("Show whether builds are on, the allowed repositories (with their deploy key and build files) and the build cache")
     .action(async () => {
       const out = output(globals());
       try {
         const { policy } = await loadPolicy();
         const cache = join(guardDir(), "builds");
-        out.result({ enabled: policy.allow.builds, ...policy.builds, cache }, () =>
+        const legacyKey = existsSync(join(cache, "deploy_key"));
+        const repositories = await Promise.all(
+          policy.builds.repos.map(async (repo) => {
+            const own = existsSync(repoKeyPath(cache, repo));
+            const deployKey = own ? "own" : legacyKey && policy.builds.gitAuth === "deploy-key" ? "shared" : "none";
+            return { repo, deployKey, buildFiles: (await readBuildFiles(cache, repo)).length };
+          }),
+        );
+        out.result({ enabled: policy.allow.builds, ...policy.builds, repositories, cache }, () =>
           [
             `Builds: ${policy.allow.builds ? green("on") : "off"}`,
-            `Repositories: ${policy.builds.repos.join(", ") || "none"}`,
             `Git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; protected refs: ${policy.builds.protectedRefs.join(", ")}` : ""}; timeout ${policy.builds.timeoutMinutes} min`,
-            `Cache: ${cache} (delete it to free disk; the next build clones again)`,
+            repositories.length === 0
+              ? "Repositories: none"
+              : table([
+                  ["REPOSITORY", "DEPLOY KEY", "BUILD FILES"],
+                  ...repositories.map((r) => [r.repo, r.deployKey === "own" ? "its own" : r.deployKey === "shared" ? "the shared deploy_key" : "-", String(r.buildFiles)]),
+                ]),
+            `Cache: ${cache} (delete a repository's folder there to free disk; the next build clones again. keys/, files/ and deploy_key hold your deploy keys and build files)`,
           ].join("\n"),
         );
       } catch (error) {
@@ -584,12 +682,17 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("key")
-    .description("Create a read-only deploy key for --git-auth deploy-key and print its public half to add to the repository")
-    .action(async () => {
+    .description("Create a read-only deploy key and print its public half to add to the repository; --repo makes one for that repository only (GitHub accepts a deploy key on one repository)")
+    .option("--repo <url>", "the repository this key is for; its builds use it whatever --git-auth says")
+    .action(async (o: { repo?: string }) => {
       const out = output(globals());
       try {
         const dir = join(guardDir(), "builds");
         await mkdir(dir, { recursive: true, mode: 0o700 });
+        if (o.repo !== undefined) {
+          await repoDeployKey(out, dir, o.repo);
+          return;
+        }
         const key = join(dir, "deploy_key");
         if (!existsSync(key)) {
           const r = await runCommand("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", `tapdance-builds@${hostname()}`, "-f", key]);
@@ -603,6 +706,154 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             pub,
             "",
             `The private key stays here: ${key}. Use ssh URLs (git@github.com:owner/repo.git) with --git-auth deploy-key.`,
+            "GitHub accepts one deploy key on one repository only: for a second repository, use `tapdance host builds key --repo <url>`.",
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  const files = builds
+    .command("files")
+    .description("Files this machine copies into the checkout before each build of a repository: config kept out of git (google-services.json, local.properties, .env). Only you add or read them; agents cannot");
+  files
+    .command("add <path-in-repo>")
+    .description(`Add or replace a build file: its content comes from --from or stdin (at most ${BUILD_FILE_MAX_BYTES / 1024 / 1024} MB, 50 files per repository)`)
+    .requiredOption("--repo <url>", "the repository it belongs to")
+    .option("--from <file>", "read the content from this local file instead of stdin")
+    .action(async (pathInRepo: string, o: { repo: string; from?: string }) => {
+      const out = output(globals());
+      try {
+        const builds = join(guardDir(), "builds");
+        repoIdentity(o.repo);
+        const content = await readBuildFileContent(o.from);
+        const entry = await addBuildFile(builds, o.repo, pathInRepo, content);
+        const { policy } = await loadPolicy();
+        const allowed = policy.builds.repos.some((r) => repoIdentity(r) === repoIdentity(o.repo));
+        out.result({ repo: normalizeRepo(o.repo), path: entry.path, size: entry.size, sha256: entry.sha256.slice(0, 8) }, () =>
+          [
+            `Added ${entry.path} for ${normalizeRepo(o.repo)} (${entry.size} bytes, sha256 ${entry.sha256.slice(0, 8)}).`,
+            "Each build of this repository copies it into the checkout before building and removes it after; changing it builds again instead of reusing an earlier build. No guard restart needed.",
+            ...(allowed ? [] : [yellow(`${o.repo} is not on the build allow-list yet: tapdance host builds enable --repo <url>.`)]),
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  files
+    .command("list")
+    .description("List build files: path, size and the start of the sha256, never their content")
+    .option("--repo <url>", "only this repository")
+    .action(async (o: { repo?: string }) => {
+      const out = output(globals());
+      try {
+        const builds = join(guardDir(), "builds");
+        if (o.repo !== undefined) repoIdentity(o.repo);
+        const groups: Array<{ repo: string; files: BuildFileEntry[] }> = o.repo !== undefined ? [{ repo: normalizeRepo(o.repo), files: await readBuildFiles(builds, o.repo) }] : await listAllBuildFiles(builds);
+        const rows = groups.flatMap((g) => g.files.map((f) => ({ repo: g.repo, path: f.path, size: f.size, sha256: f.sha256.slice(0, 8), addedAt: f.addedAt })));
+        out.result({ files: rows }, () =>
+          rows.length === 0
+            ? `No build files${o.repo ? ` for ${normalizeRepo(o.repo)}` : ""}. Add one with: tapdance host builds files add --repo <url> <path-in-repo> --from <file>`
+            : table([["REPOSITORY", "PATH", "BYTES", "SHA256"], ...rows.map((r) => [r.repo, r.path, String(r.size), r.sha256])]),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  files
+    .command("remove <path-in-repo>")
+    .description("Remove a build file; the next build runs without it")
+    .requiredOption("--repo <url>", "the repository it belongs to")
+    .action(async (pathInRepo: string, o: { repo: string }) => {
+      const out = output(globals());
+      try {
+        repoIdentity(o.repo);
+        const entry = await removeBuildFile(join(guardDir(), "builds"), o.repo, pathInRepo);
+        out.result({ repo: normalizeRepo(o.repo), path: entry.path, removed: true }, () => `Removed ${entry.path} for ${normalizeRepo(o.repo)}.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  // ------------------------------------------------------------------ installs from CI
+  const artifacts = host.command("artifacts").description("Let the agent install Android APKs your CI built (GitHub Actions artifacts), downloaded by this machine with its own gh (off by default)");
+  artifacts
+    .command("enable")
+    .description("Allow installs from these repositories' GitHub Actions artifacts: this machine downloads them with its `gh auth` and installs the APK on the agent's Android lease")
+    .requiredOption("--repo <owner/repo>", "GitHub repository (owner/repo or its https://github.com URL), repeatable", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--branch <name>", "only artifacts of runs on this branch, e.g. main (repeatable; replaces the list)", (v: string, prev: string[] = []) => [...prev, v])
+    .option("--max-mb <n>", "largest artifact and APK, in MB (default 512)")
+    .action(async (o: { repo: string[]; branch?: string[]; maxMb?: string }) => {
+      const out = output(globals());
+      try {
+        const repos = o.repo.map((r) => githubRepo(r));
+        for (const b of o.branch ?? []) if (!BRANCH_NAME.test(b)) throw new TapdanceError("USAGE", `${b} is not a git branch name`);
+        const maxMB = o.maxMb === undefined ? undefined : Number(o.maxMb);
+        if (maxMB !== undefined && !(Number.isInteger(maxMB) && maxMB >= 1 && maxMB <= 4096)) throw new TapdanceError("USAGE", "--max-mb must be a whole number from 1 to 4096");
+        const { path } = await loadPolicy();
+        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        raw["allow"] = { ...(raw["allow"] ?? {}), artifacts: true };
+        const current = (raw["artifacts"] ?? {}) as { repos?: string[] };
+        const merged = [...(current.repos ?? [])];
+        for (const r of repos) if (!merged.some((m) => m.toLowerCase() === r.toLowerCase())) merged.push(r);
+        raw["artifacts"] = {
+          ...current,
+          repos: merged,
+          ...(o.branch?.length ? { branches: [...new Set(o.branch)] } : {}),
+          ...(maxMB !== undefined ? { maxMB } : {}),
+        };
+        const policy = GuardPolicySchema.parse(raw);
+        await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+        const gh = await ghStatus();
+        const notes = gh.ok ? [] : [gh.note];
+        const restarted = await restartGuardIfIdle(out);
+        out.result({ artifacts: policy.artifacts, ghReady: gh.ok, restarted, notes }, () =>
+          [
+            `Installs from CI allowed from: ${policy.artifacts.repos.join(", ")}${policy.artifacts.branches.length ? ` (only runs on ${policy.artifacts.branches.join(", ")})` : " (any branch of the repository itself, not forks)"}; up to ${policy.artifacts.maxMB} MB`,
+            ...notes.map((n) => yellow(n)),
+            "This machine downloads the artifact with its own gh and installs the APK on the agent's Android lease; nothing from the repository runs here. Use a fine-grained, read-only token (Actions: read, Contents: read) for these repositories only.",
+            restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running: run this command again then.",
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  artifacts
+    .command("disable")
+    .description("Turn installs from CI off (the allow-list is kept)")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const { path } = await loadPolicy();
+        const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        raw["allow"] = { ...(raw["allow"] ?? {}), artifacts: false };
+        await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
+        const restarted = await restartGuardIfIdle(out);
+        out.result({ artifacts: false, restarted }, () => `Installs from CI are off${restarted ? "; the guard restarted" : ". Restart the guard to apply it when no test is running"}.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  artifacts
+    .command("status")
+    .description("Show whether installs from CI are on, the allowed repositories and branches, the download cache and whether this machine's gh is signed in")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const { policy } = await loadPolicy();
+        const cache = join(guardDir(), "artifacts");
+        const cacheBytes = await artifactCacheBytes(cache);
+        const gh = await ghStatus();
+        out.result({ enabled: policy.allow.artifacts, ...policy.artifacts, cache, cacheBytes, ghReady: gh.ok }, () =>
+          [
+            `Installs from CI: ${policy.allow.artifacts ? green("on") : "off"}`,
+            `Repositories: ${policy.artifacts.repos.length ? policy.artifacts.repos.join(", ") : "none"}`,
+            `Branches: ${policy.artifacts.branches.length ? policy.artifacts.branches.join(", ") : "any (runs of the repository itself, not forks)"}; largest artifact ${policy.artifacts.maxMB} MB`,
+            `gh: ${gh.ok ? green("signed in") : yellow(gh.note)}`,
+            `Cache: ${cache} (${(cacheBytes / 1024 / 1024).toFixed(1)} MB; the newest 3 downloads per repository are kept; delete the folder to free disk)`,
           ].join("\n"),
         );
       } catch (error) {
@@ -664,6 +915,21 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const service = await guardServiceState(servicePlatform(), homedir(), { run: runCommand, uid: process.getuid?.() ?? 0 });
         const answering = port !== 0 && (await waitForGuard(localUrl, 0));
         rows.push({ step: "guard service", ok: service.installed && answering, detail: `${service.installed ? "installed" : "not installed"}, ${service.detail}; ${answering ? `answers on ${localUrl}` : "not answering"}` });
+        {
+          const on = hostStopApplies(policy.hostStop, platform);
+          const allowed = on ? await hostStopAllowed() : true;
+          const seen = on ? (JSON.parse(await readFile(join(guardDir(), "host-stop.json"), "utf8").catch(() => "null")) as Parameters<typeof describeIdle>[0]) : undefined;
+          const idle = on ? describeIdle(seen ?? undefined, Date.now()) : undefined;
+          rows.push({
+            step: "cost guard",
+            ok: allowed,
+            detail: [
+              describeHostStop(policy.hostStop, platform),
+              ...(idle ? [idle] : []),
+              ...(on && !allowed ? [`sudo does not allow \`${HOST_STOP_COMMAND.join(" ")}\`: add the rule \`${sudoersRule(userInfo().username)}\` (tapdance host up prints how)`] : []),
+            ].join("; "),
+          });
+        }
         const paired = await pairings();
         const age = (iso: string) => `${Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 86_400_000))} d old`;
         rows.push({
@@ -820,15 +1086,84 @@ async function probeEndpoint(endpoint: string, out: ReturnType<typeof output>): 
   });
 }
 
+/**
+ * `host builds key --repo <url>`: a deploy key for one repository (GitHub refuses a deploy key that
+ * another repository already has), under builds/keys/<slug>, private half 600 in a 700 folder.
+ */
+async function repoDeployKey(out: Output, buildsDir: string, repo: string): Promise<void> {
+  const identity = repoIdentity(repo);
+  const keys = join(buildsDir, "keys");
+  await mkdir(keys, { recursive: true, mode: 0o700 });
+  await chmod(keys, 0o700);
+  const key = repoKeyPath(buildsDir, repo);
+  const created = !existsSync(key);
+  if (created) {
+    const r = await runCommand("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", `tapdance-builds@${hostname()} ${identity}`, "-f", key]);
+    if (!r.ok) throw commandFailed(["ssh-keygen"], r.out, "ssh-keygen could not create the deploy key");
+  }
+  await chmod(key, 0o600);
+  const pub = (await readFile(`${key}.pub`, "utf8")).trim();
+  const [host, ...path] = identity.split("/");
+  const github = host === "github.com" ? `https://github.com/${path.join("/")}/settings/keys` : undefined;
+  const sshUrl = `git@${host}:${path.join("/")}.git`;
+  out.result({ repo: normalizeRepo(repo), slug: repoSlug(repo), publicKey: pub, privateKey: key, created, ...(github ? { addAt: github } : {}) }, () =>
+    [
+      `${created ? "Created" : "Already have"} a deploy key for ${identity}. Add this public key to that repository only, read-only (${github ? `GitHub: ${github}, i.e. the repository's Settings › Deploy keys › Add deploy key, leave "Allow write access" off` : "your git server's deploy keys page for the repository, read-only"}):`,
+      "",
+      pub,
+      "",
+      `The private key stays here: ${key}. Builds of this repository use it whatever --git-auth says; allow and build it with the ssh URL (${sshUrl}).`,
+    ].join("\n"),
+  );
+}
+
+/** A build file's content: from `--from <file>`, else stdin; refused above the size cap. */
+async function readBuildFileContent(from: string | undefined): Promise<Buffer> {
+  const tooBig = () => new TapdanceError("USAGE", `The file is larger than 1 MB (${BUILD_FILE_MAX_BYTES} bytes), the most a build file may be`);
+  if (from !== undefined) {
+    const info = await stat(from).catch(() => undefined);
+    if (!info?.isFile()) throw new TapdanceError("USAGE", `${from} is not a file`);
+    if (info.size > BUILD_FILE_MAX_BYTES) throw tooBig();
+    return readFile(from);
+  }
+  if (process.stdin.isTTY) throw new TapdanceError("USAGE", "No content: pass --from <file>, or pipe the file in", { hint: "e.g. tapdance host builds files add --repo <url> app/google-services.json --from ./google-services.json" });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    size += b.length;
+    if (size > BUILD_FILE_MAX_BYTES) throw tooBig();
+    chunks.push(b);
+  }
+  if (size === 0) throw new TapdanceError("USAGE", "Nothing came in on stdin", { hint: "Pass --from <file>, or pipe the file in: tapdance host builds files add --repo <url> <path-in-repo> < ./file" });
+  return Buffer.concat(chunks);
+}
+
 /** What a build on this machine still needs: git, Xcode for iOS, a JDK for Gradle (KMP), gh for gh auth. */
-async function buildPrerequisites(gitAuth: string): Promise<string[]> {
+async function buildPrerequisites(gitAuth: string, repos: string[] = []): Promise<string[]> {
   const notes: string[] = [];
   if (!(await runCommand("git", ["--version"])).ok) notes.push("git is not installed: builds cannot fetch anything.");
   if (osPlatform() === "darwin" && !(await runCommand("xcodebuild", ["-version"])).ok) notes.push("xcodebuild is not available: iOS builds need Xcode.");
-  if (!(await runCommand("java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
+  const javaHome = process.env["JAVA_HOME"];
+  if (!(await runCommand(javaHome ? join(javaHome, "bin", "java") : "java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
   if (gitAuth === "gh" && !(await runCommand("gh", ["auth", "status"])).ok) notes.push("`gh auth status` fails: run `gh auth login` on this machine.");
-  if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) notes.push("No deploy key yet: run `tapdance host builds key` and add it to the repository.");
+  if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) {
+    const keyless = repos.filter((r) => !existsSync(repoKeyPath(join(guardDir(), "builds"), r)));
+    if (keyless.length > 0) notes.push(`No deploy key yet for ${keyless.join(", ")}: run \`tapdance host builds key --repo <url>\` for each and add it to that repository.`);
+  }
   return notes;
+}
+
+/** Whether this machine's gh is installed and signed in (installs from CI download with it). */
+async function ghStatus(): Promise<{ ok: true } | { ok: false; note: string }> {
+  const r = await runCommand("gh", ["auth", "status"]).catch(() => ({ ok: false, out: "" }));
+  if (r.ok) return { ok: true };
+  return {
+    ok: false,
+    note: /ENOENT|not found|could not start/i.test(r.out) || r.out === ""
+      ? "gh is not installed or does not run here: install GitHub's CLI (https://cli.github.com), then `gh auth login --with-token` with a fine-grained, read-only token (Actions: read, Contents: read)."
+      : "`gh auth status` fails: run `gh auth login --with-token` on this machine with a fine-grained, read-only token (Actions: read, Contents: read) for the allowed repositories.",
+  };
 }
 
 /**
@@ -842,9 +1177,12 @@ async function restartGuardIfIdle(out: ReturnType<typeof output>): Promise<boole
     return false;
   }
   const uid = process.getuid?.() ?? 0;
+  // Over a non-interactive ssh command systemctl --user needs the user manager's bus set up first.
+  if (osPlatform() === "linux") await prepareLinuxUserServices(out).catch(() => undefined);
   const r =
     osPlatform() === "darwin"
       ? await runCommand("launchctl", ["kickstart", "-k", `gui/${uid}/${GUARD_LAUNCHD_LABEL}`])
       : await runCommand("systemctl", ["--user", "restart", GUARD_SYSTEMD_UNIT]);
+  if (!r.ok) out.warn(`Could not restart the guard: ${r.out.split("\n")[0] ?? ""}`);
   return r.ok;
 }

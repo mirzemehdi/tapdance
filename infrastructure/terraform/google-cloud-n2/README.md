@@ -1,32 +1,37 @@
-# Google Cloud N2 Android worker (Terraform)
+# Google Cloud N2 Android host (Terraform)
 
 This folder creates one Google Cloud VM that can run the Android Emulator with hardware
-acceleration, so it can serve as a Tapdance Android worker. Your agent runs somewhere else (an
-ordinary VPS, your laptop); the VM dials out to your gateway and needs no inbound port.
+acceleration, so it can host Android devices for a coding agent that runs somewhere else (an
+ordinary VPS, your laptop). After `apply` you run Tapdance's setup script on the VM over IAP SSH; it
+installs everything and runs `tapdance host up`, and the agent's machine connects over Tailscale with
+`tapdance connect`. No inbound port is opened besides IAP SSH.
 
-> **Status: written, not yet run.** This configuration was **not** checked with
-> `terraform validate` (Terraform was not installed where it was written) and has **never been
-> applied** to a real project. The install scripts were syntax-checked with `bash -n` only;
-> `shellcheck` was not available. No N2, Android or two-machine flow has been tested. Run
-> `terraform init && terraform validate` before your first `plan`, and read
-> [STATUS.md](../../../STATUS.md) (rows G-01, G-02, D-02, Q-05) for the current state. Please open
-> an issue with what you find.
+> **Status: applied once (2026-11-03).** With Terraform 1.17.1, `terraform validate` passed and
+> `apply` created 13 resources in 99 s (`region = "europe-west1"`, `zone = "europe-west1-b"`,
+> `assign_external_ip = true`, `boot_disk_size_gb = 64`, `max_run_hours` at its default of 8). The VM
+> then hosted Android emulators for an agent on a Mac
+> ([evidence](../../../docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the Cloud NAT
+> default (`assign_external_ip = false`), `create_project`, `stop_schedule` and
+> `terraform destroy`. See [STATUS.md](../../../STATUS.md) (rows G-01, G-02, G-07, Q-05).
 
-The longer, step-by-step guide (IAM, quotas, troubleshooting) is
-[docs/deployment/google-cloud-n2.md](../../../docs/deployment/google-cloud-n2.md).
+The step-by-step guide (prerequisites, IAM, the setup script, connecting the agent, costs,
+troubleshooting) is [docs/deployment/google-cloud-n2.md](../../../docs/deployment/google-cloud-n2.md).
 
 ## How the pieces fit
 
 ```text
-agent (Claude Code, Codex, ...) ──► gateway (VPS, no KVM) ◄── outbound wss:// ── this N2 VM
-        tapdance mcp / CLI              tapdance gateway                 Simlock worker + emulator
+agent machine (laptop or VPS, no KVM)                      this N2 VM
+  coding agent -> tapdance mcp / CLI  -- Tailscale -->  worker guard :4720 -> Simlock worker -> emulator
 ```
 
-- The **gateway** is a Simlock gateway started by `tapdance gateway setup`. It needs Node.js only.
-  See [`../../scripts/install-gateway.sh`](../../scripts/install-gateway.sh).
-- The **worker** on this VM is a Simlock worker configured by `tapdance worker install`. It owns the
-  emulator and joins the gateway with `tapdance worker login`.
-- Device orchestration (leases, queue, worker uplink) is
+- On the VM, `scripts/host-setup.sh` installs Node.js, a JDK, the Android SDK and a system image,
+  Tailscale and Tapdance, then runs `tapdance host up`: the bundled Simlock worker, the **worker
+  guard** (the only endpoint the agent reaches, with a fixed device API), a pairing token, `tailscale
+  serve` on port 4720, and a self-test. See
+  [one-command host](../../../docs/deployment/one-command-host.md).
+- On the agent's machine, `tapdance connect <endpoint> < pairing-<label>.token` saves the endpoint
+  and token and prints the MCP setup.
+- Device orchestration (leases, the worker) is
   [Simlock](https://github.com/callstackincubator/simlock) (MIT). UI automation, app upload and
   artifact download are [agent-device](https://github.com/callstack/agent-device) (MIT). Tapdance
   wires them together; see the [architecture decision](../../../docs/architecture-decision.md).
@@ -42,14 +47,14 @@ agent (Claude Code, Codex, ...) ──► gateway (VPS, no KVM) ◄── outbou
 | Outbound | Cloud Router + Cloud NAT (default), or an ephemeral external IP with `assign_external_ip = true`. |
 | Service account | `<name>-worker@…`, scopes `logging.write` and `monitoring.write`, roles `logging.logWriter` and `monitoring.metricWriter` (turn off with `grant_logging_roles = false`). Nothing else. |
 | VM | `n2-standard-4`, min CPU platform Intel Cascade Lake, **nested virtualization on**, Ubuntu 24.04 LTS (`ubuntu-2404-lts-amd64`), 64 GB `pd-balanced`, Shielded VM (Secure Boot, vTPM, integrity monitoring), OS Login on, project SSH keys blocked, no external IP. |
-| Startup script | Installs `qemu` KVM packages and `cpu-checker`, writes a udev rule for `/dev/kvm`, loads `kvm_intel`, runs `kvm-ok`, and copies `install-android-worker.sh` and `check-kvm.sh` to `/opt/tapdance/`. It does **not** install Tapdance or join a gateway. Log: `/var/log/tapdance-startup.log`. |
+| Startup script | Installs `qemu` KVM packages, `cpu-checker`, git, unzip and curl, writes a udev rule for `/dev/kvm`, loads `kvm_intel`, runs `kvm-ok`, and copies `check-kvm.sh` (and the legacy `install-android-worker.sh`) to `/opt/tapdance/`. It does **not** install Tapdance, log into Tailscale or pair anything. Log: `/var/log/tapdance-startup.log`. |
 | SSH access (optional) | For each principal in `ssh_members`: IAP tunnel access to this VM, `roles/compute.osAdminLogin` on it, and `roles/iam.serviceAccountUser` on its service account. |
 
-**The gateway join token never goes into Terraform.** Terraform state and instance metadata are
-readable by more people and processes than you might expect (anyone with `compute.instances.get`,
-every process on the VM through the metadata server, whoever holds the state file). You type the
-token into `tapdance worker login` over IAP SSH instead, where it is read from a hidden prompt or
-from stdin.
+**No secret goes into Terraform.** Terraform state and instance metadata are readable by more
+people and processes than you might expect (anyone with `compute.instances.get`, every process on
+the VM through the metadata server, whoever holds the state file). The pairing token is made on the
+VM by `tapdance host up`, written to a mode-600 file, and copied to the agent's machine by you; the
+Tailscale login happens in your browser.
 
 ## Why N2, and why only N2
 
@@ -71,8 +76,9 @@ gcloud resource-manager org-policies describe \
 
 ## One emulator per VM
 
-The install script pins Simlock's capacity to **one running emulator** (`--max-emulators 1`).
-Reasons:
+Simlock's default capacity on an `n2-standard-4` is **one running emulator** (a quarter of the CPU
+count), and the worker guard serves one session at a time (`limits.maxSessions` 1). Reasons to keep
+it there:
 
 - An `n2-standard-4` has 4 vCPUs and 16 GB. Simlock budgets 4 GiB of RAM per emulator, and one
   emulator under nested virtualization with software GPU rendering (`swiftshader_indirect`, there
@@ -80,14 +86,11 @@ Reasons:
 - A second emulator on the same 4 vCPUs makes both slow: longer boots, "app not responding"
   dialogs, and UI waits that run into the agent's timeouts. Flaky devices are worse for an agent
   than a short queue.
-- Simlock's own default on this machine size is also one (a quarter of the CPU count). Pinning it
-  makes the choice explicit and survives a resize.
 - Requirement G-01 in [PRODUCT.md](../../../PRODUCT.md) says one emulator per VM until benchmarked.
   Nobody has benchmarked yet.
 
-To serve more devices, add more VMs (each joins the gateway as its own worker) rather than more
-emulators per VM. If you measure a larger machine type, raise the limit with
-`install-android-worker.sh --max-emulators N` and share your numbers in an issue.
+To serve more devices, add more VMs rather than more emulators per VM. If you measure a larger
+machine type, share your numbers in an issue.
 
 ## Prerequisites
 
@@ -100,12 +103,12 @@ emulators per VM. If you measure a larger machine type, raise the limit with
 - Permissions for whoever runs `terraform apply`. Owner on a dedicated project is simplest. Finer
   grained: Compute Admin, Service Account Admin, Service Usage Admin, Project IAM Admin (for the
   logging roles) and IAP Policy Admin (only for `ssh_members`).
-- Each person who will SSH in needs IAP tunnel access, `roles/compute.osAdminLogin` (the install
-  script uses sudo) and `roles/iam.serviceAccountUser` on the VM's service account. Listing them
-  in `ssh_members` grants exactly these. `gcloud compute ssh` may also need `roles/compute.viewer`
+- Each person who will SSH in needs IAP tunnel access, `roles/compute.osAdminLogin` (the setup
+  script uses sudo for Tailscale and the kvm group) and `roles/iam.serviceAccountUser` on the VM's
+  service account. Listing them in `ssh_members` grants exactly these. `gcloud compute ssh` may also need `roles/compute.viewer`
   on the project to look the VM up.
-- A Tapdance gateway reachable from the VM over `wss://` (TLS) or a private network such as
-  Tailscale. See [`install-gateway.sh`](../../scripts/install-gateway.sh).
+- A [Tailscale](https://tailscale.com/) account, with the agent's machine logged into the tailnet
+  and Tapdance installed there ([installation](../../../docs/installation.md)).
 
 ## Steps
 
@@ -143,54 +146,38 @@ emulators per VM. If you measure a larger machine type, raise the limit with
    It must end with "KVM acceleration is usable". If it does not, stop here and read
    [Troubleshooting](#troubleshooting). Tapdance never falls back to software emulation.
 
-5. **Install the worker.** Read the Android SDK licences first (the script can show them to you
-   when you leave the flag out); `--accept-android-licenses` accepts all of them for you:
+5. **Run the setup script** on the VM, as your own user. Read the Android SDK licences first: saying
+   yes to the install accepts them.
 
    ```sh
-   bash /opt/tapdance/install-android-worker.sh --accept-android-licenses \
-     --gateway wss://gateway.example.com --label tapdance-n2
+   curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label gcp-n2-1
    ```
 
-   The script installs KVM access, OpenJDK 17, Node.js 22, the Android command-line tools
-   (checked against Google's published SHA-256), platform-tools, the emulator, the
-   `system-images;android-35;google_apis;x86_64` image, and Tapdance from a git checkout. It then
-   runs `tapdance worker check --android-only`, enables lingering, runs
-   `tapdance worker install --service` (a systemd user service), and `emulator -accel-check`.
-   Add `--boot-test` to boot one throw-away emulator as an end-to-end check. Run it with `--help`
-   for every option.
+   It asks once before installing, asks before logging the VM into your tailnet
+   (`sudo tailscale up --operator=$USER` prints a link to open in your browser), installs Tapdance
+   into `~/tapdance`, and runs `tapdance host up --label gcp-n2-1`. That ends with a
+   `TAPDANCE HOST READY` block naming the endpoint and the token file
+   (`~/.tapdance/worker/pairing-gcp-n2-1.token`). If it stops at the pairing step because the `curl`
+   pipe cannot answer, run `~/.local/bin/tapdance host up --label gcp-n2-1` in the same shell.
 
-6. **Join the gateway.** On the gateway, mint a join token (it is shown once):
+6. **Copy the token** to the agent's machine, privately (from where you run `gcloud`):
 
    ```sh
-   tapdance gateway token --role worker --label tapdance-n2
+   gcloud compute scp --zone us-central1-a --project my-tapdance-project --tunnel-through-iap \
+     tapdance-n2:.tapdance/worker/pairing-gcp-n2-1.token .
    ```
 
-   On the VM, join. The token is read from a hidden prompt:
+7. **Connect** on the agent's machine, with the endpoint `host up` printed, then delete the file:
 
    ```sh
-   tapdance worker login --accept-gateway-exec --gateway wss://gateway.example.com --label tapdance-n2
-   ```
-
-   Or from your laptop without opening a shell, passing the token on stdin:
-
-   ```sh
-   read -rs TOKEN && printf '%s\n' "$TOKEN" | gcloud compute ssh tapdance-n2 --zone us-central1-a \
-     --tunnel-through-iap \
-     --command 'bash -lc "tapdance worker login --accept-gateway-exec --gateway wss://gateway.example.com --label tapdance-n2 --token-stdin"'
-   unset TOKEN
-   ```
-
-7. **Check from the gateway machine:**
-
-   ```sh
-   tapdance workers list
-   tapdance devices
+   tapdance connect https://tapdance-n2.<tailnet>.ts.net:4720 < pairing-gcp-n2-1.token
+   rm pairing-gcp-n2-1.token
    tapdance device lease --platform android
    tapdance device release
    ```
 
-8. **Optionally close SSH** once the worker has joined: set `enable_iap_ssh = false` and apply. The
-   worker keeps running and reconnecting; it never needed inbound access.
+8. **Optionally close SSH** afterwards: set `enable_iap_ssh = false` and apply. The worker and guard
+   keep running (linger) and Tailscale stays connected; you need SSH again only to change the host.
 
 ## Variables
 
@@ -224,7 +211,7 @@ emulators per VM. If you measure a larger machine type, raise the limit with
 | `iap_ssh_command` | The `gcloud compute ssh … --tunnel-through-iap` command. |
 | `next_steps` | Steps 3–7 above with your names filled in. |
 | `stop_command`, `start_command` | `gcloud compute instances stop/start …`. |
-| `delete_command` | `terraform destroy`, plus revoking the join token on the gateway. |
+| `delete_command` | `terraform destroy`, plus removing the VM from your tailnet. |
 | `cost_note` | The estimate below, with your disk size. |
 
 ## Cost (estimates, November 2026)
@@ -242,7 +229,7 @@ November 2026, before taxes and credits. Check
 | 64 GB `pd-balanced` boot disk | about USD 0.10/GB-month, so about USD 6.40/month | Always, also while stopped |
 | Cloud NAT | about USD 0.0014/hour per VM using it, plus USD 0.005/hour for the NAT's external IP, plus USD 0.045 per GiB processed | Gateway exists / traffic flows |
 | Ephemeral external IP (instead of NAT) | about USD 0.005/hour | VM running |
-| Internet egress (to your gateway) | per GiB, by destination | Traffic flows |
+| Internet egress (to the agent's machine, through Tailscale) | per GiB, by destination | Traffic flows |
 
 Example: running 8 hours a day on 22 working days (176 hours) costs roughly USD 34 for the VM plus
 about USD 6.40 for the disk, plus a few dollars of NAT and traffic. Running all month costs
@@ -259,28 +246,32 @@ terraform destroy
 
 - **Stopping** ends vCPU and RAM billing. The disk keeps billing. Leases on the VM end: after a
   reboot Simlock releases a lease whose emulator is no longer running (reason `device-lost`).
-- **Starting** boots the VM; with lingering enabled, the worker's systemd user service starts and
-  redials the gateway by itself (1 s, doubling up to 30 s between tries).
+- **Starting** boots the VM; with linger on (`host up` turns it on), the worker and guard start
+  as systemd user services, and Tailscale reconnects with its `serve` setting. Not yet observed on a
+  real VM.
+- **Pausing** without stopping the VM: `tapdance host pause` on the VM stops the guard, the worker
+  and its emulators; `tapdance host resume` starts them again.
 - **Deleting** with `terraform destroy` removes the VM, disk, network, NAT and service account. It
   does not disable the APIs, and it will not delete a project it created while
-  `project_deletion_policy = "PREVENT"`. Afterwards revoke the worker's join token on the gateway:
-  `tapdance simlock --gateway token list`, then `tapdance simlock --gateway token revoke <id>`.
+  `project_deletion_policy = "PREVENT"`. Afterwards remove the VM from your tailnet in the Tailscale
+  admin console; the token on the agent's machine stops working with the VM.
 
 ## Security
 
-- **An agent token is close to shell access.** Simlock's `exec` and agent-device let anyone with a
-  valid agent token for the gateway run adb commands and install apps on this VM as the worker's
-  user. Leasing is not a sandbox. Use this VM only for testing, keep no other credentials on it,
-  and give every agent its own token.
-- **A joined worker gives the gateway operator rights.** Whoever controls the gateway, or holds an
-  operator token for it, can lease and release any device here, install system images and read
-  the worker's configuration. Join only a gateway you trust as much as this VM.
-- **TLS or a private network is required.** Tapdance refuses `ws://` to a public address. Use
-  `wss://` behind Caddy (or another proxy that passes WebSockets) or a Tailscale address.
-- **Never commit tokens.** The join token ends up in `~/.simlock/config.json` on the VM (mode 600).
-  Do not put it in `terraform.tfvars`, instance metadata, shell history or an issue.
-- No inbound port is open except IAP SSH, and that one can be closed. ADB, the emulator console and
-  Simlock's local API are blocked by the firewall even if something on the VM listens on them.
+- **A pairing token gives device access, not a shell.** Through the worker guard its holder can
+  lease the emulator, install and drive apps, and run the fixed device commands the guard allows,
+  as the VM's user. Use this VM only for testing and keep no other credentials on it. See
+  [device-only mode](../../../docs/security/personal-mac.md) and the
+  [threat model](../../../docs/security/threat-model.md).
+- **Tailscale is the only way in for the agent.** `tailscale serve` exposes the guard to your tailnet,
+  not to the internet. A [Tailscale ACL](https://login.tailscale.com/admin/acls) that lets only the
+  agent's machine reach port 4720 narrows it further.
+- **Never commit tokens.** The pairing token lives in `~/.tapdance/worker/pairing-<label>.token`
+  (mode 600) on the VM and in `~/.tapdance/credentials.json` on the agent's machine. Do not put it
+  in `terraform.tfvars`, instance metadata, shell history or an issue.
+- No inbound port is open except IAP SSH, and that one can be closed. ADB, the emulator console,
+  Simlock's local API and the guard are blocked by the firewall even if something on the VM listens
+  on them.
 
 ## Troubleshooting
 
@@ -290,12 +281,13 @@ terraform destroy
 | `Constraint constraints/compute.disableNestedVirtualization violated` | Org policy blocks nested virtualization | Ask your organization admin to allow it for this project. |
 | `Quota 'N2_CPUS' exceeded` | Regional quota too low | Request more quota, or pick another region. |
 | `check-kvm.sh`: no `vmx` flag | Nested virtualization not active | Check `gcloud compute instances describe tapdance-n2 --zone ZONE --format='value(advancedMachineFeatures.enableNestedVirtualization)'` prints `True`. |
-| `/dev/kvm` not writable | Your login predates the kvm group | Log out and back in. The install script uses `sg kvm` meanwhile and restarts your systemd user manager so the service gets the group. |
+| `/dev/kvm` not writable | You are not in the kvm group yet | Run the setup script again: it adds you to the group and sets an ACL on `/dev/kvm`. After a reboot, log out and back in so the group applies. |
 | `gcloud compute ssh` hangs or is refused | IAP or OS Login permissions | You need IAP tunnel access, `compute.osAdminLogin` and `iam.serviceAccountUser` (see `ssh_members`). Check the firewall rule exists (`enable_iap_ssh = true`). |
 | apt or git downloads time out | No outbound route | Cloud NAT must exist (`assign_external_ip = false`) or the VM needs an external IP. |
-| Command-line tools SHA-256 mismatch | Google published a newer build | Take the new URL and SHA-256 from [developer.android.com/studio](https://developer.android.com/studio) ("Command line tools only") and pass `--cmdline-tools-url` / `--cmdline-tools-sha256`. |
-| `tapdance workers list` does not show the VM | Wrong URL, revoked or reused token, proxy without WebSocket support | On the VM run `tapdance worker logs` and look for `Uplink to gateway` lines. A join token pairs with the first worker that uses it; mint one per worker. |
-| The emulator fails with a missing `.so` | A library the install script did not add | Install it with apt and open an issue so the script can include it. |
+| `tapdance connect` says the address did not answer | The agent's machine is not in the tailnet, or the guard is not running | `tailscale status` on both machines; `tapdance host status` on the VM. |
+| `tailscale status` shows the VM's connection as `relay` | No direct path through Cloud NAT | It works, more slowly. `assign_external_ip = true` usually allows a direct path. |
+| The emulator fails with a missing `.so` | A library the setup script did not add | Install it with apt and open an issue so the script can include it. |
+| More | | See [Troubleshooting in the guide](../../../docs/deployment/google-cloud-n2.md#troubleshooting). |
 
 ## Credits
 
@@ -305,6 +297,8 @@ terraform destroy
 - [agent-device](https://github.com/callstack/agent-device) by Callstack (MIT): device automation.
 - Android SDK command-line tools, emulator and system images by Google, under the Android SDK
   licence.
-- [NodeSource](https://github.com/nodesource/distributions) Node.js packages,
-  [Caddy](https://caddyserver.com/) and [Tailscale](https://tailscale.com/) are used by the
-  gateway script only when you ask for them.
+- [Tailscale](https://tailscale.com/) connects the agent's machine to the VM.
+- The legacy `infrastructure/scripts/install-android-worker.sh` (copied to `/opt/tapdance/` for the
+  [gateway path](../../../docs/deployment/laptop-worker.md)) uses
+  [NodeSource](https://github.com/nodesource/distributions) Node.js packages; it is no longer the
+  recommended setup for this VM.

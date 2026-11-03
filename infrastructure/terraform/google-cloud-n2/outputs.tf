@@ -19,7 +19,7 @@ output "zone" {
 }
 
 output "internal_ip" {
-  description = "Private IP of the VM. Nothing listens on it for other machines: the worker dials out to the gateway."
+  description = "Private IP of the VM. Nothing listens on it for other machines: the agent reaches the VM through Tailscale."
   value       = google_compute_instance.worker.network_interface[0].network_ip
 }
 
@@ -40,14 +40,14 @@ output "next_steps" {
          ${local.ssh_command}
     2. Check KVM (read-only):
          bash /opt/tapdance/check-kvm.sh
-    3. Install the worker. Read the Android SDK licences first; the flag accepts them for you:
-         bash /opt/tapdance/install-android-worker.sh --accept-android-licenses --gateway wss://<gateway-host> --label ${google_compute_instance.worker.name}
-    4. On the gateway machine, mint a join token (shown once):
-         tapdance gateway token --role worker --label ${google_compute_instance.worker.name}
-    5. Back on the VM, join. The token is read from a hidden prompt, never from the command line:
-         tapdance worker login --accept-gateway-exec --gateway wss://<gateway-host> --label ${google_compute_instance.worker.name}
-    6. On the gateway: tapdance workers list && tapdance devices
-    The gateway must use TLS (wss://) or a private network such as Tailscale.
+    3. Run the setup script (asks before installing; yes accepts the Android SDK licences; runs tapdance host up):
+         curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label <agent-machine-name>
+    4. From this computer, copy the pairing token privately:
+         gcloud compute scp ${google_compute_instance.worker.name}:.tapdance/worker/pairing-<agent-machine-name>.token . --zone ${var.zone} --project ${local.project_id} --tunnel-through-iap
+    5. On the agent's machine:
+         tapdance connect <endpoint host up printed> < pairing-<agent-machine-name>.token
+       then delete every copy of the token file.
+    Guide: docs/deployment/google-cloud-n2.md
   EOT
 }
 
@@ -57,13 +57,22 @@ output "stop_command" {
 }
 
 output "start_command" {
-  description = "Start the VM again. The worker service starts on boot (lingering) and reconnects to the gateway by itself."
+  description = "Start the VM again. The worker and guard start on boot (linger) and Tailscale reconnects."
   value       = "gcloud compute instances start ${local.gcloud_target}"
 }
 
 output "delete_command" {
-  description = "Delete everything this configuration created. Revoke the worker's join token on the gateway too."
-  value       = "terraform destroy   # then on the gateway: tapdance simlock --gateway token list ; tapdance simlock --gateway token revoke <id>"
+  description = "Delete everything this configuration created. Remove the VM from your tailnet too."
+  value       = "terraform destroy   # then remove the VM in the Tailscale admin console (Machines)"
+}
+
+output "cost_guards" {
+  description = "What bounds this VM's cost: the per-boot run-time cap (Compute Engine stops the VM), the scheduled stop, and the budget (alerts only)."
+  value = {
+    max_run_hours = local.max_run_seconds > 0 ? "stops ${local.max_run_seconds / 3600} h after each start" : "off"
+    stop_schedule = var.stop_schedule != null ? "${var.stop_schedule} (${var.schedule_time_zone}; can start up to 15 min late)" : "off"
+    budget        = var.budget_amount_usd != null ? "USD ${floor(var.budget_amount_usd)}/month, alerts at 50/90/100% (never stops the VM)" : "off"
+  }
 }
 
 output "cost_note" {
@@ -76,7 +85,7 @@ output "cost_note" {
       Boot disk ${var.boot_disk_size_gb} GB ${var.boot_disk_type}: pd-balanced is about USD 0.10/GB-month
         (about USD ${format("%.2f", var.boot_disk_size_gb * 0.10)}/month). Billed while the VM is stopped too.
       ${var.assign_external_ip ? "Ephemeral external IP: about USD 0.005/hour while the VM runs." : "Cloud NAT: about USD 0.0014/hour per VM using it, plus USD 0.005/hour for its external IP, plus USD 0.045 per GiB processed (the SDK and image downloads are a few GiB once; live screen streaming adds more). See https://cloud.google.com/nat/pricing."}
-      Data sent from the VM to the internet (your gateway) is billed as egress.
+      Data sent from the VM to the internet (the agent's machine, through Tailscale) is billed as egress.
     Stop the VM when no agent needs it; delete it with terraform destroy when you are done.
   EOT
 }

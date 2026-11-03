@@ -1,5 +1,7 @@
 import { createServer, type Server } from "node:http";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { crc32 } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +9,7 @@ import type { LeaseHandle } from "@tapdance/core";
 import { SimlockProvider } from "@tapdance/provider-simlock";
 import { GuardPolicySchema, GuardTokens, type GuardPolicy } from "./policy.js";
 import { execOf } from "./rules.js";
-import { startGuard } from "./server.js";
+import { startGuard, type GuardOptions } from "./server.js";
 
 /**
  * Security tests for the worker guard, written as a deliberately malicious remote client against
@@ -112,12 +114,13 @@ afterEach(async () => {
   for (const c of cleanups.splice(0)) await c();
 });
 
-async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {}) {
+async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {}, extra: Partial<GuardOptions> = {}) {
   const home = await mkdtemp(join(tmpdir(), "td-guard-"));
   const env = { TAPDANCE_HOME: home };
   const upstream = await fakeSimlock(fake);
   const policy = GuardPolicySchema.parse({ listen: { host: "127.0.0.1", port: 0 }, ...overrides });
   const guard = await startGuard({
+    ...extra,
     upstream: { kind: "local", baseUrl: upstream.url, token: "slk_LOCALONLYSECRET", tenant: "local", runId: "r", clientId: "c", source: "test" },
     policy,
     env,
@@ -567,6 +570,215 @@ describe("worker guard: hardening", () => {
     expect(install?.body).toContain("App.app");
   });
 
+  it("16e. host build files reach the build but never the client: no route reads or writes them, the log names only path and hash (fake git and Xcode, mocked)", async () => {
+    const { mkdir: mk } = await import("node:fs/promises");
+    const { addBuildFile } = await import("@tapdance/provider-simlock");
+    let seenInCheckout = "";
+    const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args, o) => {
+      if (command === "git" && args[0] === "clone") await mk(join(args.at(-1)!, "App.xcodeproj"), { recursive: true });
+      if (command === "git" && args.includes("rev-parse")) return { code: 0, output: `${"b".repeat(40)}\n` };
+      if (command === "xcodebuild") {
+        seenInCheckout = await readFile(join(o.cwd!, "GoogleService-Info.plist"), "utf8");
+        await mk(join(args[args.indexOf("-derivedDataPath") + 1]!, "Build", "Products", "Debug-iphonesimulator", "App.app"), { recursive: true });
+      }
+      return { code: 0, output: "" };
+    };
+    const t = await setup(
+      { allow: { ...GuardPolicySchema.parse({}).allow, builds: true }, builds: { repos: ["https://github.com/acme/app"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 } },
+      { buildRunner: runner },
+    );
+    await addBuildFile(join(t.home, "worker", "builds"), "https://github.com/acme/app", "GoogleService-Info.plist", Buffer.from("API_KEY=PLIST_SECRET_VALUE"));
+    await t.allocate(t.alice.secret, A);
+    // A client cannot list, read or add build files: there is no such route, and the build request takes no files.
+    for (const [method, path] of [
+      ["GET", "/v1/builds/files"],
+      ["POST", "/v1/builds/files"],
+      ["GET", `/v1/leases/${A}/build/files`],
+      ["POST", `/v1/leases/${A}/build/files`],
+    ] as const) {
+      const r = await t.call(t.alice.secret, method, path, method === "POST" ? { path: "x", content: "y" } : undefined);
+      expect(r.status, `${method} ${path}`).toBeGreaterThanOrEqual(400);
+      expect(await r.text()).not.toContain("PLIST_SECRET_VALUE");
+    }
+    const r = await t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, { repo: "https://github.com/acme/app", ref: "main", files: { ".env": "EVIL=1" } });
+    const text = await r.text();
+    expect(seenInCheckout).toBe("API_KEY=PLIST_SECRET_VALUE");
+    expect(text).toContain("using host build file GoogleService-Info.plist (sha256 ");
+    expect(text).not.toContain("PLIST_SECRET_VALUE");
+    expect(text).not.toContain("EVIL");
+  });
+
+  describe("16f. installs from CI: the host downloads a GitHub Actions artifact with its own gh (fake gh, mocked)", () => {
+    const SHA = "d".repeat(40);
+    const APK = Buffer.from("fake-apk-".repeat(100));
+    /** A zip built in memory; `mode` sets Unix file type bits (a symlink is 0o120777). */
+    const zipOf = (entries: Array<{ name: string; data: Buffer; mode?: number }>) => {
+      const parts: Buffer[] = [];
+      const central: Buffer[] = [];
+      let offset = 0;
+      for (const e of entries) {
+        const name = Buffer.from(e.name);
+        const crc = crc32(e.data);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(e.data.length, 18);
+        local.writeUInt32LE(e.data.length, 22);
+        local.writeUInt16LE(name.length, 26);
+        const c = Buffer.alloc(46);
+        c.writeUInt32LE(0x02014b50, 0);
+        c.writeUInt16LE((3 << 8) | 20, 4);
+        c.writeUInt32LE(crc, 16);
+        c.writeUInt32LE(e.data.length, 20);
+        c.writeUInt32LE(e.data.length, 24);
+        c.writeUInt16LE(name.length, 28);
+        c.writeUInt32LE(((e.mode ?? 0o100644) << 16) >>> 0, 38);
+        c.writeUInt32LE(offset, 42);
+        parts.push(local, name, e.data);
+        central.push(c, name);
+        offset += 30 + name.length + e.data.length;
+      }
+      const cd = Buffer.concat(central);
+      const end = Buffer.alloc(22);
+      end.writeUInt32LE(0x06054b50, 0);
+      end.writeUInt16LE(entries.length, 8);
+      end.writeUInt16LE(entries.length, 10);
+      end.writeUInt32LE(cd.length, 12);
+      end.writeUInt32LE(offset, 16);
+      return Buffer.concat([...parts, cd, end]);
+    };
+    /** A fake gh: one successful run 42 on main of acme/app with artifact "app-debug" holding `zip`. */
+    const fakeGh = (opts: { zip?: Buffer; size?: number; branch?: string; headRepo?: string } = {}) => {
+      const calls: string[][] = [];
+      const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args, o) => {
+        calls.push([command, ...args]);
+        const path = args.find((a) => a.startsWith("repos/")) ?? "";
+        const json = (v: unknown) => ({ code: 0, output: `${JSON.stringify(v)}\n` });
+        const run = { id: 42, head_branch: opts.branch ?? "main", head_sha: SHA, conclusion: "success", status: "completed", head_repo: opts.headRepo ?? "acme/app" };
+        if (path.endsWith("/zip")) {
+          await writeFile(o.stdoutPath!, opts.zip ?? zipOf([{ name: "app-debug.apk", data: APK }]));
+          return { code: 0, output: "" };
+        }
+        if (path.endsWith("/artifacts")) return json([{ id: 777, name: "app-debug", size: opts.size ?? 2048, expired: false }]);
+        if (/\/runs\/\d+$/.test(path)) return json(run);
+        if (path.endsWith("/runs")) return json([run]);
+        return json("main");
+      };
+      return { runner, calls, downloads: () => calls.filter((c) => c.some((a) => a.endsWith("/zip"))).length };
+    };
+    const on = (extra: Partial<GuardPolicy["artifacts"]> = {}) => ({
+      allow: { ...GuardPolicySchema.parse({}).allow, artifacts: true },
+      artifacts: { repos: ["acme/app"], branches: [], maxMB: 1, ...extra },
+    });
+    const body = { repo: "acme/app", artifact: "app-debug" };
+    const ciInstall = (t: Awaited<ReturnType<typeof setup>>, secret: string, b: unknown, lease = A) => t.call(secret, "POST", `/v1/leases/${lease}/ci-install`, b);
+    const lines = async (r: Response) => (await r.text()).trim().split("\n").map((l) => JSON.parse(l) as { log?: string; result?: Record<string, unknown>; error?: { code: string; message: string; hint?: string } });
+    const installs = (t: Awaited<ReturnType<typeof setup>>) => t.upstream.seen.filter((x) => x.path.endsWith("/exec") && x.body.includes('"install"'));
+
+    it("is off by default, and a token needs the install scope", async () => {
+      const gh = fakeGh();
+      const off = await setup({}, { leasePlatform: "android" }, { ciRunner: gh.runner });
+      await off.allocate(off.alice.secret, A);
+      const refused = await ciInstall(off, off.alice.secret, body);
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).toContain("tapdance host artifacts enable");
+      const t = await setup(on(), { leasePlatform: "android" }, { ciRunner: gh.runner });
+      const viewer = await t.tokens.issue("no-install", 7, ["interaction", "inspection"]);
+      await t.allocate(viewer.secret, A);
+      expect((await ciInstall(t, viewer.secret, body)).status).toBe(403);
+      // "artifacts" is the owner's switch, never a scope a token could carry.
+      const { scopeNames } = await import("./policy.js");
+      expect(scopeNames()).not.toContain("artifacts");
+      expect(gh.calls).toHaveLength(0);
+      expect(installs(t)).toHaveLength(0);
+    });
+
+    it("refuses another client's lease, an iOS lease, repositories off the list and injection in every field, before gh runs", async () => {
+      const gh = fakeGh();
+      const t = await setup(on({ branches: ["main"] }), { leasePlatform: "android" }, { ciRunner: gh.runner });
+      await t.allocate(t.alice.secret, A);
+      expect((await ciInstall(t, t.mallory.secret, body)).status).toBe(404);
+      for (const [b, status] of [
+        [{ repo: "evil/app", artifact: "app-debug" }, 403],
+        [{ repo: "https://gitlab.com/acme/app", artifact: "app-debug" }, 400],
+        [{ repo: "acme/app;id", artifact: "app-debug" }, 400],
+        [{ repo: "acme/app", artifact: "../../.ssh/id_ed25519" }, 400],
+        [{ repo: "acme/app", artifact: "x --method DELETE" }, 400],
+        [{ repo: "acme/app", artifact: "app-debug", run: "42/../../../user" }, 400],
+        [{ repo: "acme/app", artifact: "app-debug", run: "42 -X DELETE" }, 400],
+        [{ repo: "acme/app", artifact: "app-debug", branch: "main&per_page=100" }, 400],
+        [{ repo: "acme/app", artifact: "app-debug", branch: "--hostname=evil.example" }, 400],
+        [{ repo: "acme/app", artifact: "app-debug", branch: "feature" }, 403],
+        [{ repo: "acme/app", artifact: "app-debug", url: "https://evil.example/x.apk" }, 400],
+        [{ repo: "acme/app", artifact: "app-debug", path: "/Users/owner/Downloads/x.apk" }, 400],
+        ["not json", 400],
+      ] as const) {
+        expect((await ciInstall(t, t.alice.secret, b)).status, JSON.stringify(b)).toBe(status);
+      }
+      const ios = await setup(on(), { leasePlatform: "ios" }, { ciRunner: gh.runner });
+      await ios.allocate(ios.alice.secret, A);
+      const refused = await ciInstall(ios, ios.alice.secret, body);
+      expect(refused.status).toBe(400);
+      expect(await refused.json()).toMatchObject({ error: { code: "NOT_SUPPORTED", hint: expect.stringContaining("tapdance app install <path>") } });
+      expect(gh.calls).toHaveLength(0);
+      expect(installs(t)).toHaveLength(0);
+    });
+
+    it("refuses a run on a branch off the list, a fork's run and an oversized artifact before any download", async () => {
+      for (const [gh, policy, reason] of [
+        [fakeGh({ branch: "feature" }), on({ branches: ["main"] }), /only from runs on main/],
+        [fakeGh({ headRepo: "mallory/app" }), on(), /another repository/],
+        [fakeGh({ size: 2 * 1024 * 1024 }), on(), /up to 1 MB/],
+      ] as const) {
+        const t = await setup(policy, { leasePlatform: "android" }, { ciRunner: gh.runner });
+        await t.allocate(t.alice.secret, A);
+        const out = await lines(await ciInstall(t, t.alice.secret, { ...body, run: "42" }));
+        expect(out.at(-1)!.error?.message).toMatch(reason);
+        expect(gh.downloads()).toBe(0);
+        expect(installs(t)).toHaveLength(0);
+      }
+    });
+
+    it("refuses a zip with ../ or symlink entries and an .aab, and installs nothing", async () => {
+      for (const [zip, reason] of [
+        [zipOf([{ name: "app-debug.apk", data: APK }, { name: "../../../.zshrc", data: Buffer.from("evil") }]), /leaves its folder/],
+        [zipOf([{ name: "app-debug.apk", data: Buffer.from("/Users/owner/.ssh/id_ed25519"), mode: 0o120777 }]), /symbolic link/],
+        [zipOf([{ name: "app-release.aab", data: APK }]), /App Bundle/],
+      ] as const) {
+        const gh = fakeGh({ zip });
+        const t = await setup(on(), { leasePlatform: "android" }, { ciRunner: gh.runner });
+        await t.allocate(t.alice.secret, A);
+        const out = await lines(await ciInstall(t, t.alice.secret, body));
+        expect(out.at(-1)!.error?.message).toMatch(reason);
+        expect(installs(t)).toHaveLength(0);
+        expect(existsSync(join(t.home, ".zshrc"))).toBe(false);
+      }
+    });
+
+    it("installs the APK on the lease, names the exact run, reuses the download and audits the commit", async () => {
+      const gh = fakeGh();
+      const t = await setup(on(), { leasePlatform: "android" }, { ciRunner: gh.runner });
+      await t.allocate(t.alice.secret, A);
+      const r = await ciInstall(t, t.alice.secret, body);
+      expect(r.status).toBe(200);
+      const first = (await lines(r)).at(-1)!.result!;
+      expect(first).toMatchObject({ repo: "acme/app", runId: "42", sha: SHA, branch: "main", artifact: "app-debug", cached: false, installed: true });
+      expect(first["apkSha256"]).toMatch(/^[0-9a-f]{12}$/);
+      const install = installs(t)[0]!;
+      const args = (JSON.parse(install.body) as { tool: string; args: string[] });
+      expect(args.tool).toBe("adb");
+      expect(args.args.slice(0, 3)).toEqual(["install", "-r", "-t"]);
+      expect(args.args[3]!.startsWith(join(t.home, "worker", "artifacts"))).toBe(true);
+      // gh ran with argument arrays and the host's environment, never a shell.
+      expect(gh.calls.every((c) => c[0] === "gh")).toBe(true);
+      const again = (await lines(await ciInstall(t, t.alice.secret, body))).at(-1)!.result!;
+      expect(again).toMatchObject({ runId: "42", cached: true, apkSha256: first["apkSha256"] });
+      expect(gh.downloads()).toBe(1);
+      const log = await readFile(join(t.home, "worker", "audit.log"), "utf8");
+      expect(log).toContain(`ci-install installed acme/app run 42 sha ${SHA} branch main artifact app-debug`);
+    });
+  });
+
   it("16c. a scoped token gets only its areas, never more than the policy (#46)", async () => {
     const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 512, tokenDays: 7 } });
     const viewer = await t.tokens.issue("ci-readonly", 7, ["interaction", "inspection", "screenshots"]);
@@ -770,6 +982,145 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/sessions/other/requests/x/diagnostics")).status).toBe(404);
+  });
+});
+
+/**
+ * The cost guard (policy.hostStop). Mocked throughout: a fake Simlock, a fake clock and uptime, and a
+ * fake stop runner that records the command. Nothing here powers a machine off.
+ */
+describe("cost guard (fake Simlock, fake clock, fake stop runner)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const until = async (ok: () => boolean, ms = 2000) => {
+    for (const end = Date.now() + ms; Date.now() < end; await sleep(10)) if (ok()) return;
+    throw new Error("timed out waiting");
+  };
+  const costGuard = (
+    stop: { idleMinutes: number; maxUptimeHours: number },
+    status: unknown,
+    o: { platform?: NodeJS.Platform; uptime?: number; fails?: boolean } = {},
+    fake: FakeOptions = {},
+    policy: Partial<GuardPolicy> = {},
+  ) => {
+    const clock = { now: 1_000_000_000 };
+    const calls: string[][] = [];
+    const logs: string[] = [];
+    const ready = setup({ hostStop: stop, ...policy }, { status, ...fake }, {
+      platform: o.platform ?? "linux",
+      now: () => clock.now,
+      hostStopIntervalMs: 15,
+      uptimeSeconds: async () => o.uptime ?? 600,
+      log: (m) => logs.push(m),
+      hostStopRunner: async (file, args) => {
+        calls.push([file, ...args]);
+        return o.fails ? { ok: false, out: "sudo: a password is required" } : { ok: true, out: "" };
+      },
+    });
+    return { ready, clock, calls, logs };
+  };
+  const NO_LEASES = { leases: [], devices: [] };
+
+  it("powers off with the fixed command after the idle limit, audits it, then refuses new leases", async () => {
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, NO_LEASES);
+    const t = await c.ready;
+    await sleep(80);
+    expect(c.calls).toEqual([]);
+    c.clock.now += 31 * 60_000;
+    await until(() => c.calls.length > 0);
+    expect(c.calls[0]).toEqual(["sudo", "-n", "/usr/bin/systemctl", "poweroff"]);
+    const log = await readFile(join(t.home, "worker", "audit.log"), "utf8");
+    expect(log).toContain('"path":"host-stop"');
+    expect(log).toContain("idle for 31 min");
+    const refused = await t.allocate(t.alice.secret, A);
+    expect(refused.status).toBe(503);
+    expect(((await refused.json()) as { error: { code: string } }).error.code).toBe("NO_CAPACITY");
+    expect(c.calls).toHaveLength(1);
+  });
+
+  it("does not power off while Simlock reports a lease, even one made locally, not through the guard", async () => {
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, { leases: [{ id: C }], devices: [] });
+    await c.ready;
+    c.clock.now += 120 * 60_000;
+    await sleep(120);
+    expect(c.calls).toEqual([]);
+  });
+
+  it("does not power off while a guard request is open, and counts its end as activity", async () => {
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, NO_LEASES, {}, { leaseDelayMs: 300 });
+    const t = await c.ready;
+    expect((await t.allocate(t.alice.secret, A)).status).toBe(200);
+    const open = t.call(t.alice.secret, "GET", `/v1/leases/${A}`);
+    await sleep(30);
+    c.clock.now += 60 * 60_000;
+    await sleep(100);
+    expect(c.calls).toEqual([]);
+    await open;
+    await sleep(80);
+    expect(c.calls).toEqual([]); // the request just ended: idle time starts again from then
+    c.clock.now += 31 * 60_000;
+    await until(() => c.calls.length > 0);
+  });
+
+  it("does not power off while a build runs", async () => {
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (finish = r));
+    const { mkdir: mk } = await import("node:fs/promises");
+    const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args) => {
+      if (command === "git" && args[0] === "clone") await mk(join(args.at(-1)!, "App.xcodeproj"), { recursive: true });
+      if (command === "git" && args.includes("rev-parse")) return { code: 0, output: `${"b".repeat(40)}\n` };
+      if (command === "xcodebuild") {
+        await gate;
+        await mk(join(args[args.indexOf("-derivedDataPath") + 1]!, "Build", "Products", "Debug-iphonesimulator", "App.app"), { recursive: true });
+      }
+      return { code: 0, output: "" };
+    };
+    const c = costGuard({ idleMinutes: 30, maxUptimeHours: 0 }, NO_LEASES, {}, { buildRunner: runner }, {
+      allow: { ...GuardPolicySchema.parse({}).allow, builds: true },
+      builds: { repos: ["https://github.com/acme/app"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 },
+    });
+    const t = await c.ready;
+    await t.allocate(t.alice.secret, A);
+    const build = t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, { repo: "https://github.com/acme/app", ref: "main" }).then((r) => r.text());
+    await sleep(50);
+    c.clock.now += 60 * 60_000;
+    await sleep(100);
+    expect(c.calls).toEqual([]);
+    finish();
+    await build;
+  });
+
+  it("past the uptime cap refuses new leases with the owner's reason, and powers off once none runs", async () => {
+    const c = costGuard({ idleMinutes: 0, maxUptimeHours: 8 }, NO_LEASES, { uptime: 9 * 3600 });
+    const t = await c.ready;
+    const refused = await t.allocate(t.alice.secret, A);
+    expect(refused.status).toBe(503);
+    const body = (await refused.json()) as { error: { code: string; message: string; hint: string } };
+    expect(body.error.code).toBe("NO_CAPACITY");
+    expect(body.error.message).toContain("uptime cap (8 h)");
+    expect(body.error.hint).toContain("owner set an uptime cap");
+    expect(t.upstream.seen.some((s) => s.body.includes("lease.allocate"))).toBe(false);
+    await until(() => c.calls.length > 0);
+  });
+
+  it("logs a failing stop command once an hour and keeps serving", async () => {
+    const c = costGuard({ idleMinutes: 1, maxUptimeHours: 0 }, NO_LEASES, { fails: true });
+    const t = await c.ready;
+    c.clock.now += 2 * 60_000;
+    await until(() => c.calls.length >= 3);
+    expect(c.logs.filter((l) => l.includes("failed")).length).toBe(1);
+    c.clock.now += 61 * 60_000;
+    await until(() => c.logs.filter((l) => l.includes("failed")).length === 2);
+    expect((await t.call(t.alice.secret, "GET", "/v1/status")).status).toBe(200);
+  });
+
+  it("never acts on macOS, whatever the policy says", async () => {
+    const c = costGuard({ idleMinutes: 1, maxUptimeHours: 1 }, NO_LEASES, { platform: "darwin", uptime: 99 * 3600 });
+    const t = await c.ready;
+    c.clock.now += 24 * 60 * 60_000;
+    await sleep(100);
+    expect(c.calls).toEqual([]);
+    expect((await t.allocate(t.alice.secret, A)).status).toBe(200);
+    expect(c.logs.some((l) => l.includes("ignored on macOS"))).toBe(true);
   });
 });
 

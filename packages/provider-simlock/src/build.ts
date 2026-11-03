@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { TapdanceError } from "@tapdance/core";
+import { buildFilesDigest, normalizeRepo, placeBuildFiles, readBuildFiles, removePlacedBuildFiles, repoKeyPath } from "./build-files.js";
 
 /**
  * Builds an app on the machine that runs the devices, from an allow-listed git repository, so an
@@ -35,7 +36,10 @@ export interface BuildSettings {
   protectedRefs: string[];
   gitAuth: "none" | "gh" | "deploy-key";
   timeoutMinutes: number;
-  /** The private key `host builds key` created, for gitAuth deploy-key. */
+  /**
+   * The single key `host builds key` (without --repo) created, for gitAuth deploy-key. A repository's
+   * own key (`host builds key --repo <url>`, under the builds folder) wins over it.
+   */
   deployKeyPath?: string;
 }
 
@@ -52,8 +56,20 @@ export interface BuildResult {
 export type CommandRunner = (
   command: string,
   args: string[],
-  options: { cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; onLine: (line: string) => void },
-) => Promise<{ code: number; output: string }>;
+  options: {
+    cwd?: string;
+    env: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    onLine: (line: string) => void;
+    /**
+     * Writes stdout (binary) to this file (mode 600) instead of reading it as lines; only stderr reaches
+     * `onLine` and `output`. Downloads a CI artifact without a shell redirect.
+     */
+    stdoutPath?: string;
+    /** With `stdoutPath`: stops the command once stdout passes this many bytes (`truncated` in the reply). */
+    maxStdoutBytes?: number;
+  },
+) => Promise<{ code: number; output: string; truncated?: boolean }>;
 
 const REF = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 const PROJECT = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}\.(xcodeproj|xcworkspace)$/;
@@ -85,13 +101,7 @@ export const XCODE_SETTING_KEYS = [
   "CURRENT_PROJECT_VERSION",
 ] as const;
 
-/** A repository URL as compared with the allow-list: lower-case host, no trailing slash or .git. */
-export function normalizeRepo(url: string): string {
-  let u = url.trim().replace(/\/+$/, "").replace(/\.git$/, "");
-  const ssh = /^git@([^:]+):(.+)$/.exec(u);
-  if (ssh) u = `ssh://git@${ssh[1]}/${ssh[2]}`;
-  return u.replace(/^([a-z+]+:\/\/)([^/]+)/i, (_m, scheme: string, host: string) => `${scheme.toLowerCase()}${host.toLowerCase()}`);
-}
+export { normalizeRepo };
 
 /** Checks a build request against the owner's settings; throws a TapdanceError naming what to fix. */
 export function checkBuildRequest(body: unknown, settings: BuildSettings): BuildRequest {
@@ -161,7 +171,7 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   const cache = buildCacheDir(root, req.repo);
   const src = join(cache, "src");
   await mkdir(cache, { recursive: true, mode: 0o700 });
-  const env = gitEnv(settings);
+  const env = gitEnv(settings, deployKeyFor(root, req.repo, settings));
   const step = async (command: string, args: string[], what: string, cwd?: string, extraEnv: NodeJS.ProcessEnv = {}) => {
     onLine(`$ ${command} ${args.join(" ")}`);
     const digest = new FailureDigest();
@@ -169,11 +179,14 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     if (r.code !== 0) {
       // The cause is often hundreds of lines above the end (#53): name it in the message itself.
       const cause = digest.lines();
-      const offline = hostNetworkHint(cause.join("\n"));
-      const fix = offline ?? missingSdkHint(cause.join("\n"));
+      // git's own output is short and its ssh errors carry no "fatal:" prefix: read all of it.
+      const gitText = what.startsWith("git") ? `${cause.join("\n")}\n${r.output}` : undefined;
+      const offline = hostNetworkHint(gitText ?? cause.join("\n"));
+      const auth = offline || gitText === undefined ? undefined : gitAuthHint(gitText, req.repo);
+      const fix = offline ?? auth ?? missingSdkHint(cause.join("\n"));
       throw new TapdanceError("DEVICE_ERROR", `${what} failed (exit ${r.code})${cause.length > 0 ? `:\n  ${cause.join("\n  ")}` : ""}`, {
         ...(fix ? { hint: fix } : {}),
-        details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n"), ...(offline ? { reason: "HOST_NETWORK" } : {}) },
+        details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n"), ...(offline ? { reason: "HOST_NETWORK" } : auth ? { reason: "GIT_AUTH" } : {}) },
       });
     }
     return r.output;
@@ -213,12 +226,17 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   }
   // The same commit and settings built before: install that build again (every lease is a fresh device,
   // so an agent rebuilds the same commit often; #61).
-  const key = buildKey(sha, req);
+  // Files the owner keeps out of git for this repository: part of what makes two builds the same, so
+  // changing one builds again instead of reusing a build made with the old one.
+  const files = await readBuildFiles(root, req.repo);
+  const key = buildKey(sha, req, buildFilesDigest(files));
   const kept = await keptBuild(cache, key);
   if (kept) {
     onLine(`Reusing the build of ${sha.slice(0, 12)} made ${kept.builtAt} (same commit and settings)`);
     return { sha, artifact: kept.artifact, seconds: Math.round((Date.now() - started) / 1000), reused: true };
   }
+  // Build files a build that died left in the checkout: out before git looks at the tree.
+  await removePlacedBuildFiles(src, cache);
   await git(["checkout", "--force", "--detach", sha], "git checkout");
   await git(["clean", "-ffd"], "git clean");
   if (existsSync(join(src, ".gitmodules"))) {
@@ -229,15 +247,28 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     );
   }
 
-  const built = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step);
+  // Copied in after checkout and taken out again after the build, so the next checkout of another
+  // commit starts from git's own tree and a removed build file never lingers (an ignored path would
+  // survive `git clean`).
+  let built: string;
+  try {
+    await placeBuildFiles(root, req.repo, files, src, cache, onLine);
+    built = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step);
+  } finally {
+    await removePlacedBuildFiles(src, cache);
+  }
   onLine(`Built ${relative(cache, built)}`);
   const artifact = await keepBuild(cache, key, built).catch(() => built);
   return { sha, artifact, seconds: Math.round((Date.now() - started) / 1000) };
 }
 
-/** What makes two builds the same: the commit and every input that changes the result. */
-export function buildKey(sha: string, req: BuildRequest): string {
+/**
+ * What makes two builds the same: the commit and every input that changes the result, including the
+ * host's build files for the repository (`filesDigest`, empty when it has none).
+ */
+export function buildKey(sha: string, req: BuildRequest, filesDigest = ""): string {
   const inputs = [sha, req.platform, req.project ?? "", req.scheme ?? "", req.configuration ?? "", (req.xcodeSettings ?? []).join(" "), req.gradleTask ?? "", req.dir ?? ""];
+  if (filesDigest) inputs.push(`files:${filesDigest}`);
   return createHash("sha256").update(inputs.join("\u0000")).digest("hex").slice(0, 16);
 }
 
@@ -410,6 +441,7 @@ export function isNotableBuildLine(line: string): boolean {
     /^(Building|Built) /.test(line) ||
     /^warning: (some submodules|git fetch failed)/.test(line) ||
     /^Reusing the build of /.test(line) ||
+    /^using host build file /.test(line) ||
     /^fatal: /.test(line) ||
     /(^|\s)(fatal )?error: /i.test(line) ||
     /^e: /.test(line) ||
@@ -474,16 +506,43 @@ async function newestApk(dir: string, since: number): Promise<string | undefined
   return best?.path;
 }
 
+/**
+ * The ssh key git uses for `repo`: the repository's own deploy key when the owner created one
+ * (`host builds key --repo`; GitHub accepts a deploy key on one repository only), else the single
+ * legacy key with gitAuth deploy-key, else none.
+ */
+export function deployKeyFor(buildsRoot: string, repo: string, settings: BuildSettings): string | undefined {
+  const own = repoKeyPath(buildsRoot, repo);
+  if (existsSync(own)) return own;
+  return settings.gitAuth === "deploy-key" ? settings.deployKeyPath : undefined;
+}
+
 /** git's environment for the configured auth; credentials never leave this machine. */
-function gitEnv(settings: BuildSettings): NodeJS.ProcessEnv {
+export function gitEnv(settings: BuildSettings, sshKey?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   if (settings.gitAuth === "gh") {
     // git -c through the environment: the host's `gh auth` answers credential requests for github.com.
     Object.assign(env, { GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "credential.helper", GIT_CONFIG_VALUE_0: "", GIT_CONFIG_KEY_1: "credential.helper", GIT_CONFIG_VALUE_1: "!gh auth git-credential" });
-  } else if (settings.gitAuth === "deploy-key" && settings.deployKeyPath) {
-    env["GIT_SSH_COMMAND"] = `ssh -i '${settings.deployKeyPath.replace(/'/g, "")}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`;
+  }
+  if (sshKey) {
+    // Only this key, never the account's own keys or agent: a deploy key reaches one repository, read-only.
+    env["GIT_SSH_COMMAND"] = `ssh -i '${sshKey.replace(/'/g, "")}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`;
   }
   return env;
+}
+
+/**
+ * A git step failed because the host could not sign in to the repository: name the three ways the
+ * owner can fix it, so an agent asks instead of retrying.
+ */
+export function gitAuthHint(text: string, repo: string): string | undefined {
+  if (!/Permission denied \(publickey|Repository not found|could not read (Username|Password)|Authentication failed|terminal prompts disabled|returned error: 40[13]|Invalid username or (password|token)|Could not read from remote repository|Write access to repository not granted|no such identity/i.test(text)) return undefined;
+  return [
+    `This host could not sign in to ${repo} (a private repository, or its git credentials do not reach it). Only the host's owner can fix this (an agent cannot), in one of three ways:`,
+    "(1) gh with a fine-grained, read-only token (Contents: read, this repository only): on the host `gh auth login --with-token`, then `tapdance host builds enable --repo <https url> --git-auth gh`;",
+    "(2) a deploy key for this repository: on the host `tapdance host builds key --repo <url>`, add the printed public key as a read-only deploy key (GitHub: the repository's Settings › Deploy keys), and build with the ssh URL (git@github.com:owner/repo.git);",
+    "(3) no build on the host: build the app elsewhere and install it with `tapdance app install <path>`.",
+  ].join(" ");
 }
 
 /** Runs a command with an argument array (no shell), streaming lines and keeping the output's tail. */
@@ -492,6 +551,7 @@ export const spawnRunner: CommandRunner = (command, args, options) =>
     const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
     let tail = "";
     let partial = "";
+    let truncated = false;
     const take = (chunk: Buffer) => {
       const text = partial + chunk.toString("utf8");
       const lines = text.split("\n");
@@ -499,16 +559,38 @@ export const spawnRunner: CommandRunner = (command, args, options) =>
       for (const line of lines) options.onLine(line.length > 2000 ? `${line.slice(0, 2000)}…` : line);
       tail = (tail + chunk.toString("utf8")).slice(-64_000);
     };
-    child.stdout.on("data", take);
+    let file: ReturnType<typeof createWriteStream> | undefined;
+    if (options.stdoutPath) {
+      // Binary stdout to a file, counted, so a download larger than the cap stops instead of filling the disk.
+      const sink = createWriteStream(options.stdoutPath, { mode: 0o600 });
+      file = sink;
+      sink.on("error", (error) => {
+        child.kill("SIGTERM");
+        tail += `\nwriting ${options.stdoutPath} failed: ${error.message}`;
+      });
+      let written = 0;
+      child.stdout.on("data", (chunk: Buffer) => {
+        written += chunk.length;
+        if (options.maxStdoutBytes !== undefined && written > options.maxStdoutBytes) {
+          if (!truncated) child.kill("SIGTERM");
+          truncated = true;
+          return;
+        }
+        sink.write(chunk);
+      });
+    } else child.stdout.on("data", take);
     child.stderr.on("data", take);
     const timer = setTimeout(() => child.kill("SIGTERM"), options.timeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
+      file?.destroy();
       reject(new TapdanceError("PROVIDER_UNAVAILABLE", `${command} could not start: ${error.message}`, { hint: command === "xcodebuild" ? "Install Xcode on the host." : undefined }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (partial) options.onLine(partial);
-      resolvePromise({ code: code ?? 1, output: tail });
+      const done = () => resolvePromise({ code: code ?? 1, output: tail, ...(truncated ? { truncated: true } : {}) });
+      if (file) file.end(done);
+      else done();
     });
   });

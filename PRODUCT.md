@@ -161,6 +161,7 @@ phase by phase (§19).
 | F-02 | Local artifact storage first; an extensible storage interface for S3/R2 later; no large videos in a database. | W6 |
 | F-03 | Consider short-lived signed transfers or direct encrypted channels so large binaries need not traverse the control plane. | D3 |
 | F-04 | Artifacts restricted to the owning user/session. | W9 |
+| F-05 | Install from CI: on an Android lease, the device's host downloads an APK that the user's CI built (a GitHub Actions artifact) with the host's own read-only credentials and installs it, so neither the APK nor a GitHub token passes through the agent's machine; off until the host's owner allow-lists the repository (and optionally branches and a size cap); forks' runs never used. | C (phase 2) |
 
 ## 12. External tool integrations
 
@@ -200,6 +201,7 @@ phase by phase (§19).
 | G-04 | Deployment docs: `local.md`, `self-hosted-overview.md`, `google-cloud-n2.md`, `ovh-public-cloud.md`, `dedicated-linux-server.md`, `worker-security.md`, `browser-access.md`, explaining VPS vs gateway vs worker vs emulator vs browser and that the VPS needs no KVM. | W8 |
 | G-05 | iOS docs: `docs/ios/overview.md`, `local-mac-worker.md`, `scaleway-mac.md`, `macstadium.md`, `aws-ec2-mac.md`, `simulator-management.md`, `remote-browser-access.md`, `xcode-cloud-integration.md` — prerequisites, Xcode versions, runtimes, Apple account, registration, network, leasing, artifacts, troubleshooting, costs and allocation terms (Scaleway minimum rental, AWS dedicated-host minimums). Do not imply any VPS can host iOS. | I11 |
 | G-06 | Scaleway Mac mini (M2, 16 GB, 256 GB) is the first documented cloud Mac; MacStadium and AWS EC2 Mac documented as manual options; never store AWS credentials in plaintext. | I4 |
+| G-07 | Cost guardrails for a cloud device host: the host powers itself off after a set idle time with no lease, request or build, and optionally stops taking leases past an uptime cap; Linux only (never a Mac), with one fixed stop command allowed by one sudoers rule; plus VM-level caps that work without Tapdance (run-time cap, stop schedule, budget alert). | C (phase 2) |
 
 ## 15. Documentation and open-source quality
 
@@ -250,6 +252,8 @@ phase by phase (§19).
 | H-10 | Profiles: local device-only, self-hosted remote worker, managed multi-tenant (strong isolation, short-lived environments, strict limits, no credential sharing, auditable, network restrictions); the personal-Mac model is not enough for multi-tenant hosting. | S10 |
 | H-11 | Local audit log of pairing, authorization changes, sessions, leases, installs, build approvals, resets, recordings, terminations, revocations — never keys, passwords, tokens or app contents; the owner can inspect and revoke independently of the VPS. | S11 |
 | H-12 | Security tests with a deliberately malicious client: no shell, no sudo, no home reads, no deletes outside the workspace, no Keychain, no policy changes, lease scoped to its simulator, no cross-session artifacts, expired credentials rejected, revocation immediate, builds refused in device-only mode, limits enforced. API-level tests are distinguished from OS/virtualization vulnerabilities. | S12 |
+| H-13 | Builds on the host from private repositories with read-only credentials kept on the host and never reachable by agents: a fine-grained token, or a deploy key per repository (GitHub accepts a deploy key on one repository); a sign-in failure names the ways out. | C (phase 2) |
+| H-14 | Build files: config a repository keeps out of git (`google-services.json`, `local.properties`, `.env`), added and listed only by the host's owner on the host, copied into the checkout for each build and removed after it; content never shown; no agent route. | C (phase 2) |
 
 ## 19. Product direction: the mobile lifecycle (phased)
 

@@ -16,7 +16,7 @@ import {
   validateAppPath,
 } from "./index.js";
 import { CODE_MAP } from "./agent-device-errors.js";
-import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, focusedPackage, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint } from "./provider.js";
+import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -705,6 +705,81 @@ describe("iOS gaps (#48-#50)", () => {
     await expect(asked.p.typeText(handle, text, { kind: "id", id: "settings_code_field" }, { delayMs: 40 })).rejects.toThrow(/even at 40 ms/);
   });
 
+  // MOCKED agent-device client: a snapshot with or without a focused field, and a type call that is recorded.
+  const androidWith = (nodes: Array<Record<string, unknown>> | Error, appBundleId = "com.measify.pianolune") => {
+    const typed: string[] = [];
+    const p = new (class extends SimlockProvider {
+      protected override agentClient() {
+        return {
+          capture: { snapshot: async () => (nodes instanceof Error ? Promise.reject(nodes) : { nodes, appBundleId }) },
+          interactions: { type: async (o: { text: string }) => (typed.push(o.text), {}) },
+        } as never;
+      }
+    })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+    return { p, typed };
+  };
+  const androidHandle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "local", runId: "r", clientId: "c" } } as never;
+
+  it("refuses to type with no target when no field has focus, with a hint to pass one (#72, MOCKED client)", async () => {
+    const unfocused = androidWith([
+      { ref: "e1", type: "android.widget.EditText", placeholder: "Your code", focused: false, editable: true },
+      { ref: "e2", type: "android.widget.Button", label: "Apply", focused: false },
+    ]);
+    await expect(unfocused.p.typeText(androidHandle, "N2 field")).rejects.toMatchObject({ code: "ELEMENT_NOT_FOUND", hint: expect.stringMatching(/--text.*into_text/) });
+    expect(unfocused.typed).toEqual([]);
+  });
+
+  it("types with no target into the focused field, and when the snapshot cannot tell (#72, MOCKED client)", async () => {
+    const focused = androidWith([{ ref: "e1", type: "android.widget.EditText", focused: true }, { ref: "e2", type: "android.widget.Button", focused: false }]);
+    expect((await focused.p.typeText(androidHandle, "abc")).message).toMatch(/Typed 3 characters/);
+    expect(focused.typed).toEqual(["abc"]);
+    const noFlags = androidWith([{ ref: "e1", type: "android.widget.EditText" }]);
+    await noFlags.p.typeText(androidHandle, "abc");
+    expect(noFlags.typed).toEqual(["abc"]);
+    const failed = androidWith(new Error("snapshot helper busy"));
+    await failed.p.typeText(androidHandle, "abc");
+    expect(failed.typed).toEqual(["abc"]);
+  });
+
+  it("reads focus from snapshot nodes (#72)", () => {
+    expect(editableFocus([{ type: "android.widget.EditText", focused: true }])).toBe(true);
+    expect(editableFocus([{ type: "android.view.View", focused: true, editable: true }])).toBe(true);
+    expect(editableFocus([{ type: "android.widget.EditText", focused: false }])).toBe(false);
+    expect(editableFocus([{ type: "android.widget.Button", focused: true, editable: false }])).toBe(false);
+    expect(editableFocus([{ type: "android.view.View", focused: true }])).toBeUndefined();
+    expect(editableFocus([{ type: "android.widget.EditText" }])).toBeUndefined();
+    expect(editableFocus([])).toBeUndefined();
+  });
+
+  it("names the launcher, not the session's app, when the launcher's elements fill the screen (#73, MOCKED client)", async () => {
+    const launcher = androidWith([
+      { ref: "e1", type: "android.view.View", identifier: "com.google.android.apps.nexuslauncher:id/workspace" },
+      { ref: "e2", type: "android.widget.TextView", label: "Play Store", identifier: "com.google.android.apps.nexuslauncher:id/icon" },
+      { ref: "e3", type: "android.widget.TextView", label: "Gmail", bundleId: "com.google.android.apps.nexuslauncher" },
+      { ref: "e4", type: "android.view.View", identifier: "com.android.systemui:id/clock" },
+    ]);
+    const screen = await launcher.p.inspect(androidHandle);
+    expect(screen.app).toBe("com.google.android.apps.nexuslauncher");
+    expect(screen.warnings[0]).toMatch(/not the session's app com\.measify\.pianolune/);
+    const inApp = androidWith([
+      { ref: "e1", type: "android.widget.EditText", identifier: "com.measify.pianolune:id/code" },
+      { ref: "e2", type: "android.view.View", identifier: "com.android.systemui:id/clock" },
+      { ref: "e3", type: "android.view.View", identifier: "com.android.systemui:id/battery" },
+    ]);
+    const own = await inApp.p.inspect(androidHandle);
+    expect(own.app).toBe("com.measify.pianolune");
+    expect(own.warnings).toEqual([]);
+    // A Compose screen with no ids at all keeps the session's app.
+    expect((await androidWith([{ ref: "e1", type: "android.view.View", label: "Play" }]).p.inspect(androidHandle)).app).toBe("com.measify.pianolune");
+  });
+
+  it("picks the front app from element packages (#73)", () => {
+    expect(frontApp([{ identifier: "com.a.launcher:id/x" }, { identifier: "com.a.launcher:id/y" }, { identifier: "com.b.app:id/z" }], "com.c.session")).toBe("com.a.launcher");
+    expect(frontApp([{ identifier: "com.a.launcher:id/x" }, { identifier: "com.c.session:id/z" }], "com.c.session")).toBe("com.c.session");
+    expect(frontApp([{ identifier: "android:id/content" }, { bundleId: "com.google.android.inputmethod.latin" }, { identifier: "com.android.systemui:id/clock" }], "com.c.session")).toBe("com.c.session");
+    expect(frontApp([], undefined)).toBeUndefined();
+  });
+
   it("retries a rotation the device was slow to confirm, then trusts the screen's shape (#65)", async () => {
     const { runDeviceOperation } = await import("./device-operations.js");
     const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554" } as never;
@@ -733,5 +808,26 @@ describe("iOS gaps (#48-#50)", () => {
   });
   it("taps an iOS switch row at its toggle, not its label (#58)", () => {
     expect(switchKnobPoint({ x: 0, y: 136, width: 402, height: 48 })).toEqual({ x: 360, y: 160 });
+  });
+});
+
+describe("iOS on a host that is not a Mac", () => {
+  it("is never expected from a Linux worker, and still expected from a Mac or an unknown host", async () => {
+    const { iosNeedsMac } = await import("./provider.js");
+    expect(iosNeedsMac("ios", "linux")).toBe(true);
+    expect(iosNeedsMac("ios", "darwin")).toBe(false);
+    expect(iosNeedsMac("ios", "macOS")).toBe(false);
+    expect(iosNeedsMac("ios", undefined)).toBe(false);
+    expect(iosNeedsMac("android", "linux")).toBe(false);
+  });
+});
+
+describe("Android install refusals", () => {
+  it("says to uninstall when a build is signed with another key (CI debug keys differ per run)", async () => {
+    const { androidInstallHint, fromAgentDeviceError } = await import("./agent-device-errors.js");
+    const adb = "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.measify.pianolune signatures do not match newer version; ignoring!]";
+    expect(androidInstallHint(adb)).toMatch(/Uninstall it first/);
+    expect(androidInstallHint("Success")).toBeUndefined();
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").hint).toMatch(/app uninstall/);
   });
 });

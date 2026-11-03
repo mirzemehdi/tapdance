@@ -11,7 +11,8 @@ import { agentDeviceBin, output, simlockBin, type GlobalOptions } from "./contex
 import { bold, dim, renderChecks, yellow } from "./output.js";
 import { readSecret } from "./commands-setup.js";
 import { registerGuardCommands } from "./commands-guard.js";
-import { warmSettings, type WarmCounts } from "./host/plan.js";
+import { linuxEmulatorSettings, warmSettings, type WarmCounts } from "./host/plan.js";
+import { prepareLinuxUserServices } from "./guard/service.js";
 
 const exec = promisify(execFile);
 /** The port Simlock runs its own adb server on (5037 is the developer's). */
@@ -258,6 +259,7 @@ export async function installWorker(
     ["capabilities.agent-device.command", agentDeviceBin()],
     ["capabilities.stream.enabled", o.stream ? "true" : "false"],
     ["capabilities.input.enabled", o.stream ? "true" : "false"],
+    ...linuxEmulatorSettings(osPlatform(), process.env),
   ];
   if (o.iosBackend === "axe") {
     // AXe only sees Xcode's default device set (it hardcodes deviceSetPath nil).
@@ -272,6 +274,7 @@ export async function installWorker(
   await restart(false, out);
   if (o.warm) await applyWarm(out, o.warm);
   if (o.service) {
+    if (osPlatform() === "linux") await prepareLinuxUserServices(out);
     out.progress("Installing the login service");
     await simlock(["--local", "daemon", "install"]);
   }
