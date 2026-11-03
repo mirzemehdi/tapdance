@@ -221,6 +221,17 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     );
 
   device
+    .command("links")
+    .description("Links apps asked the system to open lately (mailto:, App Store, Settings, web): scheme, URL and whether anything opened it; checks a link-out on a simulator without Mail")
+    .option("--minutes <n>", "how far back to look (1-30)", "5")
+    .action(async (o: { minutes: string }) =>
+      run(globals(), async (t, out) => {
+        const r = await t.device({ kind: "links", minutes: intArg("--minutes", o.minutes, 1, 30)! });
+        out.result(r, () => r.message);
+      }),
+    );
+
+  device
     .command("crashes")
     .description("iOS: list the leased simulator's crash reports (.ips) since the lease began, or pull one with a summary of the crashed thread")
     .option("--app <appId>", "only this app's reports")

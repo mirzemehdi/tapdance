@@ -313,6 +313,8 @@ export type DeviceOperation =
   | { kind: "perf"; metric: "frames" | "memory"; appId?: string }
   /** iOS: crash reports (.ips) from the leased simulator since the lease began, newest first. */
   | { kind: "crash-list"; appId?: string }
+  /** Links apps asked the system to open over the last `minutes` (default 5): scheme, URL, handled or not. */
+  | { kind: "links"; minutes?: number }
   /** iOS: one crash report by name ("latest" for the newest), saved to `outPath`, with a summary. */
   | { kind: "crash-pull"; name: string; outPath: string; appId?: string }
   /** Android: `adb shell` inside the leased emulator (its own VM, wiped at release); never the host. */

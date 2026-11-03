@@ -461,6 +461,7 @@ describe("worker guard: hardening", () => {
     const built = [
       dc.android.startIntent({ action: "android.intent.action.VIEW", data: "https://example.com/a?b=c&d=e", component: "com.example/.Main", categories: ["android.intent.category.DEFAULT"], flags: "0x10000000", extras: { mode: "first run; rm -rf /", count: 3, fresh: true } }),
       dc.android.notifications(),
+      dc.ios.linkLog(5),
       dc.android.inputTap(400, 955),
       dc.android.home(),
       dc.android.stopApp("com.example"),

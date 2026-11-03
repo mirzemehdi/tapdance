@@ -30,3 +30,4 @@ export { checkBuildRequest, runBuild, FailureDigest, isNotableBuildLine, hostSim
 export { listCrashReports, readCrashReport, summarizeCrash, crashReportsDir, type CrashReportInfo, type CrashFilter } from "./crash-reports.js";
 export { consolePaths, clearConsole, readConsole } from "./console-capture.js";
 export { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, DEFAULT_HOLD_MS, type PlayedTap, type Orientation } from "./touch-sequence.js";
+export { parseIosLinkLog, parseAndroidLinkLog, type OpenedLink } from "./links.js";

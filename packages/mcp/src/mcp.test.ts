@@ -46,6 +46,7 @@ const VALID_ARGS: Record<string, Record<string, unknown>> = {
   build_app: { repo: "https://github.com/acme/app", ref: "main" },
   clipboard: { action: "get" },
   audit_screen: { app_id: "com.x" },
+  opened_links: { minutes: 5 },
   crash_reports: { app_id: "com.x", pull: "latest" },
   tap_sequence: { steps: [{ t: 0, x: 10, y: 20 }] },
   clear_app_data: { app_id: "com.example.app" },

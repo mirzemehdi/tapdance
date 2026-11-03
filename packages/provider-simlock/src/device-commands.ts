@@ -223,6 +223,11 @@ export const ios = {
    * Relaunches an app with its stdout and stderr in files on the Mac (#59): `print`/`println` go to
    * stdout, which the system log does not keep. Simlock puts the simulator after the options.
    */
+  /** Launch Services' lines about URLs apps asked to open, over the last `minutes` (#60). */
+  linkLog(minutes: number): DeviceCommand {
+    const m = Math.max(1, Math.min(30, Math.round(minutes)));
+    return { tool: "simctl", args: ["spawn", "log", "show", "--last", `${m}m`, "--style", "compact", "--predicate", 'subsystem == "com.apple.launchservices" AND eventMessage CONTAINS "URL"'] };
+  },
   launchWithConsole(appId: string, stdoutPath: string, stderrPath: string, args: string[] = []): DeviceCommand {
     return { tool: "simctl", args: ["launch", "--terminate-running-process", `--stdout=${stdoutPath}`, `--stderr=${stderrPath}`, appId, ...args] };
   },

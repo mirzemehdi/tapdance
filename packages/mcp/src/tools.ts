@@ -286,6 +286,15 @@ export const TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "opened_links",
+    title: "Links the app opened",
+    description:
+      "The links apps asked the system to open in the last minutes (default 5): mailto:, App Store, Settings and web links, with the URL when the log has it, whether anything opened it, and for mailto the address and subject. Use it to check a link-out where no app handles it, such as Contact us on a simulator, which has no Mail app.",
+    input: z.object({ minutes: z.number().int().min(1).max(30).optional() }).strict(),
+    annotations: { readOnlyHint: true },
+    run: async (t, a) => json(await t.device({ kind: "links", ...(a["minutes"] !== undefined ? { minutes: a["minutes"] as number } : {}) })),
+  },
+  {
     name: "crash_reports",
     title: "List or read iOS crash reports",
     description:

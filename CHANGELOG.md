@@ -199,6 +199,9 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   manual test would do with VoiceOver, which the iOS simulator does not have.
 - Fixed (#58): `ui tap --text` on a row below the fold or under a toolbar failed; it now scrolls the
   text into view (and matches text that is part of a label) and taps it there.
+- Added (#60): `device links` / MCP `opened_links`: the links apps asked the system to open, whether
+  anything opened them and in which app, and `mailto:` address and subject. Checked on Pianolune:
+  "Contact us" → `mailto:team@measify.com (nothing handles it)`, Terms → `https (opened in com.apple.mobilesafari)`.
 
 ### Not yet proven
 

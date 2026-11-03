@@ -153,6 +153,7 @@ tapdance device request-human --reason <text> [--wait <seconds> | --no-wait]
 tapdance device request-human --cancel
 tapdance device clipboard <get | set <text>>
 tapdance device crashes [--app <id>] [--pull <name|latest>] [-o <file>]
+tapdance device links [--minutes <n>]
 tapdance device done
 ```
 
@@ -168,6 +169,13 @@ tapdance device done
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
 | `--no-keepalive` | Do not renew in the background. The lease ends after its TTL unless you run `device renew`. |
 | `--hold` | Stay in the foreground, renew, and release on Ctrl-C. |
+
+`device links` lists the links apps asked the system to open in the last minutes (default 5, at most
+30): `mailto:`, App Store, Settings and web links, whether anything opened them and in which app, and for
+`mailto:` the address and subject. It checks a link-out where nothing handles it, such as "Contact us"
+on a simulator, which has no Mail app. On iOS the log has the whole URL when the open fails (the app
+logs it); for a web page that opened, Safari has it: `ui inspect --app com.apple.mobilesafari`. Android
+masks most of a link's data in logcat.
 
 `device crashes` (iOS) lists the crash reports (`.ips`) the leased simulator wrote since the lease
 began, newest first, with app, exception and time; `--pull <name>` (or `latest`) saves one as an
@@ -920,6 +928,10 @@ Commands:
   clipboard <action> [text]         Read (get) or write (set <text>) the device
                                     clipboard: paste flows, checking what a Copy
                                     button copied
+  links [options]                   Links apps asked the system to open lately
+                                    (mailto:, App Store, Settings, web): scheme,
+                                    URL and whether anything opened it; checks a
+                                    link-out on a simulator without Mail
   crashes [options]                 iOS: list the leased simulator's crash
                                     reports (.ips) since the lease began, or
                                     pull one with a summary of the crashed
@@ -1014,6 +1026,20 @@ what a Copy button copied
 
 Options:
   -h, --help  display help for command
+```
+
+### `tapdance device links`
+
+```text
+Usage: tapdance device links [options]
+
+Links apps asked the system to open lately (mailto:, App Store, Settings, web):
+scheme, URL and whether anything opened it; checks a link-out on a simulator
+without Mail
+
+Options:
+  --minutes <n>  how far back to look (1-30) (default: "5")
+  -h, --help     display help for command
 ```
 
 ### `tapdance device crashes`

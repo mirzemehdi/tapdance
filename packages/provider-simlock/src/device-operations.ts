@@ -1,4 +1,5 @@
 import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { parseAndroidLinkLog, parseIosLinkLog, type OpenedLink } from "./links.js";
 import { basename, dirname, join, resolve } from "node:path";
 import type { AgentDeviceClient } from "agent-device";
 import { TapdanceError, type DeviceNotification, type DeviceOperation, type DeviceOperationResult, type LeaseHandle } from "@tapdance/core";
@@ -177,6 +178,19 @@ export async function runDeviceOperation(ctx: DeviceOperationContext, handle: Le
       const r = await ctx.exec({ tool: "adb", args: ["shell", command], ...(op.stdin !== undefined ? { stdin: op.stdin } : {}) }, op.timeoutMs ?? 120_000);
       const cut = (text: string, max: number) => (text.length > max ? `…${text.slice(-max)}` : text);
       return { ok: r.exitCode === 0, message: `exit ${r.exitCode}`, data: { exitCode: r.exitCode, stdout: cut(r.stdout, 32_000), stderr: cut(r.stderr, 8_000), truncated: r.stdout.length > 32_000 || r.stderr.length > 8_000 } };
+    }
+    case "links": {
+      const minutes = op.minutes ?? 5;
+      if (!Number.isInteger(minutes) || minutes < 1 || minutes > 30) throw new TapdanceError("USAGE", "minutes must be a whole number from 1 to 30");
+      const links = isAndroid
+        ? parseAndroidLinkLog((await run(ctx, { tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "-t", "5000"] }, "read the log")).stdout)
+        : parseIosLinkLog((await run(ctx, ios.linkLog(minutes), "read the log", 120_000)).stdout);
+      const line = (l: OpenedLink) => `${l.time}  ${l.url ?? `${l.scheme}:`}${l.handled === false ? "  (nothing handles it)" : l.handled ? `  (opened${l.handler ? ` in ${l.handler}` : ""})` : ""}${l.mail ? `  → mail to ${l.mail.to}${l.mail.subject ? `, subject "${l.mail.subject}"` : ""}` : ""}`;
+      return {
+        ok: true,
+        message: links.length === 0 ? `No links were opened in the last ${minutes} min` : links.map(line).join("\n"),
+        data: { links, ...(isAndroid ? { note: "Android masks most of a link's data in logcat; the app's own log may have the full URL." } : {}) },
+      };
     }
     case "crash-list":
     case "crash-pull":
