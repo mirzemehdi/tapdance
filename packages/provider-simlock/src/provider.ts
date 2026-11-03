@@ -35,6 +35,8 @@ import {
   type DeviceOperationResult,
   type AppBuildRequest,
   type AppBuildResult,
+  type AppCiInstallRequest,
+  type AppCiInstallResult,
 } from "@tapdance/core";
 import { runDeviceOperation } from "./device-operations.js";
 import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
@@ -411,6 +413,22 @@ export class SimlockProvider implements DeviceProvider {
       });
     }
     return this.http.build(handle.leaseId, { ...request, platform: handle.platform }, onLine);
+  }
+
+  async installFromCi(handle: LeaseHandle, request: AppCiInstallRequest, onLine: (line: string) => void): Promise<AppCiInstallResult> {
+    this.data(handle);
+    if (handle.platform !== "android") {
+      throw new TapdanceError("NOT_SUPPORTED", "Installing from CI works for Android leases only", {
+        hint: "For an iOS simulator, build a simulator .app (xcodebuild -sdk iphonesimulator) and upload it with `tapdance app install <path>`, or build it on the host with `tapdance app build`.",
+      });
+    }
+    if (this.isLocal()) {
+      throw new TapdanceError("NOT_SUPPORTED", "Installs from CI go through a worker guard", {
+        hint: "On this machine, download the artifact yourself (gh run download <run-id> -n <artifact>) and run `tapdance app install <path>`.",
+      });
+    }
+    const body: Record<string, unknown> = { repo: request.repo, artifact: request.artifact, ...(request.run ? { run: request.run } : {}), ...(request.branch ? { branch: request.branch } : {}) };
+    return this.http.ciInstall(handle.leaseId, body, onLine);
   }
 
   /** Runs adb/simctl against the leased device (Simlock's lease exec puts the device in). */

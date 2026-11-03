@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { TapdanceError } from "@tapdance/core";
@@ -56,8 +56,20 @@ export interface BuildResult {
 export type CommandRunner = (
   command: string,
   args: string[],
-  options: { cwd?: string; env: NodeJS.ProcessEnv; timeoutMs: number; onLine: (line: string) => void },
-) => Promise<{ code: number; output: string }>;
+  options: {
+    cwd?: string;
+    env: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    onLine: (line: string) => void;
+    /**
+     * Writes stdout (binary) to this file (mode 600) instead of reading it as lines; only stderr reaches
+     * `onLine` and `output`. Downloads a CI artifact without a shell redirect.
+     */
+    stdoutPath?: string;
+    /** With `stdoutPath`: stops the command once stdout passes this many bytes (`truncated` in the reply). */
+    maxStdoutBytes?: number;
+  },
+) => Promise<{ code: number; output: string; truncated?: boolean }>;
 
 const REF = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 const PROJECT = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}\.(xcodeproj|xcworkspace)$/;
@@ -539,6 +551,7 @@ export const spawnRunner: CommandRunner = (command, args, options) =>
     const child = spawn(command, args, { cwd: options.cwd, env: options.env, stdio: ["ignore", "pipe", "pipe"] });
     let tail = "";
     let partial = "";
+    let truncated = false;
     const take = (chunk: Buffer) => {
       const text = partial + chunk.toString("utf8");
       const lines = text.split("\n");
@@ -546,16 +559,38 @@ export const spawnRunner: CommandRunner = (command, args, options) =>
       for (const line of lines) options.onLine(line.length > 2000 ? `${line.slice(0, 2000)}…` : line);
       tail = (tail + chunk.toString("utf8")).slice(-64_000);
     };
-    child.stdout.on("data", take);
+    let file: ReturnType<typeof createWriteStream> | undefined;
+    if (options.stdoutPath) {
+      // Binary stdout to a file, counted, so a download larger than the cap stops instead of filling the disk.
+      const sink = createWriteStream(options.stdoutPath, { mode: 0o600 });
+      file = sink;
+      sink.on("error", (error) => {
+        child.kill("SIGTERM");
+        tail += `\nwriting ${options.stdoutPath} failed: ${error.message}`;
+      });
+      let written = 0;
+      child.stdout.on("data", (chunk: Buffer) => {
+        written += chunk.length;
+        if (options.maxStdoutBytes !== undefined && written > options.maxStdoutBytes) {
+          if (!truncated) child.kill("SIGTERM");
+          truncated = true;
+          return;
+        }
+        sink.write(chunk);
+      });
+    } else child.stdout.on("data", take);
     child.stderr.on("data", take);
     const timer = setTimeout(() => child.kill("SIGTERM"), options.timeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
+      file?.destroy();
       reject(new TapdanceError("PROVIDER_UNAVAILABLE", `${command} could not start: ${error.message}`, { hint: command === "xcodebuild" ? "Install Xcode on the host." : undefined }));
     });
     child.on("close", (code) => {
       clearTimeout(timer);
       if (partial) options.onLine(partial);
-      resolvePromise({ code: code ?? 1, output: tail });
+      const done = () => resolvePromise({ code: code ?? 1, output: tail, ...(truncated ? { truncated: true } : {}) });
+      if (file) file.end(done);
+      else done();
     });
   });

@@ -7,6 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
+import { checkCiRequest, fetchCiApk, type CiInstallRequest } from "@tapdance/provider-simlock";
 import { checkBuildRequest, checkTimedTaps, clearConsole, consolePaths, crashReportsDir, listCrashReports, playTouches, toFramebuffer, viewportFromConfig, type Orientation, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
@@ -31,6 +32,8 @@ export interface GuardOptions {
   crashReportsDir?: string;
   /** Runs build commands (tests pass a fake; the service uses spawn). */
   buildRunner?: CommandRunner;
+  /** Runs gh for installs from CI (tests pass a fake; the service uses spawn). */
+  ciRunner?: CommandRunner;
   upstream: SimlockConnection;
   policy: GuardPolicy;
   env?: NodeJS.ProcessEnv;
@@ -345,6 +348,8 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   };
 
   let building = false;
+  /** An install from CI is downloading or installing (one at a time on a host). */
+  let fetching = false;
   /** Leases Simlock reports, made through this guard or locally; undefined when Simlock does not answer. */
   const simlockLeases = async (): Promise<number | undefined> => {
     const r = await doFetch(`${upstream.baseUrl}/v1/status`, { headers: upstreamHeaders }).catch(() => undefined);
@@ -362,7 +367,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     checking = true;
     try {
       const leases = await simlockLeases();
-      const busy = (leases ?? 0) > 0 || allocating.size > 0 || building || inFlight > 0;
+      const busy = (leases ?? 0) > 0 || allocating.size > 0 || building || fetching || inFlight > 0;
       if (busy) touch();
       const decision = hostStopDecision(stopSettings, { now: now(), lastActivity, busy, uptimeSeconds: await uptime() });
       // For `tapdance host status`: how long the host has been idle.
@@ -426,6 +431,33 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       line({ error: { code: e.code, message: e.message, ...(e.hint ? { hint: e.hint } : {}), ...(e.details?.["tail"] ? { tail: e.details["tail"] } : {}) } });
     } finally {
       building = false;
+      res.end();
+    }
+  };
+
+  /**
+   * Fetches an APK from the user's CI with this host's gh and installs it on the lease, streaming
+   * progress as NDJSON lines like the build route. The agent names a repository and an artifact; the
+   * host picks the run, the URL and every path.
+   */
+  const runCiInstallRoute = async (res: ServerResponse, leaseId: string, request: CiInstallRequest, decide: (d: "allow" | "deny", e?: { reason?: string; command?: string; leaseId?: string }) => Promise<void>) => {
+    fetching = true;
+    res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
+    const line = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
+    try {
+      const apk = await fetchCiApk(request, hostPolicy.artifacts, join(guardDir(env), "artifacts"), (l) => line({ log: redactSecrets(l) }), options.ciRunner);
+      const what = `${apk.repo} run ${apk.runId} sha ${apk.sha} branch ${apk.branch} artifact ${apk.artifact} apk sha256 ${apk.apkSha256.slice(0, 12)}${apk.cached ? " (cached)" : ""}`;
+      line({ log: `Installing ${apk.artifact} on the lease` });
+      const install = await execUpstream(leaseId, "adb", ["install", "-r", "-t", apk.apk]);
+      if (install.exitCode !== 0) throw new TapdanceError("DEVICE_ERROR", `Installing the APK failed: ${(install.stderr || install.stdout).trim().split("\n").slice(-3).join(" ")}`);
+      await decide("allow", { command: `ci-install installed ${what}`, leaseId });
+      line({ result: { repo: apk.repo, runId: apk.runId, sha: apk.sha, branch: apk.branch, artifact: apk.artifact, apkSha256: apk.apkSha256.slice(0, 12), cached: apk.cached, installed: true } });
+    } catch (error) {
+      const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", (error as Error).message);
+      await decide("deny", { reason: `ci-install failed: ${e.message}`, leaseId });
+      line({ error: { code: e.code, message: e.message, ...(e.hint ? { hint: e.hint } : {}) } });
+    } finally {
+      fetching = false;
       res.end();
     }
   };
@@ -615,6 +647,37 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             await decide("allow", { command: `build ${request.platform} ${request.repo}@${request.ref}`, leaseId: r.leaseId });
             await runBuildRoute(res, r.leaseId, request, decide);
+            return;
+          }
+          if (r.action === "ci-install") {
+            // The owner's switch (not a token scope) and the token's install scope must both allow it.
+            if (!hostPolicy.allow.artifacts) {
+              await decide("deny", { reason: "artifacts off", leaseId: r.leaseId, command: "ci-install" });
+              return send(res, 403, "FORBIDDEN", policyOff("artifacts", "Installs from CI"), `The host owner turns them on: tapdance host artifacts enable --repo <owner/repo>`);
+            }
+            if (!policy.allow.install) {
+              await decide("deny", { reason: "install disabled by policy", leaseId: r.leaseId, command: "ci-install" });
+              return send(res, 403, "FORBIDDEN", "App installs are disabled by the worker's local policy");
+            }
+            if (fetching) return send(res, 429, "NO_CAPACITY", "Another install from CI is running on this host; try again when it finishes");
+            const raw = await readBody(req, 16 * 1024);
+            // The platform is the lease's, not whatever the client says.
+            const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${r.leaseId}`, { headers: upstreamHeaders });
+            const platform = detail.ok ? ((await detail.json()) as { lease?: { platform?: string } }).lease?.platform : undefined;
+            if (platform !== "android") {
+              await decide("deny", { reason: "ci-install is for Android leases", leaseId: r.leaseId, command: "ci-install" });
+              return send(res, 400, "NOT_SUPPORTED", "Installing from CI works for Android leases only", "For an iOS simulator, upload a simulator .app with `tapdance app install <path>`, or build it on the host with `tapdance app build`.");
+            }
+            let request: CiInstallRequest;
+            try {
+              request = checkCiRequest(raw ? JSON.parse(raw.toString("utf8")) : {}, hostPolicy.artifacts);
+            } catch (error) {
+              const e = error instanceof TapdanceError ? error : new TapdanceError("USAGE", "The request is not valid JSON");
+              await decide("deny", { reason: e.message, leaseId: r.leaseId, command: "ci-install" });
+              return send(res, e.code === "FORBIDDEN" ? 403 : 400, e.code, e.message, e.hint);
+            }
+            await decide("allow", { command: `ci-install ${request.repo} artifact ${request.artifact}${request.run ? ` run ${request.run}` : ""}${request.branch ? ` branch ${request.branch}` : ""}`, leaseId: r.leaseId });
+            await runCiInstallRoute(res, r.leaseId, request, decide);
             return;
           }
           if (r.action === "touches") {

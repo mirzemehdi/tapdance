@@ -154,6 +154,40 @@ describe("MCP agent flow", () => {
     expect((await call("release_device")).json).toMatchObject({ released: true });
   });
 
+  it("install_app from_ci: exactly one of path and from_ci, strict inside, passed to the provider (FakeProvider, mocked)", async () => {
+    const input = TOOLS.find((t) => t.name === "install_app")!.input;
+    expect(input.safeParse({ from_ci: { repo: "acme/app", artifact: "app-debug", run: "42" } }).success).toBe(true);
+    for (const bad of [
+      { from_ci: { repo: "acme/app", artifact: "app-debug", url: "https://evil.example/x.apk" } },
+      { from_ci: { repo: "acme/app", artifact: "app-debug", path: "/etc/passwd" } },
+      { from_ci: { repo: "acme/app", artifact: "--paginate" } },
+      { from_ci: { repo: "acme/app", artifact: "a", run: "42; id" } },
+      { from_ci: { repo: "acme/app" } },
+    ]) {
+      expect(input.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+    const seen: unknown[] = [];
+    class CiProvider extends FakeProvider {
+      async installFromCi(_handle: unknown, request: unknown) {
+        seen.push(request);
+        return { repo: "acme/app", runId: "42", sha: "d".repeat(40), branch: "main", artifact: "app-debug", apkSha256: "0123456789ab", cached: false, installed: true };
+      }
+    }
+    const { call } = await connect(new CiProvider());
+    await call("lease_device", { platform: "android" });
+    expect((await call("install_app", {})).json).toMatchObject({ error: { code: "USAGE" } });
+    expect((await call("install_app", { path: "./app.apk", from_ci: { repo: "acme/app", artifact: "app-debug" } })).json).toMatchObject({ error: { code: "USAGE" } });
+    expect((await call("install_app", { from_ci: { repo: "acme/app", artifact: "app-debug", run: "42", branch: "main" } })).json).toMatchObject({ error: { code: "USAGE" } });
+    expect(seen).toHaveLength(0);
+    const r = await call("install_app", { from_ci: { repo: "acme/app", artifact: "app-debug", branch: "main" } });
+    expect(r.json).toMatchObject({ installed: { runId: "42", installed: true } });
+    expect(seen).toEqual([{ repo: "acme/app", artifact: "app-debug", branch: "main" }]);
+    // The plain FakeProvider cannot install from CI: refused, not faked.
+    const plain = await connect();
+    await plain.call("lease_device", { platform: "android" });
+    expect((await plain.call("install_app", { from_ci: { repo: "acme/app", artifact: "app-debug" } })).json).toMatchObject({ error: { code: "NOT_SUPPORTED" } });
+  });
+
   it("confines install paths to the project", async () => {
     const { call } = await connect();
     await call("lease_device", { platform: "android" });

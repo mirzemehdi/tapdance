@@ -34,7 +34,7 @@ import {
   type AlertAction,
   type AlertResult,
   type DeviceOperation,
-  type DeviceOperationResult, type TimedTap, type AppBuildRequest, type AppBuildResult } from "@tapdance/core";
+  type DeviceOperationResult, type TimedTap, type AppBuildRequest, type AppBuildResult, type AppCiInstallRequest, type AppCiInstallResult } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
 import { PROFILE_PROVIDER, ProfileProvider, isNotableBuildLine } from "@tapdance/provider-simlock";
 import { auditScreen, type AuditReport } from "./audit.js";
@@ -590,6 +590,22 @@ export class Tapdance {
       const result = await provider.device(handle, { ...operation, outPath });
       const artifact = await this.artifacts.record({ kind: "other", path: result.path ?? outPath, sessionId: this.session.id, leaseId: handle.leaseId, note: `pulled ${name}` });
       return { ...result, artifact };
+    });
+  }
+
+  /**
+   * Has the machine that runs the leased Android device fetch an APK the user's CI built (a GitHub
+   * Actions artifact) with its own read-only GitHub credentials, and install it there. The agent never
+   * holds a GitHub credential and the APK never crosses the agent's link. iOS leases are refused.
+   */
+  async installFromCi(request: AppCiInstallRequest): Promise<AppCiInstallResult> {
+    await this.guardHuman();
+    if (!request.repo || !request.artifact) throw new TapdanceError("USAGE", "An install from CI needs repo (owner/repo) and artifact (its name)");
+    if (request.run !== undefined && request.branch !== undefined) throw new TapdanceError("USAGE", "Pass run or branch, not both");
+    if (request.run !== undefined && !/^[1-9][0-9]{0,19}$/.test(request.run)) throw new TapdanceError("USAGE", "run must be a workflow run id (digits only)");
+    return this.onDevice(async (handle, provider) => {
+      if (!provider.installFromCi) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} cannot install apps from CI`);
+      return provider.installFromCi(handle, request, (line) => this.progress(line));
     });
   }
 

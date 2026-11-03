@@ -20,6 +20,8 @@ import type {
   DeviceOperationResult,
   AppBuildRequest,
   AppBuildResult,
+  AppCiInstallRequest,
+  AppCiInstallResult,
 } from "./types.js";
 
 export type CheckStatus = "pass" | "warn" | "fail" | "skip";
@@ -79,6 +81,8 @@ export interface DeviceProvider {
   inspect(handle: LeaseHandle, options?: { interactiveOnly?: boolean; system?: boolean; appId?: string }): Promise<ScreenInspection>;
   /** Builds an app on the machine that runs the device (a worker guard's allow-listed repositories) and installs it on the lease. */
   buildApp?(handle: LeaseHandle, request: AppBuildRequest, onLine: (line: string) => void): Promise<AppBuildResult>;
+  /** Has the device's host fetch an APK from the user's CI (a GitHub Actions artifact) with its own credentials and install it on the lease. Android only. */
+  installFromCi?(handle: LeaseHandle, request: AppCiInstallRequest, onLine: (line: string) => void): Promise<AppCiInstallResult>;
   /** `inject` taps through Android's input service (`adb shell input tap`) instead of the automation helper. */
   tap(handle: LeaseHandle, target: ElementTarget, options?: { settle?: boolean; inject?: boolean }): Promise<ActionResult>;
   swipe(

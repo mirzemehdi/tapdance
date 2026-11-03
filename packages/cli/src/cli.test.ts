@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -150,6 +150,47 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["host", "builds", "key", "--repo", "file:///etc"], env).code).toBe(2);
     expect(tapdance(["host", "builds", "files", "list", "--repo", "not a url"], env).code).toBe(2);
   });
+
+  it("app install: a path or --from-ci with --artifact, never both; refused with exit 2 before any lease", () => {
+    for (const args of [
+      ["app", "install"],
+      ["app", "install", "./app.apk", "--from-ci", "acme/app", "--artifact", "app-debug"],
+      ["app", "install", "--from-ci", "acme/app"],
+      ["app", "install", "--from-ci", "acme/app", "--artifact", "app-debug", "--run", "42", "--branch", "main"],
+      ["app", "install", "--from-ci", "acme/app", "--artifact", "app-debug", "--run", "42;id"],
+      ["app", "install", "--from-ci", "acme/app", "--artifact", "app-debug", "--app-id", "com.x"],
+      ["app", "install", "./app.apk", "--artifact", "app-debug"],
+      ["app", "install", "./app.apk", "--run", "42"],
+    ]) {
+      const r = tapdance(["--json", ...args]);
+      expect(r.code, args.join(" ")).toBe(2);
+      expect(JSON.parse(r.stdout), args.join(" ")).toMatchObject({ error: { code: "USAGE" } });
+    }
+    // A valid request gets as far as needing a device.
+    expect(tapdance(["--json", "app", "install", "--from-ci", "acme/app", "--artifact", "app-debug", "--branch", "main"]).code).toBe(3);
+  }, 60_000);
+
+  it("host artifacts: enable validates repositories, branches and the size limit; status reads the owner's policy", () => {
+    // enable and disable restart the guard service on success, so only their refusals run here; PATH
+    // without gh keeps `status` from running the real gh.
+    const home = mkdtempSync(join(tmpdir(), "td-cli-"));
+    const env = { TAPDANCE_HOME: home, PATH: "/nonexistent" };
+    for (const bad of [
+      ["--repo", "https://gitlab.com/acme/app"],
+      ["--repo", "acme/app;id"],
+      ["--repo", "acme/app/extra"],
+      ["--repo", "acme/app", "--branch", "../main"],
+      ["--repo", "acme/app", "--max-mb", "0"],
+    ]) {
+      expect(tapdance(["host", "artifacts", "enable", ...bad], env).code, bad.join(" ")).toBe(2);
+    }
+    const dir = join(home, "worker");
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    writeFileSync(join(dir, "policy.json"), JSON.stringify({ allow: { artifacts: true }, artifacts: { repos: ["acme/app"], branches: ["main"], maxMB: 300 } }), { mode: 0o600 });
+    const status = tapdance(["--json", "host", "artifacts", "status"], env);
+    expect(status.code, status.stderr).toBe(0);
+    expect(JSON.parse(status.stdout)).toMatchObject({ enabled: true, repos: ["acme/app"], branches: ["main"], maxMB: 300, cacheBytes: 0, ghReady: false });
+  }, 60_000);
 
   it("hints never name a bare simlock command or a global npm install", () => {
     const bad: string[] = [];
