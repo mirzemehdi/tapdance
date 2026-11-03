@@ -567,6 +567,44 @@ describe("worker guard: hardening", () => {
     expect(install?.body).toContain("App.app");
   });
 
+  it("16e. host build files reach the build but never the client: no route reads or writes them, the log names only path and hash (fake git and Xcode, mocked)", async () => {
+    const { mkdir: mk } = await import("node:fs/promises");
+    const { addBuildFile } = await import("@tapdance/provider-simlock");
+    let seenInCheckout = "";
+    const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args, o) => {
+      if (command === "git" && args[0] === "clone") await mk(join(args.at(-1)!, "App.xcodeproj"), { recursive: true });
+      if (command === "git" && args.includes("rev-parse")) return { code: 0, output: `${"b".repeat(40)}\n` };
+      if (command === "xcodebuild") {
+        seenInCheckout = await readFile(join(o.cwd!, "GoogleService-Info.plist"), "utf8");
+        await mk(join(args[args.indexOf("-derivedDataPath") + 1]!, "Build", "Products", "Debug-iphonesimulator", "App.app"), { recursive: true });
+      }
+      return { code: 0, output: "" };
+    };
+    const t = await setup(
+      { allow: { ...GuardPolicySchema.parse({}).allow, builds: true }, builds: { repos: ["https://github.com/acme/app"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 } },
+      { buildRunner: runner },
+    );
+    await addBuildFile(join(t.home, "worker", "builds"), "https://github.com/acme/app", "GoogleService-Info.plist", Buffer.from("API_KEY=PLIST_SECRET_VALUE"));
+    await t.allocate(t.alice.secret, A);
+    // A client cannot list, read or add build files: there is no such route, and the build request takes no files.
+    for (const [method, path] of [
+      ["GET", "/v1/builds/files"],
+      ["POST", "/v1/builds/files"],
+      ["GET", `/v1/leases/${A}/build/files`],
+      ["POST", `/v1/leases/${A}/build/files`],
+    ] as const) {
+      const r = await t.call(t.alice.secret, method, path, method === "POST" ? { path: "x", content: "y" } : undefined);
+      expect(r.status, `${method} ${path}`).toBeGreaterThanOrEqual(400);
+      expect(await r.text()).not.toContain("PLIST_SECRET_VALUE");
+    }
+    const r = await t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, { repo: "https://github.com/acme/app", ref: "main", files: { ".env": "EVIL=1" } });
+    const text = await r.text();
+    expect(seenInCheckout).toBe("API_KEY=PLIST_SECRET_VALUE");
+    expect(text).toContain("using host build file GoogleService-Info.plist (sha256 ");
+    expect(text).not.toContain("PLIST_SECRET_VALUE");
+    expect(text).not.toContain("EVIL");
+  });
+
   it("16c. a scoped token gets only its areas, never more than the policy (#46)", async () => {
     const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 512, tokenDays: 7 } });
     const viewer = await t.tokens.issue("ci-readonly", 7, ["interaction", "inspection", "screenshots"]);

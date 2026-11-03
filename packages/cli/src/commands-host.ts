@@ -1,10 +1,22 @@
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import type { Command } from "commander";
-import { describeBadHealth } from "@tapdance/provider-simlock";
+import {
+  BUILD_FILE_MAX_BYTES,
+  addBuildFile,
+  describeBadHealth,
+  listAllBuildFiles,
+  normalizeRepo,
+  readBuildFiles,
+  removeBuildFile,
+  repoIdentity,
+  repoKeyPath,
+  repoSlug,
+  type BuildFileEntry,
+} from "@tapdance/provider-simlock";
 import {
   Tapdance,
   TapdanceError,
@@ -527,7 +539,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .command("enable")
     .description("Allow builds from these repositories (git mode): the agent sends a repo and ref, this machine fetches and builds it")
     .requiredOption("--repo <url>", "repository allowed to be built (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
-    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`), deploy-key (`host builds key`), or none", "none")
+    .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`, e.g. a fine-grained read-only token), deploy-key (`host builds key`), or none; a repository's own key from `host builds key --repo` is used whenever it exists", "none")
     .option("--protected-ref <branch>", "only build commits already on this branch of the remote, e.g. main (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
     .option("--timeout-minutes <n>", "longest build", "45")
     .option("--allow-admin-account", "accept the risk of building on an administrator account")
@@ -554,7 +566,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         };
         const policy = GuardPolicySchema.parse(raw);
         await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
-        const notes = await buildPrerequisites(o.gitAuth);
+        const notes = await buildPrerequisites(o.gitAuth, policy.builds.repos);
         const restarted = await restartGuardIfIdle(out);
         out.result({ builds: policy.builds, restarted, notes }, () =>
           [
@@ -586,18 +598,31 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("status")
-    .description("Show whether builds are on, the allowed repositories and the build cache size")
+    .description("Show whether builds are on, the allowed repositories (with their deploy key and build files) and the build cache")
     .action(async () => {
       const out = output(globals());
       try {
         const { policy } = await loadPolicy();
         const cache = join(guardDir(), "builds");
-        out.result({ enabled: policy.allow.builds, ...policy.builds, cache }, () =>
+        const legacyKey = existsSync(join(cache, "deploy_key"));
+        const repositories = await Promise.all(
+          policy.builds.repos.map(async (repo) => {
+            const own = existsSync(repoKeyPath(cache, repo));
+            const deployKey = own ? "own" : legacyKey && policy.builds.gitAuth === "deploy-key" ? "shared" : "none";
+            return { repo, deployKey, buildFiles: (await readBuildFiles(cache, repo)).length };
+          }),
+        );
+        out.result({ enabled: policy.allow.builds, ...policy.builds, repositories, cache }, () =>
           [
             `Builds: ${policy.allow.builds ? green("on") : "off"}`,
-            `Repositories: ${policy.builds.repos.join(", ") || "none"}`,
             `Git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; protected refs: ${policy.builds.protectedRefs.join(", ")}` : ""}; timeout ${policy.builds.timeoutMinutes} min`,
-            `Cache: ${cache} (delete it to free disk; the next build clones again)`,
+            repositories.length === 0
+              ? "Repositories: none"
+              : table([
+                  ["REPOSITORY", "DEPLOY KEY", "BUILD FILES"],
+                  ...repositories.map((r) => [r.repo, r.deployKey === "own" ? "its own" : r.deployKey === "shared" ? "the shared deploy_key" : "-", String(r.buildFiles)]),
+                ]),
+            `Cache: ${cache} (delete a repository's folder there to free disk; the next build clones again. keys/, files/ and deploy_key hold your deploy keys and build files)`,
           ].join("\n"),
         );
       } catch (error) {
@@ -606,12 +631,17 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("key")
-    .description("Create a read-only deploy key for --git-auth deploy-key and print its public half to add to the repository")
-    .action(async () => {
+    .description("Create a read-only deploy key and print its public half to add to the repository; --repo makes one for that repository only (GitHub accepts a deploy key on one repository)")
+    .option("--repo <url>", "the repository this key is for; its builds use it whatever --git-auth says")
+    .action(async (o: { repo?: string }) => {
       const out = output(globals());
       try {
         const dir = join(guardDir(), "builds");
         await mkdir(dir, { recursive: true, mode: 0o700 });
+        if (o.repo !== undefined) {
+          await repoDeployKey(out, dir, o.repo);
+          return;
+        }
         const key = join(dir, "deploy_key");
         if (!existsSync(key)) {
           const r = await runCommand("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", `tapdance-builds@${hostname()}`, "-f", key]);
@@ -625,8 +655,72 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             pub,
             "",
             `The private key stays here: ${key}. Use ssh URLs (git@github.com:owner/repo.git) with --git-auth deploy-key.`,
+            "GitHub accepts one deploy key on one repository only: for a second repository, use `tapdance host builds key --repo <url>`.",
           ].join("\n"),
         );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  const files = builds
+    .command("files")
+    .description("Files this machine copies into the checkout before each build of a repository: config kept out of git (google-services.json, local.properties, .env). Only you add or read them; agents cannot");
+  files
+    .command("add <path-in-repo>")
+    .description(`Add or replace a build file: its content comes from --from or stdin (at most ${BUILD_FILE_MAX_BYTES / 1024 / 1024} MB, 50 files per repository)`)
+    .requiredOption("--repo <url>", "the repository it belongs to")
+    .option("--from <file>", "read the content from this local file instead of stdin")
+    .action(async (pathInRepo: string, o: { repo: string; from?: string }) => {
+      const out = output(globals());
+      try {
+        const builds = join(guardDir(), "builds");
+        repoIdentity(o.repo);
+        const content = await readBuildFileContent(o.from);
+        const entry = await addBuildFile(builds, o.repo, pathInRepo, content);
+        const { policy } = await loadPolicy();
+        const allowed = policy.builds.repos.some((r) => repoIdentity(r) === repoIdentity(o.repo));
+        out.result({ repo: normalizeRepo(o.repo), path: entry.path, size: entry.size, sha256: entry.sha256.slice(0, 8) }, () =>
+          [
+            `Added ${entry.path} for ${normalizeRepo(o.repo)} (${entry.size} bytes, sha256 ${entry.sha256.slice(0, 8)}).`,
+            "Each build of this repository copies it into the checkout before building and removes it after; changing it builds again instead of reusing an earlier build. No guard restart needed.",
+            ...(allowed ? [] : [yellow(`${o.repo} is not on the build allow-list yet: tapdance host builds enable --repo <url>.`)]),
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  files
+    .command("list")
+    .description("List build files: path, size and the start of the sha256, never their content")
+    .option("--repo <url>", "only this repository")
+    .action(async (o: { repo?: string }) => {
+      const out = output(globals());
+      try {
+        const builds = join(guardDir(), "builds");
+        if (o.repo !== undefined) repoIdentity(o.repo);
+        const groups: Array<{ repo: string; files: BuildFileEntry[] }> = o.repo !== undefined ? [{ repo: normalizeRepo(o.repo), files: await readBuildFiles(builds, o.repo) }] : await listAllBuildFiles(builds);
+        const rows = groups.flatMap((g) => g.files.map((f) => ({ repo: g.repo, path: f.path, size: f.size, sha256: f.sha256.slice(0, 8), addedAt: f.addedAt })));
+        out.result({ files: rows }, () =>
+          rows.length === 0
+            ? `No build files${o.repo ? ` for ${normalizeRepo(o.repo)}` : ""}. Add one with: tapdance host builds files add --repo <url> <path-in-repo> --from <file>`
+            : table([["REPOSITORY", "PATH", "BYTES", "SHA256"], ...rows.map((r) => [r.repo, r.path, String(r.size), r.sha256])]),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+  files
+    .command("remove <path-in-repo>")
+    .description("Remove a build file; the next build runs without it")
+    .requiredOption("--repo <url>", "the repository it belongs to")
+    .action(async (pathInRepo: string, o: { repo: string }) => {
+      const out = output(globals());
+      try {
+        repoIdentity(o.repo);
+        const entry = await removeBuildFile(join(guardDir(), "builds"), o.repo, pathInRepo);
+        out.result({ repo: normalizeRepo(o.repo), path: entry.path, removed: true }, () => `Removed ${entry.path} for ${normalizeRepo(o.repo)}.`);
       } catch (error) {
         process.exitCode = out.error(error);
       }
@@ -842,14 +936,70 @@ async function probeEndpoint(endpoint: string, out: ReturnType<typeof output>): 
   });
 }
 
+/**
+ * `host builds key --repo <url>`: a deploy key for one repository (GitHub refuses a deploy key that
+ * another repository already has), under builds/keys/<slug>, private half 600 in a 700 folder.
+ */
+async function repoDeployKey(out: Output, buildsDir: string, repo: string): Promise<void> {
+  const identity = repoIdentity(repo);
+  const keys = join(buildsDir, "keys");
+  await mkdir(keys, { recursive: true, mode: 0o700 });
+  await chmod(keys, 0o700);
+  const key = repoKeyPath(buildsDir, repo);
+  const created = !existsSync(key);
+  if (created) {
+    const r = await runCommand("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", `tapdance-builds@${hostname()} ${identity}`, "-f", key]);
+    if (!r.ok) throw commandFailed(["ssh-keygen"], r.out, "ssh-keygen could not create the deploy key");
+  }
+  await chmod(key, 0o600);
+  const pub = (await readFile(`${key}.pub`, "utf8")).trim();
+  const [host, ...path] = identity.split("/");
+  const github = host === "github.com" ? `https://github.com/${path.join("/")}/settings/keys` : undefined;
+  const sshUrl = `git@${host}:${path.join("/")}.git`;
+  out.result({ repo: normalizeRepo(repo), slug: repoSlug(repo), publicKey: pub, privateKey: key, created, ...(github ? { addAt: github } : {}) }, () =>
+    [
+      `${created ? "Created" : "Already have"} a deploy key for ${identity}. Add this public key to that repository only, read-only (${github ? `GitHub: ${github}, i.e. the repository's Settings › Deploy keys › Add deploy key, leave "Allow write access" off` : "your git server's deploy keys page for the repository, read-only"}):`,
+      "",
+      pub,
+      "",
+      `The private key stays here: ${key}. Builds of this repository use it whatever --git-auth says; allow and build it with the ssh URL (${sshUrl}).`,
+    ].join("\n"),
+  );
+}
+
+/** A build file's content: from `--from <file>`, else stdin; refused above the size cap. */
+async function readBuildFileContent(from: string | undefined): Promise<Buffer> {
+  const tooBig = () => new TapdanceError("USAGE", `The file is larger than 1 MB (${BUILD_FILE_MAX_BYTES} bytes), the most a build file may be`);
+  if (from !== undefined) {
+    const info = await stat(from).catch(() => undefined);
+    if (!info?.isFile()) throw new TapdanceError("USAGE", `${from} is not a file`);
+    if (info.size > BUILD_FILE_MAX_BYTES) throw tooBig();
+    return readFile(from);
+  }
+  if (process.stdin.isTTY) throw new TapdanceError("USAGE", "No content: pass --from <file>, or pipe the file in", { hint: "e.g. tapdance host builds files add --repo <url> app/google-services.json --from ./google-services.json" });
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string);
+    size += b.length;
+    if (size > BUILD_FILE_MAX_BYTES) throw tooBig();
+    chunks.push(b);
+  }
+  if (size === 0) throw new TapdanceError("USAGE", "Nothing came in on stdin", { hint: "Pass --from <file>, or pipe the file in: tapdance host builds files add --repo <url> <path-in-repo> < ./file" });
+  return Buffer.concat(chunks);
+}
+
 /** What a build on this machine still needs: git, Xcode for iOS, a JDK for Gradle (KMP), gh for gh auth. */
-async function buildPrerequisites(gitAuth: string): Promise<string[]> {
+async function buildPrerequisites(gitAuth: string, repos: string[] = []): Promise<string[]> {
   const notes: string[] = [];
   if (!(await runCommand("git", ["--version"])).ok) notes.push("git is not installed: builds cannot fetch anything.");
   if (osPlatform() === "darwin" && !(await runCommand("xcodebuild", ["-version"])).ok) notes.push("xcodebuild is not available: iOS builds need Xcode.");
   if (!(await runCommand("java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
   if (gitAuth === "gh" && !(await runCommand("gh", ["auth", "status"])).ok) notes.push("`gh auth status` fails: run `gh auth login` on this machine.");
-  if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) notes.push("No deploy key yet: run `tapdance host builds key` and add it to the repository.");
+  if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) {
+    const keyless = repos.filter((r) => !existsSync(repoKeyPath(join(guardDir(), "builds"), r)));
+    if (keyless.length > 0) notes.push(`No deploy key yet for ${keyless.join(", ")}: run \`tapdance host builds key --repo <url>\` for each and add it to that repository.`);
+  }
   return notes;
 }
 
