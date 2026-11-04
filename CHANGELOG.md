@@ -239,6 +239,12 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 
 ### Phase 2b cloud field test, round 2: builds and installs (issues #85–#90)
 
+- `host up` warns, and `host status` shows a `gh` row, when builds with `--git-auth gh` or installs from
+  CI are on and `gh auth status` fails (#77). `host-setup.sh` picks the command-line tools archive for the
+  machine's CPU (an Apple silicon Mac got the x86_64 one); its `~/.androidrc` metrics opt-out is verified
+  with command-line tools 23.0.
+- Simlock 0.5.0, the latest release (was 0.4.0).
+
 - Changing the host policy (`host builds`, `host artifacts`) restarts the guard only when the installed guard
   serves the same `TAPDANCE_HOME`; a run with a scratch home no longer restarts the machine's real guard.
 

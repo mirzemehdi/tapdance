@@ -28,3 +28,15 @@ describe("host builds: allow-list removal and the deploy key column (#87)", () =
     expect(describeDeployKeyState("unused-https")).toBe("not used (https)");
   });
 });
+
+describe("gh on the host (#77)", () => {
+  it("is needed for gh-auth builds and for installs from CI, and not otherwise", async () => {
+    const { ghNeededFor } = await import("./builds.js");
+    expect(ghNeededFor({})).toBeUndefined();
+    expect(ghNeededFor({ allow: { builds: true }, builds: { gitAuth: "deploy-key", repos: ["git@github.com:a/b.git"] } })).toBeUndefined();
+    expect(ghNeededFor({ allow: { builds: true }, builds: { gitAuth: "gh", repos: ["https://github.com/a/b"] } })).toBe("builds with --git-auth gh");
+    expect(ghNeededFor({ allow: { builds: false, artifacts: true }, builds: { gitAuth: "gh", repos: ["x"] }, artifacts: { repos: ["a/b"] } })).toBe("installs from CI");
+    expect(ghNeededFor({ allow: { builds: true, artifacts: true }, builds: { gitAuth: "gh", repos: ["x"] }, artifacts: { repos: ["a/b"] } })).toBe("builds with --git-auth gh and installs from CI");
+    expect(ghNeededFor({ allow: { artifacts: true }, artifacts: { repos: [] } })).toBeUndefined();
+  });
+});

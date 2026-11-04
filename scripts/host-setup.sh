@@ -285,9 +285,11 @@ install_cmdline_tools() {
         const os = /<host-os>(\w+)<\/host-os>/.exec(a[1])?.[1];
         const url = /<url>([^<]+)<\/url>/.exec(a[1])?.[1];
         const sha = /<checksum[^>]*>([0-9a-f]{40})<\/checksum>/.exec(a[1])?.[1];
-        if (os === process.argv[2] && url && sha) { console.log(url + " " + sha); process.exit(0); }
+        const arch = /<host-arch>(\w+)<\/host-arch>/.exec(a[1])?.[1];
+        // A package can list one archive per CPU (macOS: x64 and aarch64): take the one for this CPU.
+        if (os === process.argv[2] && url && sha && (!arch || arch === process.argv[3])) { console.log(url + " " + sha); process.exit(0); }
       }
-    }' "$TMP/repo.xml" "$host")"
+    }' "$TMP/repo.xml" "$host" "$([[ $ARCH == arm64 ]] && echo aarch64 || echo x64)")"
   [[ -n "$pick" ]] || die "could not find Android command-line tools for $host in Google's repository"
   local url="${pick%% *}" sum="${pick##* }"
   say "downloading Android command-line tools ($url)"

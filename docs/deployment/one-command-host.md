@@ -299,7 +299,8 @@ The script (`set -euo pipefail`):
    `~/.profile`, so commands run over SSH (`ssh host 'tapdance host status'`) find the tools.
    The newest command-line tools are Google's Android CLI, which collects usage metrics by default: the
    script adds `--no-metrics` to `~/.androidrc` (Google's documented setting; the `sdkmanager` wrapper
-   itself rejects that flag) and takes it out again if `sdkmanager` stops working with it.
+   itself rejects that flag, but it reads the file: with command-line tools 23.0 nothing is recorded with
+   the line) and takes it out again if `sdkmanager` stops working with it.
    `--with-gh` also installs the GitHub CLI (`gh`, needed for installs from CI and builds with
    `--git-auth gh`; without the flag it only notes that `gh` is missing), and
    `--sdk-packages "cmake;3.31.6"` installs extra SDK packages an app's build on this host needs.

@@ -42,7 +42,7 @@ import {
   type Platform,
 } from "@tapdance/sdk";
 import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
-import { deployKeyState, describeDeployKeyState, removeFromAllowList } from "./host/builds.js";
+import { GH_FIX, deployKeyState, describeDeployKeyState, ghNeededFor, removeFromAllowList } from "./host/builds.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
 import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, workerRunning, workerServiceInstalled } from "./commands-worker.js";
@@ -459,6 +459,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         });
 
         await step(out, "summary", async () => undefined);
+        const ghFor = ghNeededFor(policy);
+        if (ghFor && !(await runCommand("gh", ["auth", "status"])).ok) out.warn(`${ghFor} need gh logged in on this machine, and \`gh auth status\` fails: ${GH_FIX}.`);
         const costGuard = describeHostStop(hostStop, platform);
         const cloudCost = cloudCostNote(cloudVm);
         const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label, costGuard, ...(cloudCost ? { cloudCost } : {}) };
@@ -1077,6 +1079,11 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             detail: `${state.loggedIn ? `logged in as ${state.dnsName ?? "?"}` : state.backendState}; ${served ? `serving :${port} over ${mode}` : `not serving :${port}`}; tailnet HTTPS certificates ${state.https ? "on" : "off"}`,
           });
         } else rows.push({ step: "tailscale", ok: false, detail: "not installed" });
+        const ghFor = ghNeededFor(policy);
+        if (ghFor) {
+          const gh = await runCommand("gh", ["auth", "status"]);
+          rows.push({ step: "gh", ok: gh.ok, detail: gh.ok ? `logged in (needed for ${ghFor})` : `needed for ${ghFor}, but \`gh auth status\` fails: ${GH_FIX}` });
+        }
         out.result({ ready: rows.every((r) => r.ok), endpoint, steps: rows }, () =>
           [table([["STEP", "STATE", "DETAIL"], ...rows.map((r) => [r.step, r.ok ? green("ok") : yellow("not ready"), r.detail])]), "", `endpoint: ${endpoint}`].join("\n"),
         );
