@@ -223,7 +223,10 @@ Estimates from Google's published `europe-west1` rates, not a billing export.
 
 | Run | VM time | Cost |
 | --- | --- | --- |
-| 2c (2026-11-04) | from 20:03 | see teardown |
+| 2c (2026-11-04) | 20:03–23:33 UTC, 3.5 h running (two short stop/starts at 21:35 and 21:38) | about USD 0.79: VM 3.5 h × 0.21 = 0.73, 64 GB disk 0.03, external IP 0.02, plus a little egress |
+
+Teardown: `terraform destroy` removed all 18 resources, `gcp-leftovers.sh` exited 0, and the project was
+deleted (`DELETE_REQUESTED`). The gcloud credentials stay for the next round and are revoked at its end.
 
 ## Results by requirement
 
