@@ -26,7 +26,7 @@ export {
 } from "./scenario.js";
 export * from "@tapdance/core";
 export { TOOLS as TOOL_REGISTRY, findTool, runTool, toolStatus, locate, type ToolSpec, type ToolRun, type ToolStatus } from "./tools.js";
-export { isPrivateHost, TESTED_SIMLOCK_VERSION, readLocalProfile, defaultProfilePath, deviceCommands, type SimlockConnection, type DeviceCommand } from "@tapdance/provider-simlock";
+export { isPrivateHost, TESTED_SIMLOCK_VERSION, readLocalProfile, defaultProfilePath, deviceCommands, withInstallHintFor, type SimlockConnection, type DeviceCommand } from "@tapdance/provider-simlock";
 export { createProfile, editProfile, deleteProfile, listProfiles, installedImages, type ProfileCreateOptions } from "./profiles.js";
 export { PROFILE_PROVIDER, type ProfileRecord } from "@tapdance/provider-simlock";
 export { auditScreen, type AuditReport, type AuditFinding, type AuditRule } from "./audit.js";

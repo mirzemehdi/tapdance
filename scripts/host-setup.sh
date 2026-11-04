@@ -13,7 +13,11 @@
 #                                                               or ~/.local/share/tapdance/jdk (Linux)
 #      Android   Google's command-line tools (repository XML SHA-1), then sdkmanager installs
 #                platform-tools, emulator and the system image -> ~/Library/Android/sdk or ~/Android/Sdk.
-#                Accepting the Android SDK licenses is part of this step.
+#                Accepting the Android SDK licenses is part of this step. The newest command-line tools
+#                are Google's Android CLI, which collects usage metrics by default: the script turns that
+#                off with Google's documented setting, a `--no-metrics` line in ~/.androidrc.
+#      gh        only with --with-gh: the GitHub CLI (system package, sudo; Homebrew on macOS), which
+#                installs from CI (`tapdance host artifacts`) and builds with `--git-auth gh` need.
 #      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there (you log in in the app);
 #                Linux: tailscale.com's installer, then `sudo tailscale up --operator=$USER`, which
 #                prints a login link (asked first), so the guard can be served without root.
@@ -21,7 +25,13 @@
 #    sudoers rule that allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle)
 #    use sudo, and only after you said yes. Everything else goes into your home folder.
 # 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, corepack pnpm,
-#    build, a link in ~/.local/bin), then runs `tapdance host up` with your other arguments.
+#    build, a link in ~/.local/bin). On Linux it then offers the Tailscale login (`sudo tailscale up`
+#    waits until someone approves the machine in a browser, so it comes after the install), and runs
+#    `tapdance host up` with your other arguments.
+#
+# The tools go into ~/.tapdance/env.sh (PATH, ANDROID_HOME, ANDROID_SDK_ROOT, JAVA_HOME). On Linux it is
+# sourced at the top of ~/.bashrc, before Ubuntu's "not interactive: return" line, so commands run over
+# ssh (`gcloud compute ssh --command ...`) find java, sdkmanager, adb and tapdance too.
 #
 # Its own options (everything else goes to `tapdance host up`):
 #   --yes                install without asking (also passed on to host up)
@@ -29,6 +39,9 @@
 #   --skip-prerequisites do not check or install prerequisites
 #   --prerequisites-only install the prerequisites, then stop (no Tapdance install, no host up)
 #   --no-system-image    do not install the Android system image (about 1.5 GB)
+#   --with-gh            also install the GitHub CLI (gh) for installs from CI and builds with --git-auth gh
+#   --sdk-packages LIST  also install these SDK packages, comma-separated, e.g. "cmake;3.31.6" (host
+#                        builds need the app's own packages; quote the list, `;` is special in a shell)
 #
 # Settings: TAPDANCE_REPO (git URL; an SSH URL works for a private repository), TAPDANCE_REF (main),
 # TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis_playstore).
@@ -49,16 +62,29 @@ TAG="${ANDROID_TAG:-google_apis_playstore}"
 die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
 
-YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; PASS=()
-for arg in "$@"; do
-  case "$arg" in
+YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; EXTRA_SDK=(); PASS=()
+add_sdk_packages() {
+  local p; local IFS=', '
+  for p in $1; do
+    [[ -z "$p" ]] && continue
+    # sdkmanager package paths: letters, digits and . _ - separated by ; (no shell or path tricks).
+    [[ "$p" =~ ^[A-Za-z0-9._-]+(\;[A-Za-z0-9._-]+)*$ && "$p" != *..* ]] || die "--sdk-packages: \"$p\" is not an SDK package path like cmake;3.31.6"
+    EXTRA_SDK+=("$p")
+  done
+}
+while (( $# )); do
+  case "$1" in
     --yes|-y) YES=1; PASS+=("--yes") ;;
     --check) CHECK=1 ;;
     --skip-prerequisites) SKIP_PREREQ=1 ;;
     --prerequisites-only) ONLY_PREREQ=1 ;;
     --no-system-image) NO_IMAGE=1 ;;
-    *) PASS+=("$arg") ;;
+    --with-gh) WITH_GH=1 ;;
+    --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
+    --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
+    *) PASS+=("$1") ;;
   esac
+  shift
 done
 
 OS="$(uname -s)"
@@ -99,7 +125,8 @@ jdk_ok() {
   [[ "$v" =~ ^[0-9]+$ ]] && (( v >= 17 ))
 }
 cmdline_ok() { [[ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]]; }
-pkg_ok() { [[ -d "$SDK/$1" ]]; }
+# An SDK package path ("cmake;3.31.6") is installed in the folder of the same path ("cmake/3.31.6").
+pkg_ok() { [[ -d "$SDK/${1//;//}" ]]; }
 image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
 # The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
 emulator_libs_ok() {
@@ -142,7 +169,13 @@ check_all() {
     emulator_libs_ok || { MISSING+=("emulator-libs"); SUDO_STEPS+=("emulator-libs"); }
     (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
   fi
+  local p; for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || MISSING+=("sdk:$p"); done
   tailscale_bin >/dev/null || { MISSING+=("tailscale"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("tailscale"); }
+  if ! command -v gh >/dev/null 2>&1; then
+    if (( WITH_GH )); then MISSING+=("gh"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("gh")
+    else NOTES+=("gh (GitHub CLI) is not installed: installs from CI (tapdance host artifacts) and builds with --git-auth gh need it. Run this script again with --with-gh, or install it yourself"); fi
+  fi
+  (( ${#EXTRA_SDK[@]} )) || NOTES+=("builds on this host (tapdance host builds) also need the app's own SDK packages (for example cmake;3.31.6 for native code), or Gradle may stop on a missing one: add them with --sdk-packages \"cmake;3.31.6\"")
   if [[ "$OS" == Linux ]]; then
     if [[ ! -e /dev/kvm ]]; then
       NOTES+=("KVM: /dev/kvm is missing, so Android emulators cannot run here (a cloud VM without nested virtualization, or virtualization off in the BIOS); the emulator and system image are skipped. This machine can still be a control machine: tapdance connect <host endpoint> < pairing-<label>.token")
@@ -171,6 +204,8 @@ describe() {
     tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
     kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
     emulator-libs) echo "system libraries the Android emulator needs (libpulse, libxkbfile, libXi, libSM, libICE; sudo)" ;;
+    gh) [[ "$OS" == Darwin ]] && echo "GitHub CLI gh (Homebrew)" || echo "GitHub CLI gh (system package, sudo)" ;;
+    sdk:*) echo "Android SDK package ${1#sdk:} (sdkmanager)" ;;
     poweroff-rule) echo "a sudoers rule that lets $(id -un) run only /usr/bin/systemctl poweroff, so the guard can stop this cloud VM when it sits idle (sudo; /etc/sudoers.d/tapdance-poweroff, checked with visudo)" ;;
   esac
 }
@@ -268,7 +303,29 @@ sdkmanager_install() {
   export JAVA_HOME="$home" ANDROID_HOME="$SDK"
   say "accepting the Android SDK licenses and installing: $*"
   yes 2>/dev/null | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
-  "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "$@"
+  # Under `curl | bash` stdin is this script: sdkmanager must not read it.
+  "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "$@" < /dev/null
+}
+
+# The newest command-line tools are Google's Android CLI, which collects usage metrics unless told
+# not to. Its documented switch is --no-metrics, and ~/.androidrc applies a flag to every invocation
+# (https://developer.android.com/tools/agents/android-cli). The `sdkmanager` wrapper rejects
+# --no-metrics on its own command line, so check that it still runs with the file; if not, take the
+# line out again and say so.
+android_metrics_off() {
+  local rc="$HOME/.androidrc" sdkm="$SDK/cmdline-tools/latest/bin/sdkmanager"
+  grep -qsxF -- "--no-metrics" "$rc" && return 0
+  local home; home="$(java_home)" && export JAVA_HOME="$home"
+  local before=0; "$sdkm" --version >/dev/null 2>&1 < /dev/null && before=1
+  local existed=0; [[ -e "$rc" ]] && existed=1
+  printf -- '--no-metrics\n' >> "$rc"
+  if (( before )) && ! "$sdkm" --version >/dev/null 2>&1 < /dev/null; then
+    grep -vxF -- "--no-metrics" "$rc" > "$TMP/androidrc" || true
+    if (( existed )); then cat "$TMP/androidrc" > "$rc"; else rm -f "$rc"; fi
+    NOTES+=("Android CLI metrics: sdkmanager did not run with --no-metrics in $rc, so the line was taken out again; turn metrics off as Google's Android CLI documentation says")
+    return 0
+  fi
+  say "turned off the Android CLI's usage metrics (--no-metrics in $rc)"
 }
 
 install_system_packages() {
@@ -286,6 +343,18 @@ install_emulator_libs() {
   elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y pulseaudio-libs libxkbfile libXi libSM libICE
   elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm libpulse libxkbfile libxi libsm libice
   else die "install the libraries \`$SDK/emulator/emulator -version\` reports missing, then run this script again"; fi
+}
+
+install_gh() {
+  if [[ "$OS" == Darwin ]]; then
+    if command -v brew >/dev/null 2>&1; then brew install gh
+    else NOTES+=("gh: install it from https://cli.github.com (no Homebrew here)"); fi
+    return 0
+  fi
+  if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y gh
+  elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y gh
+  elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm github-cli
+  else NOTES+=("gh: install it with your package manager (https://cli.github.com)"); fi
 }
 
 install_tailscale() {
@@ -337,15 +406,33 @@ write_env_file() {
     echo "# Written by Tapdance's host-setup.sh: tools it installed in your home folder."
     echo "export PATH=\"$BIN_DIR:$SHARE/node/bin:$SDK/platform-tools:$SDK/emulator:$SDK/cmdline-tools/latest/bin:\$PATH\""
     echo "export ANDROID_HOME=\"$SDK\""
+    echo "export ANDROID_SDK_ROOT=\"$SDK\""
     local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; echo "export PATH=\"$home/bin:\$PATH\""; fi
   } > "$ENV_FILE"
-  local rcs=("$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")")
-  # Ubuntu's .bashrc stops early in non-interactive shells: .profile serves `bash -lc` over ssh.
-  [[ "$OS" == Linux ]] && rcs+=("$HOME/.profile")
-  local rc; for rc in "${rcs[@]}"; do
-    if ! grep -qs "tapdance/env.sh" "$rc"; then
-      printf '\n[ -f "%s" ] && . "%s"\n' "$ENV_FILE" "$ENV_FILE" >> "$rc"
-      say "added $ENV_FILE to $rc (new shells pick up the tools)"
+  local source_line; source_line="[ -f \"$ENV_FILE\" ] && . \"$ENV_FILE\""
+  if [[ "$OS" == Linux && "${SHELL:-}" != */zsh ]]; then
+    # Ubuntu's .bashrc returns early when not interactive, and bash reads .bashrc (not .profile) for a
+    # command run over ssh: the line must come before that guard, so it goes at the very top.
+    local rc="$HOME/.bashrc"
+    if ! head -n 2 "$rc" 2>/dev/null | grep -qs "tapdance/env.sh"; then
+      { printf '# Tapdance (host-setup.sh): first, so commands over ssh find the tools too.\n%s\n' "$source_line"
+        grep -v -e "tapdance/env.sh" -e "^# Tapdance (host-setup.sh)" "$rc" 2>/dev/null || true; } > "$TMP/bashrc"
+      cat "$TMP/bashrc" > "$rc"
+      say "added $ENV_FILE at the top of $rc (new shells and ssh commands pick up the tools)"
+    fi
+  fi
+  local rcs=()
+  if [[ "$OS" == Linux ]]; then
+    # zsh reads .zshenv in every shell, ssh commands included; login shells (`bash -lc`) read .profile.
+    [[ "${SHELL:-}" == */zsh ]] && rcs+=("$HOME/.zshenv")
+    rcs+=("$HOME/.profile")
+  else
+    rcs+=("$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")")
+  fi
+  local f; for f in "${rcs[@]}"; do
+    if ! grep -qs "tapdance/env.sh" "$f"; then
+      printf '\n%s\n' "$source_line" >> "$f"
+      say "added $ENV_FILE to $f (new shells pick up the tools)"
     fi
   done
   . "$ENV_FILE"
@@ -368,8 +455,9 @@ if (( ! SKIP_PREREQ )); then
       case "$m" in
         node) install_node ;;
         jdk) node_ok || install_node; install_jdk ;;
-        android-cmdline-tools) node_ok || install_node; install_cmdline_tools ;;
+        android-cmdline-tools) node_ok || install_node; install_cmdline_tools; android_metrics_off ;;
         git|unzip) install_system_packages "$m" ;;
+        gh) install_gh ;;
         tailscale) install_tailscale ;;
         emulator-libs) install_emulator_libs ;;
         kvm-group)
@@ -386,16 +474,19 @@ if (( ! SKIP_PREREQ )); then
     pkg_ok platform-tools || SDK_PKGS+=("platform-tools")
     pkg_ok emulator || SDK_PKGS+=("emulator")
     (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
+    for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || SDK_PKGS+=("$p"); done
     (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
     # The emulator just installed may need system libraries this machine lacks.
     emulator_libs_ok || install_emulator_libs
     write_env_file
     check_all
     for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
-    remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group || "$m" == poweroff-rule ]] || remaining+=("$m"); done
+    remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group || "$m" == poweroff-rule || "$m" == gh ]] || remaining+=("$m"); done
     (( ${#remaining[@]} == 0 )) || die "still missing after installing: ${remaining[*]}"
   fi
-  (( CHECK )) || linux_tailscale
+  # --prerequisites-only stops here, so it offers the Tailscale login now. A full run offers it after
+  # the Tapdance install: `sudo tailscale up` waits until someone approves the machine.
+  if (( ONLY_PREREQ && ! CHECK )); then linux_tailscale; fi
 elif (( CHECK )); then
   die "--check and --skip-prerequisites together check nothing"
 fi
@@ -434,6 +525,10 @@ else
   say "linked $BIN_DIR/tapdance -> $MAIN"
   TAPDANCE=(node "$MAIN")
 fi
+
+# Linux: log in to the tailnet now. It blocks until the machine is approved in a browser, so it comes
+# after the install (nothing waits on it) and before host up, the first step that needs Tailscale.
+(( SKIP_PREREQ )) || linux_tailscale
 
 if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
   say "no /dev/kvm: this machine cannot run emulators, so it cannot host devices. Tapdance is installed;"

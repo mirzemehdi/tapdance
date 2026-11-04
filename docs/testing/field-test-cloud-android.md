@@ -23,6 +23,10 @@ order of steps, the checkpoints and the teardown.
   `gcloud` in on the machine that provisions (`gcloud auth login` and `gcloud auth application-default
   login`, in their own terminal), opens the Tailscale login links, and pastes any GitHub token on the VM
   themselves. Never create a service account key.
+- **Those logins outlive the run.** Both `gcloud` logins grant the `cloud-platform` scope for the owner's
+  whole Google account, not just the test project, and their refresh tokens in `~/.config/gcloud` do not
+  expire (valid until revoked, or unused for about 6 months), usable by any process of that user. On a
+  machine other agents share, revoke them at teardown (step 9).
 - **Ask the owner at every checkpoint** marked **ASK** below, wait for a clear yes, and do only what was
   approved. Creating, starting, resizing or deleting a cloud resource is always a checkpoint.
 - **Keep a resource log** (below) from the first resource on, and **never end a session with billable
@@ -45,7 +49,7 @@ order of steps, the checkpoints and the teardown.
 | 6 | Approve the pairing, or allow `--yes` | Owner | Host setup |
 | 7 | Only for CI installs or host builds: log `gh` in on the VM with a fine-grained, read-only token | Owner pastes it | Before the app checklist |
 | 8 | **ASK**: anything that would extend the run (a second VM, a bigger machine, a longer `max_run_hours`, a VM restart) | Owner approves | Any time |
-| 9 | Teardown: `terraform destroy`, leftovers check, Tailscale machine, GitHub token, project (optional) | Agent runs what it can; owner does the rest | Always, at the end, also after a failure |
+| 9 | Teardown: `terraform destroy`, leftovers check, project (optional), credentials (`gcloud` logins, Tapdance profile, GitHub token, Tailscale machine) | Agent runs what it can; owner does the rest | Always, at the end, also after a failure |
 
 ## Costs
 
@@ -78,7 +82,8 @@ teardown. It is what you report to the owner at the end.
 | Tailscale machine | `tapdance-n2` | | owner: Tailscale admin console, Machines | |
 | GitHub fine-grained token (if any) | name only, never the value | | owner: GitHub settings, Developer settings | |
 | Pairing token copies | file paths on the agent's machine | | `rm` | |
-| Scratch `TAPDANCE_HOME` | path | | `rm -rf` | |
+| Scratch `TAPDANCE_HOME` | path | | `rm -rf`, or `revoke-run-credentials.sh` | |
+| `gcloud` logins made for the run | the account name, and on which machine | | `infrastructure/scripts/revoke-run-credentials.sh` (asks first) | |
 
 ## 1. Prerequisites
 
@@ -154,7 +159,6 @@ Restarting the VM restarts the clock; ask first (checkpoint 8).
 
 ```bash
 gcloud compute ssh tapdance-n2 --zone=europe-west1-b --tunnel-through-iap   # --billing-project=<PROJECT_ID> if needed
-bash /opt/tapdance/check-kvm.sh       # must end with "KVM acceleration is usable"
 ```
 
 Then on the VM, as the logged-in user:
@@ -162,7 +166,17 @@ Then on the VM, as the logged-in user:
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh \
   | bash -s -- --label field-agent --idle-stop off
+bash /opt/tapdance/check-kvm.sh       # after setup: must end with "KVM acceleration is usable"
 ```
+
+Run `check-kvm.sh` after the setup script, not before: on a fresh VM it reports "cannot open /dev/kvm"
+(the setup script adds you to the kvm group and grants this login access at once) and skips the
+emulator check (no SDK yet). Before setup, only its `vmx`, kvm module and `/dev/kvm` lines tell you
+anything. It finds the SDK in `~/Android/Sdk`, where the setup script installs it.
+
+- For the app checklists add `--with-gh` (installs the GitHub CLI for installs from CI and builds with
+  `--git-auth gh`) and, for a build on the host, the app's own SDK packages, for example
+  `--sdk-packages "cmake;3.31.6"` for a Kotlin Multiplatform app with native code.
 
 - `--idle-stop off`: in ephemeral mode the run-time limit ends the VM. The guard's idle stop would
   power the VM off instead, which **clears the run-time countdown and leaves a stopped VM whose disk
@@ -170,8 +184,13 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
 - To test a branch that is not merged yet: `TAPDANCE_REF=<branch>` on `bash`, and the script's URL from
   that branch.
 - The script lists what it will install and asks once; yes also accepts the Android SDK licences
-  (checkpoint 4). It prints a Tailscale login link (checkpoint 5) and asks to approve the pairing on the
-  terminal (checkpoint 6).
+  (checkpoint 4). After installing Tapdance it prints a Tailscale login link and waits until the owner
+  approves the machine (checkpoint 5), then asks to approve the pairing on the terminal (checkpoint 6).
+- Commands over ssh (`gcloud compute ssh … --command '…'`) find `java`, `sdkmanager`, `adb` and
+  `tapdance`: the script sources `~/.tapdance/env.sh` at the top of `~/.bashrc`, before Ubuntu's
+  "not interactive" guard. On a VM set up by an older script, use `bash -lc '…'`.
+- To change the idle stop later, keep the pairing: `tapdance host up --idle-stop 10` keeps the host's
+  only pairing; with several, pass its `--label`.
 - It ends with the `TAPDANCE HOST READY` block. On a Google Cloud VM the block has a line
   `cloud VM:  Google Cloud, billed while running; its disk bills even when stopped. Delete it when you
   are done: …`, and `cost guard:` shows the idle stop off. Write down the endpoint.
@@ -201,7 +220,9 @@ The VPS needs no KVM. Install Tailscale on it, `sudo tailscale up` (the owner ap
 the tailnet), clone and build this repository, and set the scratch home as above. Copy the token from
 the provisioning machine to the VPS with `scp` (or run `gcloud compute scp` on the VPS if the owner
 logged `gcloud` in there), then the same `connect`, `rm` and `doctor`. If the tailnet has ACLs, allow
-the VPS to reach the VM's port 4720. Everything below is the same; the viewer needs a browser, so skip
+the VPS to reach the VM's port 4720. To check that the VPS reaches the VM, use
+`tailscale ping --tsmp tapdance-n2` or `curl -s https://tapdance-n2.<tailnet>.ts.net:4720/v1/healthz`:
+plain `tailscale ping` (disco) never answered from a VPS in the 2026-11-04 run while both of these did. Everything below is the same; the viewer needs a browser, so skip
 it or open it from the owner's computer.
 
 ## 6. Run the checklists
@@ -248,7 +269,8 @@ folder), and decide with the owner whether to go on. Do not edit `packages/` to 
 | Key press, tap, `inspect`, screenshot, recording start and stop | the drivers' tables (CLI and MCP separately) |
 | Install: APK upload and from CI | `install_apk`, `install_from_ci` steps; the APK's size |
 | Build on the host (if run) | `build` step |
-| Emulator memory and CPU at idle | on the VM: `ps -o rss,pcpu -C qemu-system-x86_64` (or `top`) |
+| Emulator memory and CPU at idle | on the VM: `ps -o rss,pcpu,args -p "$(pgrep -d, -f qemu-system-x86_64)"` (the process is `qemu-system-x86_64-headless`; `ps -C` does not match it), or `top` |
+| Which emulators run | on the VM: `adb -P 5038 devices -l` (Simlock runs its own adb server on port 5038; plain `adb devices` lists nothing) |
 | Disk used at the end | on the VM: `df -h /` |
 | VM running time and estimated cost | apply time to destroy time × the hourly price |
 | Each checkpoint: who did it, when | your notes |
@@ -309,7 +331,8 @@ stopped.
    terraform destroy            # read the plan: only this run's resources; then yes
    ```
 
-4. Check that nothing bills. It must exit 0:
+4. Check that nothing bills, **before** you delete the project or unlink billing (afterwards the check
+   cannot list anything: exit 2, "DELETE_REQUESTED" or "billing must be enabled"). It must exit 0:
 
    ```bash
    bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>; echo "exit: $?"
@@ -324,13 +347,26 @@ stopped.
    owner runs it.
 6. The owner removes the VM from the tailnet in the
    [Tailscale admin console](https://login.tailscale.com/admin/machines), and deletes the GitHub token
-   used on the VM (if any).
-7. On the agent's machine: delete every copy of the pairing token, and the scratch home
-   (`rm -rf "$TAPDANCE_HOME"`, which holds the saved token). Keep `~/td-field/out` until the evidence is
-   written; it can hold screenshots of the owner's app.
-8. Tell the owner, in one message: what was created, what was deleted and when, the leftovers check's
-   result (exit 0), what they still have to do (Tailscale, GitHub token, project), and the cost: running
-   hours × the hourly price, plus the disk for the same hours.
+   used on the VM (if any): the token dies with the VM's disk there, but stays valid on GitHub until it
+   expires or is deleted.
+7. On the agent's machine: delete every copy of the pairing token. Keep `~/td-field/out` until the
+   evidence is written; it can hold screenshots of the owner's app.
+8. Revoke what the run left on the machines that provisioned and drove it (the agent's machine, and the
+   owner's computer if it provisioned). The script asks before each change, and only the owner answers:
+   keep a `gcloud` login they had before the run.
+
+   ```bash
+   bash infrastructure/scripts/revoke-run-credentials.sh --tapdance-home "$TAPDANCE_HOME"
+   ```
+
+   It offers `gcloud auth revoke --all` and `gcloud auth application-default revoke`, deletes the scratch
+   home (which holds the saved token; it never touches `~/.tapdance`), and prints what is still
+   credentialed: the `gcloud` logins, whether application-default credentials still work, and the two
+   things only the owner can do on the web (the GitHub token, the Tailscale machine). `--check` only
+   prints that list.
+9. Tell the owner, in one message: what was created, what was deleted and when, the leftovers check's
+   result (exit 0), the credentials check, what they still have to do (Tailscale, GitHub token,
+   project), and the cost: running hours × the hourly price, plus the disk for the same hours.
 
 ## Troubleshooting from the 2026-11-03 run
 
@@ -342,3 +378,6 @@ stopped.
 | 404 for a CI artifact | The token must select the repository whose CI made the artifact |
 | `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | An earlier build signed with another key is installed: `tapdance app uninstall <app id>` |
 | The VM is gone in the middle of the run | `max_run_hours` passed in ephemeral mode. Teardown still applies; ask the owner before creating a new one |
+| The VM powered itself off | The guard's idle stop (`host up --idle-stop`). Why: `~/.tapdance/worker/audit.log` (`TIMER host-stop`) and `~/.tapdance/worker/guard.log`. After a start it powers off again after the same idle time unless an agent connects; `tapdance host status` shows when |
+| `gcp-leftovers.sh` exits 2 after the project was deleted | Expected: a deleted project cannot be checked. Run it before `gcloud projects delete` |
+| `sdkmanager --no-metrics` says "Unknown option" | The newest command-line tools are Google's Android CLI wrapper; `host-setup.sh` turns metrics off in `~/.androidrc` instead |

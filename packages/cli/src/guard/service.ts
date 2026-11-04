@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -33,11 +33,19 @@ export interface GuardServiceSpec {
   home: string;
 }
 
-export function guardServicePaths(platform: ServicePlatform, home: string): { file: string; log?: string } {
+/**
+ * The service file and its log. On Linux the log is a file next to the guard's other files
+ * (`<TAPDANCE_HOME>/worker/guard.log`), not only the user journal: on some VMs (Google Cloud OS Login
+ * accounts) the user journal is not kept or not readable, and `journalctl --user` shows nothing (#95).
+ */
+export function guardServicePaths(platform: ServicePlatform, home: string, tapdanceHome?: string): { file: string; log: string } {
   return platform === "darwin"
     ? { file: join(home, "Library", "LaunchAgents", `${GUARD_LAUNCHD_LABEL}.plist`), log: join(home, "Library", "Logs", "tapdance-guard.log") }
-    : { file: join(home, ".config", "systemd", "user", GUARD_SYSTEMD_UNIT) };
+    : { file: join(home, ".config", "systemd", "user", GUARD_SYSTEMD_UNIT), log: join(tapdanceHome ?? join(home, ".tapdance"), "worker", "guard.log") };
 }
+
+/** A log this large is moved to `<log>.1` (replacing an older one) when the service is installed. */
+export const GUARD_LOG_ROTATE_BYTES = 5 * 1024 * 1024;
 
 /**
  * The service's environment: a fixed PATH (launchd and systemd start with an almost empty one) with
@@ -123,6 +131,7 @@ function systemdArg(s: string): string {
 }
 
 export function systemdUnit(spec: GuardServiceSpec): string {
+  const { log } = guardServicePaths("linux", spec.home, spec.environment["TAPDANCE_HOME"]);
   return [
     "[Unit]",
     "Description=Tapdance worker guard (device-only API for remote agents)",
@@ -132,6 +141,9 @@ export function systemdUnit(spec: GuardServiceSpec): string {
     `ExecStart=${guardProgramArguments(spec).map(systemdArg).join(" ")}`,
     ...Object.entries(spec.environment).map(([k, v]) => `Environment="${systemdEscape(`${k}=${v}`)}"`),
     "WorkingDirectory=%h",
+    // Also to a file: the user journal may not be kept for this account (journalctl --user shows nothing).
+    `StandardOutput=append:${systemdEscape(log)}`,
+    `StandardError=append:${systemdEscape(log)}`,
     "Restart=on-failure",
     "RestartSec=5",
     "",
@@ -193,7 +205,7 @@ export interface ServiceInstall {
 
 /** Writes the plist or unit (mode 644; it holds no secret) and (re)loads it. Safe to run again. */
 export async function installGuardService(spec: GuardServiceSpec, io: ServiceIo): Promise<ServiceInstall> {
-  const { file, log } = guardServicePaths(spec.platform, spec.home);
+  const { file, log } = guardServicePaths(spec.platform, spec.home, spec.environment["TAPDANCE_HOME"]);
   const write = io.write ?? defaultWrite;
   const commands: string[] = [];
   const attempt = async (cmd: string[]) => {
@@ -235,11 +247,17 @@ export async function installGuardService(spec: GuardServiceSpec, io: ServiceIo)
     return done;
   }
   await write(file, content, 0o644);
+  // systemd appends to the log but does not create its folder; keep one older log.
+  if (!io.write) {
+    await mkdir(dirname(log), { recursive: true, mode: 0o700 });
+    const size = (await stat(log).catch(() => undefined))?.size ?? 0;
+    if (size >= GUARD_LOG_ROTATE_BYTES) await rename(log, `${log}.1`).catch(() => undefined);
+  }
   const hint = "Check that a systemd user instance runs for this account (`systemctl --user status`); on a headless server enable it with `loginctl enable-linger $USER`.";
   await must(["systemctl", "--user", "daemon-reload"], "systemctl --user daemon-reload failed", hint);
   await must(["systemctl", "--user", "enable", GUARD_SYSTEMD_UNIT], "systemctl --user enable failed", hint);
-  await must(["systemctl", "--user", "restart", GUARD_SYSTEMD_UNIT], "systemctl --user could not start the worker guard", `See \`journalctl --user -u ${GUARD_SYSTEMD_UNIT}\`. ${hint}`);
-  return { platform: "linux", file, commands };
+  await must(["systemctl", "--user", "restart", GUARD_SYSTEMD_UNIT], "systemctl --user could not start the worker guard", `See ${log}. ${hint}`);
+  return { platform: "linux", file, log, commands };
 }
 
 /** Stops the service and deletes its file. Not being installed is not an error. */
@@ -318,7 +336,14 @@ export async function waitForGuard(url: string, timeoutMs: number, fetchImpl: ty
  * user, else with passwordless sudo), waits for the user manager's bus, and points this process (and the
  * Simlock and systemctl it runs) at it when XDG_RUNTIME_DIR is not set.
  */
+let linuxUserServicesReady = false;
 export async function prepareLinuxUserServices(out: { progress: (m: string) => void; warn: (m: string) => void }): Promise<void> {
+  // `host up` reaches this from three steps (host up, worker install, guard install): check and report
+  // once per run (#78).
+  if (linuxUserServicesReady) {
+    useUserBus(process.getuid?.() ?? 0);
+    return;
+  }
   const user = userInfo().username;
   const lingering = async () => parseLinger((await runCommand("loginctl", ["show-user", user, "--property=Linger"])).out) === true;
   if (!(await lingering())) {
@@ -338,4 +363,15 @@ export async function prepareLinuxUserServices(out: { progress: (m: string) => v
     });
   }
   useUserBus(process.getuid?.() ?? 0);
+  linuxUserServicesReady = true;
+}
+
+/**
+ * The TAPDANCE_HOME an installed guard service runs with, read from its plist or unit text: the
+ * value it was installed with, or `defaultHome` when the service sets none.
+ */
+export function serviceTapdanceHome(serviceText: string, defaultHome: string): string {
+  const plist = /<key>TAPDANCE_HOME<\/key>\s*<string>([^<]+)<\/string>/.exec(serviceText)?.[1];
+  const unit = /^Environment="?TAPDANCE_HOME=([^"\n]+)"?$/m.exec(serviceText)?.[1];
+  return plist ?? unit ?? defaultHome;
 }

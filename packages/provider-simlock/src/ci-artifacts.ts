@@ -7,7 +7,7 @@ import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
 import { TapdanceError } from "@tapdance/core";
 import { hostNetworkHint, spawnRunner, type CommandRunner } from "./build.js";
-import { repoIdentity, repoSlug } from "./build-files.js";
+import { repoDisplay, repoSlug } from "./build-files.js";
 
 /**
  * Installs an Android APK that the user's own CI built (a GitHub Actions artifact) on a lease. The
@@ -73,7 +73,7 @@ export function githubRepo(input: string): string {
   if (/^(https:\/\/|ssh:\/\/|git@)/.test(path)) {
     let identity: string;
     try {
-      identity = repoIdentity(path);
+      identity = repoDisplay(path);
     } catch {
       return refuse("is not a GitHub repository URL");
     }
@@ -152,6 +152,45 @@ export function ghFailure(output: string, what: string, repo: string, code: numb
     return new TapdanceError("FORBIDDEN", `The host's GitHub token may not read ${what} of ${repo}`, { hint: OWNER_GH_HINT, details: { reason: "GH_AUTH" } });
   }
   return new TapdanceError("DEVICE_ERROR", `gh failed for ${what} (exit ${code})${last ? `: ${last}` : ""}`);
+}
+
+/** The outcome of checking that this host's gh can read a repository and its Actions artifacts. */
+export interface CiAccess {
+  repo: string;
+  ok: boolean;
+  /** gh's own words when it failed. */
+  detail?: string;
+  hint?: string;
+  reason?: string;
+}
+
+/**
+ * Checks that this host's gh can read `repo` and list its Actions artifacts (#86): the two reads an
+ * install from CI starts with, without downloading anything. Never throws: the caller warns.
+ */
+export async function ciAccessProbe(input: string, run: CommandRunner = spawnRunner): Promise<CiAccess> {
+  let repo: string;
+  try {
+    repo = githubRepo(input);
+  } catch (error) {
+    return { repo: input, ok: false, detail: (error as Error).message, reason: "USAGE" };
+  }
+  for (const [path, what] of [
+    [`repos/${repo}`, "the repository"],
+    [`repos/${repo}/actions/artifacts?per_page=1`, "its Actions artifacts"],
+  ] as const) {
+    let r: { code: number; output: string };
+    try {
+      r = await run("gh", ["api", path, "--jq", ".id // .total_count"], { env: ghEnv(), timeoutMs: 30_000, onLine: () => undefined });
+    } catch (error) {
+      return { repo, ok: false, detail: `gh could not run: ${(error as Error).message}`, hint: `GitHub's CLI must be installed on this machine (https://cli.github.com). ${OWNER_GH_HINT}`, reason: "GH_MISSING" };
+    }
+    if (r.code !== 0) {
+      const e = ghFailure(r.output, what, repo, r.code);
+      return { repo, ok: false, detail: e.message, ...(e.hint ? { hint: e.hint } : {}), reason: typeof e.details?.["reason"] === "string" ? (e.details["reason"] as string) : e.code };
+    }
+  }
+  return { repo, ok: true };
 }
 
 interface RunInfo {

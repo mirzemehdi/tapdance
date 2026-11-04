@@ -46,6 +46,11 @@ export interface LeaseHandle {
   createdAt: string;
   expiresAt: string;
   providerData: Record<string, unknown>;
+  /**
+   * What the agent should know about the device at lease time (still starting, a system dialog on
+   * screen). Set by `lease` only; not kept in the session record.
+   */
+  notices?: string[];
 }
 
 export type LeaseState = "active" | "ended" | "unknown";
@@ -205,7 +210,35 @@ export interface LogResult {
   source: string;
   lines: string[];
   truncated: boolean;
+  /** The provider applied the request's `filter` itself (its notes are kept as they are). */
+  filtered?: boolean;
   artifact?: ArtifactRef;
+}
+
+/** The most log lines one `logs` call returns (CLI `-n`, SDK `lines`). */
+export const MAX_LOG_LINES = 20_000;
+
+/** Which log lines to keep: `contains` is case-insensitive; `level` keeps errors, or faults and crashes. */
+export interface LogFilter {
+  contains?: string;
+  level?: "error" | "fault";
+}
+
+const LOG_LEVELS: Record<"error" | "fault", (line: string) => boolean> = {
+  // logcat brief (E/Tag) and threadtime ("date time pid tid E Tag:") levels, plus the words iOS uses.
+  error: (l) => /\b[EF]\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+[EF]\s/.test(l) || /error|fault|fatal|exception/i.test(l),
+  fault: (l) => /\bF\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+F\s/.test(l) || /fault|fatal|crash/i.test(l),
+};
+
+/** Whether a log line passes a filter. */
+export function logLineMatches(line: string, filter: LogFilter): boolean {
+  if (filter.contains !== undefined && !line.toLowerCase().includes(filter.contains.toLowerCase())) return false;
+  return filter.level === undefined || LOG_LEVELS[filter.level](line);
+}
+
+/** True when a filter keeps only some lines. */
+export function isLogFilter(filter: LogFilter | undefined): filter is LogFilter {
+  return filter !== undefined && (filter.contains !== undefined || filter.level !== undefined);
 }
 
 /** An explicit Android intent for `launch_app`. Values are validated and quoted by the provider. */
@@ -283,8 +316,19 @@ export interface AppBuildResult {
   /** File name of the built .app or .apk (it stays on the host). */
   artifact: string;
   installed: boolean;
-  /** The same commit and settings were built before on the host; that build was installed (#61). */
+  /**
+   * The same commit and settings were built before on the host; that build was installed (#61).
+   * Always set by the SDK (false for a fresh build); a guard from before #88 may leave it out.
+   */
   reused?: boolean;
+  /** The ref the build was asked for (branch, tag or sha), next to the exact `sha` it resolved to. */
+  ref?: string;
+  /** With `reused`: when the host made that earlier build (ISO time). */
+  builtAt?: string;
+  /** Android: the installed app's package, read from the APK on the host (launch_app takes it). */
+  appId?: string;
+  /** Android: the installed APK's versionCode. */
+  versionCode?: number;
 }
 
 /** An APK the user's CI built (a GitHub Actions artifact), fetched by the device's host with its own credentials. */
@@ -312,6 +356,10 @@ export interface AppCiInstallResult {
   /** The host had downloaded this run's artifact before and used that copy. */
   cached: boolean;
   installed: boolean;
+  /** The installed app's package, read from the APK on the host (#89); launch_app takes it. */
+  appId?: string;
+  /** The installed APK's versionCode. */
+  versionCode?: number;
 }
 
 /** One tap of a timed sequence: `t` ms after the start, at (x, y); `hold` ms makes it a long press. */

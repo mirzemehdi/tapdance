@@ -46,7 +46,18 @@ interface FakeOptions {
   filesGroup?: string;
   /** The "Mac's" DiagnosticReports folder (#59). */
   crashDir?: string;
+  /** What adb/simctl `install` prints on stderr when the fake device refuses it (exit 1). */
+  installFails?: string;
 }
+
+/**
+ * An APK that Android's aapt2 linked (build-tools 36.0.0) from a manifest with package
+ * com.measify.pianolune, versionCode 3 and versionName 1.2.0, and nothing else.
+ */
+const REAL_APK = Buffer.from(
+  "UEsDBAAAAAAIAAAAIQAPahMmlgEAAMwDAAATAAAAQW5kcm9pZE1hbmlmZXN0LnhtbJVSu07DQBCci3FiEghGAglESgpE4QAFQpShR0hIVBSYmJAoL8s2SOko+QYKvoCCgi+gRlR8B78Ac8vFcYwiwVnju53b2d3bOwsO3ixAoYaLAuBiMs4z6yqxRTSINvFIPBEvxCvxQXwSNQUkxD3xQLwTNnrwcYkrzkAFt1xFiNHBEAMc8R+Q+b1zTFVfdpbRJNNHyJ0emVMqujib8gbW/+A1zjZIY9vYhYc9YodWgda+sCdU+PQb0irJKmCcIdlAavWZJ2SeDrP6SNIqVk0VnsT3JXMLI9phGrGHG846+za7mfALcYg6v5jqNnf6ovRyeT0Tuy7Zu5wj+sZiT9fnSISB5NYeiZwiJNekzse1ZF+TE+jqW1RG1DRYme5eMKNv/9FM7g+4Uw5fmH5nSm0UlKoRka1UTEC5jKp7D3xxONJf2uSfM7weC1yv8CuZd1mRmKnOtcZauUPdB1i24ayM36bh5oii8Sua/UXOZcOVDVfNafV6KcO5pt6DTB495k29KlMv5C5+4uvZMufP66xcX8bnVzP69Q1QSwMEAAAAAAAAAAAhAAtQNhMoAAAAKAAAAA4AAQByZXNvdXJjZXMuYXJzYwACAAwAKAAAAAAAAAABABwAHAAAAAAAAAAAAAAAAAEAABwAAAAAAAAAUEsBAgAAAAAAAAgAAAAhAA9qEyaWAQAAzAMAABMAAAAAAAAAAAAAAAAAAAAAAEFuZHJvaWRNYW5pZmVzdC54bWxQSwECAAAAAAAAAAAAACEAC1A2EygAAAAoAAAADgAAAAAAAAAAAAAAAADHAQAAcmVzb3VyY2VzLmFyc2NQSwUGAAAAAAIAAgB9AAAAHAIAAAAA",
+  "base64",
+);
 
 async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
   const seen: Upstream["seen"] = [];
@@ -82,6 +93,10 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
     }
     if (lease && req.url!.endsWith("/exec")) {
       const args = (JSON.parse(body || "{}") as { args?: string[] }).args ?? [];
+      if (args[0] === "install" && options.installFails !== undefined) {
+        res.writeHead(200, { "content-type": "text/event-stream" }).end(`event: output\ndata: ${JSON.stringify({ stream: "stderr", chunk: options.installFails })}\n\nevent: exit\ndata: {"exitCode":1}\n\n`);
+        return;
+      }
       const printed =
         args[0] === "get_app_container" && args.at(-1) === "groups"
           ? options.filesGroup
@@ -424,11 +439,21 @@ describe("worker guard: hardening", () => {
       await provider.logs(handle(platform), { lines: 50 });
       await provider.crashLogs(handle(platform), { lines: 50, appId: "com.x" });
       await provider.crashLogs(handle(platform), { lines: 50 });
+      await provider.logs(handle(platform), { lines: 20_000 });
+      await provider.logs(handle(platform), { lines: 50, appId: "com.x", filter: { contains: "ANR in" } });
+      await provider.crashLogs(handle(platform), { lines: 50, filter: { level: "fault" } });
     }
     expect(bodies.length).toBeGreaterThanOrEqual(11);
     expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "-t", "50", "--pid=1234"] });
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "-t", "20000"] });
+    // A search reads the whole buffer (#82).
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "--pid=1234"] });
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-b", "crash", "-v", "threadtime"] });
     const policy = GuardPolicySchema.parse({});
     for (const body of bodies) expect(execOf(body, policy), JSON.stringify(body)).toMatchObject({ ok: true });
+    // Malicious: a streaming logcat (no -d) would hold an exec slot until it times out.
+    expect(execOf({ tool: "adb", args: ["logcat", "-v", "threadtime"] }, policy)).toMatchObject({ ok: false });
+    expect(execOf({ tool: "adb", args: ["logcat", "-t", "50"] }, policy)).toMatchObject({ ok: false });
   });
 
   it("13. uploads and artifacts belong to the client that created them (H-06)", async () => {
@@ -476,6 +501,7 @@ describe("worker guard: hardening", () => {
       dc.android.killBackground("com.example"),
       dc.android.pidOf("com.example"),
       dc.android.uiautomatorDump(),
+      dc.android.guestState(),
       dc.android.chromeFlags(),
       dc.android.chromeDebugApp(),
       dc.android.chromeNotifications(),
@@ -489,8 +515,28 @@ describe("worker guard: hardening", () => {
       dc.android.mediaScan("/sdcard/Pictures/cat.png"),
       dc.ios.statusBarTime("09:41"),
       dc.ios.statusBarClear(),
+      dc.android.logcat({ lines: 200 }),
+      dc.android.logcat({ lines: dc.MAX_LOG_LINES, pid: "1234" }),
+      dc.android.logcat(),
+      dc.android.logcat({ crash: true }),
+      dc.android.logcat({ crash: true, lines: 50 }),
     ];
     for (const cmd of built) expect(execOf(cmd, all), JSON.stringify(cmd.args)).toMatchObject({ ok: true });
+    // logcat (#82): line counts up to the cap, and none of logcat's file, regex or buffer-clearing flags.
+    for (const args of [
+      ["logcat", "-d", "-t", String(dc.MAX_LOG_LINES + 1)],
+      ["logcat", "-d", "-t", "100000"],
+      ["logcat", "-d", "-t", "0"],
+      ["logcat", "-d", "-t", "1;reboot"],
+      ["logcat", "-d", "-e", ".*"],
+      ["logcat", "-f", "/sdcard/Download/x"],
+      ["logcat", "-c"],
+      ["logcat", "-d", "--pid=1;reboot"],
+    ]) {
+      expect(execOf({ tool: "adb", args }, all).ok, args.join(" ")).toBe(false);
+    }
+    expect(() => dc.android.logcat({ lines: dc.MAX_LOG_LINES + 1 })).toThrow(/lines/);
+    expect(() => dc.android.logcat({ pid: "1; reboot" })).toThrow(/pid/);
     // Injection attempts and paths outside the allowed areas.
     const refused: Array<{ tool: string; args: string[]; stdin?: string }> = [
       { tool: "adb", args: ["shell", "am", "start", "-W", "-a", "x; reboot"] },
@@ -502,6 +548,13 @@ describe("worker guard: hardening", () => {
       { tool: "adb", args: ["shell", "run-as", "com.example", "sh", "-c", "'reboot'"] },
       { tool: "adb", args: ["shell", "settings", "put", "global", "adb_enabled", "0"] },
       { tool: "adb", args: ["shell", "dumpsys", "notification", "--noredact"], stdin: "x" },
+      // The settle probe (#79) passes only as the exact fixed string, with no stdin.
+      { tool: "adb", args: ["shell", `${dc.GUEST_STATE}; reboot`] },
+      { tool: "adb", args: ["shell", `${dc.GUEST_STATE}\nreboot`] },
+      { tool: "adb", args: ["shell", dc.GUEST_STATE, "; reboot"] },
+      { tool: "adb", args: ["shell", ...dc.GUEST_STATE.split(" ")] },
+      { tool: "adb", args: ["shell", dc.GUEST_STATE], stdin: "reboot" },
+      { tool: "adb", args: ["shell", dc.GUEST_STATE.replace("/proc/stat", "/data/system/users/0/accounts.db")] },
       { tool: "adb", args: ["push", "/Users/owner/.ssh/id_rsa", "/sdcard/Download/k"] },
       { tool: "adb", args: ["pull", "/sdcard/Download/x", "/Users/owner/x"] },
       { tool: "simctl", args: ["addmedia", "/Users/owner/Pictures/private.jpg"] },
@@ -528,6 +581,9 @@ describe("worker guard: hardening", () => {
     const defaults = GuardPolicySchema.parse({ allow: { deviceShell: false } });
     expect(execOf(dc.android.notifications(), defaults).ok).toBe(true);
     expect(execOf(dc.android.notifications(), defaults, { physical: true }).ok).toBe(false);
+    // The settle probe is inspection: allowed with the device shell off.
+    expect(execOf(dc.android.guestState(), defaults).ok).toBe(true);
+    expect(execOf(dc.android.guestState(), GuardPolicySchema.parse({ allow: { deviceShell: false, inspection: false } })).ok).toBe(false);
     expect(execOf(dc.android.postNotification("a", "b"), defaults).ok).toBe(true);
     expect(execOf(dc.android.postNotification("a", "b"), defaults, { physical: true }).ok).toBe(false);
     expect(execOf({ tool: "adb", args: ["shell", "input", "tap", "1", "2; reboot"] }, defaults).ok).toBe(false);
@@ -606,6 +662,66 @@ describe("worker guard: hardening", () => {
     expect(text).toContain("using host build file GoogleService-Info.plist (sha256 ");
     expect(text).not.toContain("PLIST_SECRET_VALUE");
     expect(text).not.toContain("EVIL");
+  });
+
+  it("16g. a build reply says whether it was reused, the ref and the installed package; refusals and sign-in failures say why (fake git and Gradle, mocked; #85 #88 #89)", async () => {
+    const { mkdir: mk } = await import("node:fs/promises");
+    const SHA = "b".repeat(40);
+    const gradleArgs: string[][] = [];
+    const runner: import("@tapdance/provider-simlock").CommandRunner = async (command, args, o) => {
+      if (command === "git" && args[0] === "clone") {
+        await mk(args.at(-1)!, { recursive: true });
+        await writeFile(join(args.at(-1)!, "gradlew"), "#!/bin/sh\n");
+      }
+      if (command === "git" && args.includes("rev-parse")) return { code: 0, output: `${SHA}\n` };
+      if (command.endsWith("gradlew")) {
+        gradleArgs.push(args);
+        const out = join(o.cwd!, "app", "build", "outputs", "apk", "debug");
+        await mk(out, { recursive: true });
+        await writeFile(join(out, "app-debug.apk"), REAL_APK);
+      }
+      return { code: 0, output: "" };
+    };
+    const policy = { allow: { ...GuardPolicySchema.parse({}).allow, builds: true }, builds: { repos: ["https://github.com/acme/app"], protectedRefs: [], gitAuth: "none" as const, timeoutMinutes: 5, gradleDaemonIdleMinutes: 10 } };
+    const body = { repo: "https://github.com/acme/app", ref: "main" };
+    type Line = { log?: string; result?: Record<string, unknown>; error?: { code: string; message: string; hint?: string; details?: Record<string, unknown> } };
+    const parse = async (r: Response) => (await r.text()).trim().split("\n").map((l) => JSON.parse(l) as Line);
+
+    const t = await setup(policy, { buildRunner: runner, leasePlatform: "android" });
+    await t.allocate(t.alice.secret, A);
+    const first = (await parse(await t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, body))).at(-1)!.result!;
+    expect(first).toMatchObject({ sha: SHA, ref: "main", reused: false, installed: true, appId: "com.measify.pianolune", versionCode: 3 });
+    expect(first["builtAt"]).toBeUndefined();
+    expect(gradleArgs[0]).toContain("-Dorg.gradle.daemon.idletimeout=600000");
+    const again = (await parse(await t.call(t.alice.secret, "POST", `/v1/leases/${A}/build`, body))).at(-1)!.result!;
+    expect(again).toMatchObject({ sha: SHA, reused: true, builtAt: expect.stringMatching(/^\d{4}-/), appId: "com.measify.pianolune" });
+
+    // The device refuses an older versionCode: the hint names the package the host built.
+    const old = await setup(policy, { buildRunner: runner, leasePlatform: "android", installFails: "adb: failed to install /x/app-debug.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 2 is older than current 3]" });
+    await old.allocate(old.alice.secret, A);
+    const refused = (await parse(await old.call(old.alice.secret, "POST", `/v1/leases/${A}/build`, body))).at(-1)!.error!;
+    expect(refused).toMatchObject({ code: "DEVICE_ERROR", details: { reason: "INSTALL_DOWNGRADE", appId: "com.measify.pianolune" } });
+    expect(refused.hint).toContain('uninstall_app {app_id: "com.measify.pianolune"}');
+    expect(refused.hint).toContain("tapdance app uninstall com.measify.pianolune");
+    expect(refused.hint).not.toContain("<appId>");
+
+    // The host cannot sign in to the repository: AUTH_FAILED, with git's own line.
+    const denied: import("@tapdance/provider-simlock").CommandRunner = async (command, args, o) => {
+      if (command === "git" && args[0] === "clone") {
+        o.onLine("git@github.com: Permission denied (publickey).");
+        o.onLine("fatal: Could not read from remote repository.");
+        return { code: 128, output: "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n" };
+      }
+      return runner(command, args, o);
+    };
+    const ssh = "git" + "@github.com:acme/app.git";
+    const noAuth = await setup({ ...policy, builds: { ...policy.builds, repos: [ssh] } }, { buildRunner: denied, leasePlatform: "android" });
+    await noAuth.allocate(noAuth.alice.secret, A);
+    const lines = await parse(await noAuth.call(noAuth.alice.secret, "POST", `/v1/leases/${A}/build`, { repo: ssh, ref: "main" }));
+    const failed = lines.at(-1)!.error!;
+    expect(failed).toMatchObject({ code: "AUTH_FAILED", details: { reason: "GIT_AUTH", gitAuth: "none" } });
+    expect(failed.message).toContain("Permission denied (publickey)");
+    expect(lines.some((l) => l.log === "git@github.com: Permission denied (publickey).")).toBe(true);
   });
 
   describe("16f. installs from CI: the host downloads a GitHub Actions artifact with its own gh (fake gh, mocked)", () => {
@@ -776,6 +892,21 @@ describe("worker guard: hardening", () => {
       expect(gh.downloads()).toBe(1);
       const log = await readFile(join(t.home, "worker", "audit.log"), "utf8");
       expect(log).toContain(`ci-install installed acme/app run 42 sha ${SHA} branch main artifact app-debug`);
+    });
+
+    it("names the installed package, and the real package in a downgrade hint (#89)", async () => {
+      const gh = fakeGh({ zip: zipOf([{ name: "androidApp-debug.apk", data: REAL_APK }]) });
+      const t = await setup(on(), { leasePlatform: "android" }, { ciRunner: gh.runner });
+      await t.allocate(t.alice.secret, A);
+      const out = await lines(await ciInstall(t, t.alice.secret, body));
+      expect(out.at(-1)!.result).toMatchObject({ runId: "42", installed: true, appId: "com.measify.pianolune", versionCode: 3 });
+      expect(out.some((l) => l.log === "Installing app-debug (com.measify.pianolune versionCode 3) on the lease")).toBe(true);
+      expect(await readFile(join(t.home, "worker", "audit.log"), "utf8")).toContain("app com.measify.pianolune");
+      const old = await setup(on(), { leasePlatform: "android", installFails: "Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 2 is older than current 3]" }, { ciRunner: gh.runner });
+      await old.allocate(old.alice.secret, A);
+      const refused = (await lines(await ciInstall(old, old.alice.secret, body))).at(-1)!.error as { code: string; hint?: string; details?: Record<string, unknown> };
+      expect(refused).toMatchObject({ code: "DEVICE_ERROR", details: { reason: "INSTALL_DOWNGRADE", appId: "com.measify.pianolune" } });
+      expect(refused.hint).toContain('uninstall_app {app_id: "com.measify.pianolune"}');
     });
   });
 
@@ -982,6 +1113,30 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/sessions/other/requests/x/diagnostics")).status).toBe(404);
+  });
+
+  it("20. diagnostics of a failed allocate reach only the token that tried it, until another token gets that lease (MOCKED Simlock)", async () => {
+    const fake: FakeOptions = { allocateError: { code: -32000, message: "DEVICE_UNAVAILABLE" } };
+    const t = await setup({}, fake);
+    const path = (lease: string) => `/v1/agent-device/sessions/tok_c3ffdeb1-118a%3Atd-8e267af7a097-${lease.slice(0, 12)}/requests/152ae64bc4d8b38c/diagnostics`;
+    expect(await (await t.allocate(t.alice.secret, A)).json()).toMatchObject({ error: { message: "DEVICE_UNAVAILABLE" } });
+    // The failed allocate still owns nothing: no device command, but its diagnostics can be read.
+    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "snapshot", leaseId: A })).status).toBe(403);
+    expect((await t.call(t.alice.secret, "GET", path(A))).status).toBe(200);
+    // Another client cannot read them, and a failed attempt on A opens nothing about B.
+    expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(404);
+    expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
+    // Mallory's own failed attempt on B opens its diagnostics to Mallory only.
+    await t.allocate(t.mallory.secret, B);
+    expect((await t.call(t.mallory.secret, "GET", path(B))).status).toBe(200);
+    expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
+    // Once the lease id is granted to another token, the old failed attempt no longer opens it.
+    delete fake.allocateError;
+    expect((await t.allocate(t.mallory.secret, A)).status).toBe(200);
+    expect((await t.call(t.alice.secret, "GET", path(A))).status).toBe(404);
+    expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(200);
+    // Forwarded only when allowed: no refused request reached Simlock.
+    expect(t.upstream.seen.filter((x) => x.path.endsWith("/diagnostics")).length).toBe(3);
   });
 });
 

@@ -77,7 +77,7 @@ which client owns which lease). Otherwise it:
   account can stay logged in in the background. Run `install` from that account's own login session,
   not over plain SSH or `sudo`.
 - **Linux:** writes `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`), then runs
-  `systemctl --user daemon-reload`, `enable` and `restart`. Logs: `journalctl --user -u tapdance-guard.service`.
+  `systemctl --user daemon-reload`, `enable` and `restart`. Logs: `~/.tapdance/worker/guard.log` (earlier installs: `journalctl --user -u tapdance-guard.service`).
   On a headless machine, or to keep it running after you log out, enable lingering once:
   `loginctl enable-linger $USER`.
 

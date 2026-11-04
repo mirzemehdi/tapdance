@@ -39,7 +39,7 @@ command's output and a fix, and exits non-zero. Running it again is safe.
 | 2. account | The guard's own refusals: not as root, not while this worker has joined a gateway, and not from a macOS administrator account unless you pass `--allow-admin-account`. On an admin account it stops, explains the risk, and prints the exact command to run again. Nothing has changed at this point. |
 | 3. worker | Same as `tapdance worker install --service`: the bundled Simlock worker on loopback, agent-device, streaming and input on, restarted, and Simlock's login service installed. On Linux with no display (`DISPLAY` and `WAYLAND_DISPLAY` unset, as over SSH) it also sets `android.emulator.headless`, so emulators boot without a window, and `android.emulator.gpu` to `swiftshader_indirect` (with the emulator's `auto`, an N2 VM without a GPU idled at 136–165 % CPU and screen-changing taps took 3.4–7.9 s; with `swiftshader_indirect`, about 0 % and 2.2–2.6 s). On a re-run, when the worker answers and the guard service is running, it is left alone, because a restart would end the sessions of an agent using this host. |
 | 4. guard service | Same as `tapdance worker guard install`: a LaunchAgent (macOS) or systemd user unit (Linux) that runs `worker guard start` at login and restarts it; then it waits until the guard answers on `127.0.0.1:4720`. A running service with an unchanged file is left alone (a restart keeps lease ownership, which the guard saves, but drops in-flight uploads). It refuses while a `worker guard start` in a terminal holds the port. On Linux it also turns on **linger** for your user (`loginctl enable-linger`), waits for the user manager's bus and points `systemctl --user` at it (over a non-interactive SSH session there is none otherwise: "Failed to connect to bus: No medium found"), so the worker and guard keep running after you log out and start at boot; if linger is refused it prints the `sudo` command. Accounts logind cannot look up (Google Cloud OS Login) cannot linger; for them `host-setup.sh` installs `tapdance-user-manager.service`, which starts the user manager at boot, and `host up` starts it. |
-| 5. pairing | Issues a guard token labelled with this machine's hostname (or `--label`), after you confirm at the terminal (`--yes` skips the prompt; without a terminal it needs `--yes`). The token is written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and is **never printed**. If a valid token file for that label exists, it is kept; `--repair` revokes it and issues a new one. Tokens expire after `limits.tokenDays` (7 days by default); after that, `host up` issues a new one. |
+| 5. pairing | Issues a guard token labelled with `--label`, after you confirm at the terminal (`--yes` skips the prompt; without a terminal it needs `--yes`, and that is checked before step 1 changes anything). Without `--label` it keeps the host's only active pairing (so `host up --idle-stop 10` on a paired host changes the cost guard and pairs no one new); with no pairing yet the label is the hostname, and with several it asks you to pass `--label`. The token is written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and is **never printed**. If a valid token file for that label exists, it is kept; `--repair` revokes it and issues a new one. Tokens expire after `limits.tokenDays` (7 days by default); after that, `host up` issues a new one. |
 | 6. tailscale | If `tailscale` is installed and logged in, it exposes the guard on this machine's MagicDNS name. With HTTPS certificates on the tailnet (`CertDomains` in `tailscale status --json`) it runs `tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the endpoint is `https://…`; without them (the default on many tailnets) it runs `tailscale serve --bg --http=4720 …` and the endpoint is `http://<mac>.<tailnet>.ts.net:4720`, which travels inside the tailnet's WireGuard encryption and which `connect` accepts. Otherwise (or with `--no-tailscale`) it prints what to do and the endpoint stays `http://127.0.0.1:4720`, which only this machine can use. `host status` shows which mode is served; `host down` turns off either. On Linux, when `tailscale serve` is refused ("Access denied"), it stops and names the fix: `sudo tailscale set --operator=$USER` once. |
 | 7. self-test | Through the guard, with the new token: lists the devices, leases an Android device (iOS if there is no Android), takes a screenshot and releases it. `--skip-self-test` keeps only the device list. The first boot of a device can take minutes, and the lease waits (up to 5 minutes) while an agent holds the guard's only session (`limits.maxSessions` is 1 by default). |
 | 8. summary | Prints the block below. |
@@ -55,13 +55,14 @@ on the agent machine:  tapdance connect https://my-mac.tail1234.ts.net:4720 < pa
 
 Copy the token file to the agent's machine over a private channel (`scp`, your password manager), not
 through chat or a repository. `tapdance host token` copies it to the clipboard (`--show` prints it
-once), and `connect` prints the same fingerprint so you can compare.
+once), and `connect` prints the same fingerprint so you can compare. On Linux without a display (a
+server over ssh) `host up` does not offer the clipboard; it names the token file and `host token --show`.
 
 ### Options
 
 | Option | Meaning |
 | --- | --- |
-| `--label <name>` | Name of the pairing, shown in `tapdance worker guard tokens`. Default: the hostname. |
+| `--label <name>` | Name of the pairing, shown in `tapdance worker guard tokens`. Default: the host's only active pairing, else the hostname. A new name pairs another control machine. |
 | `--allow-admin-account` | Run the guard from a macOS administrator account. Not recommended; see below. |
 | `--no-tailscale` | Leave `tailscale serve` alone; the endpoint stays on loopback. |
 | `--keep-awake` | macOS: run the guard under `caffeinate -i` (see [Keep the guard running](../security/personal-mac.md#keep-the-guard-running)). |
@@ -183,7 +184,12 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   Gradle caches stay there, so rebuilds are incremental. `host builds status` shows the cache path.
 - **Access:** credentials stay on the host. `--git-auth gh` uses the host's `gh auth`; a read-only
   deploy key from `tapdance host builds key --repo <url>` (add its public half to the repository; use
-  ssh URLs) is used for that repository whenever it exists; `none` for public repositories. See
+  ssh URLs) is used for that repository's ssh URL whenever it exists; `none` for public repositories.
+  `host builds enable` then checks that this machine can read each repository with that auth
+  (`git ls-remote`) and warns with the fix when it cannot, for example when GitHub refuses the deploy
+  key; `--no-check` skips the check, and `host builds status --check` runs it again later. A build that
+  cannot sign in fails with `AUTH_FAILED` and git's own line (`Permission denied (publickey)`), and the
+  hint says what to check for the key or `gh` login that was used. See
   [private repositories](#private-repositories) below.
 - **Which code:** only repositories on the allow-list. With `--protected-ref main` the host builds only
   commits already on `main` of the remote, so a compromised agent with push rights cannot get an
@@ -200,10 +206,20 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   are refused, because they would run code nobody reviewed. Kotlin Multiplatform apps call Gradle from a run-script phase, so the host needs a JDK on the
   guard's `PATH` or `JAVA_HOME`; `host builds enable` checks git, Xcode, Java and `gh`.
 - **Android:** `./gradlew assembleDebug` (`--gradle-task`, `--dir` for the folder with `gradlew`); the
-  newest APK under `build/outputs/apk` is installed.
+  newest APK under `build/outputs/apk` is installed, and the reply names its package (`appId`).
+- **Gradle daemons:** a host build lets its Gradle and Kotlin daemons go after 10 idle minutes
+  (`-Dorg.gradle.daemon.idletimeout`, and `autoshutdownIdleSeconds` for Kotlin's), instead of Gradle's
+  3 hours. On a 16 GB cloud VM they held about 8 GB next to the emulator after a build (#90). A short
+  idle timeout rather than stopping them after every build: an agent that rebuilds within minutes
+  keeps a warm daemon, and nothing stops the daemons of your own builds on the same account
+  (`gradlew --stop` would, and it leaves Kotlin's daemon running). `host builds enable
+  --gradle-idle-minutes <n>` changes it; `0` builds with `--no-daemon` and compiles Kotlin inside that
+  one Gradle process, for hosts with little memory to spare. Unit-tested only.
 - **Reuse:** the last builds are kept per commit and settings (the newest three per repository, under
   `kept/` in the build cache). Asking for the same commit and settings again installs that build in
   seconds (`Reused the earlier build …`); every lease is a fresh device, so this is the common case.
+  The reply always says `reused: true` or `false` (with `builtAt` for a reused build), so an agent
+  knows whether it is testing a fresh build.
 - **Offline host:** when the host cannot reach the git server, a full commit id it already has still
   builds from its cache with a warning; a branch name does not (the cached branch may be behind). The
   error names git's own `fatal:` line and says the host's network is at fault.
@@ -237,8 +253,12 @@ compromised host would give away, in [private repositories](../guides/private-re
 | Way | Commands on the host | Covers |
 | --- | --- | --- |
 | A fine-grained, read-only GitHub token (recommended on a cloud VM) | `gh auth login --with-token`, then `tapdance host builds enable --repo https://github.com/acme/app --git-auth gh` | The repositories you select, and GitHub submodules among them |
-| A deploy key per repository | `tapdance host builds key --repo git@github.com:acme/app.git`, add the public key read-only, then `host builds enable --repo git@github.com:acme/app.git` | That one repository |
+| A deploy key per repository | `tapdance host builds key --repo git@github.com:acme/app.git`, add the public key read-only, then `host builds enable --repo git@github.com:acme/app.git` | That one repository. Organizations can turn deploy keys off; then use the token |
 | No repository access | None: build in CI or on the agent's machine, then `tapdance app install` ([build in CI](../guides/ci-builds.md)) | Nothing on the host |
+
+To undo: `tapdance host builds disable --repo <url>` removes one URL from the allow-list (the ssh and
+https URLs are separate entries) and leaves builds on; `tapdance host builds key --repo <url> --remove`
+deletes that repository's key and prints its fingerprint, so you can delete it on GitHub too.
 
 Files a repository keeps out of git (`google-services.json`, `local.properties`, `.env`) can be added
 on the host as **build files**: `tapdance host builds files add --repo <url> <path-in-repo> --from <file>`
@@ -273,9 +293,16 @@ The script (`set -euo pipefail`):
    sudoers rule that allows only `/usr/bin/systemctl poweroff` (in `/etc/sudoers.d/tapdance-poweroff`,
    checked with `visudo`, so `--idle-stop` can stop an idle VM) use `sudo`. Tailscale comes from
    Homebrew (`brew install --cask tailscale`) on macOS, where you log in in the app, or tailscale.com's
-   installer on Linux. It writes `~/.tapdance/env.sh` (PATH, `JAVA_HOME`, `ANDROID_HOME`) and sources it
-   from your `.zshrc`/`.bashrc`, and on Linux also from `~/.profile`, so commands run over SSH
-   (`ssh host 'bash -lc …'`) find the tools.
+   installer on Linux. It writes `~/.tapdance/env.sh` (PATH, `JAVA_HOME`, `ANDROID_HOME`,
+   `ANDROID_SDK_ROOT`) and sources it from your `.zshrc`/`.bashrc` on macOS; on Linux at the top of
+   `~/.bashrc` (before Ubuntu's "not interactive: return" line; `~/.zshenv` for zsh) and from
+   `~/.profile`, so commands run over SSH (`ssh host 'tapdance host status'`) find the tools.
+   The newest command-line tools are Google's Android CLI, which collects usage metrics by default: the
+   script adds `--no-metrics` to `~/.androidrc` (Google's documented setting; the `sdkmanager` wrapper
+   itself rejects that flag) and takes it out again if `sdkmanager` stops working with it.
+   `--with-gh` also installs the GitHub CLI (`gh`, needed for installs from CI and builds with
+   `--git-auth gh`; without the flag it only notes that `gh` is missing), and
+   `--sdk-packages "cmake;3.31.6"` installs extra SDK packages an app's build on this host needs.
 3. **On Linux, gets the machine ready to host without root:**
    - **KVM:** when `/dev/kvm` is not writable, it adds you to the `kvm` group and sets an ACL on
      `/dev/kvm` for your user (`setfacl`), so this login and the systemd user services can use it at
@@ -287,18 +314,19 @@ The script (`set -euo pipefail`):
      pacman equivalents elsewhere).
    - **User manager:** when your account cannot linger (Google Cloud OS Login), it installs
      `tapdance-user-manager.service`, a system unit that starts your systemd user manager at boot.
-   - **Tailscale:** after asking, it runs `sudo tailscale up --operator=$USER`, which prints a login
-     link to open in any browser. Being the operator lets your user run `tailscale serve`, which
-     `host up` needs. If the machine is already logged in, it only runs
-     `sudo tailscale set --operator=$USER`.
 4. **Installs Tapdance from source** if the `tapdance` command is missing: clones to `~/tapdance`
    (`TAPDANCE_SOURCE_DIR`, `TAPDANCE_REPO`, `TAPDANCE_REF`), puts Corepack's `pnpm` shim in
    `~/.local/bin` (no sudo), builds, and links `~/.local/bin/tapdance`.
-5. **Runs `tapdance host up`** with your other arguments. On Linux `host up` then turns on linger and,
+5. **On Linux, logs in to Tailscale:** after asking, it runs `sudo tailscale up --operator=$USER`,
+   which prints a login link to open in any browser and waits until you approve the machine; it comes
+   after the install, so nothing else waits on it (with `--prerequisites-only`, before it stops). Being
+   the operator lets your user run `tailscale serve`, which `host up` needs. If the machine is already
+   logged in, it only runs `sudo tailscale set --operator=$USER`.
+6. **Runs `tapdance host up`** with your other arguments. On Linux `host up` then turns on linger and,
    with no display, headless emulators (see the table above).
 
 Its own options: `--yes`, `--check`, `--skip-prerequisites`, `--prerequisites-only`,
-`--no-system-image`.
+`--no-system-image`, `--with-gh`, `--sdk-packages <list>`.
 
 Run so far: on macOS, the check and the install of Node.js, the Android command-line tools,
 platform-tools and the emulator into a scratch home (2 min 13 s), the Temurin download, and a fresh

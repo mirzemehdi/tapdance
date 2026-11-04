@@ -7,6 +7,7 @@ import type {
   LeaseHandle,
   LeaseRequest,
   LeaseStatus,
+  LogFilter,
   LogResult,
   Platform,
   ScreenInspection,
@@ -102,8 +103,12 @@ export interface DeviceProvider {
   startRecording(handle: LeaseHandle, outPath: string): Promise<{ path: string; token?: Record<string, unknown> }>;
   stopRecording(handle: LeaseHandle, token?: Record<string, unknown>): Promise<{ path: string; durationMs?: number; extraPaths: string[] }>;
 
-  logs(handle: LeaseHandle, options: { lines: number; appId?: string }): Promise<LogResult>;
-  crashLogs(handle: LeaseHandle, options: { lines: number; appId?: string }): Promise<LogResult>;
+  /**
+   * The last `lines` log lines. With a `filter`, the last `lines` lines that pass it, searched across
+   * everything the device's log keeps (set `filtered` on the result when the provider applied it).
+   */
+  logs(handle: LeaseHandle, options: { lines: number; appId?: string; filter?: LogFilter }): Promise<LogResult>;
+  crashLogs(handle: LeaseHandle, options: { lines: number; appId?: string; filter?: LogFilter }): Promise<LogResult>;
 
   /** Optional: device-level operations (reset, settings, files, notifications, perf, audio, intents). */
   device?(handle: LeaseHandle, operation: DeviceOperation): Promise<DeviceOperationResult>;

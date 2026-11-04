@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
-import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, withInstallHintFor, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, table, yellow } from "./output.js";
 
@@ -41,6 +41,15 @@ function intArg(name: string, value: string | undefined, min: number, max: numbe
   const n = Number(value);
   if (!Number.isInteger(n) || n < min || n > max) throw new TapdanceError("USAGE", `${name} must be an integer from ${min} to ${max}`);
   return n;
+}
+
+/** `logs --contains/--level`, checked like MCP get_logs checks them (1-200 characters; error|fault). */
+export function logFilterArgs(o: { contains?: string; level?: string }): { contains?: string; level?: "error" | "fault" } {
+  if (o.contains !== undefined && (o.contains.length < 1 || o.contains.length > 200)) throw new TapdanceError("USAGE", "--contains takes 1 to 200 characters");
+  if (o.level !== undefined && o.level !== "error" && o.level !== "fault") {
+    throw new TapdanceError("USAGE", `--level must be error or fault, not "${o.level}"`, { hint: "error keeps errors and exceptions; fault keeps faults and crashes." });
+  }
+  return { ...(o.contains !== undefined ? { contains: o.contains } : {}), ...(o.level !== undefined ? { level: o.level } : {}) };
 }
 
 function numArg(name: string, value: string | undefined): number | undefined {
@@ -157,7 +166,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       run(globals(), async (t, out) => {
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
-        const { summary, ttlCappedMinutes } = await t.lease({
+        const { summary, ttlCappedMinutes, notices } = await t.lease({
           platform: platformArg(o.platform),
           ...(o.device ? { device: o.device } : {}),
           ...(o.os ? { osVersion: o.os } : {}),
@@ -179,7 +188,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           keepalive = "off — renew with `tapdance device renew`";
         }
         if (ttlCappedMinutes) out.warn(`The worker granted ${ttlCappedMinutes} min, less than the ${ttl ?? t.resolved.config.session.defaultTtlMinutes} min asked (its policy caps leases; the keepalive renews it).`);
-        out.result({ device: summary, keepalive, ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}) }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
+        for (const notice of notices ?? []) out.warn(notice);
+        out.result({ device: summary, keepalive, ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}), ...(notices ? { notices } : {}) }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
         if (o.hold) {
           const controller = new AbortController();
           const stop = () => controller.abort();
@@ -526,15 +536,25 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .action(async (path: string | undefined, o: { appId?: string; fromCi?: string; artifact?: string; run?: string; branch?: string; launch?: string }) =>
       run(globals(), async (t, out) => {
         const ci = checkInstallArgs(path, o);
-        if (ci) {
-          const r = await t.installFromCi(ci);
+        try {
+          if (ci) {
+            const r = await t.installFromCi(ci);
+            if (o.launch) await t.launchApp(o.launch, { relaunch: true });
+            out.result({ installed: r, ...(o.launch ? { launched: o.launch } : {}) }, () =>
+              [
+                `Installed ${r.appId ? `${r.appId}${r.versionCode !== undefined ? ` (versionCode ${r.versionCode})` : ""}, ` : ""}${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, apk sha256 ${r.apkSha256}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`,
+                ...launchMismatch(r.appId, o.launch),
+              ].join("\n"),
+            );
+            return;
+          }
+          const r = await t.installApp(path!, o.appId);
           if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-          out.result({ installed: r }, () => `Installed ${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, apk sha256 ${r.apkSha256}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`);
-          return;
+          out.result({ installed: r, ...(o.launch ? { launched: o.launch } : {}) }, () => `Installed ${r.appId ?? path}${o.launch ? `; launched ${o.launch}` : ""}`);
+        } catch (error) {
+          // Install refusals name the package and only CLI syntax here (#89).
+          throw withInstallHintFor(error, "cli");
         }
-        const r = await t.installApp(path!, o.appId);
-        if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-        out.result({ installed: r }, () => `Installed ${r.appId ?? path}${o.launch ? `; launched ${o.launch}` : ""}`);
       }),
     );
   app
@@ -605,9 +625,16 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
             ...(o.dir ? { dir: o.dir } : {}),
           },
           { verbose: o.verbose === true },
-        );
+        ).catch((error: unknown) => {
+          throw withInstallHintFor(error, "cli");
+        });
         if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-        out.result(r, () => `${r.reused ? "Reused the earlier build" : "Built"} ${r.artifact} from ${r.sha.slice(0, 12)} in ${r.seconds} s and installed it${o.launch ? `; launched ${o.launch}` : ""}`);
+        out.result({ ...r, ...(o.launch ? { launched: o.launch } : {}) }, () =>
+          [
+            `${r.reused ? `Reused the earlier build (made ${r.builtAt ?? "before"})` : "Built"} ${r.artifact} from ${r.sha.slice(0, 12)} (${r.ref}) in ${r.seconds} s and installed it${r.appId ? ` as ${r.appId}` : ""}${o.launch ? `; launched ${o.launch}` : ""}`,
+            ...launchMismatch(r.appId, o.launch),
+          ].join("\n"),
+        );
       }),
     );
   app
@@ -828,13 +855,17 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   program
     .command("logs")
     .description("Recent device logs (logcat / simulator log), saved as an artifact")
-    .option("-n, --lines <n>", "how many lines", "200")
+    .option("-n, --lines <n>", `how many lines (at most ${MAX_LOG_LINES}); with a filter, how many matching lines`, "200")
     .option("--app <id>", "only this app")
     .option("--crash", "crash buffer / faults only")
-    .action(async (o: { lines: string; app?: string; crash?: boolean }) =>
+    .option("--contains <text>", "only lines containing this text (case-insensitive); on Android searches the whole logcat buffer")
+    .option("--level <level>", "only error lines (error) or faults and crashes (fault)")
+    .action(async (o: { lines: string; app?: string; crash?: boolean; contains?: string; level?: string }) =>
       run(globals(), async (t, out) => {
-        const r = await t.logs({ lines: intArg("--lines", o.lines, 1, 5000)!, ...(o.app ? { appId: o.app } : {}), ...(o.crash ? { crash: true } : {}) });
-        out.result(r, () => `${r.lines.join("\n")}\n${dim(`— ${r.source}; saved to ${r.artifact?.path}`)}`);
+        const filter = logFilterArgs(o);
+        const r = await t.logs({ lines: intArg("--lines", o.lines, 1, MAX_LOG_LINES)!, ...(o.app ? { appId: o.app } : {}), ...(o.crash ? { crash: true } : {}), ...filter });
+        const none = r.lines.length === 0 && (filter.contains !== undefined || filter.level !== undefined) ? `${dim("no matching lines")}\n` : "";
+        out.result(r, () => `${none}${r.lines.join("\n")}\n${dim(`— ${r.source}; saved to ${r.artifact?.path}`)}`);
       }),
     );
 
@@ -849,6 +880,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         );
       }),
     );
+}
+
+/** A warning line when --launch names another app than the one just installed. */
+function launchMismatch(installed: string | undefined, launched: string | undefined): string[] {
+  return installed && launched && installed !== launched ? [yellow(`warning: the installed package is ${installed}, but ${launched} was launched`)] : [];
 }
 
 /**

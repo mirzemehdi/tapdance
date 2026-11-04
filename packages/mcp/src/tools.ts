@@ -4,7 +4,7 @@ import { dirname, isAbsolute, relative, resolve } from "node:path";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
 import type { ServerNotification, ServerRequest } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { DEVICE_SETTINGS, TOOL_REGISTRY, TapdanceError, loadScenario, runScenario, validateScenario, parseTarget, redactObject, toTapdanceError, toolStatus, type ArtifactRef, type DeviceSettingName, type ElementTarget, type IntentSpec, type Tapdance } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, TOOL_REGISTRY, TapdanceError, loadScenario, runScenario, validateScenario, parseTarget, redactObject, toTapdanceError, toolStatus, withInstallHintFor, type ArtifactRef, type DeviceSettingName, type ElementTarget, type IntentSpec, type Tapdance } from "@tapdance/sdk";
 
 /**
  * Tool definitions, kept apart from transport so tests can check every schema and handler without
@@ -46,6 +46,22 @@ export function json(value: unknown): ToolResult {
 export function errorResult(error: unknown): ToolResult {
   const e = toTapdanceError(error);
   return { content: [{ type: "text", text: JSON.stringify({ error: e.toJSON() }, null, 1) }], isError: true };
+}
+
+/**
+ * What an install or build reply adds after the install (#88, #89): what was launched, a warning when
+ * that is not the package just installed, and the next call with the real app id.
+ */
+export function afterInstall(installedId: string | undefined, launched: string | undefined, fromCi: boolean): Record<string, unknown> {
+  if (launched) {
+    return {
+      launched,
+      ...(installedId && installedId !== launched ? { warning: `The installed package is ${installedId}, but ${launched} was launched.` } : {}),
+      next: "inspect_screen",
+    };
+  }
+  if (installedId) return { next: `launch_app {app_id: "${installedId}"}` };
+  return { next: fromCi ? "launch_app (list_apps shows the package name if you do not know it)" : "launch_app" };
 }
 
 function targetFrom(args: Record<string, unknown>, prefix = ""): ElementTarget | undefined {
@@ -99,7 +115,7 @@ const appId = z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]{0,254}$/).describe("Andr
 const logInput = {
   lines: z.number().int().min(1).max(2000).optional().describe("Lines to return inline (default 50)."),
   app_id: appId.optional(),
-  contains: z.string().min(1).max(200).optional().describe("Keep only lines containing this text (case-insensitive)."),
+  contains: z.string().min(1).max(200).optional().describe("Keep only lines containing this text (case-insensitive). On Android it searches the whole logcat buffer, not just the last lines."),
   level: z.enum(["error", "fault"]).optional().describe("Keep only error lines (error) or faults and crashes (fault)."),
 };
 
@@ -107,15 +123,10 @@ const logInput = {
 const LOG_INLINE_CHARS = 10_000;
 const DEFAULT_INLINE_LINES = 50;
 
-const LEVELS: Record<"error" | "fault", (line: string) => boolean> = {
-  // logcat brief (E/Tag) and threadtime ("date time pid tid E Tag:") levels, plus the words iOS uses.
-  error: (l) => /\b[EF]\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+[EF]\s/.test(l) || /error|fault|fatal|exception/i.test(l),
-  fault: (l) => /\bF\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+F\s/.test(l) || /fault|fatal|crash/i.test(l),
-};
-
 /**
- * Fetches logs through the SDK (which saves the full text as an artifact), filters them, and keeps
- * the inline part small: the last 50 lines (or `lines`) and never more than about 10,000 characters.
+ * Fetches logs through the SDK (which filters them across the whole device log and saves the result
+ * as an artifact), and keeps the inline part small: the last 50 lines (or `lines`) and never more
+ * than about 10,000 characters.
  */
 export async function logReply(
   t: Tapdance,
@@ -123,12 +134,18 @@ export async function logReply(
   crash: boolean,
 ): Promise<{ source: string; lines: string[]; omittedLines: number; artifact?: ArtifactRef }> {
   const requested = a["lines"] as number | undefined;
-  const contains = (a["contains"] as string | undefined)?.toLowerCase();
+  const contains = a["contains"] as string | undefined;
   const level = a["level"] as "error" | "fault" | undefined;
   const filtering = contains !== undefined || level !== undefined;
-  const fetchLines = filtering ? Math.min(Math.max(requested ?? 200, 1000), 2000) : (requested ?? 200);
-  const result = await t.logs({ lines: fetchLines, ...(crash ? { crash: true } : {}), ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) });
-  const matching = result.lines.filter((l) => (contains === undefined || l.toLowerCase().includes(contains)) && (level === undefined || LEVELS[level](l)));
+  const fetchLines = filtering ? 2000 : (requested ?? 200);
+  const result = await t.logs({
+    lines: fetchLines,
+    ...(crash ? { crash: true } : {}),
+    ...(a["app_id"] ? { appId: a["app_id"] as string } : {}),
+    ...(contains !== undefined ? { contains } : {}),
+    ...(level !== undefined ? { level } : {}),
+  });
+  const matching = result.lines;
   const wanted = matching.slice(-(requested ?? DEFAULT_INLINE_LINES));
   const kept: string[] = [];
   let size = 0;
@@ -166,7 +183,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "lease_device",
     title: "Lease a device",
     description:
-      "Reserve one Android emulator or iOS simulator for this session; it is booted, clean, and reserved for this session until released. Calling it again for the same platform returns the device you already hold. Every other tool acts on this device. Can take a few minutes when a new device must boot. One lease per session. If your call times out, call lease_device again: the request keeps running and returns the device with reused:true once granted.",
+      "Reserve one Android emulator or iOS simulator for this session; it is booted, clean, and reserved for this session until released. Calling it again for the same platform returns the device you already hold. Every other tool acts on this device. Can take a few minutes when a new device must boot. One lease per session. If your call times out, call lease_device again: the request keeps running and returns the device with reused:true once granted. Read notices in the reply when present: they say the device is still starting (expect slow first steps) or that a system dialog covers it.",
     input: z
       .object({
         platform,
@@ -179,7 +196,7 @@ export const TOOLS: ToolDefinition[] = [
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: async (t, a) => {
-      const { summary, reused, ttlCappedMinutes } = await t.lease({
+      const { summary, reused, ttlCappedMinutes, notices } = await t.lease({
         reuse: true,
         platform: a["platform"] as "android" | "ios",
         ...(a["device"] ? { device: a["device"] as string } : {}),
@@ -188,7 +205,7 @@ export const TOOLS: ToolDefinition[] = [
         ...(a["profile"] ? { profile: a["profile"] as string } : {}),
         ...(a["ttl_minutes"] ? { ttlMinutes: a["ttl_minutes"] as number } : {}),
       });
-      return json({ device: summary, reused, ...(ttlCappedMinutes ? { ttlCappedMinutes, note: `The worker granted ${ttlCappedMinutes} min (its policy caps leases); the server renews it while connected.` } : {}), next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
+      return json({ device: summary, reused, ...(notices ? { notices } : {}), ...(ttlCappedMinutes ? { ttlCappedMinutes, note: `The worker granted ${ttlCappedMinutes} min (its policy caps leases); the server renews it while connected.` } : {}), next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
     },
   },
   {
@@ -211,7 +228,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "install_app",
     title: "Install an app",
     description:
-      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (or a .zip/.tar holding one; .ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps. Android only, instead of path: from_ci {repo, artifact, run?, branch?} has the device's host download an APK the user's CI built (a GitHub Actions artifact) with the host's own read-only GitHub credentials and install it; you never need a GitHub token and the APK does not travel through this machine. The host's owner allow-lists the repository; a refusal names what to ask for.",
+      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (or a .zip/.tar holding one; .ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps. launch: an app id to relaunch once installed (saves a launch_app call). Android only, instead of path: from_ci {repo, artifact, run?, branch?} has the device's host download an APK the user's CI built (a GitHub Actions artifact) with the host's own read-only GitHub credentials and install it; you never need a GitHub token and the APK does not travel through this machine. The reply names the installed package (appId) and whether the host reused an earlier download (cached). The host's owner allow-lists the repository; a refusal names what to ask for.",
     input: z
       .object({
         path: z.string().min(1).max(4096).optional().describe("Absolute or working-directory-relative path to the .apk or .app. Give path or from_ci."),
@@ -226,18 +243,26 @@ export const TOOLS: ToolDefinition[] = [
           .strict()
           .optional()
           .describe("Android only: install an APK from the user's GitHub Actions run instead of a local path."),
+        launch: appId.optional().describe("Relaunch this app once it is installed, like the CLI's --launch (saves a launch_app call)."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     run: async (t, a) => {
       const ci = a["from_ci"] as { repo: string; artifact: string; run?: string; branch?: string } | undefined;
+      const launch = a["launch"] as string | undefined;
       if ((a["path"] === undefined) === (ci === undefined)) throw new TapdanceError("USAGE", "Give exactly one of path and from_ci");
       if (ci) {
         if (a["app_id"] !== undefined) throw new TapdanceError("USAGE", "app_id goes with path, not from_ci");
         if (ci.run !== undefined && ci.branch !== undefined) throw new TapdanceError("USAGE", "from_ci takes run or branch, not both");
-        return json({ installed: await t.installFromCi(ci), next: "launch_app (list_apps shows the package name if you do not know it)" });
       }
-      return json({ installed: await t.installApp(confinePath(a["path"] as string), a["app_id"] as string | undefined), next: "launch_app" });
+      try {
+        const installed = ci ? await t.installFromCi(ci) : await t.installApp(confinePath(a["path"] as string), a["app_id"] as string | undefined);
+        if (launch) await t.launchApp(launch, { relaunch: true });
+        return json({ installed, ...afterInstall(installed.appId, launch, ci !== undefined) });
+      } catch (error) {
+        // Install refusals name the package and MCP calls, not CLI syntax (#89).
+        throw withInstallHintFor(error, "mcp");
+      }
     },
   },
   {
@@ -338,7 +363,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "build_app",
     title: "Build and install an app on the device's host",
     description:
-      "Build the app on the machine that runs the leased device and install it there, from a git repository the host's owner allow-listed (the host fetches it with its own credentials). The way to get an iOS app onto a remote simulator from a machine without Xcode. iOS: xcodebuild for the simulator (project and scheme found when the repository has one Xcode project); Android: ./gradlew assembleDebug (gradle_task, dir). Returns the exact commit built. Builds run the project's scripts on the host, so the owner turns them on per repository; a refusal names what to ask for. Takes minutes; progress shows the steps and errors, and a failure names its cause.",
+      "Build the app on the machine that runs the leased device and install it there, from a git repository the host's owner allow-listed (the host fetches it with its own credentials). The way to get an iOS app onto a remote simulator from a machine without Xcode. iOS: xcodebuild for the simulator (project and scheme found when the repository has one Xcode project); Android: ./gradlew assembleDebug (gradle_task, dir). Returns the exact commit built (sha, and the ref asked for), reused: true when the host installed its earlier build of the same commit and settings (builtAt says when) instead of building again, and on Android the installed package (appId). launch: an app id to relaunch once installed (saves a launch_app call). Builds run the project's scripts on the host, so the owner turns them on per repository; a refusal names what to ask for (AUTH_FAILED: the host cannot sign in to the repository, only its owner can fix that). Takes minutes; progress shows the steps and errors, and a failure names its cause.",
     input: z
       .object({
         repo: z.string().min(1).max(500),
@@ -349,12 +374,14 @@ export const TOOLS: ToolDefinition[] = [
         xcode_settings: z.array(z.string().max(250)).max(20).optional().describe("iOS: extra build settings as KEY=VALUE, from a short list the host allows (ARCHS, EXCLUDED_ARCHS, ONLY_ACTIVE_ARCH, SWIFT_ACTIVE_COMPILATION_CONDITIONS, KOTLIN_FRAMEWORK_BUILD_TYPE…). Builds already use this Mac's simulator arch only."),
         gradle_task: z.string().max(200).optional(),
         dir: z.string().max(300).optional(),
+        launch: appId.optional().describe("Relaunch this app once it is installed, like the CLI's --launch (saves a launch_app call)."),
       })
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-    run: async (t, a) =>
-      json(
-        await t.buildApp({
+    run: async (t, a) => {
+      const launch = a["launch"] as string | undefined;
+      try {
+        const built = await t.buildApp({
           repo: a["repo"] as string,
           ref: a["ref"] as string,
           ...(a["project"] ? { project: a["project"] as string } : {}),
@@ -363,8 +390,13 @@ export const TOOLS: ToolDefinition[] = [
           ...(a["xcode_settings"] ? { xcodeSettings: a["xcode_settings"] as string[] } : {}),
           ...(a["gradle_task"] ? { gradleTask: a["gradle_task"] as string } : {}),
           ...(a["dir"] ? { dir: a["dir"] as string } : {}),
-        }),
-      ),
+        });
+        if (launch) await t.launchApp(launch, { relaunch: true });
+        return json({ ...built, ...afterInstall(built.appId, launch, false) });
+      } catch (error) {
+        throw withInstallHintFor(error, "mcp");
+      }
+    },
   },
   {
     name: "kill_app",

@@ -1,4 +1,6 @@
-import { TapdanceError, type IntentSpec, type TimedTap } from "@tapdance/core";
+import { MAX_LOG_LINES, TapdanceError, type IntentSpec, type TimedTap } from "@tapdance/core";
+
+export { MAX_LOG_LINES };
 
 /**
  * Device-level commands Tapdance sends through Simlock's lease exec (`POST /v1/leases/{id}/exec`).
@@ -47,6 +49,12 @@ export const MAX_SEQUENCE_STEPS = 500;
 /** The system dump script (`ui inspect --system`); the guard accepts exactly this string. */
 export const UIAUTOMATOR_DUMP =
   "am force-stop com.callstack.agentdevice.snapshothelper; uiautomator dump /sdcard/tapdance-ui.xml >/dev/null 2>&1; cat /sdcard/tapdance-ui.xml; rm -f /sdcard/tapdance-ui.xml";
+/**
+ * Whether a just-leased emulator has settled (#79): boot finished, the CPU counters (two reads give
+ * the guest's load) and the focused window (an "isn't responding" dialog). The guard accepts exactly
+ * this string.
+ */
+export const GUEST_STATE = "getprop sys.boot_completed; head -n 1 /proc/stat; dumpsys window displays | grep mCurrentFocus=";
 /** Chrome without its welcome, sign-in and default-browser screens. */
 export const CHROME_FLAGS = "chrome --disable-fre --no-default-browser-check --no-first-run";
 /** Files pushed through exec travel as base64 on stdin; keep them small enough for one request. */
@@ -91,6 +99,22 @@ export const android = {
       else args.push("--es", key, quote(String(value), `extra ${key}`));
     }
     if (args.length === 4) throw usage("An intent needs at least an action, data or component");
+    return { tool: "adb", args };
+  },
+  /**
+   * A logcat dump: the last `lines` lines, or with no `lines` everything the buffer keeps (for a
+   * filtered search, #82). `crash` reads the crash buffer; `pid` keeps one process.
+   */
+  logcat(o: { lines?: number; pid?: string; crash?: boolean } = {}): DeviceCommand {
+    const args = ["logcat", "-d", ...(o.crash ? ["-b", "crash"] : []), "-v", "threadtime"];
+    if (o.lines !== undefined) {
+      if (!Number.isInteger(o.lines) || o.lines < 1 || o.lines > MAX_LOG_LINES) throw usage(`lines must be a whole number from 1 to ${MAX_LOG_LINES}`);
+      args.push("-t", String(o.lines));
+    }
+    if (o.pid !== undefined) {
+      if (!/^[1-9][0-9]{0,9}$/.test(o.pid)) throw usage("pid must be a number");
+      args.push(`--pid=${o.pid}`);
+    }
     return { tool: "adb", args };
   },
   /** A raw touch through Android's input service: system pickers ignore the automation helper's events. */
@@ -171,6 +195,10 @@ export const android = {
   },
   pidOf(appId: string): DeviceCommand {
     return { tool: "adb", args: ["shell", "pidof", app(appId)] };
+  },
+  /** Boot flag, CPU counters and focused window of a just-leased emulator (#79). */
+  guestState(): DeviceCommand {
+    return { tool: "adb", args: ["shell", GUEST_STATE] };
   },
   /** Window manager state; `mCurrentFocus` names the app in front. */
   focusedWindow(): DeviceCommand {

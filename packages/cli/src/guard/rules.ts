@@ -245,7 +245,8 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
 // that rather than parsing every command's path flags.
 
 const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
-const LINES = /^[1-9][0-9]{0,3}$/;
+/** A logcat `-t` line count: 1 to MAX_LOG_LINES (20,000), digits only. */
+const isLines = (v: string | undefined) => v !== undefined && /^[1-9][0-9]{0,4}$/.test(v) && Number(v) <= deviceCommands.MAX_LOG_LINES;
 const DURATION = /^[1-9][0-9]?[ms]$/;
 /** The only log predicates Tapdance generates (see provider-simlock), with the app id slot validated. */
 const PREDICATE = /^[A-Za-z0-9_.()" =[\]-]+$/;
@@ -322,8 +323,9 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if (a.length === 4 && a[0] === "shell" && a[1] === "am" && a[2] === "force-stop" && APP_ID.test(a[3]!)) return plain("interaction");
   if (a.length === 3 && a[0] === "shell" && a[1] === "pidof" && APP_ID.test(a[2]!)) return stdin === undefined ? { ok: true, value: { tool, args: a } } : deny("stdin is not allowed for this command");
   if (a[0] === "logcat") {
-    const okFlags = a.slice(1).every((x, i, arr) => ["-d", "-v", "threadtime", "-t", "-b", "crash"].includes(x) || /^--pid=\d+$/.test(x) || (arr[i - 1] === "-t" && LINES.test(x)));
-    return okFlags ? plain("logs") : deny("logcat arguments not allowed");
+    const okFlags = a.slice(1).every((x, i, arr) => ["-d", "-v", "threadtime", "-t", "-b", "crash"].includes(x) || /^--pid=\d+$/.test(x) || (arr[i - 1] === "-t" && isLines(x)));
+    // `-d` dumps and exits; without it logcat streams until the exec times out, holding a slot.
+    return okFlags && a.includes("-d") ? plain("logs") : deny("logcat arguments not allowed");
   }
   if (a[0] !== "shell") return deny(`adb ${String(a[0] ?? "")} is not part of the device API`);
   const s = a.slice(1);
@@ -331,6 +333,8 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
   // The system's view of every window (ui inspect --system).
   if (s.length === 1 && s[0] === deviceCommands.UIAUTOMATOR_DUMP) return plain("inspection");
+  // Whether a just-leased emulator has settled (#79): boot flag, CPU counters, focused window.
+  if (s.length === 1 && s[0] === deviceCommands.GUEST_STATE) return plain("inspection");
   // One app's language (Android 13+).
   if (s.length === 6 && s[0] === "cmd" && s[1] === "locale" && s[2] === "set-app-locales" && APP_ID.test(s[3]!) && s[4] === "--locales" && deviceCommands.LOCALE.test(s[5]!)) return plain("settings");
   // Chrome without its first-run screens (a setting).

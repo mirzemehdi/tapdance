@@ -237,6 +237,34 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (#68): `device links` showed web links as a bare `https:`: the log filter missed Launch
   Services' "url scheme" lines (case); the app that took the link shows again.
 
+### Phase 2b cloud field test, round 2: builds and installs (issues #85–#90)
+
+- Changing the host policy (`host builds`, `host artifacts`) restarts the guard only when the installed guard
+  serves the same `TAPDANCE_HOME`; a run with a scratch home no longer restarts the machine's real guard.
+
+- A host build that cannot sign in to git fails with `AUTH_FAILED` (`details.reason: GIT_AUTH`) instead
+  of `DEVICE_ERROR`. The error and the CLI's quiet log show git's own line (`Permission denied
+  (publickey)`, `Repository not found`), and the hint fits the auth the host used: its deploy key with
+  the key's fingerprint and whether the organization allows deploy keys, `gh`, or an https URL next to
+  a deploy key (#85).
+- `host builds enable` checks that the host can read each `--repo` with that auth (`git ls-remote`) and
+  `host artifacts enable` that `gh` can read each repository's Actions artifacts; both warn with the fix
+  (`--no-check` skips). `host builds status --check` and `host artifacts status --check` run the check
+  again. In `--git-auth gh` mode, github.com submodules listed with ssh URLs are fetched over https
+  (#86).
+- `host builds key --repo <url> --remove` deletes a repository's key and prints its fingerprint;
+  `host builds disable --repo <url>` and `host artifacts disable --repo <owner/repo>` remove one entry
+  and leave the rest on. Output keeps the repository's case; `host builds status` says `not used
+  (https)` for an https URL next to a deploy key, and an https clone no longer gets the ssh key (#87).
+- MCP `build_app` and `install_app` take `launch` (relaunch after install). `build_app` replies always
+  carry `reused` (with `builtAt`) and `ref`; build and install-from-CI replies name the installed
+  Android package (`appId`, `versionCode`), read from the APK's manifest on the host (#88, #89).
+- Install refusals (`INSTALL_FAILED_VERSION_DOWNGRADE`, another signing key) name the package and use
+  MCP syntax in MCP replies and `tapdance` commands in the CLI (#89).
+- Host Android builds let idle Gradle and Kotlin daemons go after 10 minutes instead of Gradle's 3
+  hours; `host builds enable --gradle-idle-minutes <n>` (policy `builds.gradleDaemonIdleMinutes`; 0
+  builds with `--no-daemon`) (#90).
+
 ### Licence
 
 - Changed: Tapdance is now licensed under the GNU AGPL-3.0-only (was MIT). Self-hosting and changes
@@ -331,6 +359,90 @@ Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
 - Fixed (#73): on Android, `ui inspect` and MCP `inspect_screen` named the session's app while the
   launcher was in front. When no element on screen belongs to the session's app, the app most elements
   belong to is named instead, with a note that the session's app is not in front.
+
+### After the VPS + N2 field run (issues #72, #82)
+
+- Fixed (#72, reopened): the no-focus check never fired on a real emulator, because agent-device's
+  Android snapshot sets `focused` only on the element that has focus and leaves the key out elsewhere.
+  A screen with a text field and no focused element now counts as "no focus". Before refusing, Tapdance
+  asks agent-device for the keyboard status (`dumpsys input_method`): when the keyboard is up, some
+  view takes text, so it types as before.
+- `tapdance logs` gains `--contains <text>` (case-insensitive) and `--level error|fault`, like MCP
+  `get_logs`. A filtered search on Android reads the whole logcat buffer instead of the last N lines,
+  and the reply says how many lines matched and how far back the buffer goes; MCP `get_logs` and
+  `get_crash_logs` search the same way. `-n` goes up to 20000 lines (was 5000).
+- Fixed (#82): MCP `type_text` with a field passed on agent-device's warning that the target "resolved
+  to android.widget.TextView" although Tapdance had read the text back from the field; the warning is
+  dropped when the read-back matches.
+- Fixed (#82): `doctor` said "15 s each" when the 10 s connect timeout had fired; it names the limit
+  that fired.
+### Field run 2b on the N2 VM: leases on a slow or just-started host (#79, #80, #91, #92, #94)
+
+Found on a Google Cloud N2 host with nested-virtualization emulators; the fixes are unit-tested with
+mocked devices and not yet re-run on a host.
+
+- Fixed (#79): a lease taken right after a release, or from a spare restored from Simlock's snapshot,
+  was handed out while the guest was still starting (commands took 12-25 s, and a "System UI isn't
+  responding" dialog covered the app). An Android emulator lease now waits up to 90 s for boot
+  completion, no "isn't responding" dialog (answered with Wait) and a calm guest CPU; past that it is
+  handed out with a notice (CLI warning, `notices` in MCP `lease_device` and the SDK's `lease()`).
+- Fixed (#80): an "isn't responding" or crash dialog in front is named by `ui inspect` /
+  `inspect_screen` (app `android`, with what to tap), `app launch` / `launch_app` (a warning) and a tap
+  whose target is not found, instead of a generic miss.
+- Added (#91): `tapdance host warm default` goes back to Simlock's default spares (it removes the keys
+  `host warm` wrote), and `tapdance host warm` with no counts shows the setting and the spares.
+- Fixed (#91): `worker restart`, `worker start` and `host warm` reset Simlock's device records with
+  `nuke`, which also forgot the learned spare, so the next lease was cold. They now run Simlock's
+  `doctor --fix`, which corrects stale records and keeps what the warm pool learned.
+- Fixed (#92): a lease printed nothing between "Requesting" and "Granted", and always said "a new device
+  can take a few minutes". The request line now says whether a warm spare is ready, and while Simlock
+  queues or starts a device a progress line names the stage.
+- Fixed (#94): right after a host started, the first lease failed with `DEVICE_UNAVAILABLE` "No Android
+  device with serial …" (Simlock still listed the emulator from before the restart). The lease now asks
+  again every 10 s for up to 2 min while the host boots a new one, and a final failure says the host
+  just started instead of "check selectors".
+### Phase 2b field run: cloud host setup and teardown (issues #76, #77, #78, #81, #83, #84, #93, #95)
+
+Unit-tested or checked against a stand-in `gcloud`; not yet re-run on a cloud VM.
+
+- Fixed (#77): `host-setup.sh` sources `~/.tapdance/env.sh` at the top of `~/.bashrc` (before Ubuntu's
+  "not interactive" guard) and exports `ANDROID_SDK_ROOT`, so commands over ssh find `java`,
+  `sdkmanager`, `adb` and `tapdance`. It turns off the Android CLI's usage metrics with `--no-metrics`
+  in `~/.androidrc` (the new `sdkmanager` wrapper rejects the flag itself) and takes the line out again
+  if `sdkmanager` stops working with it. New options: `--with-gh` installs the GitHub CLI, and
+  `--sdk-packages "cmake;3.31.6"` installs extra SDK packages for builds on the host; without them it
+  notes what installs from CI and host builds need. `sdkmanager` no longer reads the script's stdin
+  under `curl | bash`.
+- Fixed (#84): `host-setup.sh` offers the Tailscale login after installing Tapdance, so the clone and
+  build no longer wait for someone to approve the machine. `check-kvm.sh` looks for the SDK in
+  `~/Android/Sdk` (then `~/android-sdk`), says that "cannot open /dev/kvm" is expected before
+  `host-setup.sh`, and the Terraform motd, `next_steps` and docs run it after the setup script.
+- Fixed (#78): `host up` on Linux without a display or clipboard tool no longer offers the clipboard
+  (it names the token file and `host token --show`); the security note mentions iOS simulators only on
+  macOS, and the Tailscale ACL hint says "this machine" on Linux; the linger line prints once.
+- Fixed (#81): `host status` reads Simlock's RAM budget from `capacity.ramBudget` (it showed "? of ? GB")
+  and leaves it out when Simlock keeps none; iOS on Linux "needs a Mac"; the Android SDK is also found in
+  `~/Android/Sdk` (it said "android not available" over ssh while an emulator ran), and the row says
+  when the SDK cannot be found from this shell.
+- Fixed (#93): `host up --idle-stop N` without `--label` keeps the host's only pairing instead of
+  pairing the hostname; several pairings and no `--label` are refused; a run that would need pairing
+  approval without a terminal is refused before any step changes anything, naming the existing pairing.
+- Fixed (#95): the Linux guard service also logs to `~/.tapdance/worker/guard.log` (the user journal is
+  not kept for OS Login accounts); installing the service moves a log over 5 MB to `guard.log.1`.
+  Existing services are rewritten, and so restarted, at the next `host up`. `host status` says when an
+  idle host will power off. The guard lets a token fetch the diagnostics of its own failed
+  `lease.allocate` for 10 minutes (it refused them, so the client lost why the lease failed), until the
+  lease id is granted to anyone.
+- Fixed (#83): `gcp-leftovers.sh` keeps gcloud's warnings out of the rows (two warning lines were
+  reported as "2 LEFT"), treats "Some requests did not succeed" as could-not-check, and says so when the
+  project is already `DELETE_REQUESTED`. The runbook names the emulator process
+  (`qemu-system-x86_64-headless`), uses `adb -P 5038` on the VM, and runs the leftovers check before the
+  project is deleted; the Terraform README writes the script's path from the repository root.
+- Added (#76): `infrastructure/scripts/revoke-run-credentials.sh`, which after a teardown asks before
+  revoking the `gcloud` logins and application-default credentials and deleting the run's scratch
+  `TAPDANCE_HOME`, then prints what is still credentialed and what only the owner can remove (the GitHub
+  token, the Tailscale machine). The runbook and the tear-down docs gained that step and a note on the
+  scope and lifetime of `gcloud` logins.
 
 ### Not yet proven
 

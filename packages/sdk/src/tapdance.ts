@@ -18,7 +18,11 @@ import {
   type ElementTarget,
   type LeaseHandle,
   type LeaseStatus,
+  type LogFilter,
   type LogResult,
+  MAX_LOG_LINES,
+  isLogFilter,
+  logLineMatches,
   type Platform,
   type ProgressListener,
   type ResolvedConfig,
@@ -375,7 +379,11 @@ export class Tapdance {
     }
   }
 
-  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean; ttlCappedMinutes?: number }> {
+  /**
+   * Leases a device for this session. `notices` says what the agent should know about it right away,
+   * for example that it was handed out while still starting (#79).
+   */
+  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean; ttlCappedMinutes?: number; notices?: string[] }> {
     const { config } = this.resolved;
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
@@ -400,7 +408,7 @@ export class Tapdance {
       }
       const ttlMinutes = options.ttlMinutes ?? config.session.defaultTtlMinutes;
       const waitSeconds = options.waitSeconds ?? config.session.leaseWaitSeconds;
-      const handle = await provider.lease(
+      const { notices, ...handle } = await provider.lease(
         this.session.id,
         {
           platform: options.platform,
@@ -431,6 +439,7 @@ export class Tapdance {
         summary: summarize(record, { state: "active", handle, expiresAt: handle.expiresAt }),
         reused: false,
         ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}),
+        ...(notices && notices.length > 0 ? { notices } : {}),
       };
     });
   }
@@ -615,7 +624,7 @@ export class Tapdance {
    * Log lines go to progress: by default only steps, errors and the outcome, with a count of the lines
    * left out; `verbose` passes every line (#53).
    */
-  async buildApp(request: AppBuildRequest, options: { verbose?: boolean } = {}): Promise<AppBuildResult> {
+  async buildApp(request: AppBuildRequest, options: { verbose?: boolean } = {}): Promise<AppBuildResult & { reused: boolean; ref: string }> {
     await this.guardHuman();
     let hidden = 0;
     const onLine = (line: string) => {
@@ -625,10 +634,12 @@ export class Tapdance {
         this.progress(line);
       } else if (++hidden % 5000 === 0) this.progress(`… ${hidden} log lines`);
     };
-    return this.onDevice(async (handle, provider) => {
+    const result = await this.onDevice(async (handle, provider) => {
       if (!provider.buildApp) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} cannot build apps`);
       return provider.buildApp(handle, request, onLine);
     });
+    // Always say whether this was a fresh build, and of which ref (#88).
+    return { ...result, reused: result.reused === true, ref: result.ref ?? request.ref };
   }
 
   /**
@@ -832,12 +843,24 @@ export class Tapdance {
     });
   }
 
-  async logs(options: { lines?: number; appId?: string; crash?: boolean } = {}): Promise<LogResult> {
+  /**
+   * Device logs, saved as an artifact. `contains` (case-insensitive) and `level` search everything the
+   * device's log keeps and return the last `lines` matching lines (#82).
+   */
+  async logs(options: { lines?: number; appId?: string; crash?: boolean; contains?: string; level?: "error" | "fault" } = {}): Promise<LogResult> {
+    const filter: LogFilter = { ...(options.contains ? { contains: options.contains } : {}), ...(options.level ? { level: options.level } : {}) };
+    if (options.level !== undefined && options.level !== "error" && options.level !== "fault") {
+      throw new TapdanceError("USAGE", `Unknown log level "${String(options.level)}"`, { hint: "Use error (errors and exceptions) or fault (faults and crashes)." });
+    }
     return this.onDevice(async (handle, provider) => {
-      const lines = options.lines ?? 200;
-      const result = options.crash
-        ? await provider.crashLogs(handle, { lines, ...(options.appId ? { appId: options.appId } : {}) })
-        : await provider.logs(handle, { lines, ...(options.appId ? { appId: options.appId } : {}) });
+      const lines = Math.min(options.lines ?? 200, MAX_LOG_LINES);
+      const request = { lines, ...(options.appId ? { appId: options.appId } : {}), ...(isLogFilter(filter) ? { filter } : {}) };
+      let result = options.crash ? await provider.crashLogs(handle, request) : await provider.logs(handle, request);
+      // A provider that did not filter (a fake one) still answers the request.
+      if (isLogFilter(filter) && !result.filtered) {
+        const kept = result.lines.filter((l) => logLineMatches(l, filter));
+        result = { ...result, lines: kept.slice(-lines), truncated: result.truncated || kept.length > lines, filtered: true };
+      }
       const path = await this.artifacts.allocate(this.session.id, "log", "txt");
       await writeFile(path, `# ${result.source}\n${result.lines.join("\n")}\n`);
       result.artifact = await this.artifacts.record({ kind: "log", path, sessionId: this.session.id, leaseId: handle.leaseId, note: result.source });

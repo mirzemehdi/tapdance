@@ -290,14 +290,23 @@ export function resolveHostStop(input: { idleStop?: string; maxUptime?: string; 
   return { idleMinutes, maxUptimeHours, idleSource, write, changed };
 }
 
-/** "idle 12 min" from the guard's last check (host-stop.json), when that check is recent. */
-export function describeIdle(state: { checkedAt?: unknown; lastActivityAt?: unknown; leases?: unknown } | undefined, now: number): string | undefined {
+/**
+ * "idle 1 min, powers off in about 9 min (around 15:43 UTC)" from the guard's last check
+ * (host-stop.json, which also carries the idle limit), when that check is recent. The guard checks once
+ * a minute and the guest then needs a minute or two to shut down, so the stop lands a little later.
+ */
+export function describeIdle(state: { checkedAt?: unknown; lastActivityAt?: unknown; leases?: unknown; idleMinutes?: unknown } | undefined, now: number): string | undefined {
   if (!state || typeof state.checkedAt !== "string" || typeof state.lastActivityAt !== "string") return undefined;
   const checked = Date.parse(state.checkedAt);
   const last = Date.parse(state.lastActivityAt);
   if (!Number.isFinite(checked) || !Number.isFinite(last) || now - checked > 5 * 60_000) return undefined;
   if (typeof state.leases === "number" && state.leases > 0) return `in use (${state.leases} lease(s))`;
-  return `idle ${Math.max(0, Math.floor((checked - last) / 60_000))} min`;
+  const idle = `idle ${Math.max(0, Math.floor((checked - last) / 60_000))} min`;
+  if (typeof state.idleMinutes !== "number" || !(state.idleMinutes > 0)) return idle;
+  const stopAt = last + state.idleMinutes * 60_000;
+  const left = Math.ceil((stopAt - now) / 60_000);
+  const at = new Date(Math.max(stopAt, now)).toISOString().slice(11, 16);
+  return left <= 0 ? `${idle}, powers off at the guard's next check (within a minute)` : `${idle}, powers off in about ${left} min (around ${at} UTC)`;
 }
 
 // ------------------------------------------------------------------ pairing
@@ -308,6 +317,37 @@ export function defaultLabel(hostname: string): string {
 
 export function sanitizeLabel(label: string): string {
   return label.trim().replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "").slice(0, 64);
+}
+
+/**
+ * Which pairing `host up` works on. `--label` wins. Without it: the hostname's label when that pairing
+ * exists, else the host's only active pairing (so `host up --idle-stop 10` keeps the pairing in use
+ * instead of pairing a new machine as the hostname, #93), else the hostname. Several active pairings
+ * and none named: refused, before anything changes.
+ */
+export function choosePairingLabel(input: { flag?: string; hostnameLabel: string; active: string[] }): { label: string; source: "flag" | "hostname" | "only pairing" } {
+  if (input.flag !== undefined) return { label: sanitizeLabel(input.flag) || "host", source: "flag" };
+  if (input.active.length === 0 || input.active.includes(input.hostnameLabel)) return { label: input.hostnameLabel, source: "hostname" };
+  if (input.active.length === 1) return { label: input.active[0]!, source: "only pairing" };
+  throw new TapdanceError("USAGE", `This host has several pairings (${input.active.map((l) => `"${l}"`).join(", ")}); say which one`, {
+    hint: `Pass --label with one of them, e.g. tapdance host up --label ${input.active[0]} (a new name pairs another control machine).`,
+  });
+}
+
+/**
+ * The refusal when `host up` would issue a new pairing without a terminal to approve it. Names the
+ * pairings this host already has, so the fix is the right --label rather than a second pairing.
+ */
+export function pairingApprovalRefusal(o: HostUpOptions, label: string, active: string[]): TapdanceError {
+  const others = active.filter((l) => l !== label);
+  if (others.length > 0) {
+    return new TapdanceError("FORBIDDEN", `"${label}" is not paired, and pairing it must be approved at this machine's terminal; this host is paired as ${others.map((l) => `"${l}"`).join(", ")}`, {
+      hint: `To keep that pairing: ${hostUpCommand({ ...o, label: others[0]! })}. To pair a new control machine as "${label}", run it in a local terminal or add --yes if you are the owner: ${hostUpCommand({ ...o, label }, { yes: true })}`,
+    });
+  }
+  return new TapdanceError("FORBIDDEN", "Pairing must be approved at this machine's terminal", {
+    hint: `Run it in a local terminal, or pass --yes if you are the owner running it here: ${hostUpCommand({ ...o, label }, { yes: true })}`,
+  });
 }
 
 /** Where `host up` writes the pairing token for a label (mode 600, next to the guard's own files). */
@@ -408,6 +448,58 @@ export function warmSettings(warm: WarmCounts, limits: { android: number; ios: n
   ];
 }
 
+/** The warm-pool keys `warmSettings` writes; `host warm default` removes exactly these (#91). */
+export const WARM_KEYS = ["warmPool.enabled", "warmPool.reserveRunning.android", "warmPool.reserveRunning.ios"] as const;
+
+/**
+ * Simlock's config without the warm-pool keys Tapdance writes, so Simlock's own default applies
+ * again: one booted spare per device kind leases used (learned). Objects left empty are dropped;
+ * any other key stays as it is. Returns the keys that were present.
+ */
+export function withoutWarmSettings(config: Record<string, unknown>): { config: Record<string, unknown>; removed: string[] } {
+  const copy = structuredClone(config);
+  const removed: string[] = [];
+  for (const key of WARM_KEYS) {
+    const path = key.split(".");
+    const parents: Array<Record<string, unknown>> = [copy];
+    for (const segment of path.slice(0, -1)) {
+      const next = parents.at(-1)![segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) break;
+      parents.push(next as Record<string, unknown>);
+    }
+    if (parents.length !== path.length) continue;
+    const last = path.at(-1)!;
+    if (!(last in parents.at(-1)!)) continue;
+    delete parents.at(-1)![last];
+    removed.push(key);
+    // Drop objects the removal left empty (reserveRunning, then warmPool), innermost first.
+    for (let i = parents.length - 1; i > 0; i--) {
+      if (Object.keys(parents[i]!).length > 0) break;
+      delete parents[i - 1]![path[i - 1]!];
+    }
+  }
+  return { config: copy, removed };
+}
+
+/** How the worker's warm spares are set, for `host warm` with no counts (#91). */
+export function describeWarm(
+  config: Record<string, unknown> | undefined,
+  pool: { enabled?: boolean; targets?: Array<{ platform?: string; model?: string; osVersion?: string; origin?: string; ready?: number; booting?: number }> } | undefined,
+): string {
+  const warm = (config?.["warmPool"] ?? {}) as { enabled?: unknown; reserveRunning?: Record<string, unknown> };
+  const set = WARM_KEYS.filter((k) => withoutWarmSettings(config ?? {}).removed.includes(k));
+  const lines: string[] = [];
+  if (warm.enabled === false) lines.push("Warm spares: off (tapdance host warm android=0,ios=0); idle devices shut down.");
+  else if (set.length === 0) lines.push("Warm spares: Simlock's default: one booted spare of each device kind a lease used (learned from leases).");
+  else lines.push(`Warm spares: set by tapdance host warm (reserved running slots: android ${String(warm.reserveRunning?.["android"] ?? 0)}, ios ${String(warm.reserveRunning?.["ios"] ?? 0)}); spares are still the device kinds leases used.`);
+  const targets = pool?.targets ?? [];
+  if (pool === undefined) lines.push("The worker is not running, so there is no spare right now.");
+  else if (targets.length === 0) lines.push(pool.enabled === false ? "No spares." : "No spare yet: the next lease boots a device, and the worker keeps one of that kind ready afterwards.");
+  for (const t of targets) lines.push(`  ${t.platform ?? "?"} ${t.model ?? "?"}${t.osVersion ? ` / ${t.osVersion}` : ""} (${t.origin ?? "?"}): ready ${t.ready ?? 0}${t.booting ? `, booting ${t.booting}` : ""}`);
+  lines.push("Change: tapdance host warm android=1,ios=0 · off: tapdance host warm android=0,ios=0 · back to the default: tapdance host warm default");
+  return lines.join("\n");
+}
+
 /** A short, safe-to-show tag for a token: the first 6 hex characters of its SHA-256. */
 export function tokenFingerprint(token: string): string {
   return createHash("sha256").update(token.trim()).digest("hex").slice(0, 6);
@@ -421,6 +513,56 @@ export function clipboardCommand(platform: NodeJS.Platform, has: (bin: string) =
   if (has("xclip")) return ["xclip", "-selection", "clipboard"];
   if (has("xsel")) return ["xsel", "--clipboard", "--input"];
   return undefined;
+}
+
+/**
+ * Whether `host up` offers to copy the token to the clipboard. Not on Linux without a display (a server
+ * over ssh has no clipboard to paste from) or without a clipboard tool: then it points at
+ * `tapdance host token --show` instead of asking a question whose only answer is "no tool found".
+ */
+export function offerClipboard(platform: NodeJS.Platform, env: Record<string, string | undefined>, has: (bin: string) => boolean): boolean {
+  if (platform === "linux" && !env["DISPLAY"] && !env["WAYLAND_DISPLAY"]) return false;
+  return clipboardCommand(platform, has) !== undefined;
+}
+
+/** The security note under the ready block. The iOS sentence only where iOS simulators run (macOS). */
+export function hostSecurityNote(platform: NodeJS.Platform, user: string, scope?: string): string {
+  return [
+    `Security: whoever holds this token can drive the devices${scope ? ` (scopes: ${scope})` : ", install apps"} and run a shell inside the emulators.`,
+    ...(platform === "darwin" ? [`An iOS simulator app is not sandboxed from this Mac: installing one runs code as ${user}, with this account's files.`] : []),
+    `Prefer a dedicated standard account for hosting, or a token without install (--scope interaction,inspection,screenshots,streaming,input). See docs/security/threat-model.md.`,
+  ].join(" ");
+}
+
+/** The Tailscale ACL suggestion under the ready block. */
+export function tailscaleAclHint(platform: NodeJS.Platform, port: number): string {
+  const self = platform === "darwin" ? "this Mac" : "this machine";
+  return `Tailscale ACL (recommended): let only the agent's machine reach this port, e.g. {"action": "accept", "src": ["<agent machine's 100.x address or tag>"], "dst": ["<${self}'s 100.x address or tag>:${port}"]} in https://login.tailscale.com/admin/acls (\`tailscale ip -4\` prints the address).`;
+}
+
+/** The prerequisites row of `host status`: iOS on Linux "needs a Mac", like `host up` says. */
+export function describePlatforms(p: { android: boolean; ios: boolean }, platform: "darwin" | "linux"): string {
+  return `android ${p.android ? "ready" : "not available"}, ios ${p.ios ? "ready" : platform === "darwin" ? "not available" : "needs a Mac"}`;
+}
+
+/**
+ * The devices part of the worker row in `host status`, from `simlock --local status --json`. Simlock 0.4
+ * reports the RAM budget under `capacity.ramBudget` (older builds at the top level), and only under a
+ * capacity strategy that keeps one: without it the budget part is left out.
+ */
+export function describeWorkerDevices(status: unknown): string {
+  const s = (status ?? {}) as { capacity?: Record<string, unknown>; ramBudget?: unknown };
+  const capacity = s.capacity ?? {};
+  const counts = (p: string) => {
+    const c = (capacity[p] ?? {}) as { running?: unknown; warm?: unknown };
+    const n = (v: unknown) => (typeof v === "number" ? v : 0);
+    return `${p} ${n(c.running)} running (${n(c.warm)} warm spare)`;
+  };
+  const budget = (capacity["ramBudget"] ?? s.ramBudget ?? {}) as { usedBytes?: unknown; limitBytes?: unknown };
+  const gb = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? (v / 1024 ** 3).toFixed(1) : undefined);
+  const used = gb(budget.usedBytes);
+  const limit = gb(budget.limitBytes);
+  return `${counts("android")}, ${counts("ios")}${used !== undefined && limit !== undefined ? `; devices use ${used} of ${limit} GB budget` : ""}`;
 }
 
 export function renderReadyBlock(r: ReadyBlock & { fingerprint?: string; label?: string }): string {

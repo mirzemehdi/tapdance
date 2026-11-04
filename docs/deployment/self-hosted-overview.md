@@ -173,10 +173,12 @@ line on a detected cloud VM to remind you. When you no longer need the host:
    it.
 2. Check in the provider's console or billing page that nothing from it is left. On Google Cloud,
    `bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` lists what can still bill and exits 0 only
-   when nothing is left ([Google Cloud N2: tear down](google-cloud-n2.md#tear-down)).
+   when nothing is left; run it before deleting the project ([Google Cloud N2: tear down](google-cloud-n2.md#tear-down)).
 3. Remove the machine from your tailnet in the
    [Tailscale admin console](https://login.tailscale.com/admin/machines), and revoke any token you gave
-   it (for example a GitHub token for installs from CI).
+   it (for example a GitHub token for installs from CI). Cloud CLI logins made for the machine (a
+   `gcloud auth login` covers your whole Google account and does not expire on its own) can go too:
+   `bash infrastructure/scripts/revoke-run-credentials.sh` asks before revoking each.
 
 Most providers' budget alerts only send e-mails; set one anyway. A Mac or a server you own costs
 nothing extra here: stop hosting with `tapdance host pause` or `tapdance host down`.

@@ -3,8 +3,45 @@ import { mkdir, mkdtemp, readdir, readFile, stat, symlink, writeFile } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCacheDir, checkBuildRequest, deployKeyFor, FailureDigest, gitAuthHint, gitEnv, hostNetworkHint, hostSimulatorArch, isNotableBuildLine, missingSdkHint, normalizeRepo, runBuild, type BuildSettings, type CommandRunner } from "./build.js";
-import { addBuildFile, BUILD_FILE_MAX_BYTES, BUILD_FILES_MAX, buildFilesDigest, checkBuildFilePath, listAllBuildFiles, readBuildFiles, removeBuildFile, repoKeyPath, repoSlug } from "./build-files.js";
+import type { TapdanceError } from "@tapdance/core";
+import {
+  buildCacheDir,
+  checkBuildRequest,
+  deployKeyFor,
+  describeGitAuth,
+  FailureDigest,
+  gitAccessProbe,
+  gitAuthContext,
+  gitAuthHint,
+  gitEnv,
+  githubOverHttps,
+  gradleDaemonArgs,
+  hostNetworkHint,
+  hostSimulatorArch,
+  isNotableBuildLine,
+  missingSdkHint,
+  normalizeRepo,
+  runBuild,
+  type BuildSettings,
+  type CommandRunner,
+} from "./build.js";
+import {
+  addBuildFile,
+  BUILD_FILE_MAX_BYTES,
+  BUILD_FILES_MAX,
+  buildFilesDigest,
+  checkBuildFilePath,
+  keyFingerprint,
+  listAllBuildFiles,
+  readBuildFiles,
+  removeBuildFile,
+  removeRepoKey,
+  repoDisplay,
+  repoIdentity,
+  repoKeyPath,
+  repoSlug,
+  sshFingerprint,
+} from "./build-files.js";
 
 const SHA = "a".repeat(40);
 const settings: BuildSettings = { repos: ["https://github.com/acme/pianolune.git"], protectedRefs: [], gitAuth: "none", timeoutMinutes: 5 };
@@ -21,7 +58,7 @@ function fakeRunner(
     calls.push([command.split("/").pop(), ...args.filter((a) => !a.startsWith(root))].join(" "));
     envs.push(o.env);
     if (command === "git" && args[0] === "clone" && opts.cloneFails) {
-      o.onLine(opts.cloneFails);
+      for (const l of opts.cloneFails.split("\n")) o.onLine(l);
       return { code: 128, output: opts.cloneFails };
     }
     if (command === "git" && args[0] === "clone") {
@@ -191,7 +228,7 @@ describe("builds on the host (#45)", () => {
     const again = fakeRunner(root);
     const lines: string[] = [];
     const reused = await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "ios" }, settings, root, (l) => lines.push(l), again.run);
-    expect(reused).toMatchObject({ sha: SHA, reused: true, artifact: built.artifact });
+    expect(reused).toMatchObject({ sha: SHA, reused: true, artifact: built.artifact, builtAt: expect.stringMatching(/^\d{4}-/) });
     expect(again.calls.some((c) => c.startsWith("xcodebuild"))).toBe(false);
     expect(lines.some((l) => l.startsWith("Reusing the build of"))).toBe(true);
     // The host is offline: a branch cannot be trusted from the cache, and the error says whose network.
@@ -241,11 +278,14 @@ describe("private repositories: per-repository deploy keys and host build files"
     expect(deployKeyFor(root, SSH, { ...settings, gitAuth: "none" })).toBeUndefined();
     await mkdir(join(root, "keys"), { recursive: true });
     await writeFile(repoKeyPath(root, SSH), "OWN");
-    // The repository's own key wins, whatever the URL form and whatever gitAuth says.
-    expect(deployKeyFor(root, REPO, deployKey)).toBe(repoKeyPath(root, SSH));
+    // The repository's own key wins for any ssh URL form, whatever gitAuth says.
+    expect(deployKeyFor(root, "ssh://git@github.com/acme/pianolune", deployKey)).toBe(repoKeyPath(root, SSH));
     expect(deployKeyFor(root, SSH, { ...settings, gitAuth: "gh" })).toBe(repoKeyPath(root, SSH));
-    expect(deployKeyFor(root, "https://github.com/acme/other", deployKey)).toBe(legacy);
-    expect(gitEnv(settings, repoKeyPath(root, SSH))["GIT_SSH_COMMAND"]).toBe(`ssh -i '${repoKeyPath(root, SSH)}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`);
+    expect(deployKeyFor(root, "git@github.com:acme/other.git", deployKey)).toBe(legacy);
+    // An https clone never uses an ssh key (#87).
+    expect(deployKeyFor(root, REPO, deployKey)).toBeUndefined();
+    expect(deployKeyFor(root, "https://github.com/acme/other", deployKey)).toBeUndefined();
+    expect(gitEnv(settings, repoKeyPath(root, SSH))["GIT_SSH_COMMAND"]).toBe(`ssh -i '${repoKeyPath(root, SSH)}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes`);
     expect(gitEnv(settings)["GIT_SSH_COMMAND"]).toBeUndefined();
     const gh = gitEnv({ ...settings, gitAuth: "gh" }, repoKeyPath(root, SSH));
     expect(gh["GIT_CONFIG_VALUE_1"]).toBe("!gh auth git-credential");
@@ -400,5 +440,127 @@ describe("private repositories: per-repository deploy keys and host build files"
     });
     await runBuild({ repo: REPO, ref: "main", platform: "ios" }, settings, root3, () => undefined, third.run);
     expect(copied).toBe("{}");
+  });
+});
+
+describe("git sign-in, repository keys and Gradle daemons on the host (#85, #86, #87, #90)", () => {
+  const SSH = "git" + "@github.com:KAppMakerDeveloperApps/Pianolune-All.git";
+  const HTTPS = "https://github.com/KAppMakerDeveloperApps/Pianolune-All";
+  // GitHub's published ed25519 host key and the fingerprint GitHub and ssh-keygen show for it.
+  const PUB = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl tapdance-builds@host";
+  const FINGERPRINT = "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU";
+  const denied = "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights";
+  const withKey = async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    await mkdir(join(root, "keys"), { recursive: true });
+    await writeFile(repoKeyPath(root, SSH), "PRIVATE");
+    await writeFile(`${repoKeyPath(root, SSH)}.pub`, `${PUB}\n`);
+    return root;
+  };
+
+  it("keeps the repository's case for people and lower-cases only its identity; fingerprints a key like ssh-keygen", async () => {
+    expect(repoDisplay(SSH)).toBe("github.com/KAppMakerDeveloperApps/Pianolune-All");
+    expect(repoDisplay("https://GitHub.com/KAppMakerDeveloperApps/Pianolune-All.git/")).toBe("github.com/KAppMakerDeveloperApps/Pianolune-All");
+    expect(repoIdentity(SSH)).toBe("github.com/kappmakerdeveloperapps/pianolune-all");
+    expect(sshFingerprint(PUB)).toBe(FINGERPRINT);
+    expect(sshFingerprint("not a key")).toBeUndefined();
+    const root = await withKey();
+    expect(keyFingerprint(repoKeyPath(root, SSH))).toBe(FINGERPRINT);
+    expect(await removeRepoKey(root, HTTPS)).toEqual({ path: repoKeyPath(root, SSH), fingerprint: FINGERPRINT });
+    expect(existsSync(repoKeyPath(root, SSH))).toBe(false);
+    expect(existsSync(`${repoKeyPath(root, SSH)}.pub`)).toBe(false);
+    expect(await removeRepoKey(root, HTTPS)).toBeUndefined();
+  });
+
+  it("a refused deploy key is AUTH_FAILED, names git's own line and the key it used (fake git, mocked)", async () => {
+    const root = await withKey();
+    const { run } = fakeRunner(root, { cloneFails: denied });
+    const lines: string[] = [];
+    const error = (await runBuild({ repo: SSH, ref: "main", platform: "android" }, { ...settings, gitAuth: "deploy-key" }, root, (l) => lines.push(l), run).catch((e: unknown) => e)) as TapdanceError;
+    expect(error.code).toBe("AUTH_FAILED");
+    expect(error.message).toMatch(/^git clone failed \(exit 128\):/);
+    // The line that names the cause is in the message (the CLI prints it) and in the quiet log.
+    expect(error.message).toContain("git@github.com: Permission denied (publickey).");
+    expect(lines.filter(isNotableBuildLine)).toContain("git@github.com: Permission denied (publickey).");
+    expect(error.hint).toContain("with its own deploy key");
+    expect(error.hint).toContain(FINGERPRINT);
+    expect(error.hint).toContain("Member privileges › Deploy keys");
+    expect(error.hint).toContain("--git-auth gh");
+    expect(error.hint).not.toMatch(/in one of three ways/);
+    expect(error.details).toMatchObject({ reason: "GIT_AUTH", gitAuth: "repo-key", keyFingerprint: FINGERPRINT });
+  });
+
+  it("tailors the sign-in hint to gh, an https URL next to a deploy key, and ssh without a key", async () => {
+    const root = await withKey();
+    const gh = gitAuthHint("remote: Repository not found.\nfatal: repository 'https://github.com/x/y/' not found", HTTPS, gitAuthContext(root, HTTPS, { ...settings, gitAuth: "gh" }));
+    expect(gh).toContain("The host's gh could not read github.com/KAppMakerDeveloperApps/Pianolune-All");
+    expect(gh).toContain("gh auth status");
+    const https = gitAuthHint("fatal: could not read Username for 'https://github.com': terminal prompts disabled", HTTPS, gitAuthContext(root, HTTPS, { ...settings, gitAuth: "deploy-key" }));
+    expect(https).toContain("a deploy key works only over ssh");
+    const keyless = await mkdtemp(join(tmpdir(), "td-build-"));
+    const noKey = gitAuthHint(denied, SSH, gitAuthContext(keyless, SSH, settings));
+    expect(noKey).toContain("no deploy key for github.com/KAppMakerDeveloperApps/Pianolune-All");
+    expect(noKey).toContain("tapdance host builds key --repo <url>");
+    expect(gitAuthContext(root, HTTPS, { ...settings, gitAuth: "gh" })).toMatchObject({ mode: "gh", ssh: false });
+    expect(gitAuthContext(root, SSH, settings)).toMatchObject({ mode: "repo-key", ssh: true, fingerprint: FINGERPRINT });
+    expect(describeGitAuth(gitAuthContext(root, SSH, settings))).toBe(`its own deploy key ${FINGERPRINT}`);
+    expect(isNotableBuildLine("remote: Repository not found.")).toBe(true);
+    expect(isNotableBuildLine("ERROR: Repository not found.")).toBe(true);
+  });
+
+  it("checks access with git ls-remote and the build's auth, never fetching (fake git, mocked)", async () => {
+    const root = await withKey();
+    const seen: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+    const answer =
+      (code: number, output: string): CommandRunner =>
+      async (_command, args, o) => {
+        seen.push({ args, env: o.env });
+        return { code, output };
+      };
+    const ok = await gitAccessProbe(SSH, { ...settings, gitAuth: "deploy-key" }, root, answer(0, "abc\tHEAD\n"));
+    expect(ok).toMatchObject({ repo: SSH, ok: true, auth: `its own deploy key ${FINGERPRINT}` });
+    expect(seen[0]!.args).toEqual(["ls-remote", SSH, "HEAD"]);
+    expect(seen[0]!.env["GIT_SSH_COMMAND"]).toContain(repoKeyPath(root, SSH));
+    expect(seen[0]!.env["GIT_SSH_COMMAND"]).toContain("BatchMode=yes");
+    const refused = await gitAccessProbe(SSH, settings, root, answer(128, denied));
+    expect(refused).toMatchObject({ ok: false, reason: "GIT_AUTH", detail: expect.stringContaining("Permission denied (publickey)") });
+    expect(refused.hint).toContain(FINGERPRINT);
+    const offline = await gitAccessProbe(HTTPS, settings, root, answer(128, "fatal: unable to access 'https://github.com/x/': Could not resolve host: github.com"));
+    expect(offline).toMatchObject({ ok: false, reason: "HOST_NETWORK" });
+    // A keyless ssh check still never prompts.
+    await gitAccessProbe(SSH, settings, await mkdtemp(join(tmpdir(), "td-build-")), answer(0, ""));
+    expect(seen.at(-1)!.env["GIT_SSH_COMMAND"]).toBe("ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes");
+    expect(await gitAccessProbe("file:///etc", settings, root, answer(0, ""))).toMatchObject({ ok: false, reason: "OTHER" });
+  });
+
+  it("fetches ssh-URL github.com submodules over https in gh mode only (fake git, mocked)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const gmod = async (src: string) => writeFile(join(src, ".gitmodules"), '[submodule "Docs"]\n\tpath = Docs\n\turl = git@github.com:acme/docs.git\n');
+    const gh = fakeRunner(root, { onClone: gmod });
+    await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "android" }, { ...settings, gitAuth: "gh" }, root, () => undefined, gh.run);
+    const sub = gh.calls.findIndex((c) => c.includes("submodule update"));
+    expect(sub).toBeGreaterThan(0);
+    expect(gh.envs[sub]).toMatchObject({ GIT_CONFIG_COUNT: "4", GIT_CONFIG_KEY_2: "url.https://github.com/.insteadOf", GIT_CONFIG_VALUE_2: "git@github.com:", GIT_CONFIG_VALUE_3: "ssh://git@github.com/" });
+    // Only the submodule step: the clone itself keeps the URL it was given.
+    expect(gh.envs[0]!["GIT_CONFIG_COUNT"]).toBe("2");
+    expect(githubOverHttps({})).toMatchObject({ GIT_CONFIG_COUNT: "2", GIT_CONFIG_KEY_0: "url.https://github.com/.insteadOf" });
+    const other = await mkdtemp(join(tmpdir(), "td-build-"));
+    const none = fakeRunner(other, { onClone: gmod });
+    await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "android" }, settings, other, () => undefined, none.run);
+    expect(none.calls.some((c) => c.includes("submodule update"))).toBe(true);
+    expect(none.envs.every((e) => e["GIT_CONFIG_KEY_0"] === undefined)).toBe(true);
+  });
+
+  it("lets an idle Gradle and Kotlin daemon go after 10 minutes by default, or runs without one (fake Gradle, mocked)", async () => {
+    expect(gradleDaemonArgs()).toEqual(["-Dorg.gradle.daemon.idletimeout=600000", "-Dkotlin.daemon.options=autoshutdownIdleSeconds=600"]);
+    expect(gradleDaemonArgs(0)).toEqual(["--no-daemon", "-Pkotlin.compiler.execution.strategy=in-process"]);
+    const root = await mkdtemp(join(tmpdir(), "td-build-"));
+    const { run, calls } = fakeRunner(root);
+    await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "android" }, settings, root, () => undefined, run);
+    expect(calls.find((c) => c.startsWith("gradlew"))).toBe("gradlew assembleDebug --console=plain -Dorg.gradle.daemon.idletimeout=600000 -Dkotlin.daemon.options=autoshutdownIdleSeconds=600");
+    const root2 = await mkdtemp(join(tmpdir(), "td-build-"));
+    const off = fakeRunner(root2);
+    await runBuild({ repo: "https://github.com/acme/pianolune", ref: "main", platform: "android" }, { ...settings, gradleDaemonIdleMinutes: 0 }, root2, () => undefined, off.run);
+    expect(off.calls.find((c) => c.startsWith("gradlew"))).toContain("--no-daemon");
   });
 });

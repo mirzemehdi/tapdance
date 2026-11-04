@@ -16,7 +16,7 @@ import {
   validateAppPath,
 } from "./index.js";
 import { CODE_MAP } from "./agent-device-errors.js";
-import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint } from "./provider.js";
+import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint, toLogResult, triesNote, withoutFillTargetDoubt } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -705,18 +705,21 @@ describe("iOS gaps (#48-#50)", () => {
     await expect(asked.p.typeText(handle, text, { kind: "id", id: "settings_code_field" }, { delayMs: 40 })).rejects.toThrow(/even at 40 ms/);
   });
 
-  // MOCKED agent-device client: a snapshot with or without a focused field, and a type call that is recorded.
-  const androidWith = (nodes: Array<Record<string, unknown>> | Error, appBundleId = "com.measify.pianolune") => {
+  // MOCKED agent-device client: a snapshot with or without a focused field, a keyboard status, and a
+  // type call that is recorded.
+  const androidWith = (nodes: Array<Record<string, unknown>> | Error, appBundleId = "com.measify.pianolune", keyboard: Record<string, unknown> | Error = { visible: false }) => {
     const typed: string[] = [];
+    const keyboardCalls: unknown[] = [];
     const p = new (class extends SimlockProvider {
       protected override agentClient() {
         return {
           capture: { snapshot: async () => (nodes instanceof Error ? Promise.reject(nodes) : { nodes, appBundleId }) },
+          command: { keyboard: async (o: unknown) => (keyboardCalls.push(o), keyboard instanceof Error ? Promise.reject(keyboard) : { platform: "android", action: "status", ...keyboard }) },
           interactions: { type: async (o: { text: string }) => (typed.push(o.text), {}) },
         } as never;
       }
     })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
-    return { p, typed };
+    return { p, typed, keyboardCalls };
   };
   const androidHandle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "local", runId: "r", clientId: "c" } } as never;
 
@@ -729,13 +732,36 @@ describe("iOS gaps (#48-#50)", () => {
     expect(unfocused.typed).toEqual([]);
   });
 
+  it("refuses when the snapshot carries no focus flags at all, as agent-device's Android snapshot does for an unfocused field (#72 reopen, MOCKED client)", async () => {
+    // The field run's "Have a code?" sheet: agent-device sets `focused` only when true, so no node has the key.
+    const sheet = [
+      { ref: "e1", type: "android.widget.TextView", label: "Have a code?" },
+      { ref: "e3", type: "android.widget.EditText", editable: true },
+      { ref: "e4", type: "android.widget.Button", label: "Apply" },
+    ];
+    const noFlags = androidWith(sheet);
+    await expect(noFlags.p.typeText(androidHandle, "N2 field 2026 Für Elise")).rejects.toMatchObject({ code: "ELEMENT_NOT_FOUND", message: "No text field has focus, so nothing was typed" });
+    expect(noFlags.typed).toEqual([]);
+    expect(noFlags.keyboardCalls).toEqual([expect.objectContaining({ action: "status" })]);
+    // The keyboard status cannot be read: the snapshot's answer stands.
+    const noStatus = androidWith(sheet, undefined, new Error("dumpsys timed out"));
+    await expect(noStatus.p.typeText(androidHandle, "abc")).rejects.toMatchObject({ code: "ELEMENT_NOT_FOUND" });
+    // The keyboard is up: some view takes text that the snapshot did not mark, so typing goes ahead.
+    const keyboardUp = androidWith(sheet, undefined, { visible: true, inputOwner: "app" });
+    await keyboardUp.p.typeText(androidHandle, "abc");
+    expect(keyboardUp.typed).toEqual(["abc"]);
+  });
+
   it("types with no target into the focused field, and when the snapshot cannot tell (#72, MOCKED client)", async () => {
-    const focused = androidWith([{ ref: "e1", type: "android.widget.EditText", focused: true }, { ref: "e2", type: "android.widget.Button", focused: false }]);
+    // After a targeted fill the field shows [focused]: only that node carries the flag.
+    const focused = androidWith([{ ref: "e1", type: "android.widget.EditText", focused: true }, { ref: "e2", type: "android.widget.Button" }]);
     expect((await focused.p.typeText(androidHandle, "abc")).message).toMatch(/Typed 3 characters/);
     expect(focused.typed).toEqual(["abc"]);
-    const noFlags = androidWith([{ ref: "e1", type: "android.widget.EditText" }]);
-    await noFlags.p.typeText(androidHandle, "abc");
-    expect(noFlags.typed).toEqual(["abc"]);
+    expect(focused.keyboardCalls).toEqual([]);
+    // No text field on screen (a game canvas, a custom view): it cannot tell, so it types.
+    const noField = androidWith([{ ref: "e1", type: "android.view.View", label: "Play" }]);
+    await noField.p.typeText(androidHandle, "abc");
+    expect(noField.typed).toEqual(["abc"]);
     const failed = androidWith(new Error("snapshot helper busy"));
     await failed.p.typeText(androidHandle, "abc");
     expect(failed.typed).toEqual(["abc"]);
@@ -747,8 +773,54 @@ describe("iOS gaps (#48-#50)", () => {
     expect(editableFocus([{ type: "android.widget.EditText", focused: false }])).toBe(false);
     expect(editableFocus([{ type: "android.widget.Button", focused: true, editable: false }])).toBe(false);
     expect(editableFocus([{ type: "android.view.View", focused: true }])).toBeUndefined();
-    expect(editableFocus([{ type: "android.widget.EditText" }])).toBeUndefined();
+    // The real Android snapshot: no `focused` key unless true (#72 reopen).
+    expect(editableFocus([{ type: "android.widget.EditText" }])).toBe(false);
+    expect(editableFocus([{ type: "android.view.View", editable: true }, { type: "android.widget.Button" }])).toBe(false);
+    expect(editableFocus([{ type: "android.widget.EditText", editable: false }])).toBeUndefined();
+    expect(editableFocus([{ type: "android.widget.Button" }])).toBeUndefined();
     expect(editableFocus([])).toBeUndefined();
+  });
+
+  it("drops agent-device's TextView doubt once the field reads back the text (#82)", () => {
+    const doubt = 'fill target label="Your code" resolved to "android.widget.TextView", attempting fill anyway.';
+    expect(withoutFillTargetDoubt({ ok: true, message: "Filled 18 chars", warning: doubt })).toEqual({ ok: true, message: "Filled 18 chars" });
+    expect(withoutFillTargetDoubt({ ok: true, message: "m", warning: `${doubt} New screen opened.` }).warning).toBe("New screen opened.");
+    expect(withoutFillTargetDoubt({ ok: true, message: "m", warning: "Other" }).warning).toBe("Other");
+  });
+
+  it("keeps the TextView doubt when the field cannot be read back, and drops it when it can (#82, MOCKED client)", async () => {
+    const doubt = 'fill target label="Your code" resolved to "android.widget.TextView", attempting fill anyway.';
+    const make = (value: string | undefined) =>
+      new (class extends SimlockProvider {
+        protected override agentClient() {
+          return { interactions: { fill: async () => ({ message: "Filled 18 chars", warning: doubt }) } } as never;
+        }
+        override async inspect() {
+          const field = value === undefined ? { ref: "@e3", role: "secure-text-field", label: "Your code" } : { ref: "@e3", role: "text-field", label: "Your code", value };
+          return { elements: [field], truncated: false, warnings: [] };
+        }
+      })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+    const read = await make("MCP into Für Elise").typeText(androidHandle, "MCP into Für Elise", { kind: "text", text: "Your code" });
+    expect(read.warning).toBeUndefined();
+    const unread = await make(undefined).typeText(androidHandle, "MCP into Für Elise", { kind: "text", text: "Your code" });
+    expect(unread.warning).toBe(doubt);
+  });
+
+  it("names the timeout that fired when doctor cannot reach Simlock (#82)", () => {
+    expect(triesNote("Cannot reach Simlock at https://h:4720: Connect Timeout Error (attempted address: h:4720, timeout: 10000ms)")).toBe("two tries, each gave up connecting after 10 s");
+    expect(triesNote("Cannot reach Simlock at https://h:4720: The operation was aborted due to timeout")).toBe("two tries, each given 15 s");
+    expect(triesNote("Cannot reach Simlock at http://h:1: connect ECONNREFUSED")).toBe("two tries");
+  });
+
+  it("searches a log dump with a filter and says how much matched (#82)", () => {
+    const dump = ["--------- beginning of main", "11-03 22:04:01.100  100  100 I ActivityManager: Start proc", "11-03 22:04:02.200  100  100 E ActivityManager: ANR in com.android.systemui", "11-03 22:06:49.643  200  200 D App: tick"].join("\n");
+    const anr = toLogResult("logcat", dump, 50, { contains: "anr IN" });
+    expect(anr.lines).toEqual(["11-03 22:04:02.200  100  100 E ActivityManager: ANR in com.android.systemui"]);
+    expect(anr.source).toBe("logcat, 1 of 4 lines matched (log kept since 22:04:01)");
+    expect(anr.filtered).toBe(true);
+    expect(toLogResult("logcat", dump, 50, { contains: "ActivityManager", level: "error" }).lines).toHaveLength(1);
+    expect(toLogResult("logcat", dump, 1, { contains: "ActivityManager" })).toMatchObject({ truncated: true, lines: [expect.stringContaining("ANR")] });
+    expect(toLogResult("logcat", dump, 2)).toMatchObject({ source: "logcat", lines: [expect.stringContaining("ANR"), expect.stringContaining("tick")], truncated: true });
   });
 
   it("names the launcher, not the session's app, when the launcher's elements fill the screen (#73, MOCKED client)", async () => {
@@ -829,5 +901,174 @@ describe("Android install refusals", () => {
     expect(androidInstallHint(adb)).toMatch(/Uninstall it first/);
     expect(androidInstallHint("Success")).toBeUndefined();
     expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").hint).toMatch(/app uninstall/);
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").details).toMatchObject({ reason: "INSTALL_SIGNATURE" });
+  });
+
+  it("names the real package, and only its reader's syntax, in a downgrade hint (#89)", async () => {
+    const { androidInstallHint, installRefusal, withInstallHintFor } = await import("./agent-device-errors.js");
+    const { TapdanceError } = await import("@tapdance/core");
+    const adb = "adb: failed to install app.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 2 is older than current 3]";
+    expect(installRefusal(adb)).toBe("INSTALL_DOWNGRADE");
+    const both = androidInstallHint(adb, "com.measify.pianolune")!;
+    expect(both).toContain('MCP uninstall_app {app_id: "com.measify.pianolune"}');
+    expect(both).toContain("`tapdance app uninstall com.measify.pianolune`");
+    expect(both).not.toContain("<appId>");
+    const fromGuard = new TapdanceError("DEVICE_ERROR", "Installing the APK failed", { hint: both, details: { reason: "INSTALL_DOWNGRADE", appId: "com.measify.pianolune" } });
+    const mcp = withInstallHintFor(fromGuard, "mcp") as InstanceType<typeof TapdanceError>;
+    expect(mcp.hint).toContain('uninstall_app {app_id: "com.measify.pianolune"}');
+    expect(mcp.hint).not.toContain("tapdance");
+    expect(mcp).toMatchObject({ code: "DEVICE_ERROR", message: "Installing the APK failed", details: { appId: "com.measify.pianolune" } });
+    const cli = withInstallHintFor(fromGuard, "cli") as InstanceType<typeof TapdanceError>;
+    expect(cli.hint).toContain("`tapdance app uninstall com.measify.pianolune`");
+    expect(cli.hint).not.toContain("uninstall_app");
+    // Without a package name the MCP hint points at list_apps instead of a placeholder.
+    expect((withInstallHintFor(new TapdanceError("DEVICE_ERROR", "x", { details: { reason: "INSTALL_DOWNGRADE" } }), "mcp") as InstanceType<typeof TapdanceError>).hint).toContain("list_apps");
+    // Other errors pass through untouched.
+    const other = new TapdanceError("AUTH_FAILED", "git clone failed", { hint: "h", details: { reason: "GIT_AUTH" } });
+    expect(withInstallHintFor(other, "mcp")).toBe(other);
+  });
+});
+
+describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-device client and Simlock HTTP)", () => {
+  const SETTLED = "1\ncpu  100 0 0 900 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
+  const CALMER = "1\ncpu  110 0 0 990 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
+  /** A provider whose agent-device client, Simlock HTTP and device exec are fakes. */
+  function fakeHost(o: {
+    allocate: (p: { leaseId: string }) => Promise<unknown>;
+    status?: (leaseId: string | undefined) => unknown;
+    probes?: string[];
+    dumpsys?: string;
+    press?: (p: Record<string, unknown>) => Promise<unknown>;
+    snapshot?: () => Promise<unknown>;
+  }) {
+    let leaseId: string | undefined;
+    const pressed: Array<Record<string, unknown>> = [];
+    const probes = [...(o.probes ?? [SETTLED, CALMER])];
+    const client = {
+      leases: {
+        allocate: async (p: { leaseId: string }) => {
+          leaseId = p.leaseId;
+          return o.allocate(p);
+        },
+        release: async () => ({ released: true }),
+      },
+      sessions: { close: async () => ({}) },
+      apps: { open: async () => ({}) },
+      interactions: { press: async (p: Record<string, unknown>) => (pressed.push(p), o.press ? o.press(p) : {}) },
+      capture: { snapshot: o.snapshot ?? (async () => ({ nodes: [] })) },
+    };
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/status") return new Response(JSON.stringify(o.status?.(leaseId) ?? { devices: [], leases: [] }), { status: 200 });
+      return new Response(JSON.stringify({ lease: { id: leaseId } }), { status: 200 });
+    }) as typeof fetch;
+    const p = new (class extends SimlockProvider {
+      protected override staleRecordRetryMs = 5;
+      protected override queuePollMs = 10;
+      protected override leaseClient() {
+        return client as never;
+      }
+      protected override agentClient() {
+        return client as never;
+      }
+      protected override async execOn(_h: unknown, _tool: string, args: string[]) {
+        if (args[1]?.startsWith("getprop")) return { exitCode: 0, stdout: probes.length > 1 ? probes.shift()! : probes[0]!, stderr: "" };
+        return { exitCode: 0, stdout: o.dumpsys ?? "", stderr: "" };
+      }
+    })({ kind: "remote", baseUrl: "https://host.example:4720", token: "t", tenant: "t", runId: "r", clientId: "c", source: "test" }, {}, fetchImpl);
+    return { p, pressed };
+  }
+  const granted = { leaseId: "x", deviceKey: "android:mobile:emulator-5554", device: { model: "Pixel 8", osVersion: "34" } };
+  const request = { platform: "android" as const, ttlMs: 60_000 };
+  const androidHandle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", physical: false, providerData: { baseUrl: "https://host.example:4720", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "t", runId: "r", clientId: "c" } } as never;
+
+  it("asks again while the host offers a device that is not running, then leases (#94)", async () => {
+    let calls = 0;
+    const { p } = fakeHost({
+      allocate: async (a) => {
+        if (++calls < 3) throw { code: "DEVICE_NOT_FOUND", message: "No Android device with serial emulator-5586" };
+        return { ...granted, leaseId: a.leaseId };
+      },
+    });
+    const progress: string[] = [];
+    const handle = await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(calls).toBe(3);
+    expect(handle.deviceId).toBe("emulator-5554");
+    expect(progress.filter((m) => /not running \(its records are stale/.test(m))).toHaveLength(2);
+  });
+
+  it("gives up with a hint that says the host just started, not to check selectors (#94)", async () => {
+    const { p } = fakeHost({ allocate: async () => Promise.reject({ code: "DEVICE_NOT_FOUND", message: "No Android device with serial emulator-5586" }) });
+    await expect(p.lease("s", { ...request, waitTimeoutMs: 1 })).rejects.toMatchObject({
+      code: "DEVICE_UNAVAILABLE",
+      retryable: true,
+      hint: expect.stringMatching(/about a minute after the host \(re\)starts/),
+      details: expect.objectContaining({ reason: "STALE_DEVICE_RECORD" }),
+    });
+    // Any other refusal is not retried.
+    let calls = 0;
+    const other = fakeHost({ allocate: async () => (calls++, Promise.reject({ code: "INVALID_ARGS", message: "refused by simlock: unknown model Pixel 99" })) });
+    await expect(other.p.lease("s", request)).rejects.toMatchObject({ code: "DEVICE_UNAVAILABLE" });
+    expect(calls).toBe(1);
+  });
+
+  it("says whether a spare is ready and where a waiting request stands (#92)", async () => {
+    const { p } = fakeHost({
+      allocate: async (a) => (await new Promise((r) => setTimeout(r, 80)), { ...granted, leaseId: a.leaseId }),
+      status: (id) => ({ devices: [], leases: [], capacity: { android: { warm: 0 } }, warmPool: { enabled: true, targets: [] }, waiting: id ? [{ id: "w1", requesterId: id, stage: "starting" }] : [] }),
+    });
+    const progress: string[] = [];
+    await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(progress[0]).toMatch(/no spare is ready, so a device has to start/);
+    expect(progress.some((m) => /^Starting a device for this lease .*\(\d+ s\)$/.test(m))).toBe(true);
+    // Said once per stage, not on every poll.
+    expect(progress.filter((m) => m.startsWith("Starting a device")).length).toBe(1);
+  });
+
+  it("names a ready spare instead of warning that a device may take minutes (#92)", async () => {
+    const { spareNote, describeWaiting } = await import("./provider.js");
+    const status = { devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", ready: 1 }] } };
+    expect(spareNote(status, { platform: "android" })).toBe("a warm spare is ready");
+    expect(spareNote(status, { platform: "android", device: "pixel 8" })).toBe("a warm spare is ready");
+    expect(spareNote(status, { platform: "android", device: "Pixel 9" })).toMatch(/no spare is ready/);
+    expect(spareNote({ ...status, warmPool: { targets: [{ platform: "android", model: "Pixel 8", ready: 0, booting: 1 }] }, capacity: {} }, { platform: "android" })).toMatch(/a spare is booting/);
+    expect(spareNote(undefined, { platform: "android" })).toMatch(/a new device can take a few minutes/);
+    expect(describeWaiting({ stage: "queued", queuePosition: 2, reason: "full" })).toBe("Queued for a device (position 2, every slot is busy)");
+    expect(describeWaiting(undefined)).toBeUndefined();
+  });
+
+  it("waits for a busy guest, answers a System UI ANR with Wait, and hands it out (#79)", async () => {
+    const ANR = "1\ncpu  0 0 0 0 0 0 0 0 0 0\n  mCurrentFocus=Window{4f u0 Application Not Responding: com.android.systemui}\n";
+    const { p, pressed } = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), probes: [ANR, SETTLED, CALMER] });
+    const progress: string[] = [];
+    const handle = await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(pressed).toEqual([expect.objectContaining({ selector: 'id="android:id/aerr_wait"' })]);
+    expect(progress.some((m) => /System UI isn't responding" dialog with Wait/.test(m))).toBe(true);
+    expect(handle.notices).toBeUndefined();
+  }, 15_000);
+
+  it("reports an ANR dialog from inspect, launch and a missed tap instead of a plain miss (#80)", async () => {
+    const nodes = [
+      { ref: "e1", label: "System UI isn't responding", identifier: "android:id/alertTitle" },
+      { ref: "e2", label: "Close app", identifier: "android:id/aerr_close" },
+      { ref: "e3", label: "Wait", identifier: "android:id/aerr_wait" },
+    ];
+    const { p } = fakeHost({
+      allocate: async () => granted,
+      dumpsys: "  mCurrentFocus=Window{4f u0 Application Not Responding: com.android.systemui}\n",
+      snapshot: async () => ({ nodes, appBundleId: "com.measify.pianolune", warnings: ["A system surface (notification shade, quick settings, or another system overlay) covers the app"] }),
+      press: async () => Promise.reject({ code: "COMMAND_FAILED", message: 'Selector did not match: label="Let me try"' }),
+    });
+    const screen = await p.inspect(androidHandle);
+    expect(screen.app).toBe("android");
+    expect(screen.warnings).toHaveLength(1);
+    expect(screen.warnings[0]).toMatch(/"System UI isn't responding" covers the screen.*aerr_wait/);
+    const launched = await p.launchApp(androidHandle, "com.measify.pianolune");
+    expect(launched).toMatchObject({ ok: true, message: expect.stringMatching(/system dialog is in front/), warning: expect.stringMatching(/Wait/) });
+    await expect(p.tap(androidHandle, { kind: "text", text: "Let me try" })).rejects.toMatchObject({
+      code: "ELEMENT_NOT_FOUND",
+      message: expect.stringMatching(/a system dialog "System UI isn't responding" is in front/),
+      hint: expect.stringMatching(/aerr_wait/),
+    });
   });
 });

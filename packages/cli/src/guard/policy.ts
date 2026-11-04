@@ -82,8 +82,13 @@ export const GuardPolicySchema = z
         /** How git reaches private repositories: the host's `gh auth`, a read-only deploy key, or nothing. */
         gitAuth: z.enum(["none", "gh", "deploy-key"]).default("none"),
         timeoutMinutes: z.number().int().min(1).max(240).default(45),
+        /**
+         * Android: minutes an idle Gradle (and Kotlin) daemon of a host build lives, so it does not hold
+         * gigabytes next to the emulators (#90). 0: no daemon (--no-daemon, Kotlin in-process).
+         */
+        gradleDaemonIdleMinutes: z.number().int().min(0).max(180).default(10),
       })
-      .default({ repos: [], protectedRefs: [], gitAuth: "none", timeoutMinutes: 45 }),
+      .default({ repos: [], protectedRefs: [], gitAuth: "none", timeoutMinutes: 45, gradleDaemonIdleMinutes: 10 }),
     /** Installs from CI (`allow.artifacts`): which GitHub repositories and branches, and how large. */
     artifacts: z
       .object({

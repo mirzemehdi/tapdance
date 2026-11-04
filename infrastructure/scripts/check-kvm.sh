@@ -8,12 +8,16 @@
 #
 # Exit codes:
 #   0  KVM acceleration is usable by this user
-#   1  KVM acceleration is not usable (the report says why and what to do)
+#   1  KVM acceleration is not usable (the report says why and what to do). On a fresh machine before
+#      scripts/host-setup.sh, "cannot open /dev/kvm" is expected: host-setup adds you to the kvm group
+#      and grants this login access at once. The CPU flag, kernel module and /dev/kvm lines are what
+#      matter before it; the verdict says when access is the only problem.
 #   2  not a Linux x86_64 machine, or a usage error
 #
 # Tapdance never falls back to software emulation. If this script fails, fix the cause it reports
 # or run the emulator on another machine (your laptop, a bare-metal server, a Google Cloud N2 VM).
-# Status of this script: syntax-checked only (bash -n). Not yet run on a real machine; see STATUS.md.
+# Run on a Google Cloud N2 VM (Ubuntu 24.04) before and after host-setup.sh in the 2026-11-04 field
+# test (issue #84); see STATUS.md.
 
 set -euo pipefail
 
@@ -26,13 +30,22 @@ modules, /dev/kvm and this user's access to it, kvm-ok (from cpu-checker), and t
 Emulator's own -accel-check when the SDK is found.
 
   --android-home DIR  Android SDK to use for `emulator -accel-check`
-                      (default: $ANDROID_HOME, then $ANDROID_SDK_ROOT, then ~/android-sdk)
+                      (default: $ANDROID_HOME, then $ANDROID_SDK_ROOT, then ~/Android/Sdk where
+                      scripts/host-setup.sh installs it, then ~/android-sdk)
   --quiet             print only failures and the final verdict
   -h, --help          show this help
 EOF
 }
 
-ANDROID_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/android-sdk}}"
+# host-setup.sh (and Android Studio) install to ~/Android/Sdk; older Tapdance scripts used ~/android-sdk.
+default_sdk() {
+  local d
+  for d in "$HOME/Android/Sdk" "$HOME/android-sdk"; do
+    [[ -x "$d/emulator/emulator" ]] && { echo "$d"; return; }
+  done
+  echo "$HOME/Android/Sdk"
+}
+ANDROID_SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$(default_sdk)}}"
 QUIET=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -44,6 +57,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 FAILURES=0
+# Set when the only problem with /dev/kvm is this user's access to it (host-setup.sh fixes that).
+ACCESS_FAILURE=0
 ok()   { [[ $QUIET -eq 1 ]] || printf '  [ok]   %s\n' "$*"; }
 info() { [[ $QUIET -eq 1 ]] || printf '         %s\n' "$*"; }
 bad()  { printf '  [FAIL] %s\n' "$*"; FAILURES=$((FAILURES + 1)); }
@@ -121,6 +136,7 @@ if [[ -e /dev/kvm ]]; then
     ok "/dev/kvm is readable and writable by $(id -un)"
   else
     bad "/dev/kvm exists but $(id -un) cannot open it read-write"
+    ACCESS_FAILURE=1
     if id -nG "$(id -un)" | grep -qw kvm; then
       if id -nG | grep -qw kvm; then
         fix "the device's group or mode is wrong; a udev rule fixes it: KERNEL==\"kvm\", GROUP=\"kvm\", MODE=\"0660\" (install-android-worker.sh writes one)"
@@ -128,7 +144,7 @@ if [[ -e /dev/kvm ]]; then
         fix "you were added to the kvm group after this login: log out and back in, or run 'newgrp kvm'"
       fi
     else
-      fix "sudo usermod -aG kvm $(id -un), then log out and back in"
+      fix "expected before scripts/host-setup.sh, which adds $(id -un) to the kvm group and grants this login access at once (no re-login). By hand: sudo usermod -aG kvm $(id -un), then log out and back in"
     fi
   fi
 else
@@ -170,7 +186,7 @@ if [[ -x "$EMULATOR" ]]; then
     sed 's/^/           /' <<<"$ACCEL_OUT"
   fi
 else
-  info "Android Emulator not found at $EMULATOR; skipped -accel-check (pass --android-home)"
+  info "Android Emulator not found at $EMULATOR; skipped -accel-check (normal before scripts/host-setup.sh installs it; otherwise pass --android-home)"
 fi
 
 # Verdict ----------------------------------------------------------------------------------
@@ -178,6 +194,11 @@ echo
 if [[ $FAILURES -eq 0 ]]; then
   echo "KVM acceleration is usable. This machine can host Android emulators for Tapdance."
   exit 0
+fi
+if [[ $FAILURES -eq 1 && $ACCESS_FAILURE -eq 1 ]]; then
+  echo "KVM is present; only $(id -un)'s access to /dev/kvm is missing. On a fresh machine that is expected:"
+  echo "scripts/host-setup.sh fixes it (kvm group plus an ACL for this login). Run this check again after it."
+  exit 1
 fi
 echo "KVM acceleration is NOT usable ($FAILURES problem(s) above)."
 echo "Do not run the Android Emulator here without acceleration: Tapdance and Simlock will not"

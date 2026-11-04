@@ -188,6 +188,54 @@ describe("MCP agent flow", () => {
     expect((await plain.call("install_app", { from_ci: { repo: "acme/app", artifact: "app-debug" } })).json).toMatchObject({ error: { code: "NOT_SUPPORTED" } });
   });
 
+  it("install_app and build_app: launch relaunches the app, replies name the package, reused and the next call; refusals use MCP syntax (FakeProvider, mocked; #88 #89)", async () => {
+    const launched: string[] = [];
+    let refuse = false;
+    class HostProvider extends FakeProvider {
+      async installFromCi() {
+        return { repo: "acme/app", runId: "42", sha: "d".repeat(40), branch: "main", artifact: "app-debug", apkSha256: "0123456789ab", cached: true, installed: true, appId: "com.measify.pianolune", versionCode: 3 };
+      }
+      async buildApp() {
+        if (refuse) {
+          throw new TapdanceError("DEVICE_ERROR", "Installing the build failed: Failure [INSTALL_FAILED_VERSION_DOWNGRADE]", {
+            hint: 'Uninstall com.measify.pianolune first (MCP uninstall_app {app_id: "com.measify.pianolune"}; CLI `tapdance app uninstall com.measify.pianolune`; its data goes), then install again.',
+            details: { reason: "INSTALL_DOWNGRADE", appId: "com.measify.pianolune" },
+          });
+        }
+        // A guard from before #88 leaves `reused` out of a fresh build's reply.
+        return { sha: "b".repeat(40), seconds: 15, artifact: "androidApp-debug.apk", installed: true, appId: "com.measify.pianolune" };
+      }
+      override async launchApp(handle: Parameters<FakeProvider["launchApp"]>[0], appId: string) {
+        launched.push(appId);
+        return super.launchApp(handle, appId);
+      }
+    }
+    const input = (name: string) => TOOLS.find((t) => t.name === name)!.input;
+    expect(input("build_app").safeParse({ repo: "https://github.com/acme/app", ref: "main", launch: "com.measify.pianolune" }).success).toBe(true);
+    expect(input("build_app").safeParse({ repo: "https://github.com/acme/app", ref: "main", launch: "com.x; reboot" }).success).toBe(false);
+    expect(input("install_app").safeParse({ from_ci: { repo: "acme/app", artifact: "app-debug" }, launch: "com.measify.pianolune" }).success).toBe(true);
+    const { call } = await connect(new HostProvider());
+    await call("lease_device", { platform: "android" });
+
+    const ci = await call("install_app", { from_ci: { repo: "acme/app", artifact: "app-debug" } });
+    expect(ci.json).toMatchObject({ installed: { appId: "com.measify.pianolune", cached: true }, next: 'launch_app {app_id: "com.measify.pianolune"}' });
+    expect(launched).toEqual([]);
+    const ciLaunched = await call("install_app", { from_ci: { repo: "acme/app", artifact: "app-debug" }, launch: "com.measify.pianolune" });
+    expect(ciLaunched.json).toMatchObject({ launched: "com.measify.pianolune", next: "inspect_screen" });
+    expect(launched).toEqual(["com.measify.pianolune"]);
+
+    const built = await call("build_app", { repo: "https://github.com/acme/app", ref: "main", launch: "com.other.app" });
+    expect(built.json).toMatchObject({ sha: "b".repeat(40), ref: "main", reused: false, appId: "com.measify.pianolune", launched: "com.other.app", warning: expect.stringContaining("com.measify.pianolune") });
+    expect(launched.at(-1)).toBe("com.other.app");
+
+    refuse = true;
+    const refused = await call("build_app", { repo: "https://github.com/acme/app", ref: "main" });
+    const error = (refused.json as { error: { code: string; hint: string } }).error;
+    expect(error.code).toBe("DEVICE_ERROR");
+    expect(error.hint).toContain('uninstall_app {app_id: "com.measify.pianolune"}');
+    expect(error.hint).not.toContain("tapdance");
+  });
+
   it("confines install paths to the project", async () => {
     const { call } = await connect();
     await call("lease_device", { platform: "android" });
