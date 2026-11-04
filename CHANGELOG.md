@@ -507,6 +507,38 @@ not yet re-run on a host.
   installs them in the same package-manager call as git and unzip; a library still missing after the
   SDK install is named and asked for again.
 
+### Field run 3 on the N2 VM (issues #104, #106-#109)
+
+Found with a Linux VPS agent (CLI and MCP) and a Google Cloud N2 Android host; the fixes are
+unit-tested with mocked clients and adb, and not yet re-run on a host.
+
+- Fixed (#104): a host build from the CLI and one from MCP `build_app` of the same commit did not reuse
+  each other. The build key hashed the request as sent: the CLI sent its defaults (`configuration`
+  Debug, `gradleTask` assembleDebug, also on Android), MCP sent only what it was given. The key now
+  holds the effective settings (the defaults filled in, only the platform's own options, `dir` in one
+  spelling), and `app build` sends only options that differ from the defaults. Builds kept before this
+  change get a new key once, so the first build of each commit after the update builds again.
+- Fixed (#106): `logs --level fault` (MCP `get_logs level`) matched "fault" inside "default", which
+  Android logs at every level (86 % of its matches on the N2 host). A logcat line's own level now
+  decides: `error` keeps E and F lines, `fault` keeps F lines and E lines that say fatal or crash; an I
+  line that mentions an exception is no longer an error. iOS lines keep the word match (NSLog writes
+  errors at the default level), without "default".
+- Fixed (#107): `launch_app` right after `clear_app_data` failed now and then with "Android helper could
+  not launch the application" or "snapshot helper session request timed out" although the app
+  started. On such a helper failure Tapdance looks at the focused window (0.5, 1.5, 3 s); when the app
+  is in front the launch succeeds with a warning, otherwise it opens once more before it fails. A
+  failed launch's hint says to check the screen instead of "Retry with --debug".
+- Fixed (#108): hints passed on agent-device's own fixes, which name its CLI (`snapshot -i`,
+  `find <text>`, `--debug`, its diagnostics log). Every sentence of an agent-device hint that names its
+  syntax is now dropped (also from the hints of successful taps and waits); plain advice ("Narrow the
+  query") is kept. `cli.test.ts` checks that code hints name only MCP tools that exist and no
+  agent-device syntax, and runs agent-device's real hints through the error mapping.
+- Fixed (#109): a refused upload install (`app install <path>`, MCP `install_app {path}`) still said
+  `<appId>`. The package now comes from the caller's id, adb's "Existing package …" text or the
+  uploaded APK's manifest, and is in `details.appId`; when nothing names it, the CLI hint says
+  `tapdance app list` shows it instead of a placeholder. Other hints that printed a placeholder for a
+  value they had (the repository URL in build-file hints, the app id for `logs --app`) now print it.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,

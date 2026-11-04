@@ -619,9 +619,10 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
             ref: o.ref,
             ...(o.project ? { project: o.project } : {}),
             ...(o.scheme ? { scheme: o.scheme } : {}),
-            configuration: o.configuration,
+            // Defaults are the host's own; sending only what differs gives MCP's request shape (#104).
+            ...(o.configuration !== "Debug" ? { configuration: o.configuration } : {}),
             ...(o.xcodeSetting.length > 0 ? { xcodeSettings: o.xcodeSetting } : {}),
-            gradleTask: o.gradleTask,
+            ...(o.gradleTask !== "assembleDebug" ? { gradleTask: o.gradleTask } : {}),
             ...(o.dir ? { dir: o.dir } : {}),
           },
           { verbose: o.verbose === true },

@@ -181,7 +181,7 @@ export async function addBuildFile(buildsRoot: string, repo: string, path: strin
   const dir = buildFilesDir(buildsRoot, repo);
   const index = await readIndex(dir, repo);
   const others = index.files.filter((f) => f.path !== rel);
-  if (others.length >= BUILD_FILES_MAX) throw new TapdanceError("USAGE", `${normalizeRepo(repo)} already has ${BUILD_FILES_MAX} build files, the most a repository may have`, { hint: "Remove one first: tapdance host builds files remove --repo <url> <path>." });
+  if (others.length >= BUILD_FILES_MAX) throw new TapdanceError("USAGE", `${normalizeRepo(repo)} already has ${BUILD_FILES_MAX} build files, the most a repository may have`, { hint: `Remove one first: tapdance host builds files remove --repo ${repo} <path>.` });
   await ownerDir(buildsRoot);
   await ownerDir(join(buildsRoot, "files"));
   await ownerDir(dir);
@@ -202,7 +202,7 @@ export async function removeBuildFile(buildsRoot: string, repo: string, path: st
   const index = await readIndex(dir, repo);
   const entry = index.files.find((f) => f.path === rel);
   if (!entry) {
-    throw new TapdanceError("USAGE", `${normalizeRepo(repo)} has no build file ${rel}`, { hint: "List them with: tapdance host builds files list --repo <url>." });
+    throw new TapdanceError("USAGE", `${normalizeRepo(repo)} has no build file ${rel}`, { hint: `List them with: tapdance host builds files list --repo ${repo}.` });
   }
   const rest = index.files.filter((f) => f.path !== rel);
   await writeIndex(dir, { repo: index.repo, files: rest });
@@ -244,7 +244,7 @@ async function targetInCheckout(src: string, realSrc: string, rel: string, creat
   const inside = (p: string) => p === realSrc || p.startsWith(realSrc + sep);
   const escape = (what: string): never => {
     throw new TapdanceError("FORBIDDEN", `Host build file ${rel} was not copied: ${what}`, {
-      hint: "The repository at this commit has a symlink or file where the build file goes. Only the host's owner can change build files: tapdance host builds files remove --repo <url> <path>, or add it at another path.",
+      hint: `The repository at this commit has a symlink or file where the build file goes. Only the host's owner can change build files: tapdance host builds files remove --repo <url> ${rel}, or add it at another path.`,
     });
   };
   const parts = rel.split("/");
@@ -287,7 +287,7 @@ export async function placeBuildFiles(buildsRoot: string, repo: string, files: B
     const blob = join(blobs, file.sha256);
     const content = await readFile(blob).catch(() => undefined);
     if (!content || createHash("sha256").update(content).digest("hex") !== file.sha256) {
-      throw new TapdanceError("CONFIG_INVALID", `Host build file ${rel} is missing or changed on disk since it was added`, { hint: "The host's owner adds it again: tapdance host builds files add --repo <url> <path> --from <file>." });
+      throw new TapdanceError("CONFIG_INVALID", `Host build file ${rel} is missing or changed on disk since it was added`, { hint: `The host's owner adds it again: tapdance host builds files add --repo ${repo} ${rel} --from <file>.` });
     }
     const target = (await targetInCheckout(src, realSrc, rel, true))!;
     placed.push(rel);

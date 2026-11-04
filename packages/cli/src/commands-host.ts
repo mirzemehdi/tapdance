@@ -828,7 +828,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           [
             `Added ${entry.path} for ${normalizeRepo(o.repo)} (${entry.size} bytes, sha256 ${entry.sha256.slice(0, 8)}).`,
             "Each build of this repository copies it into the checkout before building and removes it after; changing it builds again instead of reusing an earlier build. No guard restart needed.",
-            ...(allowed ? [] : [yellow(`${o.repo} is not on the build allow-list yet: tapdance host builds enable --repo <url>.`)]),
+            ...(allowed ? [] : [yellow(`${o.repo} is not on the build allow-list yet: tapdance host builds enable --repo ${o.repo}.`)]),
           ].join("\n"),
         );
       } catch (error) {

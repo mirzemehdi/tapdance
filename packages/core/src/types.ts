@@ -229,10 +229,34 @@ export interface LogFilter {
   level?: "error" | "fault";
 }
 
+/** A logcat line's level: threadtime ("date time pid tid E Tag:") or brief ("E/Tag(pid):"). */
+function logcatLevel(line: string): string | undefined {
+  return /^\S+\s+\S+\s+\d+\s+\d+\s+([VDIWEFA])\s/.exec(line)?.[1] ?? /^([VDIWEFA])\/\S/.exec(line)?.[1];
+}
+
+/** An iOS `log show --style compact` line's type: Df (default), I, Db, E (error), F (fault), A. */
+function iosCompactLevel(line: string): string | undefined {
+  return /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+\s+(Df|Db|I|E|F|A)\s/.exec(line)?.[1];
+}
+
+// "fault" must not match inside "default", which Android logs at every level (#106).
+const FAULT_WORD = /(?<!de)fault/i;
 const LOG_LEVELS: Record<"error" | "fault", (line: string) => boolean> = {
-  // logcat brief (E/Tag) and threadtime ("date time pid tid E Tag:") levels, plus the words iOS uses.
-  error: (l) => /\b[EF]\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+[EF]\s/.test(l) || /error|fault|fatal|exception/i.test(l),
-  fault: (l) => /\bF\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+F\s/.test(l) || /fault|fatal|crash/i.test(l),
+  // A logcat line's own level decides: an I or W line that mentions an exception is not an error (#106).
+  // A crash is E (AndroidRuntime: FATAL EXCEPTION) or F (libc: Fatal signal).
+  error: (l) => {
+    const android = logcatLevel(l);
+    if (android !== undefined) return android === "E" || android === "F" || android === "A";
+    // iOS logs errors at the default level too (NSLog), so words count there and on console lines.
+    if (iosCompactLevel(l) === "E" || iosCompactLevel(l) === "F") return true;
+    return /error|fatal|exception/i.test(l) || FAULT_WORD.test(l);
+  },
+  fault: (l) => {
+    const android = logcatLevel(l);
+    if (android !== undefined) return android === "F" || android === "A" || (android === "E" && /\bfatal\b|\bcrash/i.test(l));
+    if (iosCompactLevel(l) === "F") return true;
+    return /fatal|crash/i.test(l) || FAULT_WORD.test(l);
+  },
 };
 
 /** Whether a log line passes a filter. */

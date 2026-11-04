@@ -23,7 +23,7 @@ export {
   androidSdk,
   type ProfileRecord,
 } from "./profile-provider.js";
-export { androidInstallHint, fromAgentDeviceError, installRefusal, installRefusalHint, withInstallHintFor, type HintSurface, type InstallRefusal } from "./agent-device-errors.js";
+export { androidInstallHint, BACKEND_SYNTAX, fromAgentDeviceError, installRefusal, installRefusalHint, readerHint, withInstallHintFor, type HintSurface, type InstallRefusal } from "./agent-device-errors.js";
 export { readApkManifest, parseBinaryManifest, type ApkManifest } from "./apk-manifest.js";
 export { settleGuest, parseGuestState, busyBetween, dialogFromDumpsys, dialogInNodes, dialogAdvice, SETTLED_CPU, SETTLED_SAMPLES, SETTLE_BUDGET_MS, fallingTrend, type GuestSample, type SystemDialog, type SettleResult } from "./guest-settle.js";
 export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";

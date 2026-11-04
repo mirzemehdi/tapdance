@@ -367,7 +367,8 @@ tapdance app install --from-ci acme/app --artifact app-debug --launch com.acme.a
 The reply names the installed package and its `versionCode`, which the host reads from the APK's
 manifest (unit-tested only). When the device refuses the APK (`INSTALL_FAILED_VERSION_DOWNGRADE`, or a
 build signed with another key), the hint names that package: `tapdance app uninstall <package>`, then
-install again. `--launch` warns when it names another app than the one installed.
+install again. An upload from a path names it too (from `--app-id`, adb's message or the APK's
+manifest); when nothing names it, the hint says `tapdance app list` shows it. `--launch` warns when it names another app than the one installed.
 
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
 opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
@@ -393,7 +394,7 @@ the leased device, from an allow-listed git repository and ref, and installs it 
 streams as progress and the reply names the exact commit. This is how an agent without Xcode gets an
 iOS app onto a remote simulator. See [Builds on the host](deployment/one-command-host.md#builds-on-the-host).
 The reply says whether the host built it or reused its earlier build of the same commit and settings
-(`reused`, with `builtAt`), the ref you asked for next to the exact commit, and on Android the installed
+(`reused`, with `builtAt`; a build from MCP `build_app` counts, and an option left out equals its default), the ref you asked for next to the exact commit, and on Android the installed
 package (`appId`). When the host cannot sign in to the repository the error is `AUTH_FAILED` (exit 5),
 not `DEVICE_ERROR`: it prints git's own line (`Permission denied (publickey)`, `Repository not found`)
 and a hint for the auth the host used (its deploy key and fingerprint, or `gh`); only the host's owner
@@ -471,8 +472,11 @@ system log has the app's `os_log`/`NSLog` lines, not `print`/`println` output, w
 the full iOS crash report use `device crashes`. The output is also saved as an artifact.
 
 `--contains` keeps lines that contain the text (case-insensitive, 1–200 characters; it matches the
-tag and level as well as the message). `--level error` keeps error, fault, fatal and exception lines
-(and Android `E`/`F` lines); `--level fault` keeps fault, fatal and crash lines. With either filter,
+tag and level as well as the message). `--level error` keeps Android `E` and `F` lines (the logcat line's
+own level decides, so an `I` line that mentions an exception is left out) and, on iOS, error and fault
+lines plus lines with the words error, fault, fatal or exception; `--level fault` keeps Android `F`
+lines and `E` lines that say fatal or crash, and iOS fault lines plus lines with fault, fatal or crash.
+"default" does not count as "fault". With either filter,
 `-n` counts matching lines, and on Android Tapdance reads the whole logcat buffer rather than the last
 N lines, so a search reaches as far back as the device keeps logs; the footer says how many lines
 matched and the time of the oldest line in the buffer. On iOS the window stays the last 3 minutes (10

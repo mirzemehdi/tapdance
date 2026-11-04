@@ -15,8 +15,8 @@ import {
   toUiElement,
   validateAppPath,
 } from "./index.js";
-import { CODE_MAP } from "./agent-device-errors.js";
-import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint, toLogResult, triesNote, withoutFillTargetDoubt } from "./provider.js";
+import { BACKEND_SYNTAX, CODE_MAP, readerHint } from "./agent-device-errors.js";
+import { RAW_INPUT_APPS, SimlockProvider, actionResult, appInFront, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint, toLogResult, triesNote, withoutFillTargetDoubt } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -823,6 +823,27 @@ describe("iOS gaps (#48-#50)", () => {
     expect(toLogResult("logcat", dump, 2)).toMatchObject({ source: "logcat", lines: [expect.stringContaining("ANR"), expect.stringContaining("tick")], truncated: true });
   });
 
+  it("matches log levels by the line's own level, not by \"default\" or an I-level exception frame (#106)", () => {
+    const lines = [
+      "11-04 21:04:39.730 10549 10549 W NearbyMediums: Failed to retrieve default NfcAdapter, NFC is unsupported.",
+      "11-04 21:04:39.814 10549 10601 I NearbyMediums: WifiNetwork defaultNetworkCallback onAvailable netId:100",
+      "11-04 21:04:41.164 10549 10652 W herk    : Primes not initialized, returning default (no-op) Primes instance",
+      "11-04 21:04:42.000 10549 10549 I NearbyMediums: \tat android.os.Parcel.createExceptionOrNull(Parcel.java:3011)",
+      "11-04 21:04:43.000 10549 10549 E App     : request failed",
+      "11-04 21:04:44.000 10549 10549 E AndroidRuntime: FATAL EXCEPTION: main",
+      "11-04 21:04:45.000   900   900 F libc    : Fatal signal 11 (SIGSEGV)",
+      "F/DEBUG   (  900): backtrace:",
+      "E/Brief   (  901): brief error",
+      "2026-11-04 21:04:46.123 Df MyApp[123:456] using default settings",
+      "2026-11-04 21:04:46.124 Df MyApp[123:456] network error: offline",
+      "2026-11-04 21:04:46.125 F  MyApp[123:456] assertion",
+      "2026-11-04 21:04:46.126 E  MyApp[123:456] something went wrong",
+    ];
+    const keep = (level: "error" | "fault") => toLogResult("log", lines.join("\n"), 100, { level }).lines;
+    expect(keep("fault")).toEqual([lines[5], lines[6], lines[7], lines[11]]);
+    expect(keep("error")).toEqual([lines[4], lines[5], lines[6], lines[7], lines[8], lines[10], lines[11], lines[12]]);
+  });
+
   it("names the launcher, not the session's app, when the launcher's elements fill the screen (#73, MOCKED client)", async () => {
     const launcher = androidWith([
       { ref: "e1", type: "android.view.View", identifier: "com.google.android.apps.nexuslauncher:id/workspace" },
@@ -1194,5 +1215,108 @@ describe("reading the screen when agent-device's helper fails, and what a miss s
     expect(labels).toHaveLength(30);
     expect(labels[0]).toHaveLength(40);
     expect(describeVisible(labels)).toMatch(/and 18 more \(details\.visible\)$/);
+  });
+});
+
+describe("hints name only what a Tapdance reader can run (#108)", () => {
+  // agent-device's own hints, as the field run saw them.
+  const elementHint = 'Selector text/label values match exactly (quote multi-word values: text="Sign in"). Run snapshot -i to see current elements and refs, or use find <text> for contains matching.';
+  const debugHint = "Retry with --debug and inspect diagnostics log for details.";
+  const ambiguousHint = "Multiple candidates matched. Narrow the query or pass an exact identifier.";
+
+  it("drops the sentences of a backend hint that name agent-device's CLI and keeps plain advice", () => {
+    expect(readerHint(elementHint)).toBe('Selector text/label values match exactly (quote multi-word values: text="Sign in").');
+    expect(readerHint(debugHint)).toBeUndefined();
+    expect(readerHint(ambiguousHint)).toBe(ambiguousHint);
+    expect(readerHint("Re-check the target with snapshot -i and fill the element it reports.")).toBeUndefined();
+    expect(readerHint(undefined)).toBeUndefined();
+  });
+
+  it("maps a miss, a failed command and an ambiguous tap without agent-device syntax", () => {
+    const miss = fromAgentDeviceError({ code: "SELECTOR_NOT_FOUND", message: 'Selector did not match: text="No such button"', details: { hint: elementHint } }, 'tap "No such button"');
+    expect(miss.hint).toContain("inspect_screen");
+    expect(miss.hint).not.toMatch(BACKEND_SYNTAX);
+    const failed = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Android helper could not launch the application", details: { hint: debugHint } }, "launch com.x");
+    expect(failed.hint ?? "").not.toMatch(BACKEND_SYNTAX);
+    const ambiguous = fromAgentDeviceError({ code: "AMBIGUOUS_MATCH", message: "find matched 2 elements", details: { hint: ambiguousHint } }, "tap");
+    expect(ambiguous.hint).toBe(ambiguousHint);
+  });
+});
+
+describe("launch right after clear_app_data (#107, MOCKED agent-device client and adb)", () => {
+  const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "local", runId: "r", clientId: "c" } } as never;
+  const conn = { kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" } as const;
+  const APP = "com.measify.pianolune";
+  const inApp = `  mCurrentFocus=Window{1 u0 ${APP}/${APP}.MainActivity}\n  mFocusedApp=ActivityRecord{2 u0 ${APP}/.MainActivity t12}\n`;
+  const starting = `  mCurrentFocus=null\n  mFocusedApp=ActivityRecord{2 u0 ${APP}/.MainActivity t12}\n`;
+  const launcher = "  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
+  const helperStall = { code: "COMMAND_FAILED", message: "Android helper could not launch the application", details: { hint: "Retry with --debug and inspect diagnostics log for details." } };
+  const make = (opens: Array<unknown>, windows: string[]) => {
+    let opened = 0;
+    let looked = 0;
+    const p = new (class extends SimlockProvider {
+      protected override agentClient() {
+        return {
+          apps: {
+            open: async () => {
+              const r = opens[Math.min(opened++, opens.length - 1)];
+              if (r) throw r;
+              return {};
+            },
+          },
+        } as never;
+      }
+      protected override async execOn(_h: never, _tool: "adb" | "simctl", args: string[]) {
+        if (args.includes("window")) return { exitCode: 0, stdout: windows[Math.min(looked++, windows.length - 1)]!, stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }
+    })(conn);
+    return { p, opens: () => opened };
+  };
+  const run = async <T,>(work: () => Promise<T>): Promise<T> => {
+    vi.useFakeTimers();
+    try {
+      const pending = work();
+      pending.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(20_000);
+      return await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  };
+
+  it("reads the focused app from either focus line", () => {
+    expect(appInFront(inApp, APP)).toBe(true);
+    expect(appInFront(starting, APP)).toBe(true);
+    expect(appInFront(launcher, APP)).toBe(false);
+  });
+
+  it("reports success when the helper failed but the app is in front", async () => {
+    const t = make([helperStall], [starting]);
+    const r = await run(() => t.p.launchApp(handle, APP));
+    expect(r).toMatchObject({ ok: true, message: `Launched ${APP}`, warning: expect.stringMatching(/is in front: it launched/) });
+    expect(t.opens()).toBe(1);
+  });
+
+  it("opens once more when the app is not in front yet, and succeeds", async () => {
+    const t = make([{ code: "COMMAND_FAILED", message: "Android snapshot helper session request timed out" }, undefined], [launcher]);
+    const r = await run(() => t.p.launchApp(handle, APP));
+    expect(r).toMatchObject({ ok: true, warning: expect.stringMatching(/second one worked/) });
+    expect(t.opens()).toBe(2);
+  });
+
+  it("fails after the second try with a hint a Tapdance reader can follow", async () => {
+    const t = make([helperStall, helperStall], [launcher]);
+    const error = (await run(() => t.p.launchApp(handle, APP).catch((e: unknown) => e))) as TapdanceError;
+    expect(error).toMatchObject({ code: "DEVICE_ERROR", message: expect.stringMatching(/could not launch/) });
+    expect(error.hint).toMatch(/inspect_screen/);
+    expect(error.hint).not.toMatch(BACKEND_SYNTAX);
+    expect(t.opens()).toBe(2);
+  });
+
+  it("does not retry a failure that is not the helper's", async () => {
+    const t = make([{ code: "APP_NOT_INSTALLED", message: "Application com.measify.pianolune not found" }], [inApp]);
+    await expect(t.p.launchApp(handle, APP)).rejects.toMatchObject({ code: "APP_NOT_INSTALLED" });
+    expect(t.opens()).toBe(1);
   });
 });
