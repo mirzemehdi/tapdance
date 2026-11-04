@@ -53,7 +53,7 @@ Times are UTC. Raw logs, `timings.csv` and the checklist `results.json` files ar
    Then billing unlinked and the project deleted. `gcp-leftovers.sh` run again after the delete: exit 2
    "could not check 4 kind(s)" (#83). `tapdance doctor` afterwards: exit 10, endpoint unreachable.
 
-### Round 2 (2026-11-04, VM started 14:30:54)
+### Round 2 (2026-11-04, VM started 14:30:54, deleted 16:05:38)
 
 6. **Terraform and host setup** — PASS. `apply` 14:29:33 → 14:31:14 (101 s, 18 resources; startup
    script done about 49 s after start). `host-setup.sh --label vps-n2 --idle-stop off`: prerequisites in
@@ -86,6 +86,9 @@ Times are UTC. Raw logs, `timings.csv` and the checklist `results.json` files ar
     lease right after it failed with `DEVICE_UNAVAILABLE` "No Android device with serial emulator-5586"
     (#94); a lease 20 s later booted a new emulator. The idle stop was turned off again
     (`host up --label vps-n2 --idle-stop off`, 3.9 s) and stayed off after the reboot.
+13. **Teardown** — PASS. `gh` logged out on the VM, then `terraform destroy` (18 resources destroyed);
+    `gcp-leftovers.sh` exit 0 before the project delete; billing unlinked; project deleted; the `gcloud`
+    logins on the VPS revoked.
 
 ## Checklist by interface
 
@@ -165,6 +168,8 @@ about USD 0.11/GB-month, external IPv4 about USD 0.005/h), not a billing export.
 | 2 (2026-11-04) | 14:30 → 16:05 in three running windows (stopped by idle stop at 15:45, then a manual stop and start), about 1 h 33 min running | about USD 0.35 (VM 0.33, disk 0.015, IP 0.008), plus small egress |
 | Total | | about USD 1.39 |
 
+These are estimates; the Billing console has the final numbers.
+
 ## Results by requirement
 
 | ID | Result | Note |
@@ -225,7 +230,8 @@ terraform destroy && bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>
 - The cold-lease MCP path, and `tapdance view` in a real browser from the VPS.
 - A coding agent as the MCP client (the MCP runs used a script over stdio).
 - iOS, the gateway path, a Spot VM and other machine types.
-- Revoking the credentials the run created (#76).
+- Teardown revoking the credentials by itself (#76); in this run `gh` on the VM and `gcloud` on the VPS
+  were logged out by hand.
 
 ## Issues filed
 
