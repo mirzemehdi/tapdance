@@ -501,6 +501,15 @@ not yet re-run on a host.
 - Fixed (#103): the Simlock patch logs the baseline settle every time: "Android guest settled before
   the clean baseline" (info) or the "still busy" warning, with the wait, the last CPU reading and the
   dexopt result, in `tapdance worker logs`.
+- Changed (#101, #79): the lease's settle wait is short by default and configurable. An Android
+  emulator lease still waits up to 90 s for boot complete and no "isn't responding" or crash dialog in
+  front (a System UI ANR answered with Wait), and still warms the snapshot helper (#102); the CPU check
+  after that now lasts at most `session.settleSeconds` (new, default 15, 0–300; `0` skips it;
+  `TAPDANCE_SETTLE_SECONDS`, `device lease --settle <seconds>`, MCP `lease_device` `settle_seconds`,
+  SDK `settleSeconds`), still ending early on 3 calm readings or a falling load. Was: up to 90 s of
+  CPU checking, which on the N2 VM most leases would have spent in full although commands on the busy
+  guest already took only 2-10 s. A device still busy goes out with a notice that says so and that
+  commands may be slower for a few minutes.
 - Fixed (#100): `host-setup.sh` installed the emulator's system libraries with `sudo` after the
   question without listing them (on a fresh machine the check needed the emulator first). It now checks
   the packages directly (`dpkg-query`, `rpm`, `pacman`), names them in the list and the sudo line, and

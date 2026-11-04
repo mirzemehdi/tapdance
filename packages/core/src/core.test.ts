@@ -80,6 +80,22 @@ describe("config", () => {
     expect(c.viewer.host).toBe("127.0.0.1");
   });
 
+  it("session.settleSeconds defaults to 15, takes 0-300, may come from a project file, and TAPDANCE_SETTLE_SECONDS wins", async () => {
+    expect(parseConfig({}).session.settleSeconds).toBe(15);
+    expect(parseConfig({ session: {} }).session.settleSeconds).toBe(15);
+    expect(parseConfig({ session: { settleSeconds: 0 } }).session.settleSeconds).toBe(0);
+    expect(() => parseConfig({ session: { settleSeconds: 301 } })).toThrow(/settleSeconds/);
+    const home = await tmp();
+    const proj = await tmp();
+    await writeFile(join(proj, "tapdance.config.json"), JSON.stringify({ session: { settleSeconds: 60 } }));
+    const fromProject = await loadConfig({ cwd: proj, env: { TAPDANCE_HOME: home } });
+    expect(fromProject.config.session.settleSeconds).toBe(60);
+    expect(fromProject.warnings).toEqual([]);
+    const fromEnv = await loadConfig({ cwd: proj, env: { TAPDANCE_HOME: home, TAPDANCE_SETTLE_SECONDS: "0", TAPDANCE_TTL_MINUTES: "12" } });
+    expect(fromEnv.config.session).toMatchObject({ settleSeconds: 0, defaultTtlMinutes: 12 });
+    await expect(loadConfig({ cwd: proj, env: { TAPDANCE_HOME: home, TAPDANCE_SETTLE_SECONDS: "soon" } })).rejects.toThrow(/TAPDANCE_SETTLE_SECONDS must be an integer/);
+  });
+
   it("rejects unknown keys and bad values", () => {
     expect(() => parseConfig({ provider: "aws" })).toThrow(TapdanceError);
     expect(() => parseConfig({ endpoint: "ftp://x" })).toThrow(/http/);

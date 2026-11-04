@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { busyBetween, dialogAdvice, dialogFromDumpsys, dialogInNodes, fallingTrend, parseGuestState, SETTLED_SAMPLES, settleGuest } from "./guest-settle.js";
+import { busyBetween, DEFAULT_CPU_CHECK_MS, dialogAdvice, dialogFromDumpsys, dialogInNodes, fallingTrend, parseGuestState, SETTLED_SAMPLES, settleGuest } from "./guest-settle.js";
 
 const ANR_FOCUS = "  mCurrentFocus=Window{4f2a1c u0 Application Not Responding: com.android.systemui}";
 const APP_FOCUS = "  mCurrentFocus=Window{9b1e u0 com.google.android.apps.nexuslauncher/com.google.android.apps.nexuslauncher.NexusLauncherActivity}";
@@ -32,7 +32,7 @@ function scripted(answers: string[]) {
   };
 }
 
-describe("guest settle (#79)", () => {
+describe("guest settle (#79, #101; MOCKED probe and clock)", () => {
   it("parses the boot flag, CPU counters and an ANR dialog", () => {
     expect(parseGuestState(probe(true, 1000, 900))).toEqual({ booted: true, cpu: { total: 1000, idle: 900 } });
     expect(parseGuestState(probe(false, 10, 1, ANR_FOCUS))).toEqual({ booted: false, cpu: { total: 10, idle: 1 }, dialog: { kind: "not-responding", app: "com.android.systemui" } });
@@ -92,18 +92,83 @@ describe("guest settle (#79)", () => {
     expect(s.calls.progress[0]).toMatch(/"System UI isn't responding" dialog with Wait/);
   });
 
-  it("hands a device that stays busy out after the budget, with a notice that says how busy and for how long", async () => {
-    const answers = Array.from({ length: 100 }, (_, i) => probe(true, i * 1000, i * 10));
-    const s = scripted(answers);
-    const r = await settleGuest({ ...s.deps, budgetMs: 10_000 });
+  /** A guest that stays 99 % busy on every read. */
+  const busyForever = () => Array.from({ length: 400 }, (_, i) => probe(true, i * 1000, i * 10));
+
+  it("by default checks the CPU for about 15 s, then hands a busy device out with a notice (#101 follow-up)", async () => {
+    expect(DEFAULT_CPU_CHECK_MS).toBe(15_000);
+    const s = scripted(busyForever());
+    const r = await settleGuest(s.deps);
     expect(r).toMatchObject({ settled: false, reason: "bound", busy: 0.99 });
-    expect(r.notices[0]).toMatch(/still busy with its start-up work after 1\d s \(guest CPU 99 % at the last reading, 99 % over the last 3\)/);
-    expect(r.notices[0]).toMatch(/2-10 s each for up to a few more minutes/);
+    expect(r.waitedMs).toBeGreaterThanOrEqual(15_000);
+    expect(r.waitedMs).toBeLessThan(17_000);
+    expect(r.notices[0]).toMatch(/still busy with its start-up work after 15 s \(guest CPU 99 % at the last reading, 99 % over the last 3\)/);
+    expect(r.notices[0]).toMatch(/may be slower, 2-10 s each, for a few more minutes/);
+    expect(r.notices[0]).toMatch(/raise session\.settleSeconds/);
+    expect(s.calls.progress[0]).toMatch(/Waiting for the device to settle \(guest CPU 99 %; \d s, at most 15 s\)/);
+  });
+
+  it("starts the CPU check only once the guest has booted (#101 follow-up)", async () => {
+    // 6 s of boot, then busy: the check still gets its 15 s after boot.
+    const booting = Array.from({ length: 5 }, (_, i) => probe(false, i * 1000, i * 10));
+    const s = scripted([...booting, ...busyForever().map((p, i) => probe(true, (i + 5) * 1000, (i + 5) * 10))]);
+    const r = await settleGuest(s.deps);
+    expect(r).toMatchObject({ settled: false, reason: "bound" });
+    expect(r.waitedMs).toBeGreaterThanOrEqual(21_000);
+    expect(r.waitedMs).toBeLessThan(24_000);
+  });
+
+  it("a configured larger value waits longer for a calm device (session.settleSeconds)", async () => {
+    // Busy for 40 s, then calm: the default goes out busy, 60 s waits it out.
+    const busyThenCalm = (() => {
+      let total = 0;
+      let idle = 0;
+      return Array.from({ length: 60 }, (_, i) => ((total += 1000), (idle += i < 27 ? 10 : 900), probe(true, total, idle)));
+    })();
+    const short = scripted(busyThenCalm);
+    expect(await settleGuest(short.deps)).toMatchObject({ settled: false, reason: "bound" });
+    const long = scripted(busyThenCalm);
+    const r = await settleGuest({ ...long.deps, cpuBudgetMs: 60_000 });
+    // The sudden drop ends it as a falling load, or as a calm run.
+    expect(r.settled).toBe(true);
+    expect(["calm", "falling"]).toContain(r.reason);
+    expect(r.waitedMs).toBeGreaterThan(40_000);
+    // And one that stays busy goes out at the larger bound.
+    const stays = scripted(busyForever());
+    const bound = await settleGuest({ ...stays.deps, cpuBudgetMs: 60_000 });
+    expect(bound).toMatchObject({ settled: false, reason: "bound" });
+    expect(bound.waitedMs).toBeGreaterThanOrEqual(60_000);
+    expect(bound.waitedMs).toBeLessThan(62_000);
+  });
+
+  it("0 skips the CPU check but still waits for boot and answers a dialog (session.settleSeconds 0)", async () => {
+    // Busy, but booted with nothing in front: handed out at the first read.
+    const busy = scripted(busyForever());
+    expect(await settleGuest({ ...busy.deps, cpuBudgetMs: 0 })).toMatchObject({ settled: true, reason: "ready", notices: [] });
+    expect(busy.calls.probes).toBe(1);
+    // Not booted, then an ANR dialog, then ready: both are waited for.
+    const s = scripted([probe(false, 0, 0), probe(false, 1000, 10), probe(true, 2000, 20, ANR_FOCUS), probe(true, 3000, 30)]);
+    const r = await settleGuest({ ...s.deps, cpuBudgetMs: 0 });
+    expect(r).toMatchObject({ settled: true, reason: "ready", notices: [] });
+    expect(s.calls.dismissed).toBe(1);
+    expect(s.calls.probes).toBe(4);
+    // A dialog that will not close is still named.
+    const stuck = scripted([probe(true, 0, 0, ANR_FOCUS)]);
+    const named = await settleGuest({ ...stuck.deps, cpuBudgetMs: 0, dismiss: async () => false, readyBudgetMs: 5_000 });
+    expect(named).toMatchObject({ settled: false, reason: "bound" });
+    expect(named.notices[0]).toMatch(/"System UI isn't responding" covers the screen/);
+  });
+
+  it("says nothing when the check ends calm without a full calm run", async () => {
+    // Alternating, ending on two calm reads: no 3-in-a-row, but nothing busy to warn about.
+    const s = scripted(loads([0.2, 0.6, 0.2, 0.2, 0.6, 0.2, 0.2, 0.6, 0.2, 0.2, 0.1]));
+    const r = await settleGuest({ ...s.deps, cpuBudgetMs: 15_000 });
+    expect(r).toMatchObject({ settled: true, reason: "bound", notices: [] });
   });
 
   it("names a dialog that would not close, and skips the wait when the probe is refused", async () => {
     const stuck = scripted([probe(true, 0, 0, ANR_FOCUS)]);
-    const r = await settleGuest({ ...stuck.deps, dismiss: async () => false, budgetMs: 5_000 });
+    const r = await settleGuest({ ...stuck.deps, dismiss: async () => false, readyBudgetMs: 5_000 });
     expect(r.notices[0]).toMatch(/"System UI isn't responding" covers the screen.*android:id\/aerr_wait/);
     // An older worker guard refuses the probe: the lease goes on as before.
     expect(await settleGuest({ probe: async () => Promise.reject(new Error("FORBIDDEN")), dismiss: async () => false })).toMatchObject({ settled: false, skipped: true, notices: [] });

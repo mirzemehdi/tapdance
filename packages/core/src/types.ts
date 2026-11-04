@@ -16,6 +16,12 @@ export interface LeaseRequest {
   ttlMs: number;
   /** How long to wait in the provider's queue before failing. */
   waitTimeoutMs?: number;
+  /**
+   * How long an Android emulator lease checks the guest's CPU after boot and dialog checks before
+   * handing the device out (`session.settleSeconds`); 0 skips the CPU check. Providers without such a
+   * wait ignore it.
+   */
+  settleMs?: number;
 }
 
 /** Where a device runs, so humans and agents can tell a laptop from a cloud VM. */

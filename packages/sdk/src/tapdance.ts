@@ -89,6 +89,11 @@ export interface LeaseOptions {
   profile?: string;
   ttlMinutes?: number;
   waitSeconds?: number;
+  /**
+   * Android emulators: how long to check the guest's CPU after boot and dialog checks before handing
+   * the device out, 0-300 (0 = skip the CPU check). Default `session.settleSeconds` (15).
+   */
+  settleSeconds?: number;
   /** Return the session's current lease instead of failing when it already holds one on this platform. */
   reuse?: boolean;
 }
@@ -408,6 +413,7 @@ export class Tapdance {
       }
       const ttlMinutes = options.ttlMinutes ?? config.session.defaultTtlMinutes;
       const waitSeconds = options.waitSeconds ?? config.session.leaseWaitSeconds;
+      const settleSeconds = options.settleSeconds ?? config.session.settleSeconds;
       const { notices, ...handle } = await provider.lease(
         this.session.id,
         {
@@ -419,6 +425,7 @@ export class Tapdance {
           ...(options.profile ? { profile: options.profile } : {}),
           ttlMs: ttlMinutes * 60_000,
           ...(waitSeconds > 0 ? { waitTimeoutMs: waitSeconds * 1000 } : {}),
+          settleMs: settleSeconds * 1000,
         },
         { onProgress: (m) => this.progress(m) },
       );

@@ -361,8 +361,10 @@ versions: `tapdance devices install android 35` on the VM.
 **A busy guest after a boot or release.** Under nested virtualisation the guest stays busy for a while
 after it starts: on the 2026-11-04 run (Play image), 65-145 s after a release and about 5 minutes after
 a fresh boot, with commands taking 2-10 s instead of 2-6 s and no "isn't responding" dialog. A lease
-waits up to 90 s for 3 calm readings in a row (or a clearly falling load) and otherwise hands the
-device out with a notice that says how busy it still is. Simlock's first boot of a device runs
+waits for boot and for no "isn't responding" dialog (answered with Wait), then checks the CPU for
+`session.settleSeconds` (15 s by default) and hands the device out, with a notice that says how busy it
+still is when it is. On this VM most leases right after a release or boot will carry that notice; a
+longer check (up to 300 s) would wait out more of the busy phase, at that much extra lease time. Simlock's first boot of a device runs
 Android's background app optimisation (`cmd package bg-dexopt-job`) and waits for a calm guest before
 it saves the clean snapshot every spare restores, together at most 120 s (more would push the first
 lease past the 330 s lease wait). `tapdance worker logs` shows the outcome on the VM: "Android guest

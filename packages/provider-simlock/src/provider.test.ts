@@ -1058,6 +1058,26 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     expect(handle.notices).toBeUndefined();
   }, 15_000);
 
+  it("checks the CPU only as long as the request's settleMs, and not at all for 0 (session.settleSeconds)", async () => {
+    // A guest that stays 99 % busy.
+    const busy = Array.from({ length: 2000 }, (_, i) => `1\ncpu  ${i * 1000} 0 0 ${i * 10} 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n`);
+    const short = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), probes: [...busy] });
+    const handle = await short.p.lease("s", { ...request, settleMs: 40 });
+    expect(handle.notices?.[0]).toMatch(/still busy with its start-up work .*guest CPU 99 %.*raise session\.settleSeconds/);
+    expect(short.calls.filter((c) => c === "probe").length).toBeLessThan(40);
+    // 0: one read (booted, nothing in front), no notice, and the warm-up still runs.
+    const off = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), probes: [...busy] });
+    const quick = await off.p.lease("s", { ...request, settleMs: 0 });
+    expect(quick.notices).toBeUndefined();
+    expect(off.calls.filter((c) => c === "probe")).toHaveLength(1);
+    expect(off.calls).toContain("snapshot");
+    // 0 still answers an "isn't responding" dialog with Wait.
+    const ANR = "1\ncpu  0 0 0 0 0 0 0 0 0 0\n  mCurrentFocus=Window{4f u0 Application Not Responding: com.android.systemui}\n";
+    const dialog = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), probes: [ANR, ...busy] });
+    await dialog.p.lease("s", { ...request, settleMs: 0 });
+    expect(dialog.pressed).toEqual([expect.objectContaining({ selector: 'id="android:id/aerr_wait"' })]);
+  });
+
   it("warms agent-device's snapshot helper once the device has settled, so the agent's first inspect works (#102)", async () => {
     // The helper fails its first start on a restored spare, as on every warm lease of the N2 run.
     let snapshots = 0;

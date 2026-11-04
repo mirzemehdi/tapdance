@@ -160,12 +160,14 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--profile <name>", "boot a device profile from this machine (read-only: the lease's changes are discarded)")
     .option("--ttl <minutes>", "lease time to live in minutes")
     .option("--wait <seconds>", "how long to wait in the queue")
+    .option("--settle <seconds>", "Android emulator: how long to check the guest's CPU after boot before handing it out, 0-300 (0 skips the check)")
     .option("--no-keepalive", "do not renew in the background (the lease expires after its TTL)")
     .option("--hold", "stay in the foreground, renew, and release on Ctrl-C")
-    .action(async (o: { platform: string; device?: string; os?: string; imageTag?: string; physical?: boolean; profile?: string; ttl?: string; wait?: string; keepalive: boolean; hold?: boolean }) =>
+    .action(async (o: { platform: string; device?: string; os?: string; imageTag?: string; physical?: boolean; profile?: string; ttl?: string; wait?: string; settle?: string; keepalive: boolean; hold?: boolean }) =>
       run(globals(), async (t, out) => {
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
+        const settle = intArg("--settle", o.settle, 0, 300);
         const { summary, ttlCappedMinutes, notices } = await t.lease({
           platform: platformArg(o.platform),
           ...(o.device ? { device: o.device } : {}),
@@ -175,6 +177,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(o.profile ? { profile: o.profile } : {}),
           ...(ttl !== undefined ? { ttlMinutes: ttl } : {}),
           ...(wait !== undefined ? { waitSeconds: wait } : {}),
+          ...(settle !== undefined ? { settleSeconds: settle } : {}),
         });
         const cfg = t.resolved.config.session;
         let keepalive: string;
