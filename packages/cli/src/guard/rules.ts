@@ -324,7 +324,8 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if (a.length === 3 && a[0] === "shell" && a[1] === "pidof" && APP_ID.test(a[2]!)) return stdin === undefined ? { ok: true, value: { tool, args: a } } : deny("stdin is not allowed for this command");
   if (a[0] === "logcat") {
     const okFlags = a.slice(1).every((x, i, arr) => ["-d", "-v", "threadtime", "-t", "-b", "crash"].includes(x) || /^--pid=\d+$/.test(x) || (arr[i - 1] === "-t" && isLines(x)));
-    return okFlags ? plain("logs") : deny("logcat arguments not allowed");
+    // `-d` dumps and exits; without it logcat streams until the exec times out, holding a slot.
+    return okFlags && a.includes("-d") ? plain("logs") : deny("logcat arguments not allowed");
   }
   if (a[0] !== "shell") return deny(`adb ${String(a[0] ?? "")} is not part of the device API`);
   const s = a.slice(1);

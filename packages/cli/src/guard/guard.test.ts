@@ -436,6 +436,9 @@ describe("worker guard: hardening", () => {
     expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-b", "crash", "-v", "threadtime"] });
     const policy = GuardPolicySchema.parse({});
     for (const body of bodies) expect(execOf(body, policy), JSON.stringify(body)).toMatchObject({ ok: true });
+    // Malicious: a streaming logcat (no -d) would hold an exec slot until it times out.
+    expect(execOf({ tool: "adb", args: ["logcat", "-v", "threadtime"] }, policy)).toMatchObject({ ok: false });
+    expect(execOf({ tool: "adb", args: ["logcat", "-t", "50"] }, policy)).toMatchObject({ ok: false });
   });
 
   it("13. uploads and artifacts belong to the client that created them (H-06)", async () => {
