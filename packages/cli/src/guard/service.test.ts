@@ -197,3 +197,12 @@ describe("guard service install/uninstall (fake launchctl/systemctl)", () => {
     expect(linux.calls).toEqual(["systemctl --user disable --now tapdance-guard.service", "systemctl --user daemon-reload"]);
   });
 });
+
+describe("which TAPDANCE_HOME a guard service serves", () => {
+  it("reads it from the plist or the unit, else the default home", async () => {
+    const { serviceTapdanceHome } = await import("./service.js");
+    expect(serviceTapdanceHome("<dict><key>TAPDANCE_HOME</key>\n<string>/tmp/td</string></dict>", "/Users/w/.tapdance")).toBe("/tmp/td");
+    expect(serviceTapdanceHome('[Service]\nEnvironment="TAPDANCE_HOME=/home/w/scratch"\n', "/home/w/.tapdance")).toBe("/home/w/scratch");
+    expect(serviceTapdanceHome("[Service]\nEnvironment=\"PATH=/usr/bin\"\n", "/home/w/.tapdance")).toBe("/home/w/.tapdance");
+  });
+});

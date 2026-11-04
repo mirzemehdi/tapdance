@@ -365,3 +365,13 @@ export async function prepareLinuxUserServices(out: { progress: (m: string) => v
   useUserBus(process.getuid?.() ?? 0);
   linuxUserServicesReady = true;
 }
+
+/**
+ * The TAPDANCE_HOME an installed guard service runs with, read from its plist or unit text: the
+ * value it was installed with, or `defaultHome` when the service sets none.
+ */
+export function serviceTapdanceHome(serviceText: string, defaultHome: string): string {
+  const plist = /<key>TAPDANCE_HOME<\/key>\s*<string>([^<]+)<\/string>/.exec(serviceText)?.[1];
+  const unit = /^Environment="?TAPDANCE_HOME=([^"\n]+)"?$/m.exec(serviceText)?.[1];
+  return plist ?? unit ?? defaultHome;
+}

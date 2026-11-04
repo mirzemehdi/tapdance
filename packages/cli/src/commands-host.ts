@@ -49,7 +49,7 @@ import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm,
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
 import { HOST_STOP_COMMAND, HOST_STOP_SUDO_CHECK, describeHostStop, hostStopApplies, sudoersInstallCommand, sudoersRule } from "./guard/host-stop.js";
-import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, prepareLinuxUserServices, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
+import { GUARD_LAUNCHD_LABEL, GUARD_SYSTEMD_UNIT, prepareLinuxUserServices, serviceTapdanceHome, commandFailed, guardServicePaths, guardServiceState, runCommand, uninstallGuardService, waitForGuard } from "./guard/service.js";
 import {
   assertHostPlatform,
   cloudCheck,
@@ -1359,6 +1359,16 @@ async function ghStatus(): Promise<{ ok: true } | { ok: false; note: string }> {
  * restart forgets which client owns which lease).
  */
 async function restartGuardIfIdle(out: ReturnType<typeof output>): Promise<boolean> {
+  // Restart only the guard that reads this policy: a command run with another TAPDANCE_HOME (a test,
+  // a scratch setup) must never restart the machine's real guard, which would not read the change.
+  const defaultHome = join(homedir(), ".tapdance");
+  const { file } = guardServicePaths(servicePlatform(), homedir());
+  const served = existsSync(file) ? serviceTapdanceHome(readFileSync(file, "utf8"), defaultHome) : undefined;
+  const ours = process.env["TAPDANCE_HOME"] ?? defaultHome;
+  if (served === undefined || served !== ours) {
+    out.warn(served === undefined ? "No guard service is installed here, so nothing was restarted." : `The guard service here uses ${served}, not ${ours}, so it was not restarted.`);
+    return false;
+  }
   const status = (await localWorkerStatus().catch(() => undefined)) as { leases?: unknown[] } | undefined;
   if (Array.isArray(status?.leases) && status.leases.length > 0) {
     out.warn(`${status.leases.length} lease(s) are running, so the guard was not restarted.`);
