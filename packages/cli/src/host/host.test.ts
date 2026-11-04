@@ -34,6 +34,13 @@ import {
   parseMaxUptime,
   resolveHostStop,
   describeIdle,
+  choosePairingLabel,
+  pairingApprovalRefusal,
+  offerClipboard,
+  hostSecurityNote,
+  tailscaleAclHint,
+  describePlatforms,
+  describeWorkerDevices,
 } from "./plan.js";
 
 /** Pure parts of `host up/status/down` and `connect`. No test here runs tailscale, launchctl, Simlock or a device. */
@@ -250,6 +257,74 @@ describe("cost guard options", () => {
     expect(describeIdle({ checkedAt: "2026-11-03T11:59:30Z", lastActivityAt: "2026-11-03T11:59:30Z", leases: 2 }, now)).toBe("in use (2 lease(s))");
     expect(describeIdle({ checkedAt: "2026-11-03T11:00:00Z", lastActivityAt: "2026-11-03T10:00:00Z" }, now)).toBeUndefined();
     expect(describeIdle(undefined, now)).toBeUndefined();
+  });
+
+  it("says when an idle host powers off, from the limit in host-stop.json (#95)", () => {
+    const now = Date.parse("2026-11-04T15:34:10Z");
+    const seen = { checkedAt: "2026-11-04T15:34:05Z", lastActivityAt: "2026-11-04T15:33:03Z", leases: 0, idleMinutes: 10 };
+    expect(describeIdle(seen, now)).toBe("idle 1 min, powers off in about 9 min (around 15:43 UTC)");
+    expect(describeIdle({ ...seen, lastActivityAt: "2026-11-04T15:20:00Z" }, now)).toBe("idle 14 min, powers off at the guard's next check (within a minute)");
+    expect(describeIdle({ ...seen, leases: 1 }, now)).toBe("in use (1 lease(s))");
+    expect(describeIdle({ ...seen, idleMinutes: 0 }, now)).toBe("idle 1 min");
+  });
+});
+
+describe("pairing label for host up (#93)", () => {
+  const refusal = (f: () => unknown) => {
+    try {
+      f();
+    } catch (error) {
+      return error as TapdanceError;
+    }
+    throw new Error("expected a refusal");
+  };
+  it("keeps the host's only pairing when no --label is given, instead of pairing the hostname", () => {
+    expect(choosePairingLabel({ hostnameLabel: "tapdance-n2", active: ["vps-n2"] })).toEqual({ label: "vps-n2", source: "only pairing" });
+    expect(choosePairingLabel({ hostnameLabel: "tapdance-n2", active: [] })).toEqual({ label: "tapdance-n2", source: "hostname" });
+    expect(choosePairingLabel({ hostnameLabel: "tapdance-n2", active: ["vps-n2", "tapdance-n2"] })).toEqual({ label: "tapdance-n2", source: "hostname" });
+    expect(choosePairingLabel({ flag: "new vps", hostnameLabel: "tapdance-n2", active: ["vps-n2"] })).toEqual({ label: "new-vps", source: "flag" });
+  });
+  it("refuses to guess between several pairings", () => {
+    const e = refusal(() => choosePairingLabel({ hostnameLabel: "h", active: ["a", "b"] }));
+    expect(e.code).toBe("USAGE");
+    expect(e.message).toContain('"a", "b"');
+    expect(e.hint).toContain("tapdance host up --label a");
+  });
+  it("names the existing pairing in the approval refusal instead of suggesting a second pairing", () => {
+    const e = pairingApprovalRefusal({ idleStop: "10" }, "tapdance-n2", ["vps-n2"]);
+    expect(e.code).toBe("FORBIDDEN");
+    expect(e.message).toContain('this host is paired as "vps-n2"');
+    expect(e.hint).toContain("tapdance host up --label vps-n2 --idle-stop 10");
+    const first = pairingApprovalRefusal({}, "my-vps", []);
+    expect(first.message).toBe("Pairing must be approved at this machine's terminal");
+    expect(first.hint).toContain("tapdance host up --label my-vps --yes");
+  });
+});
+
+describe("host up and host status wording on Linux (#78, #81)", () => {
+  it("offers the clipboard only with a display and a clipboard tool", () => {
+    expect(offerClipboard("linux", {}, () => true)).toBe(false);
+    expect(offerClipboard("linux", { DISPLAY: ":0" }, () => false)).toBe(false);
+    expect(offerClipboard("linux", { WAYLAND_DISPLAY: "wayland-0" }, (b) => b === "wl-copy")).toBe(true);
+    expect(offerClipboard("darwin", {}, () => false)).toBe(true);
+  });
+  it("mentions iOS simulators and 'this Mac' only on macOS", () => {
+    expect(hostSecurityNote("linux", "w")).not.toMatch(/iOS|Mac/);
+    expect(hostSecurityNote("darwin", "w")).toContain("An iOS simulator app is not sandboxed from this Mac");
+    expect(hostSecurityNote("linux", "w", "interaction")).toContain("(scopes: interaction)");
+    expect(tailscaleAclHint("linux", 4720)).toContain("<this machine's 100.x address or tag>:4720");
+    expect(tailscaleAclHint("darwin", 4720)).toContain("<this Mac's 100.x address or tag>:4720");
+  });
+  it("says iOS needs a Mac on Linux", () => {
+    expect(describePlatforms({ android: true, ios: false }, "linux")).toBe("android ready, ios needs a Mac");
+    expect(describePlatforms({ android: false, ios: false }, "darwin")).toBe("android not available, ios not available");
+  });
+  it("reads the RAM budget from capacity.ramBudget (Simlock 0.4) and leaves it out when absent", () => {
+    const gib = 1024 ** 3;
+    const status = { capacity: { android: { running: 1, warm: 1 }, ios: { running: 0, warm: 0 }, ramBudget: { usedBytes: 4.2 * gib, limitBytes: 12 * gib, overLimit: false } } };
+    expect(describeWorkerDevices(status)).toBe("android 1 running (1 warm spare), ios 0 running (0 warm spare); devices use 4.2 of 12.0 GB budget");
+    expect(describeWorkerDevices({ capacity: { android: { running: 2 } }, ramBudget: { usedBytes: gib, limitBytes: 2 * gib } })).toContain("devices use 1.0 of 2.0 GB budget");
+    expect(describeWorkerDevices({ capacity: { android: { running: 1 } } })).toBe("android 1 running (0 warm spare), ios 0 running (0 warm spare)");
   });
 });
 

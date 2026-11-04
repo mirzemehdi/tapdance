@@ -152,8 +152,9 @@ Follow each procedure in [e2e-procedures.md](e2e-procedures.md) step by step. Wh
 - If the owner approved cloud resources, follow
   [field-test-cloud-android.md](field-test-cloud-android.md): keep a log of every resource you create,
   tear everything down at the end (also after a failure), run
-  `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` until it exits 0, and tell the owner the final
-  state, how long it ran and what it cost.
+  `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` until it exits 0 (before the project is
+  deleted), revoke the credentials the run left (`infrastructure/scripts/revoke-run-credentials.sh`,
+  asking the owner), and tell the owner the final state, how long it ran and what it cost.
 - The checklists in [`scripts/field-test/`](../../scripts/field-test/README.md) run the CLI and MCP
   checks against a connected host and time each step.
 

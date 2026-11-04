@@ -64,6 +64,13 @@ import {
   tailscaleServeOffArgs,
   tokenFingerprint,
   clipboardCommand,
+  choosePairingLabel,
+  describePlatforms,
+  describeWorkerDevices,
+  hostSecurityNote,
+  offerClipboard,
+  pairingApprovalRefusal,
+  tailscaleAclHint,
   parseWarm,
   serveNeedsOperator,
   resolveHostStop,
@@ -130,7 +137,9 @@ function readDmi(): { sysVendor?: string; productName?: string; biosVendor?: str
 
 /** sdkmanager needs a JDK; the Mac's /usr/bin/java is a stub that fails without one. */
 async function jdkCheck(): Promise<DoctorCheck> {
-  const java = process.env["JAVA_HOME"] ? join(process.env["JAVA_HOME"], "bin", "java") : "java";
+  // Over a non-interactive ssh command JAVA_HOME may be unset: also look where host-setup.sh puts the JDK.
+  const setupJdk = join(homedir(), ".local", "share", "tapdance", "jdk", "bin", "java");
+  const java = process.env["JAVA_HOME"] ? join(process.env["JAVA_HOME"], "bin", "java") : existsSync(setupJdk) ? setupJdk : "java";
   const r = await runCommand(java, ["-version"]);
   return r.ok
     ? { id: "host.jdk", title: "JDK (for sdkmanager)", status: "pass", detail: r.out.split("\n")[0] ?? "found" }
@@ -238,7 +247,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
   host
     .command("up")
     .description("Worker, guard service, pairing, Tailscale and a self-test, step by step; prints a block to paste to the agent's machine")
-    .option("--label <name>", "name for the control machine's pairing (default: this machine's hostname)")
+    .option("--label <name>", "name for the control machine's pairing (default: the pairing this host already has, if only one; else this machine's hostname)")
     .option("--allow-admin-account", "run the guard from an administrator account (not recommended)")
     .option("--no-tailscale", "do not expose the guard with `tailscale serve`; the endpoint stays on loopback")
     .option("--keep-awake", "macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline")
@@ -254,8 +263,22 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       const out = output(g);
       try {
         const platform = assertHostPlatform(osPlatform());
-        const label = sanitizeLabel(o.label ?? defaultLabel(hostname())) || "host";
         // Decided before anything changes, so a bad or refused value stops here.
+        const activeLabels = (await pairings()).filter((p) => p.state === "active").map((p) => p.label);
+        const chosen = choosePairingLabel({ ...(o.label !== undefined ? { flag: o.label } : {}), hostnameLabel: defaultLabel(hostname()), active: activeLabels });
+        const label = chosen.label;
+        if (chosen.source === "only pairing") out.progress(`No --label: keeping this host's pairing "${label}"`);
+        const tokenPath = pairingTokenPath(guardDir(), label);
+        // A new pairing needs the owner's approval: refuse now, before the cost guard or anything else
+        // changes, rather than at step 5 after earlier steps applied their settings (#93).
+        {
+          const existing = existsSync(tokenPath) ? (await readFile(tokenPath, "utf8")).trim() : "";
+          const valid = existing ? await new GuardTokens().verify(existing) : undefined;
+          const needsPairing = !valid || Boolean(o.repair);
+          if (needsPairing && !o.yes && !process.env["TAPDANCE_GUARD_PAIR_NONINTERACTIVE"] && !process.stdin.isTTY) {
+            throw pairingApprovalRefusal(o, label, activeLabels);
+          }
+        }
         const currentStop = (await loadPolicy()).policy.hostStop;
         const cloudVm = platform === "linux" ? detectCloudVm(readDmi()) : undefined;
         const costChoice = resolveHostStop({
@@ -328,7 +351,6 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           return settings;
         });
 
-        const tokenPath = pairingTokenPath(guardDir(), label);
         const secret = await step(out, "pairing", async () => {
           const tokens = new GuardTokens();
           const existing = existsSync(tokenPath) ? (await readFile(tokenPath, "utf8")).trim() : "";
@@ -340,13 +362,11 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           const active = (await tokens.all()).filter((t) => t.label === label && !t.revokedAt && Date.parse(t.expiresAt) > Date.now());
           if (active.length > 0 && !o.repair) {
             throw new TapdanceError("USAGE", `"${label}" is already paired (${active.map((t) => t.id).join(", ")}), but its token file ${tokenPath} is missing or stale`, {
-              hint: `Run \`${hostUpCommand(o, { repair: true })}\` to revoke it and issue a new token, or pick another --label.`,
+              hint: `Run \`${hostUpCommand({ ...o, label }, { repair: true })}\` to revoke it and issue a new token, or pick another --label.`,
             });
           }
           if (!o.yes && !process.env["TAPDANCE_GUARD_PAIR_NONINTERACTIVE"]) {
-            if (!process.stdin.isTTY) {
-              throw new TapdanceError("FORBIDDEN", "Pairing must be approved at this machine's terminal", { hint: `Run it in a local terminal, or pass --yes if you are the owner running it here: ${hostUpCommand(o, { yes: true })}` });
-            }
+            if (!process.stdin.isTTY) throw pairingApprovalRefusal(o, label, activeLabels);
             const days = policy.limits.tokenDays;
             if (!(await confirm(`Pair a control machine as "${label}"? It gets device-only access to this machine for ${days} day(s).`))) {
               throw new TapdanceError("USAGE", "Pairing not approved; nothing was issued");
@@ -436,25 +456,22 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             renderReadyBlock(block),
             dim(`warm spares: ${o.warm ? o.warm : "one booted spare per device kind you used (fast next lease)"}; it uses memory while the worker runs. Change: tapdance host warm android=0,ios=0. Stop everything: tapdance host pause.`),
             "",
-            yellow(
-              `Security: whoever holds this token can drive the devices${o.scope ? ` (scopes: ${o.scope})` : ", install apps"} and run a shell inside the emulators. An iOS simulator app is not sandboxed from this Mac: installing one runs code as ${userInfo().username}, with this account's files. Prefer a dedicated standard account for hosting, or a token without install (--scope interaction,inspection,screenshots,streaming,input). See docs/security/threat-model.md.`,
-            ),
-            ...(endpoint.includes(".ts.net")
-              ? [
-                  dim(
-                    `Tailscale ACL (recommended): let only the agent's machine reach this port, e.g. {"action": "accept", "src": ["<agent machine's 100.x address or tag>"], "dst": ["<this Mac's 100.x address or tag>:${new URL(endpoint).port || 4720}"]} in https://login.tailscale.com/admin/acls (\`tailscale ip -4\` prints the address).`,
-                  ),
-                ]
-              : []),
+            yellow(hostSecurityNote(platform, userInfo().username, o.scope)),
+            ...(endpoint.includes(".ts.net") ? [dim(tailscaleAclHint(platform, Number(new URL(endpoint).port) || 4720))] : []),
             ...(endpoint.startsWith("http://127.0.0.1")
               ? ["", yellow("The endpoint is loopback only: an agent on another machine cannot reach it until Tailscale is set up (then run this command again).")]
               : []),
           ].join("\n"),
         );
-        // One keypress to get the token onto the clipboard; it never reaches the terminal.
-        if (!g.json && process.stdin.isTTY && process.stdout.isTTY && (await confirm("Copy the token to the clipboard now?"))) {
-          const copied = await copyToClipboard(secret);
-          out.progress(copied ? "Token copied. Paste it to your agent privately (a direct message, not a shared channel)." : "No clipboard tool found; run `tapdance host token --show` to see it.");
+        // One keypress to get the token onto the clipboard; it never reaches the terminal. A machine with
+        // no display or no clipboard tool (a server over ssh) is not asked.
+        if (!g.json && process.stdin.isTTY && process.stdout.isTTY) {
+          if (!offerClipboard(osPlatform(), process.env, (bin) => findOnPath(bin, process.env["PATH"] ?? "", existsSync) !== undefined)) {
+            out.progress(`No clipboard here: copy ${tokenPath} to the agent's machine privately (scp), or print it with \`tapdance host token --show --label ${label}\`.`);
+          } else if (await confirm("Copy the token to the clipboard now?")) {
+            const copied = await copyToClipboard(secret);
+            out.progress(copied ? "Token copied. Paste it to your agent privately (a direct message, not a shared channel)." : "No clipboard tool found; run `tapdance host token --show` to see it.");
+          }
         }
       } catch (error) {
         process.exitCode = reportFailure(out, Boolean(g.json), error);
@@ -921,16 +938,17 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const platform = assertHostPlatform(osPlatform());
         const rows: Array<{ step: string; ok: boolean; detail: string }> = [];
         const summary = summarizePrerequisites(await prerequisiteChecks(platform));
-        rows.push({ step: "prerequisites", ok: summary.android || summary.ios, detail: `android ${summary.android ? "ready" : "not available"}, ios ${summary.ios ? "ready" : "not available"}` });
+        const sdkMissing = summary.problems.find((c) => c.id === "host.android.sdk");
+        rows.push({
+          step: "prerequisites",
+          ok: summary.android || summary.ios,
+          detail: `${describePlatforms(summary, platform)}${sdkMissing && !summary.android ? `; the Android SDK was not found from this shell (${sdkMissing.detail}): set ANDROID_HOME, or run it from a login shell` : ""}`,
+        });
         const admin = isMacAdmin();
         const gateway = joinedGateway();
         rows.push({ step: "account", ok: !gateway && process.getuid?.() !== 0, detail: `${userInfo().username}${admin ? " (administrator)" : ""}${gateway ? `; joined gateway ${gateway}` : ""}` });
         const worker = await localWorkerStatus();
-        const ws = worker as { capacity?: Record<string, { running?: number; warm?: number } | undefined>; ramBudget?: { usedBytes?: number; limitBytes?: number } } | undefined;
-        const gb = (n?: number) => (n === undefined ? "?" : (n / 1024 ** 3).toFixed(1));
-        const devicesLine = ws
-          ? (["android", "ios"] as const).map((p) => `${p} ${ws.capacity?.[p]?.running ?? 0} running (${ws.capacity?.[p]?.warm ?? 0} warm spare)`).join(", ") + `; devices use ${gb(ws.ramBudget?.usedBytes)} of ${gb(ws.ramBudget?.limitBytes)} GB budget`
-          : "";
+        const devicesLine = worker !== undefined ? describeWorkerDevices(worker) : "";
         rows.push({ step: "worker", ok: worker !== undefined, detail: worker !== undefined ? `the local Simlock worker answers; ${devicesLine}` : "not answering (tapdance worker start, or tapdance host resume)" });
         const { policy } = await loadPolicy();
         const port = policy.listen.port;

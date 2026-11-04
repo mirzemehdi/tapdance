@@ -67,6 +67,10 @@ documents N2 only. Google also notes that nested VMs can be 10% or more slower f
   pointed at the project (`gcloud config set project <PROJECT_ID>`).
 - [Terraform](https://developer.hashicorp.com/terraform/install) 1.5 or later if you use the Terraform
   route (also run `gcloud auth application-default login`).
+- Know what these logins grant: both give the `cloud-platform` scope for your **whole Google account**,
+  not just this project, and their refresh tokens (in `~/.config/gcloud`) do not expire on their own:
+  they work until revoked, or until unused for about 6 months, for any process running as your user.
+  On a shared machine, or one an agent works on, revoke them when you are done ([tear down](#tear-down)).
 - A [Tailscale](https://tailscale.com/) account. The agent's machine must be logged into that tailnet
   (`tailscale status` there lists it). Turn on **HTTPS Certificates** in the
   [DNS settings](https://login.tailscale.com/admin/dns) first: the guard then gets an `https://`
@@ -204,10 +208,14 @@ grep -cw vmx /proc/cpuinfo      # anything but 0 means nested virtualization is 
 ls -l /dev/kvm                  # must exist
 ```
 
-With the Terraform route, `bash /opt/tapdance/check-kvm.sh` runs these checks and more, and must end
-with "KVM acceleration is usable" (wait a minute or two after `apply` for the startup script). If `vmx`
-is there but `/dev/kvm` is missing, load the module: `sudo modprobe kvm_intel`. Do not go on without
-`/dev/kvm`: Tapdance never falls back to software emulation.
+With the Terraform route, `bash /opt/tapdance/check-kvm.sh` runs these checks and more (wait a minute or
+two after `apply` for the startup script). Before the setup script, only its `vmx`, kvm module and
+`/dev/kvm` lines matter: "cannot open /dev/kvm" is expected (the setup script adds you to the `kvm`
+group and grants this login access, no re-login needed), and the emulator check is skipped until the
+SDK is installed. Run it again after the setup script: then it must end with "KVM acceleration is
+usable" (it finds the SDK in `~/Android/Sdk`). If `vmx` is there but `/dev/kvm` is missing, load the
+module: `sudo modprobe kvm_intel`. Do not go on without `/dev/kvm`: Tapdance never falls back to
+software emulation.
 
 ## Run the setup script
 
@@ -231,13 +239,22 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    `/usr/bin/systemctl poweroff`, so the guard can stop the VM when it sits idle
    ([cost guardrails](#cost-guardrails)). For `/dev/kvm` it adds you to the `kvm` group and sets an ACL
    on `/dev/kvm`, so you need not log out and back in.
-2. **It logs the VM into your tailnet.** It asks first, then runs `sudo tailscale up --operator=$USER`,
-   which prints a link ("To authenticate, visit: …"). Open it in a browser on any computer and log in
-   to the tailnet your agent's machine is in. `--operator` lets your user run `tailscale serve` without
-   root, which `host up` needs.
-3. **It writes `~/.tapdance/env.sh`** (PATH, `JAVA_HOME`, `ANDROID_HOME`) and sources it from
-   `~/.bashrc` and `~/.profile`, so SSH commands find the tools too.
-4. **It installs Tapdance from source** into `~/tapdance`, builds it, and links `~/.local/bin/tapdance`.
+
+   The newest command-line tools are Google's Android CLI, which collects usage metrics by default; the
+   script turns that off with a `--no-metrics` line in `~/.androidrc`, Google's documented setting (its
+   `sdkmanager` wrapper rejects `--no-metrics` as an option). Optional: `--with-gh` also installs the
+   GitHub CLI, which [installs from CI](#getting-your-app-onto-the-vm) and builds with `--git-auth gh`
+   need, and `--sdk-packages "cmake;3.31.6"` installs SDK packages your app's build needs (a Kotlin
+   Multiplatform app with native code needs CMake; without it the first build failed after 8 minutes).
+2. **It writes `~/.tapdance/env.sh`** (PATH, `JAVA_HOME`, `ANDROID_HOME`, `ANDROID_SDK_ROOT`) and
+   sources it at the top of `~/.bashrc`, before Ubuntu's "not interactive: return" line, and from
+   `~/.profile`, so commands over ssh (`gcloud compute ssh --command …`) find the tools too.
+3. **It installs Tapdance from source** into `~/tapdance`, builds it, and links `~/.local/bin/tapdance`.
+4. **It logs the VM into your tailnet.** It asks first, then runs `sudo tailscale up --operator=$USER`,
+   which prints a link ("To authenticate, visit: …") and waits until you approve the machine. Open it
+   in a browser on any computer and log in to the tailnet your agent's machine is in. `--operator` lets
+   your user run `tailscale serve` without root, which `host up` needs. This comes after the install, so
+   nothing else waits on the login.
 5. **It runs `tapdance host up --label gcp-n2-1`**, which prints each step:
 
    | Step | On this VM |
@@ -392,7 +409,7 @@ first.
 
 | State | What bills | Back to work |
 | --- | --- | --- |
-| **Stopped** (`gcloud compute instances stop`, or the idle stop) | The 64 GB boot disk: about USD 0.21 a day (USD 6.40–7 a month) | `gcloud compute instances start`: ready in about a minute (54 s measured) |
+| **Stopped** (`gcloud compute instances stop`, or the idle stop) | The 64 GB boot disk: about USD 0.21 a day (USD 6.40–7 a month) | `gcloud compute instances start`: ready in about a minute (54 s measured). With the idle stop on, it powers off again after the idle time unless an agent connects |
 | **Snapshot, then delete the VM** | The snapshot, for the data actually used: about USD 1 a month for about 20 GB | Recreate the VM from the snapshot (below): a few minutes, same Tailscale name and pairing |
 | **Destroyed** (`terraform destroy`, or [Tear down](#tear-down)) | Nothing | Start over from [Create the VM](#create-the-vm) and pair again |
 
@@ -510,9 +527,15 @@ start and then leave alone stops again after the idle time.
 - **Where it is kept:** `hostStop` (`idleMinutes`, `maxUptimeHours`) in `~/.tapdance/worker/policy.json`
   on the VM. Running `host up` again keeps it; pass a flag to change it. `host up` restarts the guard to
   apply a change when no lease is running, and tells you when it could not.
-- **What it did:** `tapdance host status` shows the setting and how long the VM has been idle
-  ("idle stop after 30 min, uptime cap off; idle 12 min"). `tapdance worker guard audit` lists each stop
-  as a `TIMER host-stop` entry with its reason.
+- **What it did:** `tapdance host status` shows the setting, how long the VM has been idle and when it
+  will power off ("idle stop after 10 min, uptime cap off; idle 1 min, powers off in about 9 min (around
+  15:43 UTC)"). The guard checks once a minute and the guest then takes a minute or two to shut down, so
+  the VM reaches `TERMINATED` a little after the limit (measured: 12 min 15 s after the last use with a
+  10 min limit). `tapdance worker guard audit` lists each stop as a `TIMER host-stop` entry with its
+  reason, and the guard's own log, `~/.tapdance/worker/guard.log`, has the "cost guard: powering off"
+  line (`journalctl --user` may show nothing for an OS Login account).
+- **Changing it later:** `tapdance host up --idle-stop 10` keeps the host's only pairing (pass `--label`
+  when it has several); it never pairs a new machine for a cost guard change.
 
 A poweroff from inside the VM stops the instance the same way `gcloud compute instances stop` does:
 the disk and everything on it stay.
@@ -596,8 +619,8 @@ after the start).
 The token still expires on its own date. Start the VM when the agent is about to use it: after the idle
 time without use, it stops again.
 
-To see why it stopped, run `tapdance host status` and `tapdance worker guard audit` on the VM. A
-`TIMER host-stop` entry means the guard stopped it; no entry means the run-time cap, the schedule or a
+To see why it stopped, run `tapdance host status` and `tapdance worker guard audit` on the VM, or read
+`~/.tapdance/worker/guard.log`. A `TIMER host-stop` entry means the guard stopped it; no entry means the run-time cap, the schedule or a
 person did (the VM's audit logs in the Google Cloud console show the stop).
 
 ### Recommended settings for one developer
@@ -637,7 +660,8 @@ Do all of it when you are done; a stopped VM still bills for its disk.
 2. Check that nothing is left that bills. It lists VMs in any state, disks, snapshots, machine and custom
    images, reserved addresses, routers and NAT gateways, forwarding rules and storage buckets, with a cost
    hint for each, and exits 0 only when there are none (1: something is left; 2: it could not check). It
-   only reads; it never deletes.
+   only reads; it never deletes. Run it **before** deleting the project or unlinking billing: afterwards
+   the project is `DELETE_REQUESTED`, the lists answer that billing must be enabled, and it exits 2.
 
    ```bash
    bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>
@@ -648,10 +672,22 @@ Do all of it when you are done; a stopped VM still bills for its disk.
    not run it).
 4. Remove the machine from your tailnet in the
    [Tailscale admin console](https://login.tailscale.com/admin/machines), and delete any GitHub token you
-   gave the VM for installs from CI or builds. The token saved on the agent's machine stops working with
-   the VM; nothing else needs revoking.
+   gave the VM for installs from CI or builds (it dies with the disk on the VM, but stays valid on GitHub
+   until it expires or you delete it). The pairing token saved on the agent's machine stops working with
+   the VM.
+5. Revoke the logins the run left behind, on each machine that ran `gcloud` or `tapdance connect` for it:
 
-`gcp-leftovers.sh` has been tested only against a stand-in for `gcloud`, not yet on a real project.
+   ```bash
+   bash infrastructure/scripts/revoke-run-credentials.sh --tapdance-home <scratch TAPDANCE_HOME, if any>
+   ```
+
+   It asks before each step: `gcloud auth revoke --all`, `gcloud auth application-default revoke`
+   (answer no to keep a login you had before), and deleting a scratch Tapdance home (never
+   `~/.tapdance`). Then it prints what is still credentialed. `--check` only prints that.
+
+In the 2026-11-04 field run `gcp-leftovers.sh` exited 0 after `terraform destroy` and 2 after the
+project was deleted (issue #83). Its handling of a partial list and of a deleted project, and
+`revoke-run-credentials.sh`, have run only against a stand-in for `gcloud`.
 
 ## Speed on n2-standard-4
 

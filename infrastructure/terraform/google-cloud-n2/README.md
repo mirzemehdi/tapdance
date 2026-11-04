@@ -143,8 +143,12 @@ machine type, share your numbers in an issue.
    bash /opt/tapdance/check-kvm.sh
    ```
 
-   It must end with "KVM acceleration is usable". If it does not, stop here and read
-   [Troubleshooting](#troubleshooting). Tapdance never falls back to software emulation.
+   Before the setup script, only the CPU flag (`vmx`), kvm module and `/dev/kvm` lines matter: a FAIL
+   "cannot open it read-write" is expected (the setup script adds you to the kvm group and grants this
+   login access at once, no re-login), and the emulator check is skipped until the SDK is installed. If
+   the `vmx`, module or `/dev/kvm` line fails, stop here and read [Troubleshooting](#troubleshooting).
+   Tapdance never falls back to software emulation. Run the check again after step 5: then it must end
+   with "KVM acceleration is usable" (it finds the SDK in `~/Android/Sdk`, where the setup script puts it).
 
 5. **Run the setup script** on the VM, as your own user. Read the Android SDK licences first: saying
    yes to the install accepts them.
@@ -153,9 +157,9 @@ machine type, share your numbers in an issue.
    curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label gcp-n2-1
    ```
 
-   It asks once before installing, asks before logging the VM into your tailnet
-   (`sudo tailscale up --operator=$USER` prints a link to open in your browser), installs Tapdance
-   into `~/tapdance`, and runs `tapdance host up --label gcp-n2-1`. That ends with a
+   It asks once before installing, installs Tapdance into `~/tapdance`, then asks before logging the VM
+   into your tailnet (`sudo tailscale up --operator=$USER` prints a link to open in your browser and
+   waits until you approve the machine), and runs `tapdance host up --label gcp-n2-1`. That ends with a
    `TAPDANCE HOST READY` block naming the endpoint and the token file
    (`~/.tapdance/worker/pairing-gcp-n2-1.token`). If it stops at the pairing step because the `curl`
    pipe cannot answer, run `~/.local/bin/tapdance host up --label gcp-n2-1` in the same shell.
@@ -262,10 +266,13 @@ terraform destroy
 - **Deleting** with `terraform destroy` removes the VM, disk, network, NAT and service account. It
   does not disable the APIs, and it will not delete a project it created while
   `project_deletion_policy = "PREVENT"`. Then run the leftovers check
-  (`bash ../../scripts/gcp-leftovers.sh <PROJECT_ID>`, or `terraform output leftovers_check` before you
-  destroy): it lists VMs in any state, disks, snapshots, images, addresses, routers and NATs, and exits 0
-  only when nothing is left. Afterwards remove the VM from your tailnet in the Tailscale admin console;
-  the token on the agent's machine stops working with the VM.
+  (from the repository root `bash infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>`, or
+  `terraform output leftovers_check` before you destroy): it lists VMs in any state, disks, snapshots,
+  images, addresses, routers and NATs, and exits 0 only when nothing is left. Run it before
+  `gcloud projects delete` and before unlinking billing; afterwards it cannot check (exit 2). Then
+  remove the VM from your tailnet in the Tailscale admin console; the token on the agent's machine stops
+  working with the VM. `infrastructure/scripts/revoke-run-credentials.sh` revokes the `gcloud` logins
+  the run made, asking first.
 - **Ephemeral mode** (`on_run_limit = "DELETE"`): Compute Engine deletes the VM and its disk at
   `max_run_hours`. The rest stays until `terraform destroy`, and Terraform's state still lists the VM,
   so `terraform plan` would create it again: destroy instead. For test runs, see

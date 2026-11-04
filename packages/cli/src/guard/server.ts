@@ -142,6 +142,18 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   const owners = book.owners;
   /** Lease ids whose allocate is still running: reserved in `owners`, not yet known to Simlock. */
   const allocating = new Set<string>();
+  /**
+   * Allocates that failed, kept for a short while: the client fetches the failed request's diagnostics
+   * right after, and only the token that asked may read them (#95). Bounded in size and age; a lease id
+   * granted to anyone later is dropped from here.
+   */
+  const failedAllocates = new Map<string, { owner: string; at: number }>();
+  const FAILED_ALLOCATE_MS = 10 * 60_000;
+  const rememberFailedAllocate = (leaseId: string, owner: string) => {
+    failedAllocates.delete(leaseId);
+    failedAllocates.set(leaseId, { owner, at: Date.now() });
+    while (failedAllocates.size > 32) failedAllocates.delete(failedAllocates.keys().next().value!);
+  };
   /** Leases of physical phones (allocated with `physical`): no device shell on these. */
   const physicalLeases = book.physical;
   /** agent-device upload id → guard token id, learned from upload replies. */
@@ -898,6 +910,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             owners.set(leaseId, token.id); // reserved while the allocate runs
             allocating.add(leaseId);
+            failedAllocates.delete(leaseId);
             const ap = (parsed as { params: Record<string, unknown> }).params;
             const flagsOf = (ap["flags"] && typeof ap["flags"] === "object" ? ap["flags"] : {}) as Record<string, unknown>;
             if ([ap["physical"], flagsOf["physical"]].some((v) => v === true || v === "true")) physicalLeases.add(leaseId);
@@ -921,6 +934,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               if (!granted) {
                 owners.delete(leaseId);
                 physicalLeases.delete(leaseId);
+                rememberFailedAllocate(leaseId, token.id);
               }
             }
             return;
@@ -1010,7 +1024,14 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           return;
         }
         case "diagnostics": {
-          const leaseId = [...owners].find(([id, who]) => who === token!.id && id.startsWith(r.leasePrefix))?.[0];
+          // A session whose lease this token owns, or whose allocate this token just tried and failed,
+          // unless any other token now owns a lease with that prefix.
+          const prefixed = (id: string) => id.startsWith(r.leasePrefix);
+          const taken = [...owners].some(([id, who]) => who !== token!.id && prefixed(id));
+          const failed = taken
+            ? undefined
+            : [...failedAllocates].find(([id, f]) => f.owner === token!.id && prefixed(id) && Date.now() - f.at < FAILED_ALLOCATE_MS)?.[0];
+          const leaseId = taken ? undefined : ([...owners].find(([id, who]) => who === token!.id && prefixed(id))?.[0] ?? failed);
           if (!leaseId) {
             await decide("deny", { reason: "diagnostics of a session this token does not own" });
             return send(res, 404, "NOT_FOUND", "No such session for this token");

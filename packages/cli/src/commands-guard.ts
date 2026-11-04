@@ -184,7 +184,7 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
           [
             bold(r.unchanged ? `The worker guard service is already installed and running: ${r.file}` : `Installed the worker guard service: ${r.file}`),
             r.answering ? `The guard answers on ${r.url}.` : yellow(`The guard does not answer on ${r.url} yet; read its log.`),
-            r.platform === "darwin" ? `Log: ${r.log}` : "Log: journalctl --user -u tapdance-guard.service",
+            `Log: ${r.log}`,
             ...r.notes.map((n) => dim(n)),
             dim("Remove it with: tapdance worker guard uninstall"),
           ].join("\n"),

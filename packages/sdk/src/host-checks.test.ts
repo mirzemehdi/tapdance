@@ -1,5 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { EMULATOR_APT_PACKAGES, kvmChecks, missingSharedLibrary } from "./host-checks.js";
+import { EMULATOR_APT_PACKAGES, findAndroidSdk, kvmChecks, missingSharedLibrary } from "./host-checks.js";
+
+describe("findAndroidSdk (a fake file system)", () => {
+  const has = (...dirs: string[]) => (p: string) => dirs.includes(p);
+  it("prefers ANDROID_HOME, then ANDROID_SDK_ROOT", () => {
+    expect(findAndroidSdk({ ANDROID_HOME: "/a", ANDROID_SDK_ROOT: "/b" }, "linux", "/home/w", has("/a", "/b"))).toBe("/a");
+    expect(findAndroidSdk({ ANDROID_SDK_ROOT: "/b" }, "linux", "/home/w", has("/b"))).toBe("/b");
+  });
+  it("finds ~/Android/Sdk on Linux when the environment names none (an ssh command without a profile, #81)", () => {
+    expect(findAndroidSdk({}, "linux", "/home/w", has("/home/w/Android/Sdk"))).toBe("/home/w/Android/Sdk");
+    expect(findAndroidSdk({ ANDROID_HOME: "/gone" }, "linux", "/home/w", has("/home/w/Android/Sdk"))).toBe("/home/w/Android/Sdk");
+    expect(findAndroidSdk({}, "linux", "/home/w", has())).toBeUndefined();
+  });
+  it("keeps the macOS default", () => {
+    expect(findAndroidSdk({}, "darwin", "/Users/w", has("/Users/w/Library/Android/sdk"))).toBe("/Users/w/Library/Android/sdk");
+    expect(findAndroidSdk({}, "darwin", "/Users/w", has("/Users/w/Android/Sdk"))).toBeUndefined();
+  });
+});
 
 /** Pure parts of the Linux host checks; no test here runs the emulator or reads /dev/kvm. */
 describe("emulator runtime libraries", () => {

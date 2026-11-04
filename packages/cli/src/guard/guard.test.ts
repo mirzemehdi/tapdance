@@ -1024,6 +1024,30 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
     expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/sessions/other/requests/x/diagnostics")).status).toBe(404);
   });
+
+  it("20. diagnostics of a failed allocate reach only the token that tried it, until another token gets that lease (MOCKED Simlock)", async () => {
+    const fake: FakeOptions = { allocateError: { code: -32000, message: "DEVICE_UNAVAILABLE" } };
+    const t = await setup({}, fake);
+    const path = (lease: string) => `/v1/agent-device/sessions/tok_c3ffdeb1-118a%3Atd-8e267af7a097-${lease.slice(0, 12)}/requests/152ae64bc4d8b38c/diagnostics`;
+    expect(await (await t.allocate(t.alice.secret, A)).json()).toMatchObject({ error: { message: "DEVICE_UNAVAILABLE" } });
+    // The failed allocate still owns nothing: no device command, but its diagnostics can be read.
+    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "snapshot", leaseId: A })).status).toBe(403);
+    expect((await t.call(t.alice.secret, "GET", path(A))).status).toBe(200);
+    // Another client cannot read them, and a failed attempt on A opens nothing about B.
+    expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(404);
+    expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
+    // Mallory's own failed attempt on B opens its diagnostics to Mallory only.
+    await t.allocate(t.mallory.secret, B);
+    expect((await t.call(t.mallory.secret, "GET", path(B))).status).toBe(200);
+    expect((await t.call(t.alice.secret, "GET", path(B))).status).toBe(404);
+    // Once the lease id is granted to another token, the old failed attempt no longer opens it.
+    delete fake.allocateError;
+    expect((await t.allocate(t.mallory.secret, A)).status).toBe(200);
+    expect((await t.call(t.alice.secret, "GET", path(A))).status).toBe(404);
+    expect((await t.call(t.mallory.secret, "GET", path(A))).status).toBe(200);
+    // Forwarded only when allowed: no refused request reached Simlock.
+    expect(t.upstream.seen.filter((x) => x.path.endsWith("/diagnostics")).length).toBe(3);
+  });
 });
 
 /**
