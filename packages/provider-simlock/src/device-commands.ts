@@ -1,4 +1,6 @@
-import { TapdanceError, type IntentSpec, type TimedTap } from "@tapdance/core";
+import { MAX_LOG_LINES, TapdanceError, type IntentSpec, type TimedTap } from "@tapdance/core";
+
+export { MAX_LOG_LINES };
 
 /**
  * Device-level commands Tapdance sends through Simlock's lease exec (`POST /v1/leases/{id}/exec`).
@@ -91,6 +93,22 @@ export const android = {
       else args.push("--es", key, quote(String(value), `extra ${key}`));
     }
     if (args.length === 4) throw usage("An intent needs at least an action, data or component");
+    return { tool: "adb", args };
+  },
+  /**
+   * A logcat dump: the last `lines` lines, or with no `lines` everything the buffer keeps (for a
+   * filtered search, #82). `crash` reads the crash buffer; `pid` keeps one process.
+   */
+  logcat(o: { lines?: number; pid?: string; crash?: boolean } = {}): DeviceCommand {
+    const args = ["logcat", "-d", ...(o.crash ? ["-b", "crash"] : []), "-v", "threadtime"];
+    if (o.lines !== undefined) {
+      if (!Number.isInteger(o.lines) || o.lines < 1 || o.lines > MAX_LOG_LINES) throw usage(`lines must be a whole number from 1 to ${MAX_LOG_LINES}`);
+      args.push("-t", String(o.lines));
+    }
+    if (o.pid !== undefined) {
+      if (!/^[1-9][0-9]{0,9}$/.test(o.pid)) throw usage("pid must be a number");
+      args.push(`--pid=${o.pid}`);
+    }
     return { tool: "adb", args };
   },
   /** A raw touch through Android's input service: system pickers ignore the automation helper's events. */

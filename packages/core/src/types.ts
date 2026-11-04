@@ -205,7 +205,35 @@ export interface LogResult {
   source: string;
   lines: string[];
   truncated: boolean;
+  /** The provider applied the request's `filter` itself (its notes are kept as they are). */
+  filtered?: boolean;
   artifact?: ArtifactRef;
+}
+
+/** The most log lines one `logs` call returns (CLI `-n`, SDK `lines`). */
+export const MAX_LOG_LINES = 20_000;
+
+/** Which log lines to keep: `contains` is case-insensitive; `level` keeps errors, or faults and crashes. */
+export interface LogFilter {
+  contains?: string;
+  level?: "error" | "fault";
+}
+
+const LOG_LEVELS: Record<"error" | "fault", (line: string) => boolean> = {
+  // logcat brief (E/Tag) and threadtime ("date time pid tid E Tag:") levels, plus the words iOS uses.
+  error: (l) => /\b[EF]\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+[EF]\s/.test(l) || /error|fault|fatal|exception/i.test(l),
+  fault: (l) => /\bF\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+F\s/.test(l) || /fault|fatal|crash/i.test(l),
+};
+
+/** Whether a log line passes a filter. */
+export function logLineMatches(line: string, filter: LogFilter): boolean {
+  if (filter.contains !== undefined && !line.toLowerCase().includes(filter.contains.toLowerCase())) return false;
+  return filter.level === undefined || LOG_LEVELS[filter.level](line);
+}
+
+/** True when a filter keeps only some lines. */
+export function isLogFilter(filter: LogFilter | undefined): filter is LogFilter {
+  return filter !== undefined && (filter.contains !== undefined || filter.level !== undefined);
 }
 
 /** An explicit Android intent for `launch_app`. Values are validated and quoted by the provider. */

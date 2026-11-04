@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
-import { DEVICE_SETTINGS, LocalArtifactStore, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, table, yellow } from "./output.js";
 
@@ -41,6 +41,15 @@ function intArg(name: string, value: string | undefined, min: number, max: numbe
   const n = Number(value);
   if (!Number.isInteger(n) || n < min || n > max) throw new TapdanceError("USAGE", `${name} must be an integer from ${min} to ${max}`);
   return n;
+}
+
+/** `logs --contains/--level`, checked like MCP get_logs checks them (1-200 characters; error|fault). */
+export function logFilterArgs(o: { contains?: string; level?: string }): { contains?: string; level?: "error" | "fault" } {
+  if (o.contains !== undefined && (o.contains.length < 1 || o.contains.length > 200)) throw new TapdanceError("USAGE", "--contains takes 1 to 200 characters");
+  if (o.level !== undefined && o.level !== "error" && o.level !== "fault") {
+    throw new TapdanceError("USAGE", `--level must be error or fault, not "${o.level}"`, { hint: "error keeps errors and exceptions; fault keeps faults and crashes." });
+  }
+  return { ...(o.contains !== undefined ? { contains: o.contains } : {}), ...(o.level !== undefined ? { level: o.level } : {}) };
 }
 
 function numArg(name: string, value: string | undefined): number | undefined {
@@ -828,13 +837,17 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   program
     .command("logs")
     .description("Recent device logs (logcat / simulator log), saved as an artifact")
-    .option("-n, --lines <n>", "how many lines", "200")
+    .option("-n, --lines <n>", `how many lines (at most ${MAX_LOG_LINES}); with a filter, how many matching lines`, "200")
     .option("--app <id>", "only this app")
     .option("--crash", "crash buffer / faults only")
-    .action(async (o: { lines: string; app?: string; crash?: boolean }) =>
+    .option("--contains <text>", "only lines containing this text (case-insensitive); on Android searches the whole logcat buffer")
+    .option("--level <level>", "only error lines (error) or faults and crashes (fault)")
+    .action(async (o: { lines: string; app?: string; crash?: boolean; contains?: string; level?: string }) =>
       run(globals(), async (t, out) => {
-        const r = await t.logs({ lines: intArg("--lines", o.lines, 1, 5000)!, ...(o.app ? { appId: o.app } : {}), ...(o.crash ? { crash: true } : {}) });
-        out.result(r, () => `${r.lines.join("\n")}\n${dim(`— ${r.source}; saved to ${r.artifact?.path}`)}`);
+        const filter = logFilterArgs(o);
+        const r = await t.logs({ lines: intArg("--lines", o.lines, 1, MAX_LOG_LINES)!, ...(o.app ? { appId: o.app } : {}), ...(o.crash ? { crash: true } : {}), ...filter });
+        const none = r.lines.length === 0 && (filter.contains !== undefined || filter.level !== undefined) ? `${dim("no matching lines")}\n` : "";
+        out.result(r, () => `${none}${r.lines.join("\n")}\n${dim(`— ${r.source}; saved to ${r.artifact?.path}`)}`);
       }),
     );
 

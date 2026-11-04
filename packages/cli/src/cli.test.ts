@@ -151,6 +151,20 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["host", "builds", "files", "list", "--repo", "not a url"], env).code).toBe(2);
   });
 
+  it("logs: --contains, --level and --lines are checked before any lease (#82)", () => {
+    for (const args of [
+      ["logs", "--level", "warning"],
+      ["logs", "--contains", "x".repeat(201)],
+      ["logs", "-n", "20001"],
+      ["logs", "-n", "0"],
+    ]) {
+      const r = tapdance(["--json", ...args]);
+      expect(r.code, args.join(" ")).toBe(2);
+      expect(JSON.parse(r.stdout), args.join(" ")).toMatchObject({ error: { code: "USAGE" } });
+    }
+    expect(tapdance(["--json", "logs", "--contains", "ANR in", "--level", "error", "-n", "20000"]).code).toBe(3);
+  }, 60_000);
+
   it("app install: a path or --from-ci with --artifact, never both; refused with exit 2 before any lease", () => {
     for (const args of [
       ["app", "install"],

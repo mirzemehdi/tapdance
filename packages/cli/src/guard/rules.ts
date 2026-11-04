@@ -245,7 +245,8 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
 // that rather than parsing every command's path flags.
 
 const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
-const LINES = /^[1-9][0-9]{0,3}$/;
+/** A logcat `-t` line count: 1 to MAX_LOG_LINES (20,000), digits only. */
+const isLines = (v: string | undefined) => v !== undefined && /^[1-9][0-9]{0,4}$/.test(v) && Number(v) <= deviceCommands.MAX_LOG_LINES;
 const DURATION = /^[1-9][0-9]?[ms]$/;
 /** The only log predicates Tapdance generates (see provider-simlock), with the app id slot validated. */
 const PREDICATE = /^[A-Za-z0-9_.()" =[\]-]+$/;
@@ -322,7 +323,7 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if (a.length === 4 && a[0] === "shell" && a[1] === "am" && a[2] === "force-stop" && APP_ID.test(a[3]!)) return plain("interaction");
   if (a.length === 3 && a[0] === "shell" && a[1] === "pidof" && APP_ID.test(a[2]!)) return stdin === undefined ? { ok: true, value: { tool, args: a } } : deny("stdin is not allowed for this command");
   if (a[0] === "logcat") {
-    const okFlags = a.slice(1).every((x, i, arr) => ["-d", "-v", "threadtime", "-t", "-b", "crash"].includes(x) || /^--pid=\d+$/.test(x) || (arr[i - 1] === "-t" && LINES.test(x)));
+    const okFlags = a.slice(1).every((x, i, arr) => ["-d", "-v", "threadtime", "-t", "-b", "crash"].includes(x) || /^--pid=\d+$/.test(x) || (arr[i - 1] === "-t" && isLines(x)));
     return okFlags ? plain("logs") : deny("logcat arguments not allowed");
   }
   if (a[0] !== "shell") return deny(`adb ${String(a[0] ?? "")} is not part of the device API`);

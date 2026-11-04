@@ -18,7 +18,11 @@ import {
   type ElementTarget,
   type LeaseHandle,
   type LeaseStatus,
+  type LogFilter,
   type LogResult,
+  MAX_LOG_LINES,
+  isLogFilter,
+  logLineMatches,
   type Platform,
   type ProgressListener,
   type ResolvedConfig,
@@ -832,12 +836,24 @@ export class Tapdance {
     });
   }
 
-  async logs(options: { lines?: number; appId?: string; crash?: boolean } = {}): Promise<LogResult> {
+  /**
+   * Device logs, saved as an artifact. `contains` (case-insensitive) and `level` search everything the
+   * device's log keeps and return the last `lines` matching lines (#82).
+   */
+  async logs(options: { lines?: number; appId?: string; crash?: boolean; contains?: string; level?: "error" | "fault" } = {}): Promise<LogResult> {
+    const filter: LogFilter = { ...(options.contains ? { contains: options.contains } : {}), ...(options.level ? { level: options.level } : {}) };
+    if (options.level !== undefined && options.level !== "error" && options.level !== "fault") {
+      throw new TapdanceError("USAGE", `Unknown log level "${String(options.level)}"`, { hint: "Use error (errors and exceptions) or fault (faults and crashes)." });
+    }
     return this.onDevice(async (handle, provider) => {
-      const lines = options.lines ?? 200;
-      const result = options.crash
-        ? await provider.crashLogs(handle, { lines, ...(options.appId ? { appId: options.appId } : {}) })
-        : await provider.logs(handle, { lines, ...(options.appId ? { appId: options.appId } : {}) });
+      const lines = Math.min(options.lines ?? 200, MAX_LOG_LINES);
+      const request = { lines, ...(options.appId ? { appId: options.appId } : {}), ...(isLogFilter(filter) ? { filter } : {}) };
+      let result = options.crash ? await provider.crashLogs(handle, request) : await provider.logs(handle, request);
+      // A provider that did not filter (a fake one) still answers the request.
+      if (isLogFilter(filter) && !result.filtered) {
+        const kept = result.lines.filter((l) => logLineMatches(l, filter));
+        result = { ...result, lines: kept.slice(-lines), truncated: result.truncated || kept.length > lines, filtered: true };
+      }
       const path = await this.artifacts.allocate(this.session.id, "log", "txt");
       await writeFile(path, `# ${result.source}\n${result.lines.join("\n")}\n`);
       result.artifact = await this.artifacts.record({ kind: "log", path, sessionId: this.session.id, leaseId: handle.leaseId, note: result.source });

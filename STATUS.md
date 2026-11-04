@@ -12,7 +12,7 @@ What is built, what was proven on real hardware, and what is missing — one row
 | ⛔ | Blocked (reason given) |
 | ❓ | Needs a product decision |
 
-Last updated: 2026-11-03. Test host for "✅": MacBook Pro M1 Pro, 16 GB, macOS 26.5, Xcode 26.5, Simlock
+Last updated: 2026-11-04. Test host for "✅": MacBook Pro M1 Pro, 16 GB, macOS 26.5, Xcode 26.5, Simlock
 0.4.0, agent-device 0.21.35, iOS 18.5 and 26.5 simulators (iPhone 16), Android 34 emulators (Pixel 8,
 arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.16717390. Linux host: a Google
 Cloud `n2-standard-4` VM (europe-west1-b, Ubuntu 24.04, nested virtualization), emulator 37.2.13 with
@@ -365,7 +365,8 @@ paths below were exercised only by unit tests.
 | First `inspect` after a fresh lease retried once on agent-device's `INSTRUMENTATION_FAILED` | Y-04 | 🧪 | Build only; found on the N2 host, not re-run there |
 | `host builds enable` keeps earlier `--git-auth` and `--timeout-minutes`; the build JDK check honours `JAVA_HOME`; `env.sh` puts the JDK on `PATH`; the MCP outside-the-project hint covers `push_file` | H-08, S-04 | 🧪 | Build only; found on the N2 host |
 | Android install refusals name the fix (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `VERSION_DOWNGRADE`, `INSUFFICIENT_STORAGE`), for uploads, installs from CI and host builds | F-01, F-05, H-08 | 🧪 | `provider.test.ts`; the signature refusal itself was met on the N2 host, from CI and from a host build |
-| Android `ui type` / MCP `type_text` without a target refuses (`ELEMENT_NOT_FOUND`, hint to pass a target) when the snapshot shows no focused text field; types as before when it cannot tell (#72) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client); found on the N2 host, not re-run there |
+| Android `ui type` / MCP `type_text` without a target refuses (`ELEMENT_NOT_FOUND`, hint to pass a target) when the snapshot shows a text field and no focused element (agent-device sets `focused` only when true) and the keyboard status says the keyboard is down; types as before when it cannot tell (#72, reopened by the VPS + N2 run) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client with the real snapshot shape); the first fix failed on the N2 host, this one not re-run there |
+| `logs --contains` / `--level` on the CLI; with a filter, Android searches the whole logcat buffer (CLI and MCP `get_logs`/`get_crash_logs`); `-n` up to 20000; `type_text` drops agent-device's "resolved to TextView" warning when the field reads back; `doctor` names the timeout that fired (#82) | C-01, S-02, Y-04, C-05 | 🧪 | `provider.test.ts`, `guard.test.ts`, `cli.test.ts`, `mcp.test.ts` (fake provider); found on the N2 host, not re-run there |
 | Android `ui inspect` / MCP `inspect_screen` names the app whose elements are on screen (the launcher after Back) when none belong to the session's app, with a note (#73) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client); found on the N2 host, not re-run there |
 
 ## Bugs found by running for real (fixed)

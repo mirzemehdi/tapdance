@@ -424,9 +424,16 @@ describe("worker guard: hardening", () => {
       await provider.logs(handle(platform), { lines: 50 });
       await provider.crashLogs(handle(platform), { lines: 50, appId: "com.x" });
       await provider.crashLogs(handle(platform), { lines: 50 });
+      await provider.logs(handle(platform), { lines: 20_000 });
+      await provider.logs(handle(platform), { lines: 50, appId: "com.x", filter: { contains: "ANR in" } });
+      await provider.crashLogs(handle(platform), { lines: 50, filter: { level: "fault" } });
     }
     expect(bodies.length).toBeGreaterThanOrEqual(11);
     expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "-t", "50", "--pid=1234"] });
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "-t", "20000"] });
+    // A search reads the whole buffer (#82).
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-v", "threadtime", "--pid=1234"] });
+    expect(bodies).toContainEqual({ tool: "adb", args: ["logcat", "-d", "-b", "crash", "-v", "threadtime"] });
     const policy = GuardPolicySchema.parse({});
     for (const body of bodies) expect(execOf(body, policy), JSON.stringify(body)).toMatchObject({ ok: true });
   });
@@ -489,8 +496,28 @@ describe("worker guard: hardening", () => {
       dc.android.mediaScan("/sdcard/Pictures/cat.png"),
       dc.ios.statusBarTime("09:41"),
       dc.ios.statusBarClear(),
+      dc.android.logcat({ lines: 200 }),
+      dc.android.logcat({ lines: dc.MAX_LOG_LINES, pid: "1234" }),
+      dc.android.logcat(),
+      dc.android.logcat({ crash: true }),
+      dc.android.logcat({ crash: true, lines: 50 }),
     ];
     for (const cmd of built) expect(execOf(cmd, all), JSON.stringify(cmd.args)).toMatchObject({ ok: true });
+    // logcat (#82): line counts up to the cap, and none of logcat's file, regex or buffer-clearing flags.
+    for (const args of [
+      ["logcat", "-d", "-t", String(dc.MAX_LOG_LINES + 1)],
+      ["logcat", "-d", "-t", "100000"],
+      ["logcat", "-d", "-t", "0"],
+      ["logcat", "-d", "-t", "1;reboot"],
+      ["logcat", "-d", "-e", ".*"],
+      ["logcat", "-f", "/sdcard/Download/x"],
+      ["logcat", "-c"],
+      ["logcat", "-d", "--pid=1;reboot"],
+    ]) {
+      expect(execOf({ tool: "adb", args }, all).ok, args.join(" ")).toBe(false);
+    }
+    expect(() => dc.android.logcat({ lines: dc.MAX_LOG_LINES + 1 })).toThrow(/lines/);
+    expect(() => dc.android.logcat({ pid: "1; reboot" })).toThrow(/pid/);
     // Injection attempts and paths outside the allowed areas.
     const refused: Array<{ tool: string; args: string[]; stdin?: string }> = [
       { tool: "adb", args: ["shell", "am", "start", "-W", "-a", "x; reboot"] },

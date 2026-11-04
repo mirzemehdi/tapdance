@@ -72,8 +72,8 @@ tapdance doctor [--no-host]
 
 Checks configuration and its sources, the session identity, this machine (Node.js version, Android SDK
 and its packages, system images, KVM on Linux, Xcode and simulator runtimes; Windows is reported as not
-a worker), whether the Simlock worker or gateway answers `/v1/healthz` (two tries of 15 s, since a first
-connection through `tailscale serve` can be slow; the time is shown, and an `http://` endpoint that now
+a worker), whether the Simlock worker or gateway answers `/v1/healthz` (two tries of up to 15 s each, of which at most 10 s to connect; a first
+connection through `tailscale serve` can be slow; the time is shown, a failure names the limit that fired, and an `http://` endpoint that now
 serves HTTPS is named as such), the token's role, whether
 agent-device, streaming and input are available, capacity per platform (a platform with room but no device on offer fails: the worker skipped that
 driver, so leases would be refused), the Simlock version (warns if
@@ -410,7 +410,7 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 | `ui inspect` | `--app <id>` switches to that app as it is (no relaunch) and reads it: on iOS every read brings the session's app to the front, so after a link-out use `--app com.apple.mobilesafari`, and for the Home Screen `--app com.apple.springboard`; later reads stay on it until you launch your app. Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. On Android the header names the app whose elements are on screen: when none belong to the session's app (the launcher after Back), it names that app instead and a note says the session's app is not in front. |
 | `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). A `--text` target that is not on screen, or not tappable where it is (under a toolbar), is scrolled into view first (down the list, then up) and tapped where it then is; text that is only part of a label matches too, and the reply says so. On iOS, a settled tap that changed nothing and opened a link in another app (Safari) puts that app back in front (the settle read had brought your app back) and says so. |
 | `ui audit` | Accessibility check of the screen, from the accessibility tree: controls with nothing to announce (error, exit 1), touch targets under 44 pt (iOS) or 48 dp (Android), several controls announced alike, unlabelled images (info: fine if decorative). The iOS simulator has no VoiceOver, so this is how an agent checks "every control is announced"; it cannot judge colour contrast or clipped text. Controls cut off by a screen or list edge or under a tab/navigation bar are not judged; the summary line names them so you can scroll them into view. |
-| `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. On Android, typing without a target fails (`ELEMENT_NOT_FOUND`) when the screen shows that no text field has focus, instead of reporting characters that went nowhere; pass `--text`, `--ref` or `--id`. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). After a fill, Tapdance reads the field back: if it does not hold exactly the typed text, it fills again at 80 ms and then 150 ms between keystrokes, and fails with what the field shows if it still differs (secure fields are not read back). |
+| `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. On Android, typing without a target fails (`ELEMENT_NOT_FOUND`) when the screen shows a text field but no focused element and the keyboard is down, instead of reporting characters that went nowhere; pass `--text`, `--ref` or `--id`. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). After a fill, Tapdance reads the field back: if it does not hold exactly the typed text, it fills again at 80 ms and then 150 ms between keystrokes, and fails with what the field shows if it still differs (secure fields are not read back). |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
 | `ui wait` | Exactly one condition. `--timeout` defaults to 10000, at most 600000 (10 minutes; long waits run as 30 s waits in a row). Exits 1 on timeout. `--stable` reads the screen repeatedly and succeeds once its content (roles, labels, ids, values, states) has not changed for one second; positions are ignored, so a moving background does not count. On timeout it says the UI is still changing. |
 | `ui sequence` | Timed taps next to the device, so the network adds no delay between them (rhythm games, timing-graded input). The file is a JSON list `[{"t":0,"x":120,"y":900},{"t":480,"x":240,"y":900,"hold":200}]`: `t` in ms from the start, ascending; `hold` makes a long press (at most 500 taps, 10 minutes). **Android:** one shell script inside the emulator; each tap starts in the background at its time (Android's `input` then takes a few tens of ms to deliver it); through a worker guard it needs `allow.deviceShell`. **iOS:** touches through the simulator's input channel (what the live viewer uses, not XCTest, whose taps take 300–450 ms each), scheduled on the Mac: by the worker guard (`allow.interaction` and `allow.input`) or by Tapdance itself in local mode; x and y are the points `ui inspect --bounds` shows. In landscape the device is taken as turned `landscape-left` (Tapdance's "landscape", and what most apps that force landscape use); `--orientation landscape-right` for the other way. With `--orientation` given, nothing is read from the app first (a read brings the session's app to the front), so use `--orientation portrait` for taps outside your app: a banner, Notification Center, the Home Screen. On iOS a step with `toX`/`toY` is a drag to that point over `hold` ms (default 250): a swipe at a set time. The reply gives every tap's `actualMs` and `driftMs`. `--start-on-text` waits for that text first (one round trip) and starts `--offset-ms` after. |
@@ -443,15 +443,24 @@ lost. `record stop` gives up after 32 minutes.
 ### `logs`
 
 ```text
-tapdance logs [-n, --lines <n>] [--app <id>] [--crash]
+tapdance logs [-n, --lines <n>] [--app <id>] [--crash] [--contains <text>] [--level error|fault]
 ```
 
-Recent device logs (Android logcat, iOS simulator unified log), default 200 lines, at most 5000.
+Recent device logs (Android logcat, iOS simulator unified log), default 200 lines, at most 20000.
 `--app` filters to one app (iOS: its subsystem or its process, the app's executable name). On iOS the
 system log has the app's `os_log`/`NSLog` lines, not `print`/`println` output, which goes to stdout.
 `--crash` shows Android's crash buffer or iOS faults and crash messages from the last 10 minutes; for
-the full iOS crash report use `device crashes`. Asking for more than 5000 lines says it was capped. The
-output is also saved as an artifact.
+the full iOS crash report use `device crashes`. The output is also saved as an artifact.
+
+`--contains` keeps lines that contain the text (case-insensitive, 1–200 characters; it matches the
+tag and level as well as the message). `--level error` keeps error, fault, fatal and exception lines
+(and Android `E`/`F` lines); `--level fault` keeps fault, fatal and crash lines. With either filter,
+`-n` counts matching lines, and on Android Tapdance reads the whole logcat buffer rather than the last
+N lines, so a search reaches as far back as the device keeps logs; the footer says how many lines
+matched and the time of the oldest line in the buffer. On iOS the window stays the last 3 minutes (10
+with `--crash`). Logcat's separate `events` buffer is not read; use
+`tapdance device shell -- logcat -d -b events` for it. These match MCP `get_logs` `contains` and
+`level`.
 
 ### `artifacts`
 
@@ -1741,10 +1750,14 @@ Usage: tapdance logs [options]
 Recent device logs (logcat / simulator log), saved as an artifact
 
 Options:
-  -n, --lines <n>  how many lines (default: "200")
-  --app <id>       only this app
-  --crash          crash buffer / faults only
-  -h, --help       display help for command
+  -n, --lines <n>    how many lines (at most 20000); with a filter, how many
+                     matching lines (default: "200")
+  --app <id>         only this app
+  --crash            crash buffer / faults only
+  --contains <text>  only lines containing this text (case-insensitive); on
+                     Android searches the whole logcat buffer
+  --level <level>    only error lines (error) or faults and crashes (fault)
+  -h, --help         display help for command
 ```
 
 ### `tapdance artifacts`

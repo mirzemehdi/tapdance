@@ -99,7 +99,7 @@ const appId = z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]{0,254}$/).describe("Andr
 const logInput = {
   lines: z.number().int().min(1).max(2000).optional().describe("Lines to return inline (default 50)."),
   app_id: appId.optional(),
-  contains: z.string().min(1).max(200).optional().describe("Keep only lines containing this text (case-insensitive)."),
+  contains: z.string().min(1).max(200).optional().describe("Keep only lines containing this text (case-insensitive). On Android it searches the whole logcat buffer, not just the last lines."),
   level: z.enum(["error", "fault"]).optional().describe("Keep only error lines (error) or faults and crashes (fault)."),
 };
 
@@ -107,15 +107,10 @@ const logInput = {
 const LOG_INLINE_CHARS = 10_000;
 const DEFAULT_INLINE_LINES = 50;
 
-const LEVELS: Record<"error" | "fault", (line: string) => boolean> = {
-  // logcat brief (E/Tag) and threadtime ("date time pid tid E Tag:") levels, plus the words iOS uses.
-  error: (l) => /\b[EF]\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+[EF]\s/.test(l) || /error|fault|fatal|exception/i.test(l),
-  fault: (l) => /\bF\//.test(l) || /^\S+\s+\S+\s+\d+\s+\d+\s+F\s/.test(l) || /fault|fatal|crash/i.test(l),
-};
-
 /**
- * Fetches logs through the SDK (which saves the full text as an artifact), filters them, and keeps
- * the inline part small: the last 50 lines (or `lines`) and never more than about 10,000 characters.
+ * Fetches logs through the SDK (which filters them across the whole device log and saves the result
+ * as an artifact), and keeps the inline part small: the last 50 lines (or `lines`) and never more
+ * than about 10,000 characters.
  */
 export async function logReply(
   t: Tapdance,
@@ -123,12 +118,18 @@ export async function logReply(
   crash: boolean,
 ): Promise<{ source: string; lines: string[]; omittedLines: number; artifact?: ArtifactRef }> {
   const requested = a["lines"] as number | undefined;
-  const contains = (a["contains"] as string | undefined)?.toLowerCase();
+  const contains = a["contains"] as string | undefined;
   const level = a["level"] as "error" | "fault" | undefined;
   const filtering = contains !== undefined || level !== undefined;
-  const fetchLines = filtering ? Math.min(Math.max(requested ?? 200, 1000), 2000) : (requested ?? 200);
-  const result = await t.logs({ lines: fetchLines, ...(crash ? { crash: true } : {}), ...(a["app_id"] ? { appId: a["app_id"] as string } : {}) });
-  const matching = result.lines.filter((l) => (contains === undefined || l.toLowerCase().includes(contains)) && (level === undefined || LEVELS[level](l)));
+  const fetchLines = filtering ? 2000 : (requested ?? 200);
+  const result = await t.logs({
+    lines: fetchLines,
+    ...(crash ? { crash: true } : {}),
+    ...(a["app_id"] ? { appId: a["app_id"] as string } : {}),
+    ...(contains !== undefined ? { contains } : {}),
+    ...(level !== undefined ? { level } : {}),
+  });
+  const matching = result.lines;
   const wanted = matching.slice(-(requested ?? DEFAULT_INLINE_LINES));
   const kept: string[] = [];
   let size = 0;

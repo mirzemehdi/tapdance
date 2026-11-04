@@ -16,7 +16,7 @@ import {
   validateAppPath,
 } from "./index.js";
 import { CODE_MAP } from "./agent-device-errors.js";
-import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint } from "./provider.js";
+import { RAW_INPUT_APPS, SimlockProvider, actionResult, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint, toLogResult, triesNote, withoutFillTargetDoubt } from "./provider.js";
 import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
@@ -705,18 +705,21 @@ describe("iOS gaps (#48-#50)", () => {
     await expect(asked.p.typeText(handle, text, { kind: "id", id: "settings_code_field" }, { delayMs: 40 })).rejects.toThrow(/even at 40 ms/);
   });
 
-  // MOCKED agent-device client: a snapshot with or without a focused field, and a type call that is recorded.
-  const androidWith = (nodes: Array<Record<string, unknown>> | Error, appBundleId = "com.measify.pianolune") => {
+  // MOCKED agent-device client: a snapshot with or without a focused field, a keyboard status, and a
+  // type call that is recorded.
+  const androidWith = (nodes: Array<Record<string, unknown>> | Error, appBundleId = "com.measify.pianolune", keyboard: Record<string, unknown> | Error = { visible: false }) => {
     const typed: string[] = [];
+    const keyboardCalls: unknown[] = [];
     const p = new (class extends SimlockProvider {
       protected override agentClient() {
         return {
           capture: { snapshot: async () => (nodes instanceof Error ? Promise.reject(nodes) : { nodes, appBundleId }) },
+          command: { keyboard: async (o: unknown) => (keyboardCalls.push(o), keyboard instanceof Error ? Promise.reject(keyboard) : { platform: "android", action: "status", ...keyboard }) },
           interactions: { type: async (o: { text: string }) => (typed.push(o.text), {}) },
         } as never;
       }
     })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
-    return { p, typed };
+    return { p, typed, keyboardCalls };
   };
   const androidHandle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "local", runId: "r", clientId: "c" } } as never;
 
@@ -729,13 +732,36 @@ describe("iOS gaps (#48-#50)", () => {
     expect(unfocused.typed).toEqual([]);
   });
 
+  it("refuses when the snapshot carries no focus flags at all, as agent-device's Android snapshot does for an unfocused field (#72 reopen, MOCKED client)", async () => {
+    // The field run's "Have a code?" sheet: agent-device sets `focused` only when true, so no node has the key.
+    const sheet = [
+      { ref: "e1", type: "android.widget.TextView", label: "Have a code?" },
+      { ref: "e3", type: "android.widget.EditText", editable: true },
+      { ref: "e4", type: "android.widget.Button", label: "Apply" },
+    ];
+    const noFlags = androidWith(sheet);
+    await expect(noFlags.p.typeText(androidHandle, "N2 field 2026 Für Elise")).rejects.toMatchObject({ code: "ELEMENT_NOT_FOUND", message: "No text field has focus, so nothing was typed" });
+    expect(noFlags.typed).toEqual([]);
+    expect(noFlags.keyboardCalls).toEqual([expect.objectContaining({ action: "status" })]);
+    // The keyboard status cannot be read: the snapshot's answer stands.
+    const noStatus = androidWith(sheet, undefined, new Error("dumpsys timed out"));
+    await expect(noStatus.p.typeText(androidHandle, "abc")).rejects.toMatchObject({ code: "ELEMENT_NOT_FOUND" });
+    // The keyboard is up: some view takes text that the snapshot did not mark, so typing goes ahead.
+    const keyboardUp = androidWith(sheet, undefined, { visible: true, inputOwner: "app" });
+    await keyboardUp.p.typeText(androidHandle, "abc");
+    expect(keyboardUp.typed).toEqual(["abc"]);
+  });
+
   it("types with no target into the focused field, and when the snapshot cannot tell (#72, MOCKED client)", async () => {
-    const focused = androidWith([{ ref: "e1", type: "android.widget.EditText", focused: true }, { ref: "e2", type: "android.widget.Button", focused: false }]);
+    // After a targeted fill the field shows [focused]: only that node carries the flag.
+    const focused = androidWith([{ ref: "e1", type: "android.widget.EditText", focused: true }, { ref: "e2", type: "android.widget.Button" }]);
     expect((await focused.p.typeText(androidHandle, "abc")).message).toMatch(/Typed 3 characters/);
     expect(focused.typed).toEqual(["abc"]);
-    const noFlags = androidWith([{ ref: "e1", type: "android.widget.EditText" }]);
-    await noFlags.p.typeText(androidHandle, "abc");
-    expect(noFlags.typed).toEqual(["abc"]);
+    expect(focused.keyboardCalls).toEqual([]);
+    // No text field on screen (a game canvas, a custom view): it cannot tell, so it types.
+    const noField = androidWith([{ ref: "e1", type: "android.view.View", label: "Play" }]);
+    await noField.p.typeText(androidHandle, "abc");
+    expect(noField.typed).toEqual(["abc"]);
     const failed = androidWith(new Error("snapshot helper busy"));
     await failed.p.typeText(androidHandle, "abc");
     expect(failed.typed).toEqual(["abc"]);
@@ -747,8 +773,54 @@ describe("iOS gaps (#48-#50)", () => {
     expect(editableFocus([{ type: "android.widget.EditText", focused: false }])).toBe(false);
     expect(editableFocus([{ type: "android.widget.Button", focused: true, editable: false }])).toBe(false);
     expect(editableFocus([{ type: "android.view.View", focused: true }])).toBeUndefined();
-    expect(editableFocus([{ type: "android.widget.EditText" }])).toBeUndefined();
+    // The real Android snapshot: no `focused` key unless true (#72 reopen).
+    expect(editableFocus([{ type: "android.widget.EditText" }])).toBe(false);
+    expect(editableFocus([{ type: "android.view.View", editable: true }, { type: "android.widget.Button" }])).toBe(false);
+    expect(editableFocus([{ type: "android.widget.EditText", editable: false }])).toBeUndefined();
+    expect(editableFocus([{ type: "android.widget.Button" }])).toBeUndefined();
     expect(editableFocus([])).toBeUndefined();
+  });
+
+  it("drops agent-device's TextView doubt once the field reads back the text (#82)", () => {
+    const doubt = 'fill target label="Your code" resolved to "android.widget.TextView", attempting fill anyway.';
+    expect(withoutFillTargetDoubt({ ok: true, message: "Filled 18 chars", warning: doubt })).toEqual({ ok: true, message: "Filled 18 chars" });
+    expect(withoutFillTargetDoubt({ ok: true, message: "m", warning: `${doubt} New screen opened.` }).warning).toBe("New screen opened.");
+    expect(withoutFillTargetDoubt({ ok: true, message: "m", warning: "Other" }).warning).toBe("Other");
+  });
+
+  it("keeps the TextView doubt when the field cannot be read back, and drops it when it can (#82, MOCKED client)", async () => {
+    const doubt = 'fill target label="Your code" resolved to "android.widget.TextView", attempting fill anyway.';
+    const make = (value: string | undefined) =>
+      new (class extends SimlockProvider {
+        protected override agentClient() {
+          return { interactions: { fill: async () => ({ message: "Filled 18 chars", warning: doubt }) } } as never;
+        }
+        override async inspect() {
+          const field = value === undefined ? { ref: "@e3", role: "secure-text-field", label: "Your code" } : { ref: "@e3", role: "text-field", label: "Your code", value };
+          return { elements: [field], truncated: false, warnings: [] };
+        }
+      })({ kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" });
+    const read = await make("MCP into Für Elise").typeText(androidHandle, "MCP into Für Elise", { kind: "text", text: "Your code" });
+    expect(read.warning).toBeUndefined();
+    const unread = await make(undefined).typeText(androidHandle, "MCP into Für Elise", { kind: "text", text: "Your code" });
+    expect(unread.warning).toBe(doubt);
+  });
+
+  it("names the timeout that fired when doctor cannot reach Simlock (#82)", () => {
+    expect(triesNote("Cannot reach Simlock at https://h:4720: Connect Timeout Error (attempted address: h:4720, timeout: 10000ms)")).toBe("two tries, each gave up connecting after 10 s");
+    expect(triesNote("Cannot reach Simlock at https://h:4720: The operation was aborted due to timeout")).toBe("two tries, each given 15 s");
+    expect(triesNote("Cannot reach Simlock at http://h:1: connect ECONNREFUSED")).toBe("two tries");
+  });
+
+  it("searches a log dump with a filter and says how much matched (#82)", () => {
+    const dump = ["--------- beginning of main", "11-03 22:04:01.100  100  100 I ActivityManager: Start proc", "11-03 22:04:02.200  100  100 E ActivityManager: ANR in com.android.systemui", "11-03 22:06:49.643  200  200 D App: tick"].join("\n");
+    const anr = toLogResult("logcat", dump, 50, { contains: "anr IN" });
+    expect(anr.lines).toEqual(["11-03 22:04:02.200  100  100 E ActivityManager: ANR in com.android.systemui"]);
+    expect(anr.source).toBe("logcat, 1 of 4 lines matched (log kept since 22:04:01)");
+    expect(anr.filtered).toBe(true);
+    expect(toLogResult("logcat", dump, 50, { contains: "ActivityManager", level: "error" }).lines).toHaveLength(1);
+    expect(toLogResult("logcat", dump, 1, { contains: "ActivityManager" })).toMatchObject({ truncated: true, lines: [expect.stringContaining("ANR")] });
+    expect(toLogResult("logcat", dump, 2)).toMatchObject({ source: "logcat", lines: [expect.stringContaining("ANR"), expect.stringContaining("tick")], truncated: true });
   });
 
   it("names the launcher, not the session's app, when the launcher's elements fill the screen (#73, MOCKED client)", async () => {

@@ -332,6 +332,23 @@ Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
   launcher was in front. When no element on screen belongs to the session's app, the app most elements
   belong to is named instead, with a note that the session's app is not in front.
 
+### After the VPS + N2 field run (issues #72, #82)
+
+- Fixed (#72, reopened): the no-focus check never fired on a real emulator, because agent-device's
+  Android snapshot sets `focused` only on the element that has focus and leaves the key out elsewhere.
+  A screen with a text field and no focused element now counts as "no focus". Before refusing, Tapdance
+  asks agent-device for the keyboard status (`dumpsys input_method`): when the keyboard is up, some
+  view takes text, so it types as before.
+- `tapdance logs` gains `--contains <text>` (case-insensitive) and `--level error|fault`, like MCP
+  `get_logs`. A filtered search on Android reads the whole logcat buffer instead of the last N lines,
+  and the reply says how many lines matched and how far back the buffer goes; MCP `get_logs` and
+  `get_crash_logs` search the same way. `-n` goes up to 20000 lines (was 5000).
+- Fixed (#82): MCP `type_text` with a field passed on agent-device's warning that the target "resolved
+  to android.widget.TextView" although Tapdance had read the text back from the field; the warning is
+  dropped when the read-back matches.
+- Fixed (#82): `doctor` said "15 s each" when the 10 s connect timeout had fired; it names the limit
+  that fired.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,
