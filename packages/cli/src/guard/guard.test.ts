@@ -476,6 +476,7 @@ describe("worker guard: hardening", () => {
       dc.android.killBackground("com.example"),
       dc.android.pidOf("com.example"),
       dc.android.uiautomatorDump(),
+      dc.android.guestState(),
       dc.android.chromeFlags(),
       dc.android.chromeDebugApp(),
       dc.android.chromeNotifications(),
@@ -502,6 +503,13 @@ describe("worker guard: hardening", () => {
       { tool: "adb", args: ["shell", "run-as", "com.example", "sh", "-c", "'reboot'"] },
       { tool: "adb", args: ["shell", "settings", "put", "global", "adb_enabled", "0"] },
       { tool: "adb", args: ["shell", "dumpsys", "notification", "--noredact"], stdin: "x" },
+      // The settle probe (#79) passes only as the exact fixed string, with no stdin.
+      { tool: "adb", args: ["shell", `${dc.GUEST_STATE}; reboot`] },
+      { tool: "adb", args: ["shell", `${dc.GUEST_STATE}\nreboot`] },
+      { tool: "adb", args: ["shell", dc.GUEST_STATE, "; reboot"] },
+      { tool: "adb", args: ["shell", ...dc.GUEST_STATE.split(" ")] },
+      { tool: "adb", args: ["shell", dc.GUEST_STATE], stdin: "reboot" },
+      { tool: "adb", args: ["shell", dc.GUEST_STATE.replace("/proc/stat", "/data/system/users/0/accounts.db")] },
       { tool: "adb", args: ["push", "/Users/owner/.ssh/id_rsa", "/sdcard/Download/k"] },
       { tool: "adb", args: ["pull", "/sdcard/Download/x", "/Users/owner/x"] },
       { tool: "simctl", args: ["addmedia", "/Users/owner/Pictures/private.jpg"] },
@@ -528,6 +536,9 @@ describe("worker guard: hardening", () => {
     const defaults = GuardPolicySchema.parse({ allow: { deviceShell: false } });
     expect(execOf(dc.android.notifications(), defaults).ok).toBe(true);
     expect(execOf(dc.android.notifications(), defaults, { physical: true }).ok).toBe(false);
+    // The settle probe is inspection: allowed with the device shell off.
+    expect(execOf(dc.android.guestState(), defaults).ok).toBe(true);
+    expect(execOf(dc.android.guestState(), GuardPolicySchema.parse({ allow: { deviceShell: false, inspection: false } })).ok).toBe(false);
     expect(execOf(dc.android.postNotification("a", "b"), defaults).ok).toBe(true);
     expect(execOf(dc.android.postNotification("a", "b"), defaults, { physical: true }).ok).toBe(false);
     expect(execOf({ tool: "adb", args: ["shell", "input", "tap", "1", "2; reboot"] }, defaults).ok).toBe(false);

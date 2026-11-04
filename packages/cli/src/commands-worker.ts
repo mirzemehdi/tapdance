@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { chmod, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -11,7 +11,7 @@ import { agentDeviceBin, output, simlockBin, type GlobalOptions } from "./contex
 import { bold, dim, renderChecks, yellow } from "./output.js";
 import { readSecret } from "./commands-setup.js";
 import { registerGuardCommands } from "./commands-guard.js";
-import { linuxEmulatorSettings, warmSettings, type WarmCounts } from "./host/plan.js";
+import { describeWarm, linuxEmulatorSettings, warmSettings, withoutWarmSettings, type WarmCounts } from "./host/plan.js";
 import { prepareLinuxUserServices } from "./guard/service.js";
 
 const exec = promisify(execFile);
@@ -83,15 +83,25 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
 
 /**
  * Devices stopped outside Simlock (a crash, a reboot, someone quitting an emulator) stay "ready" in its
- * records, and the next lease fails with "No Android device with serial …". Right after a start, when
- * no lease is active (nothing to lose), Simlock's `nuke` without `--delete-devices` resets its device
- * state; it deletes nothing.
+ * records, and the next lease fails with "No Android device with serial …". Right after a start,
+ * Simlock's `doctor --fix` marks such devices shut down (it never touches a leased one) and keeps
+ * what the warm pool learned, so the learned spare boots again at once (#91). Only when the doctor
+ * cannot run, and no lease is active, does `nuke` (without `--delete-devices`: it deletes nothing)
+ * reset the records instead; that also forgets the learned spares.
  */
 async function reconcileDevices(out: ReturnType<typeof output>): Promise<void> {
   await cleanupClaims(out).catch(() => undefined);
+  const fixed = await simlock(["--local", "doctor", "--fix"]).then(
+    () => true,
+    () => false,
+  );
+  if (fixed) {
+    out.progress("Checked Simlock's device records against the running devices (warm spares it learned are kept)");
+    return;
+  }
   const status = safeJson(await simlock(["--local", "status", "--json"]).catch(() => "{}")) as { leases?: unknown[] } | undefined;
   if (!status || (Array.isArray(status.leases) && status.leases.length > 0)) return;
-  await simlock(["--local", "nuke", "--yes"]).then(() => out.progress("Reset Simlock's device records (no lease was active)"), () => undefined);
+  await simlock(["--local", "nuke", "--yes"]).then(() => out.progress("Reset Simlock's device records (no lease was active; the next lease teaches the warm pool again)"), () => undefined);
 }
 
 /** Releases device claims left by dead agent-device processes and reports what happened. */
@@ -305,6 +315,43 @@ export async function applyWarm(
   if (when === "never" || (when === "if-idle" && activeLeases > 0)) return { settings, restarted: false, activeLeases };
   await restart(false, out);
   return { settings, restarted: true, activeLeases };
+}
+
+/**
+ * Removes the warm-pool keys `applyWarm` wrote from Simlock's config, so Simlock's default (one
+ * learned spare per device kind used) applies again (#91). Simlock has no `config unset`; the file is
+ * rewritten the way Simlock writes it (owner-only, atomic rename). Restarts like `applyWarm`.
+ */
+export async function resetWarm(
+  out: ReturnType<typeof output>,
+  options: { restart?: "always" | "if-idle" | "never" } = {},
+): Promise<{ removed: string[]; restarted: boolean; activeLeases: number }> {
+  const file = join(simlockHome(), "config.json");
+  const current = existsSync(file) ? (safeJson(await readFile(file, "utf8")) as Record<string, unknown> | undefined) : {};
+  if (current === undefined) throw new TapdanceError("USAGE", `${file} is not valid JSON; fix it by hand, then run this again`);
+  const { config, removed } = withoutWarmSettings(current);
+  if (removed.length > 0) {
+    out.progress(`Removing ${removed.join(", ")} from ${file}`);
+    const temp = `${file}.tapdance-${process.pid}`;
+    await writeFile(temp, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+    await rename(temp, file);
+  }
+  const status = (await localWorkerStatus()) as { leases?: unknown[] } | undefined;
+  const activeLeases = Array.isArray(status?.leases) ? status.leases.length : 0;
+  const when = options.restart ?? "always";
+  if (removed.length === 0 || when === "never" || (when === "if-idle" && activeLeases > 0)) return { removed, restarted: false, activeLeases };
+  await restart(false, out);
+  return { removed, restarted: true, activeLeases };
+}
+
+/** The warm-spare setting and the spares the worker keeps now, in words (#91). */
+export async function warmReport(): Promise<{ text: string; config?: Record<string, unknown>; warmPool?: unknown }> {
+  const file = join(simlockHome(), "config.json");
+  const config = existsSync(file) ? (safeJson(await readFile(file, "utf8").catch(() => "")) as Record<string, unknown> | undefined) : undefined;
+  const status = (await localWorkerStatus()) as { warmPool?: Parameters<typeof describeWarm>[1] } | undefined;
+  const pool = status ? (status.warmPool ?? { targets: [] }) : undefined;
+  const warmConfig = config?.["warmPool"] as Record<string, unknown> | undefined;
+  return { text: describeWarm(config, pool), ...(warmConfig ? { config: warmConfig } : {}), ...(pool ? { warmPool: pool } : {}) };
 }
 
 /** Ends every lease on the local worker (Simlock's nuke without --delete-devices: deletes nothing). */

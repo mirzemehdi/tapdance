@@ -332,6 +332,32 @@ Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
   launcher was in front. When no element on screen belongs to the session's app, the app most elements
   belong to is named instead, with a note that the session's app is not in front.
 
+### Field run 2b on the N2 VM: leases on a slow or just-started host (#79, #80, #91, #92, #94)
+
+Found on a Google Cloud N2 host with nested-virtualization emulators; the fixes are unit-tested with
+mocked devices and not yet re-run on a host.
+
+- Fixed (#79): a lease taken right after a release, or from a spare restored from Simlock's snapshot,
+  was handed out while the guest was still starting (commands took 12-25 s, and a "System UI isn't
+  responding" dialog covered the app). An Android emulator lease now waits up to 90 s for boot
+  completion, no "isn't responding" dialog (answered with Wait) and a calm guest CPU; past that it is
+  handed out with a notice (CLI warning, `notices` in MCP `lease_device` and the SDK's `lease()`).
+- Fixed (#80): an "isn't responding" or crash dialog in front is named by `ui inspect` /
+  `inspect_screen` (app `android`, with what to tap), `app launch` / `launch_app` (a warning) and a tap
+  whose target is not found, instead of a generic miss.
+- Added (#91): `tapdance host warm default` goes back to Simlock's default spares (it removes the keys
+  `host warm` wrote), and `tapdance host warm` with no counts shows the setting and the spares.
+- Fixed (#91): `worker restart`, `worker start` and `host warm` reset Simlock's device records with
+  `nuke`, which also forgot the learned spare, so the next lease was cold. They now run Simlock's
+  `doctor --fix`, which corrects stale records and keeps what the warm pool learned.
+- Fixed (#92): a lease printed nothing between "Requesting" and "Granted", and always said "a new device
+  can take a few minutes". The request line now says whether a warm spare is ready, and while Simlock
+  queues or starts a device a progress line names the stage.
+- Fixed (#94): right after a host started, the first lease failed with `DEVICE_UNAVAILABLE` "No Android
+  device with serial …" (Simlock still listed the emulator from before the restart). The lease now asks
+  again every 10 s for up to 2 min while the host boots a new one, and a final failure says the host
+  just started instead of "check selectors".
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,

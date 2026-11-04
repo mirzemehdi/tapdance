@@ -12,7 +12,7 @@ What is built, what was proven on real hardware, and what is missing — one row
 | ⛔ | Blocked (reason given) |
 | ❓ | Needs a product decision |
 
-Last updated: 2026-11-03. Test host for "✅": MacBook Pro M1 Pro, 16 GB, macOS 26.5, Xcode 26.5, Simlock
+Last updated: 2026-11-04. Test host for "✅": MacBook Pro M1 Pro, 16 GB, macOS 26.5, Xcode 26.5, Simlock
 0.4.0, agent-device 0.21.35, iOS 18.5 and 26.5 simulators (iPhone 16), Android 34 emulators (Pixel 8,
 arm64 images, one with Google Play), AXe 1.8.0, Google's Android CLI 1.1.16717390. Linux host: a Google
 Cloud `n2-standard-4` VM (europe-west1-b, Ubuntu 24.04, nested virtualization), emulator 37.2.13 with
@@ -367,6 +367,11 @@ paths below were exercised only by unit tests.
 | Android install refusals name the fix (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`, `VERSION_DOWNGRADE`, `INSUFFICIENT_STORAGE`), for uploads, installs from CI and host builds | F-01, F-05, H-08 | 🧪 | `provider.test.ts`; the signature refusal itself was met on the N2 host, from CI and from a host build |
 | Android `ui type` / MCP `type_text` without a target refuses (`ELEMENT_NOT_FOUND`, hint to pass a target) when the snapshot shows no focused text field; types as before when it cannot tell (#72) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client); found on the N2 host, not re-run there |
 | Android `ui inspect` / MCP `inspect_screen` names the app whose elements are on screen (the launcher after Back) when none belong to the session's app, with a note (#73) | Y-04 | 🧪 | `provider.test.ts` (mocked agent-device client); found on the N2 host, not re-run there |
+| An Android emulator lease waits up to 90 s for the guest to settle (boot complete, no "isn't responding" dialog, guest CPU at most 50 % between two reads); a System UI ANR dialog is answered with Wait; past 90 s the device is handed out with a notice (CLI warning, MCP `lease_device` `notices`, SDK `notices`). New fixed device command `GUEST_STATE`, accepted by the guard as inspection (#79) | W-04, Y-04, H-06 | 🧪 | `guest-settle.test.ts`, `provider.test.ts`, `guard.test.ts` 14 (mocked device and client); the 50 % threshold is not yet calibrated on a real host |
+| An "isn't responding" or crash dialog is named by `ui inspect` / `inspect_screen` (app `android`, advice to tap Wait or Close app), by `app launch` / `launch_app` (warning) and by a tap whose target is not found (message and hint), instead of a plain miss (#80) | Y-04 | 🧪 | `guest-settle.test.ts`, `provider.test.ts` (mocked); found on the N2 host, not re-run there |
+| `host warm default` removes the warm-pool keys `host warm` wrote (Simlock's learned default again); `host warm` with no counts shows the setting and the spares. `worker start`/`restart` and `host warm` reconcile Simlock's records with `doctor --fix` instead of `nuke`, so the learned spare survives a restart; `nuke` only when the doctor cannot run (#91) | W-04, W-07 | 🧪 | `host.test.ts` (config edit and wording); the restart path is build-only, not yet run on a host |
+| The lease request line says whether a warm spare is ready; while Simlock queues or starts a device, a progress line every stage change or 15 s (from Simlock's `waiting` list) (#92) | C-02, W-06 | 🧪 | `provider.test.ts` (mocked Simlock HTTP) |
+| A lease that meets "No Android device with serial …" (a host that just started still lists its old emulator as ready) asks again every 10 s for up to 2 min, then fails `DEVICE_UNAVAILABLE` with a hint saying the host just started (#94) | W-03, W-04 | 🧪 | `provider.test.ts` (mocked); `doctor` still counts that stale device as running (Simlock's status, upstream) |
 
 ## Bugs found by running for real (fixed)
 

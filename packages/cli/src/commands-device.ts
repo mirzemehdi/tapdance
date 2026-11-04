@@ -157,7 +157,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       run(globals(), async (t, out) => {
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
-        const { summary, ttlCappedMinutes } = await t.lease({
+        const { summary, ttlCappedMinutes, notices } = await t.lease({
           platform: platformArg(o.platform),
           ...(o.device ? { device: o.device } : {}),
           ...(o.os ? { osVersion: o.os } : {}),
@@ -179,7 +179,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           keepalive = "off — renew with `tapdance device renew`";
         }
         if (ttlCappedMinutes) out.warn(`The worker granted ${ttlCappedMinutes} min, less than the ${ttl ?? t.resolved.config.session.defaultTtlMinutes} min asked (its policy caps leases; the keepalive renews it).`);
-        out.result({ device: summary, keepalive, ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}) }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
+        for (const notice of notices ?? []) out.warn(notice);
+        out.result({ device: summary, keepalive, ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}), ...(notices ? { notices } : {}) }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
         if (o.hold) {
           const controller = new AbortController();
           const stop = () => controller.abort();

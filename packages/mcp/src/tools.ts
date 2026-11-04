@@ -166,7 +166,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "lease_device",
     title: "Lease a device",
     description:
-      "Reserve one Android emulator or iOS simulator for this session; it is booted, clean, and reserved for this session until released. Calling it again for the same platform returns the device you already hold. Every other tool acts on this device. Can take a few minutes when a new device must boot. One lease per session. If your call times out, call lease_device again: the request keeps running and returns the device with reused:true once granted.",
+      "Reserve one Android emulator or iOS simulator for this session; it is booted, clean, and reserved for this session until released. Calling it again for the same platform returns the device you already hold. Every other tool acts on this device. Can take a few minutes when a new device must boot. One lease per session. If your call times out, call lease_device again: the request keeps running and returns the device with reused:true once granted. Read notices in the reply when present: they say the device is still starting (expect slow first steps) or that a system dialog covers it.",
     input: z
       .object({
         platform,
@@ -179,7 +179,7 @@ export const TOOLS: ToolDefinition[] = [
       .strict(),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: async (t, a) => {
-      const { summary, reused, ttlCappedMinutes } = await t.lease({
+      const { summary, reused, ttlCappedMinutes, notices } = await t.lease({
         reuse: true,
         platform: a["platform"] as "android" | "ios",
         ...(a["device"] ? { device: a["device"] as string } : {}),
@@ -188,7 +188,7 @@ export const TOOLS: ToolDefinition[] = [
         ...(a["profile"] ? { profile: a["profile"] as string } : {}),
         ...(a["ttl_minutes"] ? { ttlMinutes: a["ttl_minutes"] as number } : {}),
       });
-      return json({ device: summary, reused, ...(ttlCappedMinutes ? { ttlCappedMinutes, note: `The worker granted ${ttlCappedMinutes} min (its policy caps leases); the server renews it while connected.` } : {}), next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
+      return json({ device: summary, reused, ...(notices ? { notices } : {}), ...(ttlCappedMinutes ? { ttlCappedMinutes, note: `The worker granted ${ttlCappedMinutes} min (its policy caps leases); the server renews it while connected.` } : {}), next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
     },
   },
   {

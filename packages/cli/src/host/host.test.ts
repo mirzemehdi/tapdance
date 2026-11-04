@@ -25,6 +25,8 @@ import {
   clipboardCommand,
   parseWarm,
   warmSettings,
+  withoutWarmSettings,
+  describeWarm,
   linuxEmulatorSettings,
   parseLinger,
   serveNeedsOperator,
@@ -302,6 +304,29 @@ describe("rendering", () => {
     // An omitted platform keeps one spare; more spares than slots reserve nothing.
     expect(warmSettings({ android: 5 }, limits)).toContainEqual(["warmPool.reserveRunning.android", "0"]);
     expect(warmSettings({ android: 5 }, limits)).toContainEqual(["warmPool.reserveRunning.ios", "4"]);
+  });
+
+  it("goes back to Simlock's default spares by removing only the keys host warm wrote (#91)", () => {
+    const written = { http: { port: 4701 }, warmPool: { enabled: true, reserveRunning: { android: 1, ios: 5 }, quarantine: { maxRetries: 2 } } };
+    const { config, removed } = withoutWarmSettings(written);
+    expect(removed).toEqual(["warmPool.enabled", "warmPool.reserveRunning.android", "warmPool.reserveRunning.ios"]);
+    // Another warmPool key stays; the emptied reserveRunning goes; the input is not changed.
+    expect(config).toEqual({ http: { port: 4701 }, warmPool: { quarantine: { maxRetries: 2 } } });
+    expect(written.warmPool.enabled).toBe(true);
+    expect(withoutWarmSettings({ warmPool: { enabled: false } }).config).toEqual({});
+    expect(withoutWarmSettings({ android: { emulator: {} } })).toEqual({ config: { android: { emulator: {} } }, removed: [] });
+    expect(withoutWarmSettings({ warmPool: "odd" }).removed).toEqual([]);
+  });
+
+  it("says how the warm spares are set and which are ready (#91)", () => {
+    const learned = { enabled: true, targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", origin: "learned", ready: 1, booting: 0 }] };
+    expect(describeWarm({}, learned)).toMatch(/Simlock's default[\s\S]*android Pixel 8 \/ 34 \(learned\): ready 1/);
+    expect(describeWarm({ warmPool: { enabled: true, reserveRunning: { android: 0, ios: 4 } } }, learned)).toMatch(/set by tapdance host warm \(reserved running slots: android 0, ios 4\)/);
+    expect(describeWarm({ warmPool: { enabled: false } }, { enabled: false, targets: [] })).toMatch(/off[\s\S]*No spares\./);
+    // Before the first lease, or after a reset that forgot the learned kind.
+    expect(describeWarm({}, { enabled: true, targets: [] })).toMatch(/No spare yet: the next lease boots a device/);
+    expect(describeWarm(undefined, undefined)).toMatch(/not running/);
+    expect(describeWarm({}, learned)).toMatch(/tapdance host warm default/);
   });
 
   it("describes the catalog per platform", () => {

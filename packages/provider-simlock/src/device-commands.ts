@@ -47,6 +47,12 @@ export const MAX_SEQUENCE_STEPS = 500;
 /** The system dump script (`ui inspect --system`); the guard accepts exactly this string. */
 export const UIAUTOMATOR_DUMP =
   "am force-stop com.callstack.agentdevice.snapshothelper; uiautomator dump /sdcard/tapdance-ui.xml >/dev/null 2>&1; cat /sdcard/tapdance-ui.xml; rm -f /sdcard/tapdance-ui.xml";
+/**
+ * Whether a just-leased emulator has settled (#79): boot finished, the CPU counters (two reads give
+ * the guest's load) and the focused window (an "isn't responding" dialog). The guard accepts exactly
+ * this string.
+ */
+export const GUEST_STATE = "getprop sys.boot_completed; head -n 1 /proc/stat; dumpsys window displays | grep mCurrentFocus=";
 /** Chrome without its welcome, sign-in and default-browser screens. */
 export const CHROME_FLAGS = "chrome --disable-fre --no-default-browser-check --no-first-run";
 /** Files pushed through exec travel as base64 on stdin; keep them small enough for one request. */
@@ -171,6 +177,10 @@ export const android = {
   },
   pidOf(appId: string): DeviceCommand {
     return { tool: "adb", args: ["shell", "pidof", app(appId)] };
+  },
+  /** Boot flag, CPU counters and focused window of a just-leased emulator (#79). */
+  guestState(): DeviceCommand {
+    return { tool: "adb", args: ["shell", GUEST_STATE] };
   },
   /** Window manager state; `mCurrentFocus` names the app in front. */
   focusedWindow(): DeviceCommand {

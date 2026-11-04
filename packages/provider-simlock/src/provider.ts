@@ -48,7 +48,8 @@ import { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuff
 import { WebSocket } from "ws";
 import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
-import { SimlockHttp, type ExecResult, type SimlockWorker } from "./http.js";
+import { SimlockHttp, type ExecResult, type SimlockStatus, type SimlockWorker } from "./http.js";
+import { describeDialog, dialogAdvice, dialogFromDumpsys, dialogInNodes, settleGuest, type SettleResult, type SystemDialog } from "./guest-settle.js";
 import { AxeBackend } from "./axe.js";
 
 export const PROVIDER_NAME = "simlock";
@@ -58,6 +59,44 @@ export const TESTED_SIMLOCK_VERSION = "0.4.0";
 
 /** Simlock's agent-device front waits at most this long in the queue (src/agent-device, "Allocate queue wait"). */
 const MAX_ALLOCATE_WAIT_MS = 330_000;
+
+/** How long a lease keeps asking again while the host offers a device that is not running (#94). */
+const STALE_RECORD_WINDOW_MS = 120_000;
+/** `details.reason` of a lease refused because the host's device record was stale (#94). */
+export const STALE_RECORD_REASON = "STALE_DEVICE_RECORD";
+const STALE_RECORD_HINT =
+  "The host still lists a device that is not running, as it does for about a minute after the host (re)starts while the emulator boots again. Lease again in a minute: `tapdance device lease` (MCP lease_device). If it keeps happening, run `tapdance worker restart` on the host.";
+
+/** agent-device's refusal of a granted device whose serial or UDID is not connected (#94). */
+export function isStaleDeviceRecord(error: unknown): error is TapdanceError {
+  if (!(error instanceof TapdanceError)) return false;
+  const action = error.details?.["action"];
+  if (action !== "lease" && action !== "open device session") return false;
+  return /No (Android|Apple|iOS) device with (serial|UDID)/i.test(error.message);
+}
+
+/** The part of the request line that says whether a spare is ready, from Simlock's status (#92). */
+export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion">): string {
+  if (status === undefined) return "queues if busy; a new device can take a few minutes";
+  const same = (a: string | undefined, b: string | undefined) => a === undefined || b === undefined || a.toLowerCase() === b.toLowerCase();
+  const targets = (status.warmPool?.targets ?? []).filter((t) => t.platform === request.platform && same(request.device, t.model) && same(request.osVersion, t.osVersion));
+  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (request.device === undefined && (status.capacity?.[request.platform]?.warm ?? 0) > 0);
+  if (ready) return "a warm spare is ready";
+  if (targets.some((t) => (t.booting ?? 0) > 0)) return "a spare is booting; this can take a minute or two";
+  return "no spare is ready, so a device has to start: this can take a few minutes";
+}
+
+/** One line about a waiting lease request in Simlock's status, or undefined when it is not waiting (#92). */
+export function describeWaiting(waiting: NonNullable<SimlockStatus["waiting"]>[number] | undefined): string | undefined {
+  if (waiting === undefined) return undefined;
+  if (waiting.stage === "queued") {
+    const why: Record<string, string> = { full: "every slot is busy", "running-limit": "the running-device limit is reached", "device-limit": "the device limit is reached", "boot-failed": "a boot failed; retrying", "ram-budget": "the memory budget is used up" };
+    const reason = waiting.reason ? why[waiting.reason] ?? waiting.reason : undefined;
+    return `Queued for a device${waiting.queuePosition ? ` (position ${waiting.queuePosition}${reason ? `, ${reason}` : ""})` : reason ? ` (${reason})` : ""}`;
+  }
+  if (waiting.stage === "starting") return "Starting a device for this lease (restoring or booting an emulator or simulator)";
+  return undefined;
+}
 
 export interface SimlockProviderOptions {
   iosBackend?: "agent-device" | "axe";
@@ -456,6 +495,37 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   async lease(sessionId: string, request: LeaseRequest, options: CallOptions = {}): Promise<LeaseHandle> {
+    // A worker whose host just started (a VM start, a reboot) can still list the emulator it ran
+    // before as ready; the lease then fails with "No Android device with serial …" (#94). Simlock
+    // notices within about a minute and boots a new one: ask again until then.
+    const deadline = Date.now() + Math.min(request.waitTimeoutMs ?? STALE_RECORD_WINDOW_MS, STALE_RECORD_WINDOW_MS);
+    for (;;) {
+      try {
+        return await this.leaseClearingClaims(sessionId, request, options);
+      } catch (error) {
+        if (!isStaleDeviceRecord(error)) throw error;
+        if (Date.now() + this.staleRecordRetryMs > deadline || options.signal?.aborted) {
+          throw new TapdanceError("DEVICE_UNAVAILABLE", error.message, {
+            hint: STALE_RECORD_HINT,
+            details: { ...error.details, reason: STALE_RECORD_REASON },
+            retryable: true,
+            cause: error,
+          });
+        }
+        options.onProgress?.(
+          `The host offered a device that is not running (its records are stale, as right after the host starts); asking again in ${Math.round(this.staleRecordRetryMs / 1000)} s while it boots a new one`,
+        );
+        await new Promise((r) => setTimeout(r, this.staleRecordRetryMs));
+      }
+    }
+  }
+
+  /** How long to wait before asking again after a stale device record (#94). */
+  protected staleRecordRetryMs = 10_000;
+  /** How often to ask Simlock where a waiting lease request stands (#92). */
+  protected queuePollMs = 5_000;
+
+  private async leaseClearingClaims(sessionId: string, request: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
     // Claims left by a dead worker process block the devices they name; settle them first when the
     // worker runs here (a worker guard does the same for remote agents).
     if (this.isLocal()) await this.settleStaleClaims();
@@ -486,11 +556,13 @@ export class SimlockProvider implements DeviceProvider {
       runId: this.connection.runId,
       clientId: this.connection.clientId,
     };
-    const client = this.client({ ...base, deviceKey: "" });
+    const client = this.leaseClient({ ...base, deviceKey: "" });
     const waitMs = request.waitTimeoutMs === undefined ? undefined : Math.min(request.waitTimeoutMs, MAX_ALLOCATE_WAIT_MS);
     const waitSignal = waitMs ? AbortSignal.timeout(waitMs) : undefined;
     const signal = options.signal && waitSignal ? AbortSignal.any([options.signal, waitSignal]) : (options.signal ?? waitSignal);
-    options.onProgress?.(`Requesting ${request.platform}${request.device ? ` "${request.device}"` : ""} from ${this.connection.baseUrl} (queues if busy; a new device can take a few minutes)`);
+    const before = options.onProgress ? await this.http.status(5_000).catch(() => undefined) : undefined;
+    options.onProgress?.(`Requesting ${request.platform}${request.device ? ` "${request.device}"` : ""} from ${this.connection.baseUrl} (${spareNote(before, request)})`);
+    const stopWatching = options.onProgress ? this.watchRequest(leaseId, options.onProgress) : () => undefined;
     let lease;
     try {
       lease = await client.leases.allocate({
@@ -513,6 +585,8 @@ export class SimlockProvider implements DeviceProvider {
         });
       }
       throw fromAgentDeviceError(error, "lease");
+    } finally {
+      stopWatching();
     }
     const deviceKey = lease.deviceKey ?? "";
     const deviceId = deviceKey.split(":").slice(2).join(":");
@@ -548,7 +622,74 @@ export class SimlockProvider implements DeviceProvider {
       await this.release(handle).catch(() => undefined);
       throw fromAgentDeviceError(error, "open device session");
     }
+    if (handle.platform === "android" && !handle.physical) {
+      const settled = await this.settle(handle, options);
+      if (settled.notices.length > 0) handle.notices = settled.notices;
+    }
     return handle;
+  }
+
+  /** The agent-device client a new lease is requested through. */
+  protected leaseClient(data: SimlockLeaseData): AgentDeviceClient {
+    return this.client(data);
+  }
+
+  /**
+   * Waits for a just-leased emulator to settle (#79): boot complete, no "isn't responding" dialog
+   * (answered with Wait), and the guest's CPU calm. Never fails the lease: past the budget it hands
+   * the device out with a notice.
+   */
+  protected async settle(handle: LeaseHandle, options: CallOptions): Promise<SettleResult> {
+    const probe = deviceCommands.android.guestState();
+    return settleGuest({
+      probe: async () => {
+        const r = await this.execOn(handle, "adb", probe.args, 15_000);
+        if (r.exitCode !== 0 && r.stdout.trim() === "") throw new Error(r.stderr);
+        return r.stdout;
+      },
+      dismiss: async () => {
+        await this.agentClient(handle).interactions.press({ selector: `id=${quote("android:id/aerr_wait")}`, ...this.scope(handle) } as never);
+        return true;
+      },
+      ...(options.onProgress ? { progress: options.onProgress } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    });
+  }
+
+  /**
+   * Says where a lease request stands while Simlock works on it (#92): its place in the queue, or
+   * that a device is being started for it. Simlock's waiting list names the request by the lease id
+   * Tapdance chose. Returns the function that stops it.
+   */
+  private watchRequest(leaseId: string, onProgress: (message: string) => void): () => void {
+    const started = Date.now();
+    let stopped = false;
+    let said: string | undefined;
+    let saidAt = 0;
+    let busy = false;
+    const timer = setInterval(() => {
+      if (busy || stopped) return;
+      busy = true;
+      void this.http
+        .status(5_000)
+        .then((status) => {
+          if (stopped) return;
+          const line = describeWaiting(status.waiting?.find((w) => w.requesterId === leaseId || w.id === leaseId));
+          if (line === undefined || (line === said && Date.now() - saidAt < 15_000)) return;
+          onProgress(`${line} (${Math.round((Date.now() - started) / 1000)} s)`);
+          said = line;
+          saidAt = Date.now();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          busy = false;
+        });
+    }, this.queuePollMs);
+    timer.unref?.();
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
   }
 
   async status(handle: LeaseHandle): Promise<LeaseStatus> {
@@ -638,10 +779,32 @@ export class SimlockProvider implements DeviceProvider {
         ...this.selection(handle),
         ...this.scope(handle),
       } as never);
-      return { ok: true, message: `Launched ${appId}` };
     } catch (error) {
-      throw fromAgentDeviceError(error, `launch ${appId}`);
+      throw await this.withDialog(handle, fromAgentDeviceError(error, `launch ${appId}`));
     }
+    // A launch "succeeds" under a system dialog that keeps the app out of reach (#80): say so.
+    const dialog = handle.platform === "android" ? await this.dialogInFront(handle) : undefined;
+    return dialog ? { ok: true, message: `Launched ${appId}, but a system dialog is in front of it`, warning: dialogAdvice(dialog) } : { ok: true, message: `Launched ${appId}` };
+  }
+
+  /** An "isn't responding" or crash dialog that has the focus on an Android device, from the window manager (#80). */
+  private async dialogInFront(handle: LeaseHandle): Promise<SystemDialog | undefined> {
+    if (handle.platform !== "android") return undefined;
+    const cmd = deviceCommands.android.focusedWindow();
+    const r = await this.execOn(handle, "adb", cmd.args, 10_000).catch(() => undefined);
+    return r ? dialogFromDumpsys(r.stdout) : undefined;
+  }
+
+  /** Adds a system dialog in front to an "element not found" error: it, not the selector, is why (#80). */
+  private async withDialog(handle: LeaseHandle, error: TapdanceError): Promise<TapdanceError> {
+    if (handle.platform !== "android" || error.code !== "ELEMENT_NOT_FOUND") return error;
+    const dialog = await this.dialogInFront(handle).catch(() => undefined);
+    if (!dialog) return error;
+    return new TapdanceError(error.code, `${error.message} (a system dialog ${describeDialog(dialog)} is in front)`, {
+      hint: dialogAdvice(dialog),
+      details: { ...error.details, systemDialog: dialog.app },
+      cause: error,
+    });
   }
 
   async stopApp(handle: LeaseHandle, appId: string): Promise<ActionResult> {
@@ -683,7 +846,9 @@ export class SimlockProvider implements DeviceProvider {
       const cmd = deviceCommands.android.uiautomatorDump();
       const r = await this.execOn(handle, "adb", cmd.args, 30_000);
       if (!r.stdout.includes("<hierarchy")) throw new TapdanceError("DEVICE_ERROR", `uiautomator dump failed: ${(r.stderr || r.stdout).trim().slice(0, 200)}`);
-      return parseUiautomator(r.stdout, options.interactiveOnly ?? true);
+      const screen = parseUiautomator(r.stdout, options.interactiveOnly ?? true);
+      const dialog = dialogInNodes(screen.elements as unknown as Array<Record<string, unknown>>);
+      return dialog ? { ...screen, warnings: [dialogAdvice(dialog), ...screen.warnings] } : screen;
     }
     const axe = this.axeFor(handle);
     if (axe) return axe.inspect(handle.deviceId, options.interactiveOnly ?? true);
@@ -711,9 +876,15 @@ export class SimlockProvider implements DeviceProvider {
       // agent-device names the session's app even when another app (the launcher after Back) is in
       // front. On Android the elements carry their package, so name the app they belong to (#73).
       const sessionApp = raw.appBundleId ?? raw.appName;
-      const front = handle.platform === "android" ? frontApp(raw.nodes ?? [], sessionApp) : sessionApp;
-      const warnings = (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w)));
-      if (front && sessionApp && front !== sessionApp) {
+      // An "isn't responding" or crash dialog belongs to the system ("android"), which frontApp
+      // leaves out, so name it here instead of the app it covers (#80).
+      const dialog = handle.platform === "android" ? dialogInNodes(raw.nodes ?? []) : undefined;
+      const front = dialog ? "android" : handle.platform === "android" ? frontApp(raw.nodes ?? [], sessionApp) : sessionApp;
+      let warnings = (raw.warnings ?? []).map((w) => (typeof w === "string" ? w : JSON.stringify(w)));
+      if (dialog) {
+        // agent-device's own note guesses at a shade or overlay; this one names the dialog.
+        warnings = [dialogAdvice(dialog), ...warnings.filter((w) => !/system surface/i.test(w))];
+      } else if (front && sessionApp && front !== sessionApp) {
         warnings.unshift(`${front} is in front, not the session's app ${sessionApp}. Bring it back with \`tapdance app launch ${sessionApp}\` (MCP launch_app) if that is the app you meant.`);
       }
       return {
@@ -754,6 +925,10 @@ export class SimlockProvider implements DeviceProvider {
           return { ...actionResult(result, `Tapped ${describe(target)} at (${point.x}, ${point.y})`), warning: "The keyboard covered the target's usual tap path; it was tapped at its centre instead" };
         }
       }
+      // A system dialog in front (an "isn't responding" dialog on a guest still starting) hides every
+      // element: say that instead of scrolling for it (#80).
+      const blocked = await this.withDialog(handle, mapped);
+      if (blocked !== mapped) throw blocked;
       // Text that is not on screen, or sits under a toolbar, is where a person would scroll first
       // (#58: a row below the fold in Settings › Apps). Scroll it into view and tap it there.
       if (target.kind === "text" && (mapped.code === "ELEMENT_NOT_FOUND" || /covered|occlud|toolbar|off-?screen/i.test(mapped.message))) {

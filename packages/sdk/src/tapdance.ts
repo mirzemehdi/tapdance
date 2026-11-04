@@ -375,7 +375,11 @@ export class Tapdance {
     }
   }
 
-  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean; ttlCappedMinutes?: number }> {
+  /**
+   * Leases a device for this session. `notices` says what the agent should know about it right away,
+   * for example that it was handed out while still starting (#79).
+   */
+  async lease(options: LeaseOptions): Promise<{ record: SessionRecord; summary: DeviceSummary; reused: boolean; ttlCappedMinutes?: number; notices?: string[] }> {
     const { config } = this.resolved;
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
@@ -400,7 +404,7 @@ export class Tapdance {
       }
       const ttlMinutes = options.ttlMinutes ?? config.session.defaultTtlMinutes;
       const waitSeconds = options.waitSeconds ?? config.session.leaseWaitSeconds;
-      const handle = await provider.lease(
+      const { notices, ...handle } = await provider.lease(
         this.session.id,
         {
           platform: options.platform,
@@ -431,6 +435,7 @@ export class Tapdance {
         summary: summarize(record, { state: "active", handle, expiresAt: handle.expiresAt }),
         reused: false,
         ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}),
+        ...(notices && notices.length > 0 ? { notices } : {}),
       };
     });
   }

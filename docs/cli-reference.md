@@ -192,6 +192,14 @@ been used for `session.idleReleaseMinutes` (it then releases it), or `session.ma
 
 A session that already holds a lease gets `LEASE_ALREADY_HELD` (exit 3) from `device lease`.
 
+While it waits, `device lease` prints progress on stderr: whether a warm spare is ready, the request's
+place in the queue or that a device is being started, and, for an Android emulator, how long it waits
+for the device to settle. An emulator handed out while still starting (boot not complete, its CPU busy,
+a "System UI isn't responding" dialog) is checked for up to 90 s; an "isn't responding" dialog is
+answered with Wait. A device still busy after that is handed out with a warning (in `--json`,
+`notices`). When a host that just started still lists its old emulator ("No Android device with
+serial …"), the lease asks again every 10 s for up to 2 minutes while the host boots a new one.
+
 `device status` shows the device, platform and OS, provider and worker, endpoint and whether it is TLS,
 loopback or a private network, state, lease id and minutes left, a running recording, and a human hold
 from the viewer. If the lease has ended it fails with `LEASE_LOST` and clears the session record.
@@ -584,6 +592,8 @@ Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
+| `host warm default [--now]` | Back to Simlock's default: one booted spare of each device kind a lease used (learned from leases). Removes the `warmPool.enabled` and `warmPool.reserveRunning.*` keys `host warm` wrote to `~/.simlock/config.json` and restarts like `host warm`. |
+| `host warm` | Show the warm-spare setting (Simlock's default, set by `host warm`, or off) and the spares the worker keeps now, with how many are ready. |
 | `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--allow-admin-account]` / `host builds disable` / `host builds status` / `host builds key [--repo <url>]` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it. `key` creates a read-only deploy key and prints its public half; with `--repo` the key is for that repository only and its builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `status` lists each repository with its deploy key and number of build files. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
 | `host builds files add --repo <url> <path-in-repo> [--from <file>]` / `host builds files list [--repo <url>]` / `host builds files remove --repo <url> <path-in-repo>` | Build files: config a repository keeps out of git (`google-services.json`, `local.properties`, `.env`), copied into the checkout before each build of that repository and removed after it. `add` reads `--from` or stdin (at most 1 MB, 50 files per repository) and refuses absolute paths, `..`, `.git` and `.gitmodules`; `list` shows path, size and the start of the sha256, never the content. Owner-only: no guard route or MCP tool reads or writes them. |
 | `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>]` / `host artifacts disable` / `host artifacts status` | Let the agent install Android APKs your CI built (`app install --from-ci`): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in. `enable` and `disable` restart the guard when no lease is running. Ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
@@ -2159,9 +2169,12 @@ Commands:
                            its devices stop, and nothing restarts at login
   resume [options]         Start hosting again after `host pause`, the same way
                            as before (guard flags, Tailscale, login services)
-  warm [options] <counts>  Set how many booted spare devices the worker keeps
-                           (e.g. android=0,ios=0), without re-running host up;
-                           restarts the worker only when nothing is leased
+  warm [options] [counts]  Set how many booted spare devices the worker keeps
+                           (e.g. android=0,ios=0), or `default` for Simlock's
+                           own (one spare per device kind leases used), without
+                           re-running host up; restarts the worker only when
+                           nothing is leased. With no counts, shows the current
+                           setting and spares
   builds                   Let the agent build apps on this machine from
                            allow-listed git repositories (off by default)
   artifacts                Let the agent install Android APKs your CI built
@@ -2245,10 +2258,12 @@ Options:
 ### `tapdance host warm`
 
 ```text
-Usage: tapdance host warm [options] <counts>
+Usage: tapdance host warm [options] [counts]
 
-Set how many booted spare devices the worker keeps (e.g. android=0,ios=0),
-without re-running host up; restarts the worker only when nothing is leased
+Set how many booted spare devices the worker keeps (e.g. android=0,ios=0), or
+`default` for Simlock's own (one spare per device kind leases used), without
+re-running host up; restarts the worker only when nothing is leased. With no
+counts, shows the current setting and spares
 
 Options:
   --now       restart the worker even if a lease is running (that ends the
