@@ -799,6 +799,39 @@ export class SimlockProvider implements DeviceProvider {
     return r ? dialogFromDumpsys(r.stdout) : undefined;
   }
 
+  /**
+   * The screen through a plain uiautomator dump, when agent-device's helper cannot read it: elements
+   * by text and bounds, refs not actionable. Fails with the helper's own error when the dump fails too.
+   */
+  private async inspectByDump(handle: LeaseHandle, interactiveOnly: boolean, helperError: unknown): Promise<ScreenInspection> {
+    const cmd = deviceCommands.android.uiautomatorDump();
+    const r = await this.execOn(handle, "adb", cmd.args, 30_000).catch(() => undefined);
+    if (!r?.stdout.includes("<hierarchy")) throw fromAgentDeviceError(helperError, "inspect");
+    const screen = parseUiautomator(r.stdout, interactiveOnly);
+    const reason = String((helperError as Error)?.message ?? helperError).split("\n")[0]!.slice(0, 160);
+    return {
+      ...screen,
+      source: "uiautomator",
+      warnings: [`agent-device could not read the screen (${reason}); these elements come from a uiautomator dump, so their refs cannot be tapped: target by text or x/y`, ...screen.warnings],
+    };
+  }
+
+  /**
+   * Adds what is on screen to an "element not found" error, so an agent can pick the right target
+   * without another inspect (an idea from phone-harness). One read; never replaces the error.
+   */
+  private async withVisible(handle: LeaseHandle, error: TapdanceError): Promise<TapdanceError> {
+    if (error.code !== "ELEMENT_NOT_FOUND") return error;
+    const screen = await this.inspect(handle, { interactiveOnly: true }).catch(() => undefined);
+    const visible = screen ? visibleLabels(screen.elements) : [];
+    if (visible.length === 0) return error;
+    return new TapdanceError(error.code, `${error.message}. On screen: ${describeVisible(visible)}`, {
+      ...(error.hint ? { hint: error.hint } : {}),
+      details: { ...error.details, visible },
+      cause: error,
+    });
+  }
+
   /** Adds a system dialog in front to an "element not found" error: it, not the selector, is why (#80). */
   private async withDialog(handle: LeaseHandle, error: TapdanceError): Promise<TapdanceError> {
     if (handle.platform !== "android" || error.code !== "ELEMENT_NOT_FOUND") return error;
@@ -856,15 +889,31 @@ export class SimlockProvider implements DeviceProvider {
     }
     const axe = this.axeFor(handle);
     if (axe) return axe.inspect(handle.deviceId, options.interactiveOnly ?? true);
+    let snap: unknown;
     try {
       const read = () => this.agentClient(handle).capture.snapshot({ interactiveOnly: options.interactiveOnly ?? true, ...this.scope(handle) } as never);
-      // On an emulator just handed out, agent-device's snapshot helper can fail its first start
-      // (INSTRUMENTATION_FAILED) and work a moment later: read once more before reporting it.
-      const snap = await read().catch(async (error: unknown) => {
-        if (handle.platform !== "android" || !/INSTRUMENTATION_FAILED|snapshot helper failed/i.test(String((error as Error)?.message ?? error))) throw error;
-        await new Promise((r) => setTimeout(r, 1500));
-        return read();
-      });
+      // On an emulator just handed out, or one still busy, agent-device's snapshot helper can fail to
+      // start (INSTRUMENTATION_FAILED) or to see an idle UI, and work a moment later: back off and read
+      // again. If it still fails, read the screen with a plain uiautomator dump instead (an idea from
+      // phone-harness, which falls back to pixels the same way) and say where the elements came from.
+      try {
+        snap = await read();
+      } catch (error) {
+        if (handle.platform !== "android" || !HELPER_FLAKE.test(String((error as Error)?.message ?? error))) throw error;
+        let last: unknown = error;
+        for (const pause of SNAPSHOT_BACKOFF_MS) {
+          await new Promise((r) => setTimeout(r, pause));
+          try {
+            snap = await read();
+            last = undefined;
+            break;
+          } catch (again) {
+            if (!HELPER_FLAKE.test(String((again as Error)?.message ?? again))) throw again;
+            last = again;
+          }
+        }
+        if (last !== undefined) return await this.inspectByDump(handle, options.interactiveOnly ?? true, last);
+      }
       const raw = snap as unknown as {
         nodes?: Array<Record<string, unknown>>;
         truncated?: boolean;
@@ -942,7 +991,7 @@ export class SimlockProvider implements DeviceProvider {
           return { ...actionResult(result as never, `Tapped ${describe(target)} at (${found.point.x}, ${found.point.y})`), warning: /after 0 swipe/.test(found.message) ? `No element had exactly that text; tapped the one whose label contains it (${found.message.replace(/ after 0 swipe\(s\) \w+$/, "")})` : `It was not on screen; ${found.message.toLowerCase()} first` };
         }
       }
-      throw mapped;
+      throw await this.withVisible(handle, mapped);
     }
     // Some system surfaces (the file picker, the share sheet) drop the automation helper's touch
     // events while `adb shell input tap` works. When a settled tap changed nothing there, repeat it
@@ -1277,7 +1326,7 @@ export class SimlockProvider implements DeviceProvider {
       if (mapped.code === "ELEMENT_NOT_FOUND" && target === undefined) {
         throw new TapdanceError("ELEMENT_NOT_FOUND", "No text field has focus", { hint: NO_FOCUS_HINT });
       }
-      throw mapped;
+      throw target === undefined ? mapped : await this.withVisible(handle, mapped);
     }
   }
 
@@ -1957,6 +2006,27 @@ export const RAW_INPUT_APPS = new Set([
   "com.android.intentresolver",
   "com.google.android.intentresolver",
 ]);
+
+/** agent-device snapshot failures that pass on their own a moment later (a busy or just-started guest). */
+const HELPER_FLAKE = /INSTRUMENTATION_FAILED|snapshot helper failed|could not get idle state|idle state/i;
+/** Pauses before reading again after such a failure, then a uiautomator dump is used. */
+export const SNAPSHOT_BACKOFF_MS = [500, 1000, 2000];
+
+/** The labels on screen, for a "not found" error: distinct, non-empty, short, at most 30. */
+export function visibleLabels(elements: Array<{ label?: string; text?: string; value?: string }>): string[] {
+  const seen = new Set<string>();
+  for (const e of elements) {
+    const label = (e.label ?? e.text ?? "").trim().replace(/\s+/g, " ");
+    if (label && !seen.has(label)) seen.add(label.length > 40 ? `${label.slice(0, 39)}…` : label);
+    if (seen.size >= 30) break;
+  }
+  return [...seen];
+}
+
+export function describeVisible(labels: string[]): string {
+  const shown = labels.slice(0, 12).map((l) => JSON.stringify(l)).join(", ");
+  return labels.length > 12 ? `${shown} and ${labels.length - 12} more (details.visible)` : shown;
+}
 
 const NO_FOCUS_HINT =
   "Pass the field as a target so Tapdance focuses and fills it: --text, --ref or --id with `tapdance ui type` (MCP type_text: into_text, into_ref or into_id). Or tap the field first.";

@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TapdanceError } from "@tapdance/core";
 import {
   SimlockHttp,
@@ -1070,5 +1070,85 @@ describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-dev
       message: expect.stringMatching(/a system dialog "System UI isn't responding" is in front/),
       hint: expect.stringMatching(/aerr_wait/),
     });
+  });
+});
+
+describe("reading the screen when agent-device's helper fails, and what a miss shows (phone-harness ideas, MOCKED client and adb)", () => {
+  const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "local", runId: "r", clientId: "c" } } as never;
+  const conn = { kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" } as const;
+  const dump = '<?xml version="1.0"?><hierarchy rotation="0"><node index="0" text="Let me try" resource-id="" class="android.widget.Button" package="com.measify.pianolune" clickable="true" enabled="true" bounds="[42,2169][1038,2295]" /></hierarchy>';
+  const make = (snapshots: Array<Error | Record<string, unknown>>, adb: { stdout: string; exitCode?: number } | Error = { stdout: dump }) => {
+    let reads = 0;
+    const execs: string[][] = [];
+    const p = new (class extends SimlockProvider {
+      protected override agentClient() {
+        return {
+          capture: { snapshot: async () => { const s = snapshots[Math.min(reads++, snapshots.length - 1)]!; if (s instanceof Error) throw s; return s; } },
+          interactions: { press: async () => { throw Object.assign(new Error("Selector did not match: id=\"buy\""), { code: "SELECTOR_NOT_FOUND" }); } },
+        } as never;
+      }
+      protected override async execOn(_h: never, _tool: "adb" | "simctl", args: string[]) {
+        execs.push(args);
+        if (adb instanceof Error) throw adb;
+        // The focused-window read for a system dialog answers with an ordinary app window.
+        if (args.includes("window")) return { exitCode: 0, stdout: "mCurrentFocus=Window{1 u0 com.measify.pianolune/.MainActivity}", stderr: "" };
+        return { exitCode: adb.exitCode ?? 0, stdout: adb.stdout, stderr: "" };
+      }
+    })(conn);
+    return { p, execs, reads: () => reads };
+  };
+  const flake = new Error("Android snapshot helper failed: INSTRUMENTATION_FAILED");
+
+  it("backs off and reads again while the helper is starting", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = make([flake, flake, { nodes: [{ ref: "e1", type: "android.widget.Button", label: "Let me try" }], appBundleId: "com.measify.pianolune" }]);
+      const pending = t.p.inspect(handle);
+      await vi.advanceTimersByTimeAsync(5000);
+      const screen = await pending;
+      expect(t.reads()).toBe(3);
+      expect(screen.source).toBeUndefined();
+      expect(screen.elements.map((e) => e.label)).toEqual(["Let me try"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("falls back to a uiautomator dump, marked as such, when the helper keeps failing; fails with the helper's error when the dump fails too", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = make([flake]);
+      const pending = t.p.inspect(handle);
+      await vi.advanceTimersByTimeAsync(5000);
+      const screen = await pending;
+      expect(t.reads()).toBe(4);
+      expect(screen.source).toBe("uiautomator");
+      expect(screen.warnings[0]).toMatch(/uiautomator dump.*refs cannot be tapped/);
+      expect(screen.elements.some((e) => e.label === "Let me try")).toBe(true);
+      const both = make([flake], { stdout: "ERROR: could not get idle state" });
+      const failing = both.p.inspect(handle).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await failing).toMatchObject({ message: expect.stringMatching(/INSTRUMENTATION_FAILED/) });
+      // Other failures are not retried.
+      const other = make([new Error("device offline")]);
+      await expect(other.p.inspect(handle)).rejects.toThrow(/device offline/);
+      expect(other.reads()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a tap whose target is missing names what is on screen", async () => {
+    const t = make([{ nodes: [{ ref: "e1", label: "Start free trial" }, { ref: "e2", label: "Restore purchases" }, { ref: "e3", label: "Start free trial" }, { ref: "e4", label: "" }], appBundleId: "com.measify.pianolune" }]);
+    const error = await t.p.tap(handle, { kind: "id", id: "buy" }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "ELEMENT_NOT_FOUND", message: expect.stringMatching(/On screen: "Start free trial", "Restore purchases"$/), details: { visible: ["Start free trial", "Restore purchases"] } });
+  });
+
+  it("caps and shortens the list it shows", async () => {
+    const { visibleLabels, describeVisible } = await import("./provider.js");
+    const labels = visibleLabels(Array.from({ length: 40 }, (_, i) => ({ label: `Row ${i} ${"x".repeat(i === 0 ? 50 : 1)}` })));
+    expect(labels).toHaveLength(30);
+    expect(labels[0]).toHaveLength(40);
+    expect(describeVisible(labels)).toMatch(/and 18 more \(details\.visible\)$/);
   });
 });

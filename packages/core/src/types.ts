@@ -138,6 +138,11 @@ export interface ScreenInspection {
   elements: UiElement[];
   truncated: boolean;
   warnings: string[];
+  /**
+   * Where the elements came from when it was not the usual backend: `uiautomator` when Android's
+   * automation helper could not read the screen and a plain UI dump was used (refs are not actionable).
+   */
+  source?: "uiautomator";
 }
 
 export interface ActionResult {

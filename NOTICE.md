@@ -70,6 +70,7 @@ rely on them say so in a comment.
 | [Loupe](https://github.com/bmcreations/loupe) (bmcreations) | Apache-2.0 | The human/agent hand-off model: a human touch takes over, agent input is refused with `HUMAN_HELD` and a retry time, and the human hands back. |
 | [simslim](https://github.com/MobAI-App/simslim) (Interlap) | MIT | The idea of slimming iOS simulators by disabling background services. Simlock already offers this as its slim mode; Tapdance recommends it and does not reimplement it. |
 | [AXe](https://github.com/cameroncooke/AXe) (Cameron Cooke) | MIT | Tapdance's optional iOS backend calls the `axe` executable and maps its output. AXe itself is not bundled. |
+| [phone-harness](https://github.com/phone-harness/phone-harness) (Shawn Pana) | MIT | Two ideas, no code: a "not found" error that lists what is on screen, and reading the screen another way (there: from pixels; here: a uiautomator dump) after backing off when the accessibility tree cannot be read. |
 
 [DeviceDeck](https://github.com/devicelab-dev/DeviceDeck) (Apache-2.0) was reviewed when choosing a
 streaming approach. Nothing from it is used.

@@ -463,6 +463,17 @@ Unit-tested or checked against a stand-in `gcloud`; not yet re-run on a cloud VM
   token, the Tailscale machine). The runbook and the tear-down docs gained that step and a note on the
   scope and lifetime of `gcloud` logins.
 
+### Ideas from phone-harness
+
+- A tap or a targeted `type` whose target is not found fails naming what is on screen (`On screen: "…"`,
+  the full list in `details.visible`), so an agent can retarget without another inspect.
+- Android `inspect` backs off (0.5, 1, 2 s) when agent-device's snapshot helper fails to start or to see
+  an idle UI, then reads a plain uiautomator dump, marked `source: "uiautomator"` with a warning that
+  its refs cannot be tapped. Was: one retry after 1.5 s, then an error.
+- Not ported: an element-tree cache. A Tapdance tap reads nothing before it acts (agent-device resolves
+  the target on the host in one call), so there is no repeated read to cache; `settle_ms` / `--no-settle`
+  already trade the after-tap diff for speed.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,
