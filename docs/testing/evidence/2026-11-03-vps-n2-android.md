@@ -162,14 +162,15 @@ about USD 0.11/GB-month, external IPv4 about USD 0.005/h), not a billing export.
 | Round | VM time | Cost |
 | --- | --- | --- |
 | 1 (2026-11-03) | 20:55 → 01:33, about 4 h 37 min | about USD 1.04 (VM 0.97, disk 0.05, IP 0.02), plus small egress |
-| 2 (2026-11-04) | from 14:30 | see teardown (filled in after `terraform destroy`) |
+| 2 (2026-11-04) | 14:30 → 16:05 in three running windows (stopped by idle stop at 15:45, then a manual stop and start), about 1 h 33 min running | about USD 0.35 (VM 0.33, disk 0.015, IP 0.008), plus small egress |
+| Total | | about USD 1.39 |
 
 ## Results by requirement
 
 | ID | Result | Note |
 | --- | --- | --- |
 | Q-05 | PASS | Repeated with a Linux VPS as the agent's machine: provision, KVM, emulator, upload and CI install, launch, screenshot, release through the guard. |
-| G-01 | PASS | Two VMs created with Terraform and `terraform destroy` run on the first: 18 resources destroyed, nothing left. |
+| G-01 | PASS | Two VMs created with Terraform and `terraform destroy` run on both: 18 resources destroyed each time, `gcp-leftovers.sh` clean before the project delete, billing unlinked, both projects deleted. |
 | G-07 | PARTIAL | Idle stop again (10 min, VM off 12 min 15 s after the last activity). `max_run_hours = 6` with `DELETE` set, not reached. Budget created by Terraform, no alert triggered. Uptime cap not run. |
 | G-08 | PARTIAL | `cloud VM:` line seen in `host up` and `host status`; ephemeral mode applied; `gcp-leftovers.sh` exit 0 after destroy (exit 2 after the project delete, #83). The `DELETE` at the cap did not fire. |
 | H-08 | PASS (Android) | Build from git with a `gh` token, CLI and MCP, reuse, protected ref refused. Deploy-key route BLOCKED by the organization. |
