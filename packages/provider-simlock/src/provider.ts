@@ -632,7 +632,7 @@ export class SimlockProvider implements DeviceProvider {
       throw fromAgentDeviceError(error, "open device session");
     }
     if (handle.platform === "android" && !handle.physical) {
-      const settled = await this.settle(handle, options);
+      const settled = await this.settle(handle, options, request.settleMs);
       if (settled.notices.length > 0) handle.notices = settled.notices;
       await this.warmUpSnapshotHelper(handle);
     }
@@ -678,12 +678,13 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   /**
-   * Waits for a just-leased emulator to settle (#79, #101): boot complete, no "isn't responding"
-   * dialog (answered with Wait), and the guest's CPU calm for several readings in a row (or clearly
-   * falling). Never fails the lease: past the budget (about 90 s, see SETTLE_BUDGET_MS for why) it
-   * hands the device out with a notice that says how busy it still is.
+   * Waits for a just-leased emulator to settle (#79, #101): boot complete and no "isn't responding"
+   * dialog (answered with Wait), up to 90 s; then checks the guest's CPU for `cpuCheckMs` (the
+   * request's `settleMs`, `session.settleSeconds`, 15 s by default, 0 = not at all), ending early on
+   * calm readings in a row or a clearly falling load. Never fails the lease: a device still busy is
+   * handed out with a notice that says how busy it is (see DEFAULT_CPU_CHECK_MS for why it is short).
    */
-  protected async settle(handle: LeaseHandle, options: CallOptions): Promise<SettleResult> {
+  protected async settle(handle: LeaseHandle, options: CallOptions, cpuCheckMs?: number): Promise<SettleResult> {
     const probe = deviceCommands.android.guestState();
     return settleGuest({
       probe: async () => {
@@ -697,6 +698,7 @@ export class SimlockProvider implements DeviceProvider {
       },
       ...(options.onProgress ? { progress: options.onProgress } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(cpuCheckMs !== undefined ? { cpuBudgetMs: cpuCheckMs } : {}),
       intervalMs: this.settleIntervalMs,
     });
   }

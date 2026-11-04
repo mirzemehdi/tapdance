@@ -167,6 +167,7 @@ tapdance device done
 | `--profile <name>` | Boot a [device profile](#device-profiles) from this machine instead of a Simlock device. |
 | `--ttl <minutes>` | Lease TTL, 1–240. Default `session.defaultTtlMinutes` (30). |
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
+| `--settle <seconds>` | Android emulators: how long to check the guest's CPU after it has booted with no dialog in front, 0–300. Default `session.settleSeconds` (15). `0` skips the CPU check. |
 | `--no-keepalive` | Do not renew in the background. The lease ends after its TTL unless you run `device renew`. |
 | `--hold` | Stay in the foreground, renew, and release on Ctrl-C. |
 
@@ -194,10 +195,12 @@ A session that already holds a lease gets `LEASE_ALREADY_HELD` (exit 3) from `de
 
 While it waits, `device lease` prints progress on stderr: whether a warm spare is ready, the request's
 place in the queue or that a device is being started, and, for an Android emulator, how long it waits
-for the device to settle. An emulator handed out while still starting (boot not complete, its CPU busy,
-a "System UI isn't responding" dialog) is checked for up to 90 s; an "isn't responding" dialog is
-answered with Wait. A device still busy after that is handed out with a warning (in `--json`,
-`notices`). When a host that just started still lists its old emulator ("No Android device with
+for the device to settle. An emulator handed out while still starting waits up to 90 s for boot to
+complete and for no "isn't responding" or crash dialog to be in front (an "isn't responding" dialog is
+answered with Wait); then its CPU is checked for up to `--settle` seconds (default
+`session.settleSeconds`, 15), ending early on 3 calm readings in a row or a clearly falling load. A
+device still busy after that is handed out with a warning (in `--json`, `notices`): commands work but
+can take 2-10 s each for a few more minutes. When a host that just started still lists its old emulator ("No Android device with
 serial …"), the lease asks again every 10 s for up to 2 minutes while the host boots a new one.
 
 `device status` shows the device, platform and OS, provider and worker, endpoint and whether it is TLS,
@@ -1053,6 +1056,9 @@ Options:
                              the lease's changes are discarded)
   --ttl <minutes>            lease time to live in minutes
   --wait <seconds>           how long to wait in the queue
+  --settle <seconds>         Android emulator: how long to check the guest's CPU
+                             after boot before handing it out, 0-300 (0 skips
+                             the check)
   --no-keepalive             do not renew in the background (the lease expires
                              after its TTL)
   --hold                     stay in the foreground, renew, and release on

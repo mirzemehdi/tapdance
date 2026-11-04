@@ -39,8 +39,13 @@ export const ConfigSchema = z
         leaseWaitSeconds: z.number().int().min(0).max(3600).default(330),
         /** Release a lease nobody has used for this long (0 = never). The keepalive enforces it. */
         idleReleaseMinutes: z.number().int().min(0).max(24 * 60).default(30),
+        /**
+         * How long an Android emulator lease checks the guest's CPU, once it has booted with no
+         * dialog in front, before handing it out (0 = skip the CPU check; boot and dialog checks run).
+         */
+        settleSeconds: z.number().int().min(0).max(300).default(15),
       })
-      .default({ defaultTtlMinutes: 30, keepalive: true, maxSessionMinutes: 240, leaseWaitSeconds: 330, idleReleaseMinutes: 30 }),
+      .default({ defaultTtlMinutes: 30, keepalive: true, maxSessionMinutes: 240, leaseWaitSeconds: 330, idleReleaseMinutes: 30, settleSeconds: 15 }),
     ios: z
       .object({
         /** "agent-device" works locally and through gateways; "axe" (local Mac only) drives the simulator with AXe. */
@@ -230,7 +235,10 @@ export function envOverrides(env: NodeJS.ProcessEnv): Record<string, unknown> {
   if (env["TAPDANCE_ENDPOINT"]) out["endpoint"] = env["TAPDANCE_ENDPOINT"];
   if (env["TAPDANCE_ARTIFACTS_DIR"]) out["artifacts"] = { directory: env["TAPDANCE_ARTIFACTS_DIR"] };
   const ttl = int(env, "TAPDANCE_TTL_MINUTES");
-  if (ttl !== undefined) out["session"] = { defaultTtlMinutes: ttl };
+  const settle = int(env, "TAPDANCE_SETTLE_SECONDS");
+  if (ttl !== undefined || settle !== undefined) {
+    out["session"] = { ...(ttl !== undefined ? { defaultTtlMinutes: ttl } : {}), ...(settle !== undefined ? { settleSeconds: settle } : {}) };
+  }
   const port = int(env, "TAPDANCE_VIEWER_PORT");
   if (port !== undefined) out["viewer"] = { port };
   if (env["TAPDANCE_SIMLOCK_PROFILE"]) out["simlock"] = { profilePath: env["TAPDANCE_SIMLOCK_PROFILE"] };

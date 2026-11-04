@@ -5,8 +5,10 @@
  * showing an "isn't responding" dialog over everything. Commands then take 10-25 s each.
  *
  * The probe is `deviceCommands.android.guestState()`: `sys.boot_completed`, the first line of
- * /proc/stat (two reads give the guest's CPU load) and the focused window. The guest counts as
- * settled after SETTLED_SAMPLES calm intervals in a row, or once its load clearly falls (#101).
+ * /proc/stat (two reads give the guest's CPU load) and the focused window. The wait has two parts:
+ * boot complete with no "isn't responding" or crash dialog in front (an ANR is answered with Wait),
+ * bounded by READY_BUDGET_MS; then a short CPU check (`session.settleSeconds`, DEFAULT_CPU_CHECK_MS)
+ * that ends early after SETTLED_SAMPLES calm intervals in a row or a clearly falling load (#101).
  *
  * Not measured: the guest's /proc/stat may not show work the emulator does in host threads (software
  * rendering), so a calm guest can still mean a busy qemu process.
@@ -96,17 +98,23 @@ export const SETTLED_CPU = 0.5;
  */
 export const SETTLED_SAMPLES = 3;
 /**
- * How long a lease waits for the guest to settle before handing it out with a notice.
- *
- * Why only about 90 s although the busy phase is longer: measured on a Google Cloud N2 VM (nested
- * virtualisation, 2026-11-04, #101), the guest stayed busy for 65-145 s after a release and about
- * 310 s after a fresh boot, yet commands on the busy guest took 2-10 s and no "isn't responding"
- * dialog appeared (the dialog is answered here, and the clean baseline is taken from a calm guest).
- * Waiting the whole phase out would cost every lease minutes for commands that already work, and a
- * lease already waits up to 330 s in the queue, longer than many MCP clients allow a tool call. So
- * the wait covers most of the phase after a release and the notice says what is left.
+ * How long a lease waits for what causes the "isn't responding" experience to end: boot complete and
+ * no "isn't responding" or crash dialog in front. Past it the device goes out with a notice naming
+ * what is still wrong.
  */
-export const SETTLE_BUDGET_MS = 90_000;
+export const READY_BUDGET_MS = 90_000;
+/**
+ * How long a lease checks the guest's CPU once it is ready, by default (`session.settleSeconds`;
+ * 0 skips the check). Short on purpose: measured on a Google Cloud N2 VM (nested virtualisation,
+ * 2026-11-04, #101), the guest stayed busy for 65-145 s after a release and about 310 s after a fresh
+ * boot, yet commands on the busy guest took 2-10 s and no "isn't responding" dialog appeared once
+ * System UI's ANR was answered with Wait. A 90 s CPU wait would have cost most leases there the full
+ * 90 s for commands that already work, so the lease hands the device out after a short check and the
+ * notice says the guest is still busy.
+ */
+export const DEFAULT_CPU_CHECK_MS = 15_000;
+/** The most `session.settleSeconds` may ask for. */
+export const MAX_CPU_CHECK_MS = 300_000;
 export const SETTLE_INTERVAL_MS = 1500;
 /**
  * A clearly falling load counts as good enough: the mean of the last TREND_WINDOW readings is at most
@@ -127,7 +135,10 @@ export interface SettleDeps {
   progress?: (message: string) => void;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
-  budgetMs?: number;
+  /** Bound on waiting for boot complete and no dialog in front (READY_BUDGET_MS). */
+  readyBudgetMs?: number;
+  /** How long to check the CPU once the guest is ready (DEFAULT_CPU_CHECK_MS); 0 skips the check. */
+  cpuBudgetMs?: number;
   intervalMs?: number;
   signal?: AbortSignal;
 }
@@ -141,10 +152,11 @@ export interface SettleResult {
   busy?: number;
   /**
    * Why the wait ended: `calm` (SETTLED_SAMPLES calm intervals in a row), `falling` (a clearly
-   * falling load, handed out with a notice), `no-counters` (booted, nothing in front, no CPU counters
-   * to judge by), `bound` (the budget ran out) or `skipped` (the probe could not run).
+   * falling load, handed out with a notice), `ready` (booted, nothing in front, and the CPU check is
+   * off), `no-counters` (booted, nothing in front, no CPU counters to judge by), `bound` (the CPU
+   * check or the ready budget ran out) or `skipped` (the probe could not run).
    */
-  reason?: "calm" | "falling" | "no-counters" | "bound" | "skipped";
+  reason?: "calm" | "falling" | "ready" | "no-counters" | "bound" | "skipped";
   /** The probe could not run, so nothing was checked. */
   skipped?: boolean;
 }
@@ -166,9 +178,12 @@ export function fallingTrend(readings: number[]): { recent: number; older: numbe
 export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
-  const budget = deps.budgetMs ?? SETTLE_BUDGET_MS;
+  const readyBudget = deps.readyBudgetMs ?? READY_BUDGET_MS;
+  const cpuBudget = Math.min(Math.max(deps.cpuBudgetMs ?? DEFAULT_CPU_CHECK_MS, 0), MAX_CPU_CHECK_MS);
   const interval = deps.intervalMs ?? SETTLE_INTERVAL_MS;
   const started = now();
+  /** When the guest was first seen booted with nothing in front: the CPU check runs from here. */
+  let readyAt: number | undefined;
   const waited = () => Math.round((now() - started) / 1000);
   let previous: GuestSample | undefined;
   let busy: number | undefined;
@@ -209,13 +224,16 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
       readings = [];
       calm = 0;
     } else {
+      const quiet = current.booted && !current.dialog;
+      // Booted and nothing in front: with the CPU check off, that is all a lease waits for.
+      if (quiet && cpuBudget === 0) return done({ settled: true, notices: [], waitedMs: now() - started, reason: "ready" });
+      if (quiet && readyAt === undefined) readyAt = now();
       const reading = previous ? busyBetween(previous, current) : undefined;
       previous = current;
       if (reading !== undefined) {
         busy = reading;
         readings.push(reading);
       }
-      const quiet = current.booted && !current.dialog;
       calm = quiet && reading !== undefined && reading <= SETTLED_CPU ? calm + 1 : reading === undefined && quiet ? calm : 0;
       if (calm >= SETTLED_SAMPLES) return done({ settled: true, notices: [], waitedMs: now() - started, busy: busy!, reason: "calm" });
       const trend = quiet ? fallingTrend(readings) : undefined;
@@ -232,12 +250,16 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
       }
     }
     const elapsed = now() - started;
-    if (elapsed >= budget || deps.signal?.aborted) break;
+    // A ready guest gets the CPU check's time; one still booting or behind a dialog gets the ready
+    // budget (or the CPU check's end, when that is later and a dialog came back).
+    const cpuEnd = readyAt === undefined ? undefined : readyAt - started + cpuBudget;
+    const bound = current.booted && !current.dialog && cpuEnd !== undefined ? cpuEnd : Math.max(readyBudget, cpuEnd ?? 0);
+    if (elapsed >= bound || deps.signal?.aborted) break;
     // Said once something is not calm, then every 15 s: a calm device goes out without a word.
     const unsettled = !current.booted || current.dialog !== undefined || (busy !== undefined && busy > SETTLED_CPU);
     if (busy !== undefined && (lastReport === undefined ? unsettled : now() - lastReport >= REPORT_EVERY_MS)) {
       const why = !current.booted ? "boot not complete" : current.dialog ? `${describeDialog(current.dialog)} on screen` : `guest CPU ${pct(busy)}`;
-      deps.progress?.(`${lastReport === undefined ? "Waiting for the device to settle" : "Still settling"} (${why}; ${Math.round(elapsed / 1000)} s, at most ${Math.round(budget / 1000)} s)`);
+      deps.progress?.(`${lastReport === undefined ? "Waiting for the device to settle" : "Still settling"} (${why}; ${Math.round(elapsed / 1000)} s, at most ${Math.round(bound / 1000)} s)`);
       lastReport = now();
     }
     await sleep(interval);
@@ -247,9 +269,12 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
   else if (current && !current.booted) notices.push(`The device had not finished booting after ${waited()} s; the first commands may fail or be slow. Check it with \`tapdance ui inspect\` (MCP inspect_screen) before installing.`);
   else if (busy !== undefined) {
     const recent = readings.slice(-TREND_WINDOW);
+    // Calm at the end without a full calm run: nothing worth a warning.
+    if (busy <= SETTLED_CPU && mean(recent) <= SETTLED_CPU) return done({ settled: true, notices: [], waitedMs: now() - started, busy, reason: "bound" });
     notices.push(
       `The device is still busy with its start-up work after ${waited()} s (guest CPU ${pct(busy)} at the last reading, ${pct(mean(recent))} over the last ${recent.length}). ` +
-        `It was handed out rather than kept waiting: commands work but can take 2-10 s each for up to a few more minutes (after a fresh boot on a slow host, up to about 4). Nothing needs to be done about it.`,
+        `It was handed out rather than kept waiting: commands work but may be slower, 2-10 s each, for a few more minutes (after a fresh boot on a slow host, up to about 5). ` +
+        `Nothing needs to be done about it; to have leases wait longer, raise session.settleSeconds (CLI device lease --settle, MCP lease_device settle_seconds).`,
     );
   }
   return { settled: false, notices, waitedMs: now() - started, ...(busy !== undefined ? { busy } : {}), reason: "bound" };

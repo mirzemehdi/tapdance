@@ -332,6 +332,15 @@ describe("ownership", () => {
     await expect(t.lease({ platform: "ios", reuse: true })).rejects.toMatchObject({ code: "LEASE_ALREADY_HELD" });
   });
 
+  it("passes the settle check's length to the provider: session.settleSeconds by default, the lease option over it (FakeProvider)", async () => {
+    const { t, provider } = await setup();
+    await t.lease({ platform: "android" });
+    expect((provider.calls.find((c) => c.method === "lease")!.args[1] as { settleMs: number }).settleMs).toBe(15_000);
+    await t.release();
+    await t.lease({ platform: "android", settleSeconds: 0 });
+    expect((provider.calls.filter((c) => c.method === "lease")[1]!.args[1] as { settleMs: number }).settleMs).toBe(0);
+  });
+
   it("serializes concurrent leases in one session", async () => {
     const { t, provider } = await setup();
     const results = await Promise.allSettled([t.lease({ platform: "android" }), t.lease({ platform: "android" })]);
