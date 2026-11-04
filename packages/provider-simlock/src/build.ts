@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { chmod, cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, resolve, sep } from "node:path";
-import { TapdanceError } from "@tapdance/core";
-import { buildFilesDigest, normalizeRepo, placeBuildFiles, readBuildFiles, removePlacedBuildFiles, repoKeyPath } from "./build-files.js";
+import { TapdanceError, redactSecrets } from "@tapdance/core";
+import { buildFilesDigest, isSshUrl, keyFingerprint, normalizeRepo, placeBuildFiles, readBuildFiles, removePlacedBuildFiles, repoDisplay, repoKeyPath } from "./build-files.js";
 
 /**
  * Builds an app on the machine that runs the devices, from an allow-listed git repository, so an
@@ -41,6 +41,11 @@ export interface BuildSettings {
    * own key (`host builds key --repo <url>`, under the builds folder) wins over it.
    */
   deployKeyPath?: string;
+  /**
+   * Android: minutes an idle Gradle (and Kotlin) daemon of a host build stays alive (#90). 0 builds
+   * with --no-daemon and compiles Kotlin in Gradle's own process. Default 10.
+   */
+  gradleDaemonIdleMinutes?: number;
 }
 
 export interface BuildResult {
@@ -50,6 +55,8 @@ export interface BuildResult {
   seconds: number;
   /** The same commit and settings were built before: that build was installed again (#61). */
   reused?: boolean;
+  /** With `reused`: when that earlier build was made (ISO time). */
+  builtAt?: string;
 }
 
 /** Runs one command; resolves with its exit code and output (lines also go to `onLine`). */
@@ -171,7 +178,8 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   const cache = buildCacheDir(root, req.repo);
   const src = join(cache, "src");
   await mkdir(cache, { recursive: true, mode: 0o700 });
-  const env = gitEnv(settings, deployKeyFor(root, req.repo, settings));
+  const auth = gitAuthContext(root, req.repo, settings);
+  const env = gitEnv(settings, auth.key);
   const step = async (command: string, args: string[], what: string, cwd?: string, extraEnv: NodeJS.ProcessEnv = {}) => {
     onLine(`$ ${command} ${args.join(" ")}`);
     const digest = new FailureDigest();
@@ -182,11 +190,17 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
       // git's own output is short and its ssh errors carry no "fatal:" prefix: read all of it.
       const gitText = what.startsWith("git") ? `${cause.join("\n")}\n${r.output}` : undefined;
       const offline = hostNetworkHint(gitText ?? cause.join("\n"));
-      const auth = offline || gitText === undefined ? undefined : gitAuthHint(gitText, req.repo);
-      const fix = offline ?? auth ?? missingSdkHint(cause.join("\n"));
-      throw new TapdanceError("DEVICE_ERROR", `${what} failed (exit ${r.code})${cause.length > 0 ? `:\n  ${cause.join("\n  ")}` : ""}`, {
+      const signIn = offline || gitText === undefined ? undefined : gitAuthHint(gitText, req.repo, auth);
+      const fix = offline ?? signIn ?? missingSdkHint(cause.join("\n"));
+      // A host that cannot sign in to the repository is the owner's credential problem, not a device
+      // failure: AUTH_FAILED, so an agent asks instead of retrying or leasing again (#85).
+      throw new TapdanceError(signIn ? "AUTH_FAILED" : "DEVICE_ERROR", `${what} failed (exit ${r.code})${cause.length > 0 ? `:\n  ${cause.join("\n  ")}` : ""}`, {
         ...(fix ? { hint: fix } : {}),
-        details: { digest: cause, tail: r.output.split("\n").slice(-30).join("\n"), ...(offline ? { reason: "HOST_NETWORK" } : auth ? { reason: "GIT_AUTH" } : {}) },
+        details: {
+          digest: cause,
+          tail: r.output.split("\n").slice(-30).join("\n"),
+          ...(offline ? { reason: "HOST_NETWORK" } : signIn ? { reason: "GIT_AUTH", gitAuth: auth.mode, ...(auth.fingerprint ? { keyFingerprint: auth.fingerprint } : {}) } : {}),
+        },
       });
     }
     return r.output;
@@ -233,7 +247,7 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   const kept = await keptBuild(cache, key);
   if (kept) {
     onLine(`Reusing the build of ${sha.slice(0, 12)} made ${kept.builtAt} (same commit and settings)`);
-    return { sha, artifact: kept.artifact, seconds: Math.round((Date.now() - started) / 1000), reused: true };
+    return { sha, artifact: kept.artifact, seconds: Math.round((Date.now() - started) / 1000), reused: true, builtAt: kept.builtAt };
   }
   // Build files a build that died left in the checkout: out before git looks at the tree.
   await removePlacedBuildFiles(src, cache);
@@ -242,7 +256,10 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   if (existsSync(join(src, ".gitmodules"))) {
     // A submodule the host cannot fetch (another account, ssh without a key) is often docs or tooling
     // the app does not need: warn and build; the build fails on its own if it did need it.
-    await git(["submodule", "update", "--init", "--recursive"], "git submodule update").catch((error: unknown) =>
+    // With gh the host has no ssh key: fetch github.com submodules listed with ssh URLs over https,
+    // where gh signs in (#86).
+    const submoduleEnv = settings.gitAuth === "gh" ? githubOverHttps(env) : {};
+    await step("git", ["-C", src, "submodule", "update", "--init", "--recursive"], "git submodule update", undefined, submoduleEnv).catch((error: unknown) =>
       onLine(`warning: some submodules could not be fetched (${(error as Error).message}); building without them`),
     );
   }
@@ -253,7 +270,7 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
   let built: string;
   try {
     await placeBuildFiles(root, req.repo, files, src, cache, onLine);
-    built = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step);
+    built = req.platform === "ios" ? await buildIos(req, src, cache, step) : await buildAndroid(req, src, step, settings.gradleDaemonIdleMinutes);
   } finally {
     await removePlacedBuildFiles(src, cache);
   }
@@ -399,7 +416,7 @@ export class FailureDigest {
     } else if (/^The following build commands failed:/.test(line)) {
       this.push(this.blocks, line, 30);
       this.capture = { end: (l) => l.trim() === "" || /^\(\d+ failures?\)/.test(l.trim()), left: 10 };
-    } else if (/(^|\s)(fatal )?error: /i.test(line) || /^fatal: /.test(line) || /^e: /.test(line) || /^> Task \S+ FAILED/.test(line)) {
+    } else if (/(^|\s)(fatal )?error: /i.test(line) || /^fatal: /.test(line) || /^e: /.test(line) || /^> Task \S+ FAILED/.test(line) || GIT_SIGN_IN_LINE.test(line)) {
       this.push(this.errors, line.trim(), 12);
     }
   }
@@ -434,6 +451,12 @@ function ownerMust(what: string, command: string): string {
   return `${what}. Only the host's owner can fix this (an agent cannot install software on the host through Tapdance): ask them to run on the host \`${command}\`, e.g. with request_human / \`tapdance device request-human --reason …\`, then build again.`;
 }
 
+/**
+ * git's and ssh's own lines that say why a fetch could not sign in (#85). They carry no "fatal:" or
+ * "error:" prefix, so the digest and the quiet view would otherwise drop the one line naming the cause.
+ */
+const GIT_SIGN_IN_LINE = /Permission denied \(publickey|^(remote: )?(ERROR: )?Repository not found|Host key verification failed|^remote: (Invalid username|Support for password authentication|Write access to repository not granted)|^ERROR: (The key you are authenticating with|Permission to)|Deploy keys are disabled|terminal prompts disabled|Authentication failed for/i;
+
 /** Whether a build log line belongs in the quiet default view: steps, errors and the outcome (#53). */
 export function isNotableBuildLine(line: string): boolean {
   return (
@@ -443,6 +466,7 @@ export function isNotableBuildLine(line: string): boolean {
     /^Reusing the build of /.test(line) ||
     /^using host build file /.test(line) ||
     /^fatal: /.test(line) ||
+    GIT_SIGN_IN_LINE.test(line) ||
     /(^|\s)(fatal )?error: /i.test(line) ||
     /^e: /.test(line) ||
     /\*\* (BUILD|ARCHIVE) (SUCCEEDED|FAILED) \*\*/.test(line) ||
@@ -474,14 +498,27 @@ async function findXcodeProject(src: string): Promise<string> {
   return pick[0]!;
 }
 
-async function buildAndroid(req: BuildRequest, src: string, step: Step): Promise<string> {
+/**
+ * Gradle arguments that keep a host build's daemons from holding memory next to the devices (#90).
+ * A short idle timeout rather than `gradlew --stop` after each build: an agent that rebuilds within
+ * minutes keeps a warm daemon (tens of seconds per build on a Kotlin Multiplatform app), the memory
+ * comes back minutes after the last build, and nothing touches the owner's own daemons (`--stop` stops
+ * every daemon of that Gradle version on the account, an IDE's included, and leaves Kotlin's running).
+ * 0 means no daemon at all: --no-daemon, and Kotlin compiles inside that one Gradle process.
+ */
+export function gradleDaemonArgs(idleMinutes = 10): string[] {
+  if (idleMinutes <= 0) return ["--no-daemon", "-Pkotlin.compiler.execution.strategy=in-process"];
+  return [`-Dorg.gradle.daemon.idletimeout=${idleMinutes * 60_000}`, `-Dkotlin.daemon.options=autoshutdownIdleSeconds=${idleMinutes * 60}`];
+}
+
+async function buildAndroid(req: BuildRequest, src: string, step: Step, daemonIdleMinutes?: number): Promise<string> {
   const dir = req.dir ? resolve(src, req.dir) : src;
   if (!(dir === src || dir.startsWith(src + sep))) throw new TapdanceError("USAGE", "dir must be inside the repository");
   const gradlew = join(dir, "gradlew");
   if (!existsSync(gradlew)) throw new TapdanceError("USAGE", `No gradlew in ${req.dir ?? "the repository root"}`, { hint: "Pass dir: the folder that holds gradlew." });
   await chmod(gradlew, 0o755);
   const startedAt = Date.now();
-  await step(gradlew, [req.gradleTask ?? "assembleDebug", "--console=plain"], "gradle", dir);
+  await step(gradlew, [req.gradleTask ?? "assembleDebug", "--console=plain", ...gradleDaemonArgs(daemonIdleMinutes)], "gradle", dir);
   // A Gradle run that found everything up to date writes no new APK (#66): the newest one on disk is
   // the build of this commit, since the checkout just ran.
   const apk = (await newestApk(dir, startedAt - 5_000)) ?? (await newestApk(dir, 0));
@@ -509,16 +546,63 @@ async function newestApk(dir: string, since: number): Promise<string | undefined
 /**
  * The ssh key git uses for `repo`: the repository's own deploy key when the owner created one
  * (`host builds key --repo`; GitHub accepts a deploy key on one repository only), else the single
- * legacy key with gitAuth deploy-key, else none.
+ * legacy key with gitAuth deploy-key, else none. Only for ssh URLs: an https clone never uses an ssh
+ * key (#87).
  */
 export function deployKeyFor(buildsRoot: string, repo: string, settings: BuildSettings): string | undefined {
+  if (!isSshUrl(repo)) return undefined;
   const own = repoKeyPath(buildsRoot, repo);
   if (existsSync(own)) return own;
   return settings.gitAuth === "deploy-key" ? settings.deployKeyPath : undefined;
 }
 
-/** git's environment for the configured auth; credentials never leave this machine. */
-export function gitEnv(settings: BuildSettings, sshKey?: string): NodeJS.ProcessEnv {
+/** What signs git in for one repository on this host, for hints and the access check (#85, #86). */
+export interface GitAuthContext {
+  /** Its own deploy key, the shared deploy_key, the host's gh, or nothing (public, or the account's own ssh keys). */
+  mode: "repo-key" | "shared-key" | "gh" | "none";
+  /** The private key ssh uses, for an ssh URL with a deploy key. */
+  key?: string;
+  /** That key's SHA256 fingerprint, as GitHub's deploy keys page shows it. */
+  fingerprint?: string;
+  /** The URL is ssh (a deploy key applies) rather than https (gh applies). */
+  ssh: boolean;
+  /** An https URL although the repository has a deploy key, or the host uses deploy keys: the key goes unused. */
+  keyUnusedOverHttps?: boolean;
+}
+
+export function gitAuthContext(buildsRoot: string, repo: string, settings: BuildSettings): GitAuthContext {
+  const ssh = isSshUrl(repo);
+  const key = deployKeyFor(buildsRoot, repo, settings);
+  const fingerprint = key ? keyFingerprint(key) : undefined;
+  let ownKey = false;
+  try {
+    ownKey = existsSync(repoKeyPath(buildsRoot, repo));
+  } catch {
+    // Not a URL a key could be for.
+  }
+  const mode: GitAuthContext["mode"] = key ? (key === repoKeyPath(buildsRoot, repo) ? "repo-key" : "shared-key") : settings.gitAuth === "gh" ? "gh" : "none";
+  return {
+    mode,
+    ssh,
+    ...(key ? { key } : {}),
+    ...(fingerprint ? { fingerprint } : {}),
+    ...(!ssh && mode !== "gh" && (ownKey || settings.gitAuth === "deploy-key") ? { keyUnusedOverHttps: true } : {}),
+  };
+}
+
+/** How `ctx` signs in, in a few words. */
+export function describeGitAuth(ctx: GitAuthContext): string {
+  if (ctx.mode === "repo-key") return `its own deploy key${ctx.fingerprint ? ` ${ctx.fingerprint}` : ""}`;
+  if (ctx.mode === "shared-key") return `the shared deploy key${ctx.fingerprint ? ` ${ctx.fingerprint}` : ""}`;
+  if (ctx.mode === "gh") return ctx.ssh ? "no deploy key (gh signs in over https only)" : "gh";
+  return ctx.ssh ? "this account's own ssh keys (no deploy key)" : "no credentials";
+}
+
+/**
+ * git's environment for the configured auth; credentials never leave this machine. `batch` makes ssh
+ * fail instead of asking for anything (the access check runs from a terminal; the guard never has one).
+ */
+export function gitEnv(settings: BuildSettings, sshKey?: string, options: { batch?: boolean } = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   if (settings.gitAuth === "gh") {
     // git -c through the environment: the host's `gh auth` answers credential requests for github.com.
@@ -526,23 +610,115 @@ export function gitEnv(settings: BuildSettings, sshKey?: string): NodeJS.Process
   }
   if (sshKey) {
     // Only this key, never the account's own keys or agent: a deploy key reaches one repository, read-only.
-    env["GIT_SSH_COMMAND"] = `ssh -i '${sshKey.replace(/'/g, "")}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new`;
+    env["GIT_SSH_COMMAND"] = `ssh -i '${sshKey.replace(/'/g, "")}' -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes`;
+  } else if (options.batch) {
+    env["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes";
   }
   return env;
 }
 
 /**
- * A git step failed because the host could not sign in to the repository: name the three ways the
- * owner can fix it, so an agent asks instead of retrying.
+ * Extra git config (through the environment) that fetches github.com URLs written for ssh over https,
+ * where gh signs in: submodules listed as git@github.com:owner/repo.git in gh mode (#86).
  */
-export function gitAuthHint(text: string, repo: string): string | undefined {
-  if (!/Permission denied \(publickey|Repository not found|could not read (Username|Password)|Authentication failed|terminal prompts disabled|returned error: 40[13]|Invalid username or (password|token)|Could not read from remote repository|Write access to repository not granted|no such identity/i.test(text)) return undefined;
+export function githubOverHttps(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const n = Number(env["GIT_CONFIG_COUNT"] ?? 0) || 0;
+  return {
+    GIT_CONFIG_COUNT: String(n + 2),
+    [`GIT_CONFIG_KEY_${n}`]: "url.https://github.com/.insteadOf",
+    [`GIT_CONFIG_VALUE_${n}`]: "git@github.com:",
+    [`GIT_CONFIG_KEY_${n + 1}`]: "url.https://github.com/.insteadOf",
+    [`GIT_CONFIG_VALUE_${n + 1}`]: "ssh://git@github.com/",
+  };
+}
+
+const SIGN_IN_FAILED = /Permission denied \(publickey|Repository not found|could not read (Username|Password)|Authentication failed|terminal prompts disabled|returned error: 40[13]|Invalid username or (password|token)|Could not read from remote repository|Write access to repository not granted|no such identity|Deploy keys are disabled|Host key verification failed/i;
+
+const OWNER_ONLY = "Only the host's owner can fix this (an agent cannot)";
+const GH_WAY = "use gh: on the host `gh auth login --with-token` with a fine-grained, read-only token (Contents: read, this repository only), then `tapdance host builds enable --repo <https url> --git-auth gh`";
+const ELSEWHERE = "Or build the app elsewhere and install it with `tapdance app install <path>` (MCP install_app).";
+
+function shownRepo(repo: string): string {
+  try {
+    return repoDisplay(repo);
+  } catch {
+    return repo;
+  }
+}
+
+/**
+ * A git step failed because the host could not sign in to the repository: say what to check for the
+ * auth this host used (`ctx`: its own deploy key, the shared one, gh), so an agent asks the owner
+ * instead of retrying, and the owner knows where to look (#85).
+ */
+export function gitAuthHint(text: string, repo: string, ctx?: GitAuthContext): string | undefined {
+  if (!SIGN_IN_FAILED.test(text)) return undefined;
+  const shown = shownRepo(repo);
+  if (ctx?.key && ctx.ssh) {
+    const which = ctx.mode === "repo-key" ? "its own deploy key" : "the shared deploy key (builds/deploy_key)";
+    const disabled = /Deploy keys are disabled/i.test(text) ? " The server says deploy keys are disabled for it." : "";
+    return [
+      `This host signs in to ${shown} with ${which}${ctx.fingerprint ? ` (${ctx.fingerprint})` : ""}, and the git server refuses it.${disabled}`,
+      `${OWNER_ONLY}: add that public key read-only to this repository (GitHub: the repository's Settings › Deploy keys; on the host \`tapdance host builds key --repo <url>\` prints it again),`,
+      'and check that the organization allows deploy keys (GitHub: organization Settings › Member privileges › Deploy keys; when they are off, adding one fails with "Deploy keys are disabled").',
+      `If deploy keys cannot be used, ${GH_WAY}, and build with the https URL. ${ELSEWHERE}`,
+    ].join(" ");
+  }
+  if (ctx && !ctx.ssh && ctx.mode === "gh") {
+    return `The host's gh could not read ${shown}. ${OWNER_ONLY}: the token gh uses on the host must reach this repository (a fine-grained token with Contents: read and this repository selected); check on the host with \`gh auth status\` and \`git ls-remote <https url>\`, or sign in again with \`gh auth login --with-token\`. ${ELSEWHERE}`;
+  }
+  if (ctx?.keyUnusedOverHttps) {
+    return `This build used the https URL of ${shown}, but a deploy key works only over ssh. Build with the ssh URL (git@host:owner/repo.git; the host's owner allows it with \`tapdance host builds enable --repo <ssh url>\`), or the owner can ${GH_WAY}. ${ELSEWHERE}`;
+  }
+  if (ctx?.ssh && !ctx.key) {
+    return [
+      `This host has no deploy key for ${shown}, so ssh had only this account's own keys, and they do not reach it. ${OWNER_ONLY}:`,
+      "on the host `tapdance host builds key --repo <url>`, then add the printed public key read-only to this repository (GitHub: Settings › Deploy keys; organizations can turn deploy keys off);",
+      `or ${GH_WAY}, and build with the https URL. ${ELSEWHERE}`,
+    ].join(" ");
+  }
   return [
-    `This host could not sign in to ${repo} (a private repository, or its git credentials do not reach it). Only the host's owner can fix this (an agent cannot), in one of three ways:`,
+    `This host could not sign in to ${shown} (a private repository, or its git credentials do not reach it). ${OWNER_ONLY}, in one of three ways:`,
     "(1) gh with a fine-grained, read-only token (Contents: read, this repository only): on the host `gh auth login --with-token`, then `tapdance host builds enable --repo <https url> --git-auth gh`;",
-    "(2) a deploy key for this repository: on the host `tapdance host builds key --repo <url>`, add the printed public key as a read-only deploy key (GitHub: the repository's Settings › Deploy keys), and build with the ssh URL (git@github.com:owner/repo.git);",
-    "(3) no build on the host: build the app elsewhere and install it with `tapdance app install <path>`.",
+    "(2) a deploy key for this repository: on the host `tapdance host builds key --repo <url>`, add the printed public key as a read-only deploy key (GitHub: the repository's Settings › Deploy keys; organizations can turn deploy keys off), and build with the ssh URL (git@github.com:owner/repo.git);",
+    "(3) no build on the host: build the app elsewhere and install it with `tapdance app install <path>` (MCP install_app).",
   ].join(" ");
+}
+
+/** The outcome of checking that this host can read a repository with the auth its builds will use. */
+export interface GitAccess {
+  repo: string;
+  ok: boolean;
+  /** How the host signs in for this repository (`describeGitAuth`). */
+  auth: string;
+  /** git's own words when it failed (the lines that name the cause). */
+  detail?: string;
+  hint?: string;
+  reason?: "GIT_AUTH" | "HOST_NETWORK" | "OTHER";
+}
+
+/**
+ * Checks that this host can read `repo` with the auth a build would use (`git ls-remote <repo> HEAD`
+ * with the same key or gh helper), without fetching anything (#86). Never throws: the caller warns.
+ */
+export async function gitAccessProbe(repo: string, settings: BuildSettings, buildsRoot: string, run: CommandRunner = spawnRunner, timeoutMs = 30_000): Promise<GitAccess> {
+  if (!/^(https:\/\/|ssh:\/\/|git@)/.test(repo)) return { repo, ok: false, auth: "none", detail: "not an https:// or ssh git URL", reason: "OTHER" };
+  const ctx = gitAuthContext(buildsRoot, repo, settings);
+  const auth = describeGitAuth(ctx);
+  let r: { code: number; output: string };
+  try {
+    r = await run("git", ["ls-remote", repo, "HEAD"], { env: gitEnv(settings, ctx.key, { batch: true }), timeoutMs, onLine: () => undefined });
+  } catch (error) {
+    return { repo, ok: false, auth, detail: `git could not run: ${(error as Error).message}`, reason: "OTHER" };
+  }
+  if (r.code === 0) return { repo, ok: true, auth };
+  const lines = r.output.split("\n").map((l) => l.trim()).filter(Boolean);
+  const named = lines.filter((l) => GIT_SIGN_IN_LINE.test(l) || /^fatal: /.test(l));
+  const detail = redactSecrets((named.length > 0 ? named : lines).slice(-3).join(" ").slice(0, 400)) || `git ls-remote exited ${r.code}`;
+  const offline = hostNetworkHint(r.output);
+  if (offline) return { repo, ok: false, auth, detail, reason: "HOST_NETWORK", hint: "This machine cannot reach the git server right now; builds need it." };
+  const hint = gitAuthHint(r.output, repo, ctx);
+  return { repo, ok: false, auth, detail, ...(hint ? { hint, reason: "GIT_AUTH" as const } : { reason: "OTHER" as const }) };
 }
 
 /** Runs a command with an argument array (no shell), streaming lines and keeping the output's tail. */

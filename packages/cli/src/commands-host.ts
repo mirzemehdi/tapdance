@@ -9,7 +9,17 @@ import {
   BUILD_FILE_MAX_BYTES,
   addBuildFile,
   artifactCacheBytes,
+  ciAccessProbe,
+  gitAccessProbe,
   githubRepo,
+  isSshUrl,
+  keyFingerprint,
+  removeRepoKey,
+  repoDisplay,
+  sshFingerprint,
+  type BuildSettings,
+  type CiAccess,
+  type GitAccess,
   describeBadHealth,
   listAllBuildFiles,
   normalizeRepo,
@@ -32,6 +42,7 @@ import {
   type Platform,
 } from "@tapdance/sdk";
 import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
+import { deployKeyState, describeDeployKeyState, removeFromAllowList } from "./host/builds.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
 import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, workerRunning, workerServiceInstalled } from "./commands-worker.js";
@@ -593,11 +604,15 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .option("--git-auth <mode>", "how git reaches private repositories: gh (this machine's `gh auth`, e.g. a fine-grained read-only token), deploy-key (`host builds key`), or none; a repository's own key from `host builds key --repo` is used whenever it exists (default: keep the current setting, else none)")
     .option("--protected-ref <branch>", "only build commits already on this branch of the remote, e.g. main (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
     .option("--timeout-minutes <n>", "longest build (default: keep the current setting, else 45)")
+    .option("--gradle-idle-minutes <n>", "Android: minutes an idle Gradle and Kotlin daemon of a host build stays alive, 0 for none (default: keep the current setting, else 10)")
+    .option("--no-check", "skip checking that this machine can read each --repo with that auth (git ls-remote)")
     .option("--allow-admin-account", "accept the risk of building on an administrator account")
-    .action(async (o: { repo: string[]; gitAuth?: string; protectedRef?: string[]; timeoutMinutes?: string; allowAdminAccount?: boolean }) => {
+    .action(async (o: { repo: string[]; gitAuth?: string; protectedRef?: string[]; timeoutMinutes?: string; gradleIdleMinutes?: string; check: boolean; allowAdminAccount?: boolean }) => {
       const out = output(globals());
       try {
         if (o.gitAuth !== undefined && !["none", "gh", "deploy-key"].includes(o.gitAuth)) throw new TapdanceError("USAGE", "--git-auth must be gh, deploy-key or none");
+        const gradleIdle = o.gradleIdleMinutes === undefined ? undefined : Number(o.gradleIdleMinutes);
+        if (gradleIdle !== undefined && !(Number.isInteger(gradleIdle) && gradleIdle >= 0 && gradleIdle <= 180)) throw new TapdanceError("USAGE", "--gradle-idle-minutes must be a whole number from 0 to 180");
         for (const repo of o.repo) if (!/^(https:\/\/|ssh:\/\/|git@)/.test(repo)) throw new TapdanceError("USAGE", `${repo} is not an https:// or ssh git URL`);
         if (osPlatform() === "darwin" && (await isMacAdmin()) && !o.allowAdminAccount) {
           throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
@@ -616,15 +631,20 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           gitAuth: o.gitAuth ?? current.gitAuth ?? "none",
           ...(o.protectedRef?.length ? { protectedRefs: o.protectedRef } : {}),
           timeoutMinutes: o.timeoutMinutes !== undefined ? Number(o.timeoutMinutes) : (current.timeoutMinutes ?? 45),
+          ...(gradleIdle !== undefined ? { gradleDaemonIdleMinutes: gradleIdle } : {}),
         };
         const policy = GuardPolicySchema.parse(raw);
         await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
         const notes = await buildPrerequisites(policy.builds.gitAuth, policy.builds.repos);
+        // Can this machine read each repository with the auth its builds will use? A warning, not a
+        // refusal: the owner may be setting up offline, or add the key on GitHub next (#86).
+        const access = o.check ? await checkGitAccess([...new Set(o.repo)], buildSettingsOf(policy.builds), out) : [];
         const restarted = await restartGuardIfIdle(out);
-        out.result({ builds: policy.builds, restarted, notes }, () =>
+        out.result({ builds: policy.builds, restarted, notes, ...(o.check ? { access } : {}) }, () =>
           [
             `Builds allowed from: ${policy.builds.repos.join(", ")} (git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; only commits on ${policy.builds.protectedRefs.join(", ")}` : ""})`,
             ...notes.map((n) => yellow(n)),
+            ...access.map(describeGitAccess),
             yellow("A build runs the repository's own scripts (Xcode run-script phases, Gradle) on this machine as this account. Allow only repositories you trust, and prefer --protected-ref main."),
             restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running: tapdance host builds enable … again then, or `tapdance worker guard install` after `tapdance worker guard uninstall`.",
           ].join("\n"),
@@ -635,12 +655,31 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("disable")
-    .description("Turn builds off (the allow-list is kept)")
-    .action(async () => {
+    .description("Turn builds off (the allow-list is kept); with --repo, remove only those repositories from the allow-list and leave builds on")
+    .option("--repo <url>", "remove this URL from the allow-list, exactly as `host builds status` lists it (repeatable; the ssh and https URLs are separate entries)", (v: string, prev: string[] = []) => [...prev, v])
+    .action(async (o: { repo?: string[] }) => {
       const out = output(globals());
       try {
         const { path } = await loadPolicy();
         const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        if (o.repo?.length) {
+          const current = (raw["builds"] ?? {}) as { repos?: string[] };
+          const { kept, removed } = removeFromAllowList(current.repos ?? [], o.repo, (r) => normalizeRepo(r).toLowerCase(), "build allow-list");
+          raw["builds"] = { ...current, repos: kept };
+          const policy = GuardPolicySchema.parse(raw);
+          await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+          const restarted = await restartGuardIfIdle(out);
+          const cache = join(guardDir(), "builds");
+          const keyed = removed.filter((r) => isSshUrl(r) && existsSync(repoKeyPath(cache, r)));
+          out.result({ removed, repos: kept, builds: policy.allow.builds, restarted }, () =>
+            [
+              `Removed from the build allow-list: ${removed.join(", ")}. Still allowed: ${kept.length ? kept.join(", ") : "none"}.`,
+              ...keyed.map((r) => `${r} still has its deploy key here; remove it with: tapdance host builds key --repo ${r} --remove`),
+              restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running.",
+            ].join("\n"),
+          );
+          return;
+        }
         raw["allow"] = { ...(raw["allow"] ?? {}), builds: false };
         await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
         const restarted = await restartGuardIfIdle(out);
@@ -651,30 +690,35 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("status")
-    .description("Show whether builds are on, the allowed repositories (with their deploy key and build files) and the build cache")
-    .action(async () => {
+    .description("Show whether builds are on, the allowed repositories (with their deploy key and build files) and the build cache; --check also tries each repository with its auth")
+    .option("--check", "check that this machine can read each repository with the auth its builds use (git ls-remote; needs the network)")
+    .action(async (o: { check?: boolean }) => {
       const out = output(globals());
       try {
         const { policy } = await loadPolicy();
         const cache = join(guardDir(), "builds");
         const legacyKey = existsSync(join(cache, "deploy_key"));
+        const access = o.check ? await checkGitAccess(policy.builds.repos, buildSettingsOf(policy.builds), out) : [];
         const repositories = await Promise.all(
-          policy.builds.repos.map(async (repo) => {
-            const own = existsSync(repoKeyPath(cache, repo));
-            const deployKey = own ? "own" : legacyKey && policy.builds.gitAuth === "deploy-key" ? "shared" : "none";
-            return { repo, deployKey, buildFiles: (await readBuildFiles(cache, repo)).length };
+          policy.builds.repos.map(async (repo, i) => {
+            const ownKey = existsSync(repoKeyPath(cache, repo));
+            const deployKey = deployKeyState({ ssh: isSshUrl(repo), ownKey, sharedKey: legacyKey, gitAuth: policy.builds.gitAuth });
+            const fingerprint = deployKey === "own" ? keyFingerprint(repoKeyPath(cache, repo)) : deployKey === "shared" ? keyFingerprint(join(cache, "deploy_key")) : undefined;
+            const a = access[i];
+            return { repo, deployKey, ...(fingerprint ? { keyFingerprint: fingerprint } : {}), buildFiles: (await readBuildFiles(cache, repo)).length, ...(a ? { access: a } : {}) };
           }),
         );
         out.result({ enabled: policy.allow.builds, ...policy.builds, repositories, cache }, () =>
           [
             `Builds: ${policy.allow.builds ? green("on") : "off"}`,
-            `Git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; protected refs: ${policy.builds.protectedRefs.join(", ")}` : ""}; timeout ${policy.builds.timeoutMinutes} min`,
+            `Git auth: ${policy.builds.gitAuth}${policy.builds.protectedRefs.length ? `; protected refs: ${policy.builds.protectedRefs.join(", ")}` : ""}; timeout ${policy.builds.timeoutMinutes} min; Gradle daemons ${policy.builds.gradleDaemonIdleMinutes === 0 ? "off (--no-daemon)" : `stop after ${policy.builds.gradleDaemonIdleMinutes} idle min`}`,
             repositories.length === 0
               ? "Repositories: none"
               : table([
-                  ["REPOSITORY", "DEPLOY KEY", "BUILD FILES"],
-                  ...repositories.map((r) => [r.repo, r.deployKey === "own" ? "its own" : r.deployKey === "shared" ? "the shared deploy_key" : "-", String(r.buildFiles)]),
+                  ["REPOSITORY", "DEPLOY KEY", "BUILD FILES", ...(o.check ? ["ACCESS"] : [])],
+                  ...repositories.map((r) => [r.repo, describeDeployKeyState(r.deployKey), String(r.buildFiles), ...(o.check ? [r.access?.ok ? green("ok") : yellow(r.access?.reason === "HOST_NETWORK" ? "offline" : "refused")] : [])]),
                 ]),
+            ...access.filter((a) => !a.ok).map(describeGitAccess),
             `Cache: ${cache} (delete a repository's folder there to free disk; the next build clones again. keys/, files/ and deploy_key hold your deploy keys and build files)`,
           ].join("\n"),
         );
@@ -684,12 +728,17 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   builds
     .command("key")
-    .description("Create a read-only deploy key and print its public half to add to the repository; --repo makes one for that repository only (GitHub accepts a deploy key on one repository)")
-    .option("--repo <url>", "the repository this key is for; its builds use it whatever --git-auth says")
-    .action(async (o: { repo?: string }) => {
+    .description("Create a read-only deploy key and print its public half to add to the repository; --repo makes one for that repository only (GitHub accepts a deploy key on one repository); --remove deletes it")
+    .option("--repo <url>", "the repository this key is for; its ssh builds use it whatever --git-auth says")
+    .option("--remove", "delete the key (with --repo: that repository's own key; without: the shared deploy_key) and print its fingerprint, to delete it on the git server too")
+    .action(async (o: { repo?: string; remove?: boolean }) => {
       const out = output(globals());
       try {
         const dir = join(guardDir(), "builds");
+        if (o.remove) {
+          await removeDeployKey(out, dir, o.repo);
+          return;
+        }
         await mkdir(dir, { recursive: true, mode: 0o700 });
         if (o.repo !== undefined) {
           await repoDeployKey(out, dir, o.repo);
@@ -701,14 +750,16 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           if (!r.ok) throw commandFailed(["ssh-keygen"], r.out, "ssh-keygen could not create the deploy key");
         }
         const pub = (await readFile(`${key}.pub`, "utf8")).trim();
-        out.result({ publicKey: pub, privateKey: key }, () =>
+        const fingerprint = sshFingerprint(pub);
+        out.result({ publicKey: pub, privateKey: key, ...(fingerprint ? { fingerprint } : {}) }, () =>
           [
             "Add this as a read-only deploy key in each repository (GitHub: Settings › Deploy keys › Add, leave write access off):",
             "",
             pub,
             "",
-            `The private key stays here: ${key}. Use ssh URLs (git@github.com:owner/repo.git) with --git-auth deploy-key.`,
+            `${fingerprint ? `Fingerprint ${fingerprint}. ` : ""}The private key stays here: ${key}. Use ssh URLs (git@github.com:owner/repo.git) with --git-auth deploy-key.`,
             "GitHub accepts one deploy key on one repository only: for a second repository, use `tapdance host builds key --repo <url>`.",
+            DEPLOY_KEYS_OFF,
           ].join("\n"),
         );
       } catch (error) {
@@ -787,7 +838,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .requiredOption("--repo <owner/repo>", "GitHub repository (owner/repo or its https://github.com URL), repeatable", (v: string, prev: string[] = []) => [...prev, v])
     .option("--branch <name>", "only artifacts of runs on this branch, e.g. main (repeatable; replaces the list)", (v: string, prev: string[] = []) => [...prev, v])
     .option("--max-mb <n>", "largest artifact and APK, in MB (default 512)")
-    .action(async (o: { repo: string[]; branch?: string[]; maxMb?: string }) => {
+    .option("--no-check", "skip checking that this machine's gh can read each --repo and its Actions artifacts")
+    .action(async (o: { repo: string[]; branch?: string[]; maxMb?: string; check: boolean }) => {
       const out = output(globals());
       try {
         const repos = o.repo.map((r) => githubRepo(r));
@@ -810,11 +862,14 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
         const gh = await ghStatus();
         const notes = gh.ok ? [] : [gh.note];
+        // Signed in is not enough: can the token read these repositories' artifacts (#86)? A warning only.
+        const access = o.check && gh.ok ? await checkCiAccess([...new Set(repos)], out) : [];
         const restarted = await restartGuardIfIdle(out);
-        out.result({ artifacts: policy.artifacts, ghReady: gh.ok, restarted, notes }, () =>
+        out.result({ artifacts: policy.artifacts, ghReady: gh.ok, restarted, notes, ...(o.check && gh.ok ? { access } : {}) }, () =>
           [
             `Installs from CI allowed from: ${policy.artifacts.repos.join(", ")}${policy.artifacts.branches.length ? ` (only runs on ${policy.artifacts.branches.join(", ")})` : " (any branch of the repository itself, not forks)"}; up to ${policy.artifacts.maxMB} MB`,
             ...notes.map((n) => yellow(n)),
+            ...access.map(describeCiAccess),
             "This machine downloads the artifact with its own gh and installs the APK on the agent's Android lease; nothing from the repository runs here. Use a fine-grained, read-only token (Actions: read, Contents: read) for these repositories only.",
             restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running: run this command again then.",
           ].join("\n"),
@@ -825,12 +880,32 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   artifacts
     .command("disable")
-    .description("Turn installs from CI off (the allow-list is kept)")
-    .action(async () => {
+    .description("Turn installs from CI off (the allow-list is kept); with --repo, remove only those repositories from the list and leave installs from CI on")
+    .option("--repo <owner/repo>", "remove this repository from the list (repeatable)", (v: string, prev: string[] = []) => [...prev, v])
+    .action(async (o: { repo?: string[] }) => {
       const out = output(globals());
       try {
         const { path } = await loadPolicy();
         const raw = JSON.parse(await readFile(path, "utf8")) as Record<string, any>;
+        if (o.repo?.length) {
+          const current = (raw["artifacts"] ?? {}) as { repos?: string[] };
+          const same = (r: string) => {
+            try {
+              return githubRepo(r).toLowerCase();
+            } catch {
+              return r.toLowerCase();
+            }
+          };
+          const { kept, removed } = removeFromAllowList(current.repos ?? [], o.repo, same, "list of repositories this host installs CI artifacts from");
+          raw["artifacts"] = { ...current, repos: kept };
+          const policy = GuardPolicySchema.parse(raw);
+          await writeFile(path, `${JSON.stringify(policy, null, 2)}\n`, { mode: 0o600 });
+          const restarted = await restartGuardIfIdle(out);
+          out.result({ removed, repos: kept, artifacts: policy.allow.artifacts, restarted }, () =>
+            [`Removed from installs from CI: ${removed.join(", ")}. Still allowed: ${kept.length ? kept.join(", ") : "none"}.`, restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running."].join("\n"),
+          );
+          return;
+        }
         raw["allow"] = { ...(raw["allow"] ?? {}), artifacts: false };
         await writeFile(path, `${JSON.stringify(GuardPolicySchema.parse(raw), null, 2)}\n`, { mode: 0o600 });
         const restarted = await restartGuardIfIdle(out);
@@ -841,20 +916,23 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
   artifacts
     .command("status")
-    .description("Show whether installs from CI are on, the allowed repositories and branches, the download cache and whether this machine's gh is signed in")
-    .action(async () => {
+    .description("Show whether installs from CI are on, the allowed repositories and branches, the download cache and whether this machine's gh is signed in; --check also tries each repository's artifacts")
+    .option("--check", "check that this machine's gh can read each repository and its Actions artifacts (needs the network)")
+    .action(async (o: { check?: boolean }) => {
       const out = output(globals());
       try {
         const { policy } = await loadPolicy();
         const cache = join(guardDir(), "artifacts");
         const cacheBytes = await artifactCacheBytes(cache);
         const gh = await ghStatus();
-        out.result({ enabled: policy.allow.artifacts, ...policy.artifacts, cache, cacheBytes, ghReady: gh.ok }, () =>
+        const access = o.check && gh.ok ? await checkCiAccess(policy.artifacts.repos, out) : [];
+        out.result({ enabled: policy.allow.artifacts, ...policy.artifacts, cache, cacheBytes, ghReady: gh.ok, ...(o.check ? { access } : {}) }, () =>
           [
             `Installs from CI: ${policy.allow.artifacts ? green("on") : "off"}`,
             `Repositories: ${policy.artifacts.repos.length ? policy.artifacts.repos.join(", ") : "none"}`,
             `Branches: ${policy.artifacts.branches.length ? policy.artifacts.branches.join(", ") : "any (runs of the repository itself, not forks)"}; largest artifact ${policy.artifacts.maxMB} MB`,
             `gh: ${gh.ok ? green("signed in") : yellow(gh.note)}`,
+            ...access.map(describeCiAccess),
             `Cache: ${cache} (${(cacheBytes / 1024 / 1024).toFixed(1)} MB; the newest 3 downloads per repository are kept; delete the folder to free disk)`,
           ].join("\n"),
         );
@@ -1097,7 +1175,8 @@ async function probeEndpoint(endpoint: string, out: ReturnType<typeof output>): 
  * another repository already has), under builds/keys/<slug>, private half 600 in a 700 folder.
  */
 async function repoDeployKey(out: Output, buildsDir: string, repo: string): Promise<void> {
-  const identity = repoIdentity(repo);
+  // The repository as the owner typed it (#87); only the key's folder name is lower-case.
+  const identity = repoDisplay(repo);
   const keys = join(buildsDir, "keys");
   await mkdir(keys, { recursive: true, mode: 0o700 });
   await chmod(keys, 0o700);
@@ -1109,18 +1188,82 @@ async function repoDeployKey(out: Output, buildsDir: string, repo: string): Prom
   }
   await chmod(key, 0o600);
   const pub = (await readFile(`${key}.pub`, "utf8")).trim();
+  const fingerprint = sshFingerprint(pub);
   const [host, ...path] = identity.split("/");
   const github = host === "github.com" ? `https://github.com/${path.join("/")}/settings/keys` : undefined;
-  const sshUrl = `git@${host}:${path.join("/")}.git`;
-  out.result({ repo: normalizeRepo(repo), slug: repoSlug(repo), publicKey: pub, privateKey: key, created, ...(github ? { addAt: github } : {}) }, () =>
+  const sshUrl = isSshUrl(repo) ? repo : `git@${host}:${path.join("/")}.git`;
+  out.result({ repo: normalizeRepo(repo), slug: repoSlug(repo), publicKey: pub, privateKey: key, created, ...(fingerprint ? { fingerprint } : {}), ...(github ? { addAt: github } : {}) }, () =>
     [
       `${created ? "Created" : "Already have"} a deploy key for ${identity}. Add this public key to that repository only, read-only (${github ? `GitHub: ${github}, i.e. the repository's Settings › Deploy keys › Add deploy key, leave "Allow write access" off` : "your git server's deploy keys page for the repository, read-only"}):`,
       "",
       pub,
       "",
-      `The private key stays here: ${key}. Builds of this repository use it whatever --git-auth says; allow and build it with the ssh URL (${sshUrl}).`,
+      `${fingerprint ? `Fingerprint ${fingerprint}. ` : ""}The private key stays here: ${key}. Builds of this repository use it whenever they fetch over ssh, whatever --git-auth says; allow and build it with the ssh URL (${sshUrl}).`,
+      DEPLOY_KEYS_OFF,
+      "Remove it later with: tapdance host builds key --repo <url> --remove",
     ].join("\n"),
   );
+}
+
+/** Organizations can turn deploy keys off; say so where the owner adds one (#86). */
+const DEPLOY_KEYS_OFF =
+  'Organizations can turn deploy keys off (GitHub: organization Settings › Member privileges › Deploy keys); adding one then fails with "Deploy keys are disabled". Use gh instead: `gh auth login --with-token` with a fine-grained, read-only token for this repository, then `tapdance host builds enable --repo <https url> --git-auth gh`.';
+
+/**
+ * `host builds key --remove`: deletes a repository's own key (with `repo`) or the shared deploy_key,
+ * and prints its fingerprint so the owner deletes it on the git server too (#87).
+ */
+async function removeDeployKey(out: Output, buildsDir: string, repo: string | undefined): Promise<void> {
+  let removed: { path: string; fingerprint?: string } | undefined;
+  let github: string | undefined;
+  if (repo !== undefined) {
+    const shown = repoDisplay(repo);
+    removed = await removeRepoKey(buildsDir, repo);
+    const [host, ...path] = shown.split("/");
+    if (host === "github.com") github = `https://github.com/${path.join("/")}/settings/keys`;
+    if (!removed) throw new TapdanceError("USAGE", `There is no deploy key for ${shown} on this machine`, { hint: "`tapdance host builds status` shows which repositories have one." });
+  } else {
+    const key = join(buildsDir, "deploy_key");
+    if (!existsSync(key) && !existsSync(`${key}.pub`)) throw new TapdanceError("USAGE", "There is no shared deploy key (builds/deploy_key) on this machine", { hint: "To remove a repository's own key, pass --repo <url>." });
+    const fingerprint = keyFingerprint(key);
+    await rm(key, { force: true });
+    await rm(`${key}.pub`, { force: true });
+    removed = { path: key, ...(fingerprint ? { fingerprint } : {}) };
+  }
+  out.result({ removed: removed.path, ...(removed.fingerprint ? { fingerprint: removed.fingerprint } : {}), ...(repo !== undefined ? { repo: normalizeRepo(repo) } : {}) }, () =>
+    [
+      `Deleted the deploy key ${removed!.path}${removed!.fingerprint ? ` (${removed!.fingerprint})` : ""}. Builds that need it now fail to sign in.`,
+      `Delete it on the git server too${github ? `: ${github}` : " (the repository's deploy keys page)"}, the entry with that fingerprint.`,
+    ].join("\n"),
+  );
+}
+
+/** The settings a build uses, from the policy (with the shared key when it exists), for the access check. */
+function buildSettingsOf(builds: { repos: string[]; protectedRefs: string[]; gitAuth: "none" | "gh" | "deploy-key"; timeoutMinutes: number; gradleDaemonIdleMinutes?: number }): BuildSettings {
+  const key = join(guardDir(), "builds", "deploy_key");
+  return { ...builds, ...(existsSync(key) ? { deployKeyPath: key } : {}) };
+}
+
+/** `git ls-remote` each repository with the auth its builds use (#86). Never fails the command. */
+async function checkGitAccess(repos: string[], settings: BuildSettings, out: Output): Promise<GitAccess[]> {
+  if (repos.length > 0) out.progress(`Checking that this machine can read ${repos.length === 1 ? repos[0] : `${repos.length} repositories`} (git ls-remote; skip with --no-check)`);
+  return Promise.all(repos.map((repo) => gitAccessProbe(repo, settings, join(guardDir(), "builds"))));
+}
+
+function describeGitAccess(a: GitAccess): string {
+  if (a.ok) return green(`✓ ${a.repo}: this machine can read it (${a.auth})`);
+  return yellow(`! ${a.repo}: this machine cannot read it with ${a.auth}${a.detail ? `: ${a.detail}` : ""}${a.hint ? `\n  fix: ${a.hint}` : ""}`);
+}
+
+/** gh reads of each repository and its Actions artifacts (#86). Never fails the command. */
+async function checkCiAccess(repos: string[], out: Output): Promise<CiAccess[]> {
+  if (repos.length > 0) out.progress("Checking that this machine's gh can read each repository's Actions artifacts (skip with --no-check)");
+  return Promise.all(repos.map((repo) => ciAccessProbe(repo)));
+}
+
+function describeCiAccess(a: CiAccess): string {
+  if (a.ok) return green(`✓ ${a.repo}: this machine's gh can read its Actions artifacts`);
+  return yellow(`! ${a.repo}: ${a.detail ?? "gh cannot read it"}${a.hint ? `\n  fix: ${a.hint}` : ""}`);
 }
 
 /** A build file's content: from `--from <file>`, else stdin; refused above the size cap. */

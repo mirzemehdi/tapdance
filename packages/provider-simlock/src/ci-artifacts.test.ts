@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import type { CommandRunner } from "./build.js";
-import { checkCiRequest, extractApk, fetchCiApk, githubRepo, type ArtifactSettings } from "./ci-artifacts.js";
+import { checkCiRequest, ciAccessProbe, extractApk, fetchCiApk, githubRepo, type ArtifactSettings } from "./ci-artifacts.js";
 
 const SHA = "c".repeat(40);
 const settings: ArtifactSettings = { repos: ["acme/app"], branches: [], maxMB: 5 };
@@ -93,7 +93,8 @@ const okRun = (id: number, branch = "main", repo = "acme/app"): FakeRun => ({ id
 describe("install from CI: request checks", () => {
   it("names repositories as owner/repo and refuses anything else", () => {
     expect(githubRepo("acme/app")).toBe("acme/app");
-    expect(githubRepo("https://github.com/Acme/App.git")).toBe("acme/app");
+    // The owner's case is kept (#87); comparisons ignore it.
+    expect(githubRepo("https://github.com/Acme/App.git")).toBe("Acme/App");
     expect(githubRepo("git@github.com:acme/app.git")).toBe("acme/app");
     for (const bad of ["https://gitlab.com/acme/app", "acme/app/extra", "acme", "../etc", "acme/..", "-X/app", "acme/app;id", "acme/app?x=1", "file:///etc/passwd", "https://github.com:8443/acme/app", ""]) {
       expect(() => githubRepo(bad), bad).toThrow();
@@ -102,7 +103,7 @@ describe("install from CI: request checks", () => {
 
   it("refuses repositories off the allow-list, injection in every field and unknown fields", () => {
     expect(() => checkCiRequest({ repo: "evil/app", artifact: "apk" }, settings)).toThrow(/not on this host's list/);
-    expect(checkCiRequest({ repo: "https://github.com/ACME/app", artifact: "app-debug" }, settings)).toEqual({ repo: "acme/app", artifact: "app-debug" });
+    expect(checkCiRequest({ repo: "https://github.com/ACME/app", artifact: "app-debug" }, settings)).toEqual({ repo: "ACME/app", artifact: "app-debug" });
     for (const body of [
       { repo: "acme/app", artifact: "../../etc/passwd" },
       { repo: "acme/app", artifact: "apk; rm -rf /" },
@@ -208,5 +209,28 @@ describe("install from CI: fetching with the host's gh (fake gh, mocked)", () =>
     const root = await mkdtemp(join(tmpdir(), "td-ci-auth-"));
     const gh = fakeGh({ fail: "To get started with GitHub CLI, please run:  gh auth login" });
     await expect(fetchCiApk({ repo: "acme/app", artifact: "apk" }, settings, root, () => undefined, gh.run)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE", hint: expect.stringMatching(/gh auth login --with-token.*Actions: read/) });
+  });
+});
+
+describe("install from CI: checking access when the owner allows a repository (fake gh, mocked, #86)", () => {
+  it("reads the repository and lists one artifact with the host's gh, and says what failed", async () => {
+    const calls: string[][] = [];
+    const answer =
+      (fail?: { at: string; output: string }): CommandRunner =>
+      async (command, args) => {
+        calls.push([command, ...args]);
+        if (fail && args.some((a) => a.includes(fail.at))) return { code: 1, output: fail.output };
+        return { code: 0, output: "1\n" };
+      };
+    expect(await ciAccessProbe("https://github.com/Acme/App", answer())).toEqual({ repo: "Acme/App", ok: true });
+    expect(calls.map((c) => c.slice(0, 3))).toEqual([
+      ["gh", "api", "repos/Acme/App"],
+      ["gh", "api", "repos/Acme/App/actions/artifacts?per_page=1"],
+    ]);
+    const forbidden = await ciAccessProbe("acme/app", answer({ at: "/actions/artifacts", output: "gh: Resource not accessible by personal access token (HTTP 403)" }));
+    expect(forbidden).toMatchObject({ repo: "acme/app", ok: false, reason: "GH_AUTH", hint: expect.stringContaining("Actions: read") });
+    const missing = await ciAccessProbe("acme/app", answer({ at: "repos/acme/app", output: "gh: Not Found (HTTP 404)" }));
+    expect(missing).toMatchObject({ ok: false, reason: "GH_NOT_FOUND" });
+    expect(await ciAccessProbe("acme/app;id", answer())).toMatchObject({ ok: false, reason: "USAGE" });
   });
 });

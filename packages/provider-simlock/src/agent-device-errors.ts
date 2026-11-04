@@ -55,13 +55,60 @@ const STALE_CLAIM_HINT =
  * What to do about Android install refusals people meet in practice: a build signed with another key
  * (CI runners usually make a fresh debug key per run) cannot update the installed app.
  */
-export function androidInstallHint(output: string): string | undefined {
-  if (/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(output)) {
-    return "The installed app was signed with a different key (CI builds often get a new debug key per run). Uninstall it first (`tapdance app uninstall <appId>`, MCP uninstall_app; its data goes), or sign debug builds with one shared debug keystore in CI.";
-  }
-  if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(output)) return "The installed app has a higher versionCode. Uninstall it first (`tapdance app uninstall <appId>`), then install.";
-  if (/INSTALL_FAILED_INSUFFICIENT_STORAGE/i.test(output)) return "The emulator is out of storage: release the lease for a fresh device, or uninstall apps you no longer need.";
+export function androidInstallHint(output: string, appId?: string, surface: HintSurface = "both"): string | undefined {
+  const reason = installRefusal(output);
+  return reason ? installRefusalHint(reason, appId, surface) : undefined;
+}
+
+/** Who reads a hint: a CLI user, an MCP agent, or either (a worker guard does not know which). */
+export type HintSurface = "cli" | "mcp" | "both";
+
+/** `details.reason` of an Android install refusal Tapdance has a hint for. */
+export type InstallRefusal = "INSTALL_SIGNATURE" | "INSTALL_DOWNGRADE" | "INSTALL_STORAGE";
+
+export function installRefusal(output: string): InstallRefusal | undefined {
+  if (/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(output)) return "INSTALL_SIGNATURE";
+  if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(output)) return "INSTALL_DOWNGRADE";
+  if (/INSTALL_FAILED_INSUFFICIENT_STORAGE/i.test(output)) return "INSTALL_STORAGE";
   return undefined;
+}
+
+/**
+ * The fix for an install refusal, naming the real package when it is known and only the syntax its
+ * reader can use (#89): MCP tool calls for an agent, `tapdance` commands for the CLI.
+ */
+export function installRefusalHint(reason: InstallRefusal, appId?: string, surface: HintSurface = "both"): string {
+  if (reason === "INSTALL_STORAGE") {
+    return surface === "mcp"
+      ? "The emulator is out of storage: release_device and lease_device again for a fresh device, or uninstall_app the apps you no longer need."
+      : "The emulator is out of storage: release the lease for a fresh device, or uninstall apps you no longer need.";
+  }
+  const id = appId && /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/.test(appId) ? appId : undefined;
+  const mcp = id ? `uninstall_app {app_id: "${id}"}` : "uninstall_app with the app's package (list_apps shows it)";
+  const cli = `\`tapdance app uninstall ${id ?? "<appId>"}\``;
+  const how = surface === "mcp" ? mcp : surface === "cli" ? cli : `MCP ${mcp}; CLI ${cli}`;
+  const what = id ?? "it";
+  if (reason === "INSTALL_SIGNATURE") {
+    return `The installed app was signed with a different key (CI builds often get a new debug key per run). Uninstall ${what} first (${how}; its data goes), then install again; or sign debug builds with one shared debug keystore in CI.`;
+  }
+  return `The installed app has a higher versionCode than this build. Uninstall ${what} first (${how}; its data goes), then install again.`;
+}
+
+/**
+ * The same error with its install-refusal hint written for `surface` (#89): the worker guard writes one
+ * for either reader; the CLI and the MCP server each keep only their own syntax.
+ */
+export function withInstallHintFor(error: unknown, surface: "cli" | "mcp"): unknown {
+  if (!(error instanceof TapdanceError)) return error;
+  const reason = error.details?.["reason"];
+  if (reason !== "INSTALL_SIGNATURE" && reason !== "INSTALL_DOWNGRADE" && reason !== "INSTALL_STORAGE") return error;
+  const appId = typeof error.details?.["appId"] === "string" ? (error.details["appId"] as string) : undefined;
+  return new TapdanceError(error.code, error.message, {
+    hint: installRefusalHint(reason, appId, surface),
+    ...(error.details ? { details: error.details } : {}),
+    retryable: error.retryable,
+    ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}),
+  });
 }
 
 export function fromAgentDeviceError(error: unknown, action: string): TapdanceError {
@@ -76,8 +123,8 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   }
   const rawCode = typeof e.code === "string" ? e.code : "";
   const message = typeof e.message === "string" ? e.message : String(error);
-  const installHint = action === "install" ? androidInstallHint(`${message} ${JSON.stringify(e.details ?? "")}`) : undefined;
-  if (installHint) return new TapdanceError("DEVICE_ERROR", `install failed: ${message.split("\n")[0]}`, { hint: installHint });
+  const refusal = action === "install" ? installRefusal(`${message} ${JSON.stringify(e.details ?? "")}`) : undefined;
+  if (refusal) return new TapdanceError("DEVICE_ERROR", `install failed: ${message.split("\n")[0]}`, { hint: installRefusalHint(refusal), details: { reason: refusal } });
   const backendDetails = e.details !== null && typeof e.details === "object" ? (e.details as Record<string, unknown>) : {};
   const reason = typeof backendDetails["reason"] === "string" ? backendDetails["reason"] : "";
   let code: ErrorCode = CODE_MAP[rawCode] ?? "DEVICE_ERROR";

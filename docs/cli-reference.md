@@ -356,6 +356,11 @@ host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). For example:
 tapdance app install --from-ci acme/app --artifact app-debug --launch com.acme.app
 ```
 
+The reply names the installed package and its `versionCode`, which the host reads from the APK's
+manifest (unit-tested only). When the device refuses the APK (`INSTALL_FAILED_VERSION_DOWNGRADE`, or a
+build signed with another key), the hint names that package: `tapdance app uninstall <package>`, then
+install again. `--launch` warns when it names another app than the one installed.
+
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
 opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
 explicit Android intent instead. `stop` force-stops it (on Android that also cancels its alarms and
@@ -379,7 +384,12 @@ and `Log` lines are already in logcat.
 the leased device, from an allow-listed git repository and ref, and installs it on the lease; the log
 streams as progress and the reply names the exact commit. This is how an agent without Xcode gets an
 iOS app onto a remote simulator. See [Builds on the host](deployment/one-command-host.md#builds-on-the-host).
-Unit-tested only. `uninstall` removes it. `clear` clears its data
+The reply says whether the host built it or reused its earlier build of the same commit and settings
+(`reused`, with `builtAt`), the ref you asked for next to the exact commit, and on Android the installed
+package (`appId`). When the host cannot sign in to the repository the error is `AUTH_FAILED` (exit 5),
+not `DEVICE_ERROR`: it prints git's own line (`Permission denied (publickey)`, `Repository not found`)
+and a hint for the auth the host used (its deploy key and fingerprint, or `gh`); only the host's owner
+can fix it. Unit-tested only. `uninstall` removes it. `clear` clears its data
 (first-launch state); on iOS the keychain is shared, see `device setting reset-keychain`. `list` lists
 the apps the automation backend sees.
 
@@ -584,9 +594,9 @@ Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
-| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--allow-admin-account]` / `host builds disable` / `host builds status` / `host builds key [--repo <url>]` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it. `key` creates a read-only deploy key and prints its public half; with `--repo` the key is for that repository only and its builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `status` lists each repository with its deploy key and number of build files. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
+| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--gradle-idle-minutes <n>] [--no-check] [--allow-admin-account]` / `host builds disable [--repo <url>]…` / `host builds status [--check]` / `host builds key [--repo <url>] [--remove]` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it, then checks that this machine can read each `--repo` with that auth (`git ls-remote <url> HEAD` with the same key or `gh`) and prints a warning with the fix when it cannot; `--no-check` skips that, for offline setup. `--gradle-idle-minutes` sets how long an idle Gradle and Kotlin daemon of an Android build stays alive (default 10; 0 builds with `--no-daemon`). `disable` turns builds off and keeps the list; `disable --repo <url>` removes that URL from the list and leaves builds on (the ssh and https URLs of a repository are separate entries). `key` creates a read-only deploy key and prints its public half and fingerprint; with `--repo` the key is for that repository only and its ssh builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `key --remove` deletes the key (with `--repo`, that repository's; without, the shared one) and prints its fingerprint so you delete it on GitHub too. `status` lists each repository with its deploy key (`not used (https)` next to an https URL) and number of build files; `--check` adds whether this machine can read it. Output keeps the repository's case as you typed it. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
 | `host builds files add --repo <url> <path-in-repo> [--from <file>]` / `host builds files list [--repo <url>]` / `host builds files remove --repo <url> <path-in-repo>` | Build files: config a repository keeps out of git (`google-services.json`, `local.properties`, `.env`), copied into the checkout before each build of that repository and removed after it. `add` reads `--from` or stdin (at most 1 MB, 50 files per repository) and refuses absolute paths, `..`, `.git` and `.gitmodules`; `list` shows path, size and the start of the sha256, never the content. Owner-only: no guard route or MCP tool reads or writes them. |
-| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>]` / `host artifacts disable` / `host artifacts status` | Let the agent install Android APKs your CI built (`app install --from-ci`): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in. `enable` and `disable` restart the guard when no lease is running. Ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>] [--no-check]` / `host artifacts disable [--repo <owner/repo>]…` / `host artifacts status [--check]` | Let the agent install Android APKs your CI built (`app install --from-ci`): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `enable` then checks that `gh` can read each `--repo` and list its Actions artifacts and warns with the fix when it cannot (`--no-check` skips it). `disable --repo` removes repositories from the list and leaves installs from CI on. `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in; `--check` also tries each repository. `enable` and `disable` restart the guard when no lease is running. Ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -2265,22 +2275,26 @@ Let the agent build apps on this machine from allow-listed git repositories (off
 by default)
 
 Options:
-  -h, --help        display help for command
+  -h, --help         display help for command
 
 Commands:
-  enable [options]  Allow builds from these repositories (git mode): the agent
-                    sends a repo and ref, this machine fetches and builds it
-  disable           Turn builds off (the allow-list is kept)
-  status            Show whether builds are on, the allowed repositories (with
-                    their deploy key and build files) and the build cache
-  key [options]     Create a read-only deploy key and print its public half to
-                    add to the repository; --repo makes one for that repository
-                    only (GitHub accepts a deploy key on one repository)
-  files             Files this machine copies into the checkout before each
-                    build of a repository: config kept out of git
-                    (google-services.json, local.properties, .env). Only you add
-                    or read them; agents cannot
-  help [command]    display help for command
+  enable [options]   Allow builds from these repositories (git mode): the agent
+                     sends a repo and ref, this machine fetches and builds it
+  disable [options]  Turn builds off (the allow-list is kept); with --repo,
+                     remove only those repositories from the allow-list and
+                     leave builds on
+  status [options]   Show whether builds are on, the allowed repositories (with
+                     their deploy key and build files) and the build cache;
+                     --check also tries each repository with its auth
+  key [options]      Create a read-only deploy key and print its public half to
+                     add to the repository; --repo makes one for that repository
+                     only (GitHub accepts a deploy key on one repository);
+                     --remove deletes it
+  files              Files this machine copies into the checkout before each
+                     build of a repository: config kept out of git
+                     (google-services.json, local.properties, .env). Only you
+                     add or read them; agents cannot
+  help [command]     display help for command
 ```
 
 ### `tapdance host builds enable`
@@ -2292,20 +2306,25 @@ Allow builds from these repositories (git mode): the agent sends a repo and ref,
 this machine fetches and builds it
 
 Options:
-  --repo <url>              repository allowed to be built (repeatable)
-  --git-auth <mode>         how git reaches private repositories: gh (this
-                            machine's `gh auth`, e.g. a fine-grained read-only
-                            token), deploy-key (`host builds key`), or none; a
-                            repository's own key from `host builds key --repo`
-                            is used whenever it exists (default: keep the
-                            current setting, else none)
-  --protected-ref <branch>  only build commits already on this branch of the
-                            remote, e.g. main (repeatable)
-  --timeout-minutes <n>     longest build (default: keep the current setting,
-                            else 45)
-  --allow-admin-account     accept the risk of building on an administrator
-                            account
-  -h, --help                display help for command
+  --repo <url>               repository allowed to be built (repeatable)
+  --git-auth <mode>          how git reaches private repositories: gh (this
+                             machine's `gh auth`, e.g. a fine-grained read-only
+                             token), deploy-key (`host builds key`), or none; a
+                             repository's own key from `host builds key --repo`
+                             is used whenever it exists (default: keep the
+                             current setting, else none)
+  --protected-ref <branch>   only build commits already on this branch of the
+                             remote, e.g. main (repeatable)
+  --timeout-minutes <n>      longest build (default: keep the current setting,
+                             else 45)
+  --gradle-idle-minutes <n>  Android: minutes an idle Gradle and Kotlin daemon
+                             of a host build stays alive, 0 for none (default:
+                             keep the current setting, else 10)
+  --no-check                 skip checking that this machine can read each
+                             --repo with that auth (git ls-remote)
+  --allow-admin-account      accept the risk of building on an administrator
+                             account
+  -h, --help                 display help for command
 ```
 
 ### `tapdance host builds disable`
@@ -2313,10 +2332,14 @@ Options:
 ```text
 Usage: tapdance host builds disable [options]
 
-Turn builds off (the allow-list is kept)
+Turn builds off (the allow-list is kept); with --repo, remove only those
+repositories from the allow-list and leave builds on
 
 Options:
-  -h, --help  display help for command
+  --repo <url>  remove this URL from the allow-list, exactly as `host builds
+                status` lists it (repeatable; the ssh and https URLs are
+                separate entries)
+  -h, --help    display help for command
 ```
 
 ### `tapdance host builds status`
@@ -2325,9 +2348,12 @@ Options:
 Usage: tapdance host builds status [options]
 
 Show whether builds are on, the allowed repositories (with their deploy key and
-build files) and the build cache
+build files) and the build cache; --check also tries each repository with its
+auth
 
 Options:
+  --check     check that this machine can read each repository with the auth its
+              builds use (git ls-remote; needs the network)
   -h, --help  display help for command
 ```
 
@@ -2338,11 +2364,14 @@ Usage: tapdance host builds key [options]
 
 Create a read-only deploy key and print its public half to add to the
 repository; --repo makes one for that repository only (GitHub accepts a deploy
-key on one repository)
+key on one repository); --remove deletes it
 
 Options:
-  --repo <url>  the repository this key is for; its builds use it whatever
+  --repo <url>  the repository this key is for; its ssh builds use it whatever
                 --git-auth says
+  --remove      delete the key (with --repo: that repository's own key; without:
+                the shared deploy_key) and print its fingerprint, to delete it
+                on the git server too
   -h, --help    display help for command
 ```
 
@@ -2378,17 +2407,20 @@ Let the agent install Android APKs your CI built (GitHub Actions artifacts),
 downloaded by this machine with its own gh (off by default)
 
 Options:
-  -h, --help        display help for command
+  -h, --help         display help for command
 
 Commands:
-  enable [options]  Allow installs from these repositories' GitHub Actions
-                    artifacts: this machine downloads them with its `gh auth`
-                    and installs the APK on the agent's Android lease
-  disable           Turn installs from CI off (the allow-list is kept)
-  status            Show whether installs from CI are on, the allowed
-                    repositories and branches, the download cache and whether
-                    this machine's gh is signed in
-  help [command]    display help for command
+  enable [options]   Allow installs from these repositories' GitHub Actions
+                     artifacts: this machine downloads them with its `gh auth`
+                     and installs the APK on the agent's Android lease
+  disable [options]  Turn installs from CI off (the allow-list is kept); with
+                     --repo, remove only those repositories from the list and
+                     leave installs from CI on
+  status [options]   Show whether installs from CI are on, the allowed
+                     repositories and branches, the download cache and whether
+                     this machine's gh is signed in; --check also tries each
+                     repository's artifacts
+  help [command]     display help for command
 ```
 
 ### `tapdance host artifacts enable`
@@ -2406,6 +2438,8 @@ Options:
   --branch <name>      only artifacts of runs on this branch, e.g. main
                        (repeatable; replaces the list)
   --max-mb <n>         largest artifact and APK, in MB (default 512)
+  --no-check           skip checking that this machine's gh can read each --repo
+                       and its Actions artifacts
   -h, --help           display help for command
 ```
 
@@ -2414,10 +2448,12 @@ Options:
 ```text
 Usage: tapdance host artifacts disable [options]
 
-Turn installs from CI off (the allow-list is kept)
+Turn installs from CI off (the allow-list is kept); with --repo, remove only
+those repositories from the list and leave installs from CI on
 
 Options:
-  -h, --help  display help for command
+  --repo <owner/repo>  remove this repository from the list (repeatable)
+  -h, --help           display help for command
 ```
 
 ### `tapdance host artifacts status`
@@ -2426,9 +2462,12 @@ Options:
 Usage: tapdance host artifacts status [options]
 
 Show whether installs from CI are on, the allowed repositories and branches, the
-download cache and whether this machine's gh is signed in
+download cache and whether this machine's gh is signed in; --check also tries
+each repository's artifacts
 
 Options:
+  --check     check that this machine's gh can read each repository and its
+              Actions artifacts (needs the network)
   -h, --help  display help for command
 ```
 

@@ -51,20 +51,24 @@ it is missing (Ubuntu: `sudo apt-get install -y gh`; macOS: `brew install gh`), 
 read -rsp "GitHub token: " t && echo && printf '%s' "$t" | gh auth login --with-token; unset t
 gh auth status
 
-# check that git reaches the repository the way builds do
-git -c credential.helper= -c 'credential.helper=!gh auth git-credential' ls-remote https://github.com/acme/app HEAD
-
 tapdance host builds enable --repo https://github.com/acme/app --git-auth gh --protected-ref main
 ```
+
+`host builds enable` checks that git reaches each `--repo` the way builds do (`git ls-remote <url> HEAD`
+with the `gh` credential helper) and prints a warning with the fix when it cannot, for example when
+the token does not cover that repository. It is a warning, not a refusal; `--no-check` skips it, and
+`tapdance host builds status --check` runs it again for every repository on the list.
 
 - Use `https://` URLs, both in `host builds enable` and in the agent's `tapdance app build --git`. The
   allow-list compares URLs as written, so `https://github.com/acme/app` and
   `git@github.com:acme/app.git` are different entries.
 - `--git-auth` applies to every repository on the allow-list, and each `host builds enable` sets it
   (the default is `none`). Pass `--git-auth gh` every time you add a repository.
-- **Submodules** on `https://github.com/…` that the token covers are fetched. Others (ssh URLs, other
-  hosts, repositories the token does not cover) are skipped with "warning: some submodules could not be
-  fetched"; the build goes on and fails only if it needed them.
+- **Submodules** on GitHub that the token covers are fetched, also when `.gitmodules` lists them with
+  ssh URLs (`git@github.com:…`): with `--git-auth gh` the submodule step fetches github.com over https,
+  where `gh` signs in (unit-tested only). Others (other hosts, repositories the token does not cover)
+  are skipped with "warning: some submodules could not be fetched"; the build goes on and fails only if
+  it needed them.
 - On a server without a keyring, `gh` keeps the token in `~/.config/gh/hosts.yml` of the hosting
   account.
 - **The app's toolchain must be on the host too.** Gradle does not download every SDK component: the
@@ -82,22 +86,34 @@ tapdance host builds key --repo git@github.com:acme/app.git
 ```
 
 It creates an ed25519 key under `~/.tapdance/worker/builds/keys/` (private half mode 600) and prints the
-public half with the page to add it on (GitHub: the repository's **Settings › Deploy keys › Add deploy
-key**; leave *Allow write access* off). Running it again prints the same key. Then:
+public half, its fingerprint and the page to add it on (GitHub: the repository's **Settings › Deploy
+keys › Add deploy key**; leave *Allow write access* off). The output names the repository as you typed
+it; only the key's folder name is lower-case. Running it again prints the same key. Then:
 
 ```bash
 tapdance host builds enable --repo git@github.com:acme/app.git --protected-ref main
 ```
+
+`enable` checks the key works (`git ls-remote` with that key only). If GitHub refuses it, the warning
+names the key's fingerprint and what to check: that the key is added to this repository, and that the
+organization allows deploy keys (**organization Settings › Member privileges › Deploy keys**).
 
 The agent builds with the same ssh URL: `tapdance app build --git git@github.com:acme/app.git --ref main`.
 That repository's builds use its own key whatever `--git-auth` says, and git is given only that key,
 never the account's own keys or ssh agent. Submodules in other repositories cannot use it; they are
 skipped with a warning, as above.
 
+A deploy key works over ssh only. `tapdance host builds status` shows which key each repository
+uses, and `not used (https)` next to an https URL of a repository that has a key: an https clone signs
+in with `gh` or not at all.
+
 `tapdance host builds key` without `--repo` creates one shared key for `--git-auth deploy-key`; since
-GitHub refuses a deploy key on a second repository, prefer `--repo`. `tapdance host builds status`
-shows which key each repository uses. To take a key away, delete it on the repository's deploy keys
-page.
+GitHub refuses a deploy key on a second repository, prefer `--repo`.
+
+To take a key away: `tapdance host builds key --repo git@github.com:acme/app.git --remove` deletes it on
+the host and prints its fingerprint; delete the entry with that fingerprint on the repository's deploy
+keys page too. `tapdance host builds disable --repo <url>` takes one URL off the allow-list and leaves
+builds on for the others.
 
 ## Build files
 
@@ -157,6 +173,15 @@ guard. See the [threat model](../security/threat-model.md).
 ## When a build cannot sign in
 
 A failed clone or fetch that looks like a sign-in failure ("Permission denied (publickey)", "Repository
-not found", "could not read Username", "Authentication failed") stops with a hint that starts "This host
-could not sign in to …" and names the three ways above. Only the host's owner can fix it; an agent
-should ask instead of retrying. More in [troubleshooting](../troubleshooting.md#builds-on-the-host).
+not found", "could not read Username", "Authentication failed") stops with `AUTH_FAILED` (exit 5;
+`details.reason: "GIT_AUTH"` in JSON and MCP replies), not `DEVICE_ERROR`. The error shows git's own
+line, and the hint fits the auth the host used:
+
+- **A deploy key** (the repository's own, or the shared one): it names the key's fingerprint and asks
+  whether the key is added to this repository and whether the organization allows deploy keys.
+- **gh over https:** the token gh uses on the host does not reach this repository.
+- **An https URL next to a deploy key:** a deploy key works over ssh only; build with the ssh URL.
+- **ssh without a key:** create one with `tapdance host builds key --repo <url>`, or use a token.
+
+Only the host's owner can fix it; an agent should ask instead of retrying. More in
+[troubleshooting](../troubleshooting.md#builds-on-the-host).

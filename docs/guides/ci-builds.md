@@ -100,8 +100,12 @@ On the host, once (off by default):
 # a fine-grained token: Actions: Read-only and Contents: Read-only on the app's repository
 read -rsp "GitHub token: " t && echo && printf '%s' "$t" | gh auth login --with-token; unset t
 tapdance host artifacts enable --repo acme/app --branch main
-tapdance host artifacts status
+tapdance host artifacts status --check
 ```
+
+`enable` checks that `gh` can read the repository and list its Actions artifacts, and warns with the fix
+when the token does not reach them (`--no-check` skips it); `status --check` does the same later.
+`tapdance host artifacts disable --repo acme/app` takes one repository off the list.
 
 On the agent's machine, with an Android lease:
 
@@ -112,14 +116,20 @@ tapdance app install --from-ci acme/app --artifact app-debug --run 1234567890   
 
 Without `--run` the host takes the newest successful run on `--branch` (default: the repository's
 default branch) that has the artifact; forks' runs are never used. MCP: `install_app` with
-`from_ci: {repo: "acme/app", artifact: "app-debug"}` (and `run` or `branch`).
+`from_ci: {repo: "acme/app", artifact: "app-debug"}` (and `run` or `branch`), plus `launch:
+"com.acme.app"` to relaunch it in the same call. The reply names the installed package (`appId`,
+read by the host from the APK's manifest) and whether the host reused its earlier download (`cached`),
+so an agent can call `launch_app` without `list_apps` first.
 
 - **The token must select the repository whose workflow made the artifact.** A token for another
   repository (another repository of the same app, say) gets "GitHub answered 404" from Tapdance. An
   organization may also have to approve the token first.
 - **Debug keys differ per CI run** unless you give CI a keystore. Installing a new run's APK over an
   earlier one then fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`: `tapdance app uninstall <appId>`
-  first, or sign debug builds in CI with one shared debug keystore.
+  first, or sign debug builds in CI with one shared debug keystore. An older run's APK (a lower
+  `versionCode`) fails with `INSTALL_FAILED_VERSION_DOWNGRADE`. Either way the hint names the package
+  the host tried to install, in the reader's syntax: `uninstall_app {app_id: "com.acme.app"}` for an MCP
+  agent, `tapdance app uninstall com.acme.app` in the CLI.
 - The same token also serves [builds on the host](private-repositories.md#a-fine-grained-github-token),
   which helps when your organization has turned deploy keys off.
 

@@ -183,7 +183,12 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   Gradle caches stay there, so rebuilds are incremental. `host builds status` shows the cache path.
 - **Access:** credentials stay on the host. `--git-auth gh` uses the host's `gh auth`; a read-only
   deploy key from `tapdance host builds key --repo <url>` (add its public half to the repository; use
-  ssh URLs) is used for that repository whenever it exists; `none` for public repositories. See
+  ssh URLs) is used for that repository's ssh URL whenever it exists; `none` for public repositories.
+  `host builds enable` then checks that this machine can read each repository with that auth
+  (`git ls-remote`) and warns with the fix when it cannot, for example when GitHub refuses the deploy
+  key; `--no-check` skips the check, and `host builds status --check` runs it again later. A build that
+  cannot sign in fails with `AUTH_FAILED` and git's own line (`Permission denied (publickey)`), and the
+  hint says what to check for the key or `gh` login that was used. See
   [private repositories](#private-repositories) below.
 - **Which code:** only repositories on the allow-list. With `--protected-ref main` the host builds only
   commits already on `main` of the remote, so a compromised agent with push rights cannot get an
@@ -200,10 +205,20 @@ tapdance app build --git https://github.com/acme/app --ref main --launch com.acm
   are refused, because they would run code nobody reviewed. Kotlin Multiplatform apps call Gradle from a run-script phase, so the host needs a JDK on the
   guard's `PATH` or `JAVA_HOME`; `host builds enable` checks git, Xcode, Java and `gh`.
 - **Android:** `./gradlew assembleDebug` (`--gradle-task`, `--dir` for the folder with `gradlew`); the
-  newest APK under `build/outputs/apk` is installed.
+  newest APK under `build/outputs/apk` is installed, and the reply names its package (`appId`).
+- **Gradle daemons:** a host build lets its Gradle and Kotlin daemons go after 10 idle minutes
+  (`-Dorg.gradle.daemon.idletimeout`, and `autoshutdownIdleSeconds` for Kotlin's), instead of Gradle's
+  3 hours. On a 16 GB cloud VM they held about 8 GB next to the emulator after a build (#90). A short
+  idle timeout rather than stopping them after every build: an agent that rebuilds within minutes
+  keeps a warm daemon, and nothing stops the daemons of your own builds on the same account
+  (`gradlew --stop` would, and it leaves Kotlin's daemon running). `host builds enable
+  --gradle-idle-minutes <n>` changes it; `0` builds with `--no-daemon` and compiles Kotlin inside that
+  one Gradle process, for hosts with little memory to spare. Unit-tested only.
 - **Reuse:** the last builds are kept per commit and settings (the newest three per repository, under
   `kept/` in the build cache). Asking for the same commit and settings again installs that build in
   seconds (`Reused the earlier build …`); every lease is a fresh device, so this is the common case.
+  The reply always says `reused: true` or `false` (with `builtAt` for a reused build), so an agent
+  knows whether it is testing a fresh build.
 - **Offline host:** when the host cannot reach the git server, a full commit id it already has still
   builds from its cache with a warning; a branch name does not (the cached branch may be behind). The
   error names git's own `fatal:` line and says the host's network is at fault.
@@ -237,8 +252,12 @@ compromised host would give away, in [private repositories](../guides/private-re
 | Way | Commands on the host | Covers |
 | --- | --- | --- |
 | A fine-grained, read-only GitHub token (recommended on a cloud VM) | `gh auth login --with-token`, then `tapdance host builds enable --repo https://github.com/acme/app --git-auth gh` | The repositories you select, and GitHub submodules among them |
-| A deploy key per repository | `tapdance host builds key --repo git@github.com:acme/app.git`, add the public key read-only, then `host builds enable --repo git@github.com:acme/app.git` | That one repository |
+| A deploy key per repository | `tapdance host builds key --repo git@github.com:acme/app.git`, add the public key read-only, then `host builds enable --repo git@github.com:acme/app.git` | That one repository. Organizations can turn deploy keys off; then use the token |
 | No repository access | None: build in CI or on the agent's machine, then `tapdance app install` ([build in CI](../guides/ci-builds.md)) | Nothing on the host |
+
+To undo: `tapdance host builds disable --repo <url>` removes one URL from the allow-list (the ssh and
+https URLs are separate entries) and leaves builds on; `tapdance host builds key --repo <url> --remove`
+deletes that repository's key and prints its fingerprint, so you can delete it on GitHub too.
 
 Files a repository keeps out of git (`google-services.json`, `local.properties`, `.env`) can be added
 on the host as **build files**: `tapdance host builds files add --repo <url> <path-in-repo> --from <file>`

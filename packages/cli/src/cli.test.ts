@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { repoKeyPath } from "@tapdance/provider-simlock";
 
 const cli = fileURLToPath(new URL("../dist/main.js", import.meta.url));
 const root = fileURLToPath(new URL("../../..", import.meta.url));
@@ -150,6 +151,48 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["host", "builds", "key", "--repo", "file:///etc"], env).code).toBe(2);
     expect(tapdance(["host", "builds", "files", "list", "--repo", "not a url"], env).code).toBe(2);
   });
+
+  it("host builds: key --remove, the deploy key column, --check without git, and refusals before any guard restart (#86 #87)", () => {
+    // PATH without git or gh: --check reports that it could not run, and nothing reaches a network.
+    const home = mkdtempSync(join(tmpdir(), "td-cli-"));
+    const env = { TAPDANCE_HOME: home, PATH: "/nonexistent" };
+    const ssh = "git" + "@github.com:KAppMakerDeveloperApps/Pianolune-All.git";
+    const https = "https://github.com/KAppMakerDeveloperApps/Pianolune-All";
+    const builds = join(home, "worker", "builds");
+    mkdirSync(join(builds, "keys"), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, "worker", "policy.json"), JSON.stringify({ allow: { builds: true }, builds: { repos: [ssh, https], gitAuth: "gh" } }), { mode: 0o600 });
+    const status = () => JSON.parse(tapdance(["--json", "host", "builds", "status"], env).stdout) as { repositories: Array<{ repo: string; deployKey: string; keyFingerprint?: string }>; gradleDaemonIdleMinutes: number };
+    expect(status().gradleDaemonIdleMinutes).toBe(10);
+    expect(status().repositories.map((r) => r.deployKey)).toEqual(["none", "none"]);
+    // A key where `host builds key --repo` leaves it (written here without ssh-keygen): GitHub's published host key.
+    const key = repoKeyPath(builds, ssh);
+    writeFileSync(key, "PRIVATE", { mode: 0o600 });
+    writeFileSync(`${key}.pub`, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl tapdance-builds@host\n");
+    const fingerprint = "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU";
+    // The ssh URL uses it; the https URL of the same repository never does.
+    expect(status().repositories).toMatchObject([
+      { repo: ssh, deployKey: "own", keyFingerprint: fingerprint },
+      { repo: https, deployKey: "unused-https" },
+    ]);
+    expect(tapdance(["host", "builds", "status"], env).stdout).toContain("not used (https)");
+    const removed = tapdance(["host", "builds", "key", "--repo", https, "--remove"], env);
+    expect(removed.code, removed.stderr).toBe(0);
+    expect(removed.stdout).toContain(fingerprint);
+    expect(removed.stdout).toContain("https://github.com/KAppMakerDeveloperApps/Pianolune-All/settings/keys");
+    expect(existsSync(key) || existsSync(`${key}.pub`)).toBe(false);
+    const removeMissing = tapdance(["--json", "host", "builds", "key", "--repo", ssh, "--remove"], env);
+    expect(removeMissing.code).toBe(2);
+    expect(JSON.parse(removeMissing.stdout)).toMatchObject({ error: { code: "USAGE", message: expect.stringContaining("github.com/KAppMakerDeveloperApps/Pianolune-All") } });
+    // Not on the list: refused before the policy changes or the guard restarts.
+    expect(tapdance(["host", "builds", "disable", "--repo", "https://github.com/acme/other"], env).code).toBe(2);
+    expect(JSON.parse(readFileSync(join(home, "worker", "policy.json"), "utf8"))).toMatchObject({ allow: { builds: true }, builds: { repos: [ssh, https] } });
+    expect(tapdance(["host", "builds", "enable", "--repo", https, "--gradle-idle-minutes", "-1"], env).code).toBe(2);
+    expect(tapdance(["host", "artifacts", "disable", "--repo", "acme/other"], env).code).toBe(2);
+    const checked = tapdance(["--json", "host", "builds", "status", "--check"], env);
+    expect(checked.code, checked.stderr).toBe(0);
+    const access = (JSON.parse(checked.stdout) as { repositories: Array<{ access?: { ok: boolean } }> }).repositories.map((r) => r.access?.ok);
+    expect(access).toEqual([false, false]);
+  }, 60_000);
 
   it("app install: a path or --from-ci with --artifact, never both; refused with exit 2 before any lease", () => {
     for (const args of [
