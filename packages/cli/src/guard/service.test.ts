@@ -99,6 +99,15 @@ describe("guard service files (pure)", () => {
     expect(systemdUnit(spec({ platform: "linux", startFlags: ["$HOME"] }))).toContain("start $$HOME");
   });
 
+  it("logs the Linux guard to a file under the Tapdance home, not only the user journal (#95)", () => {
+    expect(guardServicePaths("linux", "/home/w").log).toBe("/home/w/.tapdance/worker/guard.log");
+    expect(guardServicePaths("linux", "/home/w", "/srv/td").log).toBe("/srv/td/worker/guard.log");
+    const unit = systemdUnit(spec({ platform: "linux", home: "/home/w", environment: { PATH: "/a", TAPDANCE_HOME: "/srv/td" } }));
+    expect(unit).toContain("StandardOutput=append:/srv/td/worker/guard.log");
+    expect(unit).toContain("StandardError=append:/srv/td/worker/guard.log");
+    expect(systemdUnit(spec({ platform: "linux", home: "/home/w", environment: { PATH: "/a" } }))).toContain("StandardOutput=append:/home/w/.tapdance/worker/guard.log");
+  });
+
   it("builds a fixed PATH with the Android SDK tools and copies no tokens into the service", () => {
     const env = guardServiceEnvironment(
       { ANDROID_HOME: "/opt/sdk", TAPDANCE_HOME: "/x/td", TAPDANCE_TOKEN: "tdg_secretsecretsecretsecret", TAPDANCE_GUARD_PAIR_NONINTERACTIVE: "1", PATH: "/evil" },

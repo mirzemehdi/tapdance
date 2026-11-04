@@ -332,6 +332,49 @@ Run on a real `n2-standard-4` VM driven from a Mac over Tailscale
   launcher was in front. When no element on screen belongs to the session's app, the app most elements
   belong to is named instead, with a note that the session's app is not in front.
 
+### Phase 2b field run: cloud host setup and teardown (issues #76, #77, #78, #81, #83, #84, #93, #95)
+
+Unit-tested or checked against a stand-in `gcloud`; not yet re-run on a cloud VM.
+
+- Fixed (#77): `host-setup.sh` sources `~/.tapdance/env.sh` at the top of `~/.bashrc` (before Ubuntu's
+  "not interactive" guard) and exports `ANDROID_SDK_ROOT`, so commands over ssh find `java`,
+  `sdkmanager`, `adb` and `tapdance`. It turns off the Android CLI's usage metrics with `--no-metrics`
+  in `~/.androidrc` (the new `sdkmanager` wrapper rejects the flag itself) and takes the line out again
+  if `sdkmanager` stops working with it. New options: `--with-gh` installs the GitHub CLI, and
+  `--sdk-packages "cmake;3.31.6"` installs extra SDK packages for builds on the host; without them it
+  notes what installs from CI and host builds need. `sdkmanager` no longer reads the script's stdin
+  under `curl | bash`.
+- Fixed (#84): `host-setup.sh` offers the Tailscale login after installing Tapdance, so the clone and
+  build no longer wait for someone to approve the machine. `check-kvm.sh` looks for the SDK in
+  `~/Android/Sdk` (then `~/android-sdk`), says that "cannot open /dev/kvm" is expected before
+  `host-setup.sh`, and the Terraform motd, `next_steps` and docs run it after the setup script.
+- Fixed (#78): `host up` on Linux without a display or clipboard tool no longer offers the clipboard
+  (it names the token file and `host token --show`); the security note mentions iOS simulators only on
+  macOS, and the Tailscale ACL hint says "this machine" on Linux; the linger line prints once.
+- Fixed (#81): `host status` reads Simlock's RAM budget from `capacity.ramBudget` (it showed "? of ? GB")
+  and leaves it out when Simlock keeps none; iOS on Linux "needs a Mac"; the Android SDK is also found in
+  `~/Android/Sdk` (it said "android not available" over ssh while an emulator ran), and the row says
+  when the SDK cannot be found from this shell.
+- Fixed (#93): `host up --idle-stop N` without `--label` keeps the host's only pairing instead of
+  pairing the hostname; several pairings and no `--label` are refused; a run that would need pairing
+  approval without a terminal is refused before any step changes anything, naming the existing pairing.
+- Fixed (#95): the Linux guard service also logs to `~/.tapdance/worker/guard.log` (the user journal is
+  not kept for OS Login accounts); installing the service moves a log over 5 MB to `guard.log.1`.
+  Existing services are rewritten, and so restarted, at the next `host up`. `host status` says when an
+  idle host will power off. The guard lets a token fetch the diagnostics of its own failed
+  `lease.allocate` for 10 minutes (it refused them, so the client lost why the lease failed), until the
+  lease id is granted to anyone.
+- Fixed (#83): `gcp-leftovers.sh` keeps gcloud's warnings out of the rows (two warning lines were
+  reported as "2 LEFT"), treats "Some requests did not succeed" as could-not-check, and says so when the
+  project is already `DELETE_REQUESTED`. The runbook names the emulator process
+  (`qemu-system-x86_64-headless`), uses `adb -P 5038` on the VM, and runs the leftovers check before the
+  project is deleted; the Terraform README writes the script's path from the repository root.
+- Added (#76): `infrastructure/scripts/revoke-run-credentials.sh`, which after a teardown asks before
+  revoking the `gcloud` logins and application-default credentials and deleting the run's scratch
+  `TAPDANCE_HOME`, then prints what is still credentialed and what only the owner can remove (the GitHub
+  token, the Tailscale machine). The runbook and the tear-down docs gained that step and a note on the
+  scope and lifetime of `gcloud` logins.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,

@@ -38,9 +38,11 @@ output "next_steps" {
   value       = <<-EOT
     1. Wait 1-2 minutes for the startup script, then open a shell:
          ${local.ssh_command}
-    2. Check KVM (read-only):
+    2. Optional quick KVM check (read-only). Before setup only the CPU flag, kvm module and /dev/kvm lines
+       matter; "cannot open /dev/kvm" is expected, the setup script fixes it:
          bash /opt/tapdance/check-kvm.sh
-    3. Run the setup script (asks before installing; yes accepts the Android SDK licences; runs tapdance host up):
+    3. Run the setup script (asks before installing; yes accepts the Android SDK licences; then the Tailscale
+       login link; runs tapdance host up). Afterwards check-kvm.sh must end with "KVM acceleration is usable":
          curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label <agent-machine-name>
     4. From this computer, copy the pairing token privately:
          gcloud compute scp ${google_compute_instance.worker.name}:.tapdance/worker/pairing-<agent-machine-name>.token . --zone ${var.zone} --project ${local.project_id} --tunnel-through-iap
@@ -81,9 +83,12 @@ output "teardown" {
   value       = <<-EOT
     1. terraform -chdir=${abspath(path.root)} destroy
     2. bash ${abspath("${path.module}/../../scripts/gcp-leftovers.sh")} ${local.project_id}
-       It must exit 0 (nothing left that bills).
+       It must exit 0 (nothing left that bills). Run it before deleting the project or unlinking billing:
+       afterwards it cannot check.
     3. Remove the VM in the Tailscale admin console (Machines): https://login.tailscale.com/admin/machines
     4. Delete the copies of the pairing token on the agent's machine, and any GitHub token you gave the VM.
+       Revoke the gcloud logins the run made (they cover the whole Google account and do not expire):
+         bash ${abspath("${path.module}/../../scripts/revoke-run-credentials.sh")}
     ${var.create_project ? "5. This configuration created the project; to remove it as well: gcloud projects delete ${local.project_id}" : "5. Optional, when the project held nothing else: gcloud projects delete ${local.project_id}"}
   EOT
 }

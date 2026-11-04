@@ -4,8 +4,9 @@
 # Routers with their Cloud NAT gateways, forwarding rules and Cloud Storage buckets. Prints a cost hint
 # for each kind it finds.
 #
-# Read-only: it only runs `gcloud ... list` and `gcloud services list`. It never creates, stops or
-# deletes anything. `--delete-project` only PRINTS the command that deletes the whole project.
+# Read-only: it only runs `gcloud ... list`, `gcloud services list` and `gcloud projects describe`. It
+# never creates, stops or deletes anything. `--delete-project` only PRINTS the command that deletes the
+# whole project.
 #
 # Usage:
 #   infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>
@@ -14,7 +15,12 @@
 # Exit codes:
 #   0  nothing left that bills (in the kinds listed above)
 #   1  something is left: delete it (terraform destroy, or the gcloud delete commands printed)
-#   2  could not check (usage error, gcloud missing or not logged in, a list call failed)
+#   2  could not check (usage error, gcloud missing or not logged in, a list call failed or warned
+#      that some requests did not succeed, or the project is already being deleted)
+#
+# Run it BEFORE `gcloud projects delete` and before unlinking billing. Afterwards the project is
+# DELETE_REQUESTED, the Compute Engine lists answer "billing must be enabled", and nothing can be
+# checked any more (its resources stop billing when the project shuts down).
 #
 # Prices are estimates from Google's published rates in November 2026 (us-central1 / europe-west1); see
 # docs/deployment/google-cloud-n2.md#cost-estimates-november-2026 and Google's pricing pages.
@@ -24,7 +30,7 @@
 set -uo pipefail
 
 usage() {
-  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 project=""
@@ -56,11 +62,21 @@ fi
 found=0
 unknown=0
 
-# Runs a read-only gcloud list call. Prints its output; on failure prints the error and returns 1.
+errfile=$(mktemp)
+trap 'rm -f "$errfile"' EXIT
+
+# Runs a read-only gcloud list call. Prints its rows (stdout only); on failure, or when gcloud exits 0
+# but warns that some requests did not succeed (a partial list), prints the error and returns 1.
 list() {
-  local out
-  if ! out=$(gcloud "$@" --project "$project" --quiet 2>&1); then
-    echo "  could not check: $(printf '%s\n' "$out" | grep -v '^$' | head -n 2 | tr '\n' ' ')" >&2
+  local out err
+  if ! out=$(gcloud "$@" --project "$project" --quiet 2>"$errfile"); then
+    err=$(cat "$errfile")
+    echo "  could not check: $(printf '%s\n' "${err:-$out}" | grep -v '^$' | head -n 2 | tr '\n' ' ')" >&2
+    return 1
+  fi
+  err=$(cat "$errfile")
+  if grep -qE '[Dd]id not succeed|requires billing|^ERROR' <<<"$err"; then
+    echo "  could not check: $(printf '%s\n' "$err" | grep -v '^$' | head -n 3 | tr '\n' ' ')" >&2
     return 1
   fi
   printf '%s' "$out"
@@ -96,6 +112,16 @@ check() {
 
 echo "Billable leftovers in project $project (read-only check, $(date -u +%Y-%m-%dT%H:%MZ))"
 echo
+
+# A project already being deleted (gcloud projects delete) cannot be checked: say so instead of
+# reporting the errors (or warnings) its lists return.
+state=$(gcloud projects describe "$project" --format='value(lifecycleState)' 2>/dev/null || true)
+if [[ "$state" == DELETE_REQUESTED ]]; then
+  echo "Project $project is DELETE_REQUESTED (gcloud projects delete ran): it is shut down, its resources"
+  echo "stop billing, and this check cannot list them any more. Run it before deleting a project next time."
+  echo "To be sure nothing bills, see Billing > Reports in the Cloud console for the billing account."
+  exit 2
+fi
 
 enabled=$(list services list --enabled --format='value(config.name)') || {
   echo "Cannot list the project's enabled APIs. Check the project id and that gcloud is logged in (gcloud auth login)." >&2

@@ -17,10 +17,19 @@ async function cmd(file: string, args: string[], timeoutMs = 20_000): Promise<{ 
   }
 }
 
-/** Same search order Simlock uses: ANDROID_HOME, ANDROID_SDK_ROOT, then the macOS default. */
-export function findAndroidSdk(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const candidates = [env["ANDROID_HOME"], env["ANDROID_SDK_ROOT"], osPlatform() === "darwin" ? join(homedir(), "Library/Android/sdk") : undefined];
-  for (const dir of candidates) if (dir && existsSync(dir)) return dir;
+/**
+ * ANDROID_HOME, ANDROID_SDK_ROOT, then the platform's default: ~/Library/Android/sdk on macOS,
+ * ~/Android/Sdk on Linux (where Android Studio and scripts/host-setup.sh install it). The Linux default
+ * matters over a non-interactive ssh command, which does not load the shell profile that sets ANDROID_HOME.
+ */
+export function findAndroidSdk(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = osPlatform(),
+  home: string = homedir(),
+  exists: (path: string) => boolean = existsSync,
+): string | undefined {
+  const fallback = platform === "darwin" ? join(home, "Library/Android/sdk") : platform === "linux" ? join(home, "Android/Sdk") : undefined;
+  for (const dir of [env["ANDROID_HOME"], env["ANDROID_SDK_ROOT"], fallback]) if (dir && exists(dir)) return dir;
   return undefined;
 }
 
@@ -186,7 +195,7 @@ export function androidChecks(report: AndroidReport): DoctorCheck[] {
         id: "host.android.sdk",
         title: "Android SDK",
         status: "fail",
-        detail: "not found in ANDROID_HOME, ANDROID_SDK_ROOT or ~/Library/Android/sdk",
+        detail: `not found in ANDROID_HOME, ANDROID_SDK_ROOT or ${osPlatform() === "darwin" ? "~/Library/Android/sdk" : "~/Android/Sdk"}`,
         fix: "Install Android Studio or the command-line tools and set ANDROID_HOME. See docs/platforms/android.md.",
       },
     ];

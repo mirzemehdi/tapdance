@@ -51,9 +51,11 @@ fi
 install -d -m 0755 /etc/motd.d
 cat >/etc/motd.d/60-tapdance <<'EOF'
 Tapdance Android host VM.
-  1. bash /opt/tapdance/check-kvm.sh        (must end with "KVM acceleration is usable")
-  2. curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label <agent-machine-name>
-     (asks before installing; saying yes accepts the Android SDK licences. It runs tapdance host up.)
+  1. curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label <agent-machine-name>
+     (asks before installing; saying yes accepts the Android SDK licences. Then the Tailscale login
+     link, then tapdance host up.)
+  2. bash /opt/tapdance/check-kvm.sh        (after step 1 it must end with "KVM acceleration is usable";
+     before it, "cannot open /dev/kvm" is expected: the setup script fixes that)
   3. Copy ~/.tapdance/worker/pairing-<name>.token to the agent's machine privately, then there:
      tapdance connect <endpoint host up printed> < pairing-<name>.token
   Guide: docs/deployment/google-cloud-n2.md
