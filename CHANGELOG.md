@@ -239,6 +239,9 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 
 ### Phase 2b cloud field test, round 2: builds and installs (issues #85–#90)
 
+- Changing the host policy (`host builds`, `host artifacts`) restarts the guard only when the installed guard
+  serves the same `TAPDANCE_HOME`; a run with a scratch home no longer restarts the machine's real guard.
+
 - A host build that cannot sign in to git fails with `AUTH_FAILED` (`details.reason: GIT_AUTH`) instead
   of `DEVICE_ERROR`. The error and the CLI's quiet log show git's own line (`Permission denied
   (publickey)`, `Repository not found`), and the hint fits the auth the host used: its deploy key with
