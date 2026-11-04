@@ -148,7 +148,10 @@ does the setup on macOS/Linux. Differences from the wording of the spec, stated 
 
 - Tapdance stays small: five packages, most of the code is mapping, validation, output and safety.
 - Tapdance inherits Simlock's and agent-device's release cadence. We pin exact versions
-  (`simlock@0.4.0`, `agent-device@0.21.35`) and test against them.
+  (`simlock@0.4.0` at this decision, `simlock@0.5.0` since 2026-11-04; `agent-device@0.21.35`) and test
+  against them. A fix that belongs in Simlock or agent-device but cannot wait for a release ships as a
+  pnpm patch in `patches/` (applied by `pnpm install`, listed in NOTICE.md) rather than a fork: today
+  one for agent-device (#56) and one for Simlock (#94, #79).
 - Leasing is **not a sandbox**. An agent token on a worker is close to shell access as the daemon user
   (Simlock `exec`, agent-device). Multi-tenant hosting (mode C) needs per-tenant workers or VMs, not
   just leases. Tapdance documents this and does not claim isolation.
@@ -212,7 +215,7 @@ device-selection flags, and it is not installed on the test machine, so its devi
 ### Personal Macs: a worker guard (genuine gap, built)
 
 Requirement H (PRODUCT.md §18) says remote device control must not imply host control, enforced on the
-Mac. Simlock 0.4.0 cannot do that: its `exec` route is reachable by any agent token, `simctl spawn`
+Mac. Simlock 0.4.0 cannot do that (nor 0.5.0, which has no setting to turn `exec` off): its `exec` route is reachable by any agent token, `simctl spawn`
 starts any program (its docs say so), there is no switch to disable it, and a joined worker gives the
 gateway operator rights. Contributing exec scopes upstream is the right long-term fix, but no released
 Simlock has them, so Tapdance builds the missing piece:

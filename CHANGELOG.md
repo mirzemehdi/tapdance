@@ -22,7 +22,7 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Five packages: `@tapdance/core` (contracts, config, errors, sessions, artifacts),
   `@tapdance/provider-simlock`, `@tapdance/sdk`, `@tapdance/mcp`, and the `tapdance` CLI.
 - A `DeviceProvider` contract with one implementation backed by
-  [Simlock](https://github.com/callstackincubator/simlock) 0.4.0 and
+  [Simlock](https://github.com/callstackincubator/simlock) 0.5.0 (patched, see below) and
   [agent-device](https://github.com/callstack/agent-device) 0.21.35, serving both local workers and
   self-hosted gateways. `provider: "cloud"` is reserved and fails with `NOT_SUPPORTED`.
 - CLI commands: `init`, `doctor`, `config`, `devices`, `workers`, `device lease/status/renew/release`,
@@ -238,6 +238,25 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   Services' "url scheme" lines (case); the app that took the link shows again.
 
 ### Phase 2b cloud field test, round 2: builds and installs (issues #85–#90)
+
+- `host up` warns, and `host status` shows a `gh` row, when builds with `--git-auth gh` or installs from
+  CI are on and `gh auth status` fails (#77). `host-setup.sh` picks the command-line tools archive for the
+  machine's CPU (an Apple silicon Mac got the x86_64 one); its `~/.androidrc` metrics opt-out is verified
+  with command-line tools 23.0.
+- Simlock 0.5.0, the latest release (was 0.4.0).
+- Tapdance patches Simlock 0.5.0 (`patches/simlock@0.5.0.patch`, applied by `pnpm install`; MIT, listed
+  in NOTICE.md). Fixed (#94): after the host restarts, Simlock's startup pass, and `simlock doctor`
+  without `--fix`, move an Android record that still says `ready` but has no emulator to `shutdown`
+  before the daemon reports `running`, so `doctor` no longer counts a dead emulator and the warm pool
+  boots the spare again instead of a lease meeting "No Android device with serial …". Tapdance's
+  10 s retry of that error stays as a safety net. A host whose Simlock login service was installed
+  before this change still starts the copy it was installed from (the patched copy lives in another
+  `node_modules/.pnpm` folder): run `tapdance worker install --service` once to install it again.
+- Fixed (#79, Simlock patch): Simlock captures an Android device's clean baseline snapshot only from a
+  settled guest: before the capture (once, on the device's first boot) it waits, at most 120 s, until the
+  guest CPU was busy at most 50 % for two 1 s intervals. A baseline saved mid-dexopt made every warm
+  spare and reclaim restored from it start busy. Other boots and reclaims do not wait; Tapdance's own
+  90 s settle wait on lease covers them. Existing baselines are kept. Tested with mocks only.
 
 - Changing the host policy (`host builds`, `host artifacts`) restarts the guard only when the installed guard
   serves the same `TAPDANCE_HOME`; a run with a scratch home no longer restarts the machine's real guard.

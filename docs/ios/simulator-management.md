@@ -3,7 +3,7 @@
 Tapdance does not create, boot or delete simulators itself. [Simlock](https://github.com/callstackincubator/simlock)
 (MIT, by Callstack) does that on each Mac worker. This page explains what Simlock does with iOS
 simulators, which settings matter, and how Tapdance exposes them. Facts about Simlock's behaviour come
-from its documentation for `simlock@0.4.0`, the version Tapdance pins.
+from its documentation for `simlock@0.4.0`; Tapdance now pins `simlock@0.5.0`.
 
 You change Simlock settings on the worker with the bundled CLI, then restart the worker:
 

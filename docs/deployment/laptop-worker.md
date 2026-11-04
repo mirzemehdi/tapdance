@@ -244,6 +244,6 @@ Read the worker's log on the laptop with `tapdance worker logs`.
 | `Uplink … failed; retrying`, `HTTP 403` | Not a worker token, or already paired with another worker. | Mint a new worker token for this laptop. |
 | `Uplink … failed` with another reason | The laptop cannot reach the gateway. | Check the URL, DNS, and that the proxy passes WebSocket upgrades. |
 | `Refusing ws:// to public host …` | You gave a plain `ws://` address on the internet. | Use `wss://` behind Caddy, or Tailscale. |
-| `workers list` shows `incompatible` | Gateway and worker run Simlock versions that cannot talk. | Use the same Tapdance build on both (it pins Simlock 0.4.0). |
+| `workers list` shows `incompatible` | Gateway and worker run Simlock versions that cannot talk. | Use the same Tapdance build on both (it pins Simlock 0.5.0). |
 | Lease commands fail with `WORKER_OFFLINE` | The laptop is asleep or offline. | Wake it; retry. |
 | `stream unavailable` in the viewer | Streaming is off on the worker or gateway. | Log in again without `--no-viewer`; `gateway setup` enables it on the gateway. |

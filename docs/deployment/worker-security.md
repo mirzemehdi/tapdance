@@ -79,7 +79,7 @@ tapdance simlock --gateway token revoke <token id>
 | Mint one agent token per agent and label it. | You can revoke one without breaking the others, and Simlock gives each token one lease at a time by default. |
 | Keep cloud credentials, signing keys and personal secrets off workers. | Anything the daemon user can read, an agent can read. |
 | For iOS workers, keep Apple signing certificates and App Store Connect keys off the worker unless that machine must sign builds; prefer a separate keychain and account. | Same reason (X-05 is documentation-only today). |
-| Keep Tapdance (and so Simlock) the same version on gateway and workers. | Incompatible versions refuse to talk, and old versions miss fixes. Tapdance pins Simlock 0.4.0. |
+| Keep Tapdance (and so Simlock) the same version on gateway and workers. | Incompatible versions refuse to talk, and old versions miss fixes. Tapdance pins Simlock 0.5.0. |
 
 ## The worker owner's controls
 

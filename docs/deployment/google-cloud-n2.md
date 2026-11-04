@@ -242,7 +242,8 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
 
    The newest command-line tools are Google's Android CLI, which collects usage metrics by default; the
    script turns that off with a `--no-metrics` line in `~/.androidrc`, Google's documented setting (its
-   `sdkmanager` wrapper rejects `--no-metrics` as an option). Optional: `--with-gh` also installs the
+   `sdkmanager` wrapper rejects `--no-metrics` as an option, but reads the file: checked with
+   command-line tools 23.0, nothing is recorded with the line and a record is spooled without it). Optional: `--with-gh` also installs the
    GitHub CLI, which [installs from CI](#getting-your-app-onto-the-vm) and builds with `--git-auth gh`
    need, and `--sdk-packages "cmake;3.31.6"` installs SDK packages your app's build needs (a Kotlin
    Multiplatform app with native code needs CMake; without it the first build failed after 8 minutes).

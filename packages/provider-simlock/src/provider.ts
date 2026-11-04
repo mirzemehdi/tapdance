@@ -59,7 +59,7 @@ import { AxeBackend } from "./axe.js";
 export const PROVIDER_NAME = "simlock";
 
 /** The Simlock release Tapdance is tested against. Each release accepts exactly one protocol version. */
-export const TESTED_SIMLOCK_VERSION = "0.4.0";
+export const TESTED_SIMLOCK_VERSION = "0.5.0";
 
 /** Simlock's agent-device front waits at most this long in the queue (src/agent-device, "Allocate queue wait"). */
 const MAX_ALLOCATE_WAIT_MS = 330_000;

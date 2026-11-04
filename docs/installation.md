@@ -12,11 +12,13 @@ two upstream projects as pinned npm dependencies, so you do not install them sep
 
 | Bundled | Version | What it does for Tapdance | License |
 | --- | --- | --- | --- |
-| [Simlock](https://github.com/callstackincubator/simlock) | 0.4.0 (exact) | Creates, leases, queues and cleans up emulators and simulators; runs the worker and gateway daemons. | MIT |
+| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0 (exact, with Tapdance's patch) | Creates, leases, queues and cleans up emulators and simulators; runs the worker and gateway daemons. | MIT |
 | [agent-device](https://github.com/callstack/agent-device) | 0.21.35 (exact) | UI snapshots, taps, typing, screenshots, MP4 recording, app upload and log download. | MIT |
 
 `tapdance worker install` points Simlock at the bundled agent-device, and `tapdance simlock …` runs the
-bundled Simlock CLI, so neither needs a global install. The [architecture decision](architecture-decision.md)
+bundled Simlock CLI, so neither needs a global install. `pnpm install` applies Tapdance's own patches to
+both (`patches/`, listed in [NOTICE.md](../NOTICE.md#patches-to-dependencies)); a Simlock installed some
+other way does not have them. The [architecture decision](architecture-decision.md)
 explains why Tapdance builds on these two projects.
 
 Nothing else is bundled. Xcode, the Android SDK, a JDK and the optional external tools (`asc`, AXe,
