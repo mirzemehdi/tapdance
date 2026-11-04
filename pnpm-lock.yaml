@@ -44,8 +44,8 @@ importers:
         specifier: 15.0.0
         version: 15.0.0
       simlock:
-        specifier: 0.4.0
-        version: 0.4.0
+        specifier: 0.5.0
+        version: 0.5.0
       ws:
         specifier: 8.22.1
         version: 8.22.1
@@ -117,20 +117,14 @@ importers:
 
 packages:
 
-  '@agent-device/proxy@0.21.28':
-    resolution: {integrity: sha512-uwepF+PU2cZN27UB6itCWIjY8tyevW/fFMHEWIuUHsyv3lDJyFoqwJdlyx4DRoyPbvDUmHkwMtUO2nZRlQdWyQ==}
+  '@agent-device/proxy@0.21.35':
+    resolution: {integrity: sha512-4ThmkBjcwnXEyRm8sguZ+y/OlqqEq6nW0aU1chzxZOMevovp4zt5vGrcTUvzVHBCADTwfeC8KC2grnzklgR9MQ==}
     engines: {node: '>=22.12'}
 
   '@asteasolutions/zod-to-openapi@9.1.0':
     resolution: {integrity: sha512-pLMeRgRYS7/vZIgAAkOe2P6+XGTifR1MT9pqDoxZ11EmcJJ+DPmdPqLN8ZZF4U8R9KHCCQCS9c2wtuE8wSrfkw==}
     peerDependencies:
       zod: ^4.0.0
-
-  '@hono/node-server@2.0.10':
-    resolution: {integrity: sha512-ZcnNVhKTmyDJeg0UlnZjvM73JBsTAuhrH/J4fjwGOw59PwOW51r4J+p6CsKZWXdKSme4MFqU62CZMOsdDrU4CA==}
-    engines: {node: '>=20'}
-    peerDependencies:
-      hono: ^4
 
   '@hono/node-server@2.1.5':
     resolution: {integrity: sha512-MgP/I06GdvsilDspMk/qmRzpk8LOUStP6jFAbSRi40W09DhoyUn+Mj7eyKICPqeYKybOjVFLVIAQzvu1bfIa7Q==}
@@ -160,16 +154,6 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
-
-  '@modelcontextprotocol/sdk@1.32.1':
-    resolution: {integrity: sha512-2DdE+SJDtzLEEWzY1ZjY7Q+VcPhcV1KisD3zI4u0XZyktsjHum1mwbMI+JaulUBi2OZk+KJAi2uPXzxichPkdw==}
-    engines: {node: '>=18'}
-    peerDependencies:
-      '@cfworker/json-schema': ^4.1.1
-      zod: ^3.25 || ^4.0
-    peerDependenciesMeta:
-      '@cfworker/json-schema':
-        optional: true
 
   '@modelcontextprotocol/sdk@1.32.2':
     resolution: {integrity: sha512-SWsVtH/0vULSQStoZ6xxH2K09Li8fXYTMC64ZeogCdpZ3XSi1eCPOByV1OpuJxuI3OcmHhosDWYyii07tpPsLw==}
@@ -666,11 +650,11 @@ packages:
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
 
+  jose@6.2.13:
+    resolution: {integrity: sha512-7TIg10ZE1x82YediN+lcrPNvGMKge9yFHQD+Qho/b8y2adfugU3AsvvHfxV0fzyFllT6l9xCjf4RWY9g/Z9PJQ==}
+
   jose@6.2.14:
     resolution: {integrity: sha512-3JasLuki1NRLQvY4wCoC37KZk4qxoBx2k2aFqLxT84IezqW0bkJKnNtxnZj/Fu1xsQivoc/lytxaRHJoGLjJ1A==}
-
-  jose@6.2.9:
-    resolution: {integrity: sha512-XrchZOFZUl/T3vTwRe8XK+cJrGtMF4th1ARnDfwbBXFKThGhlsxEE4Zu03AD/bjJSt/9jT/mxrOCkJWOg77aPA==}
 
   json-schema-traverse@1.0.0:
     resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
@@ -898,8 +882,8 @@ packages:
     resolution: {integrity: sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==}
     engines: {node: '>= 0.4'}
 
-  simlock@0.4.0:
-    resolution: {integrity: sha512-eSGNnt+k6w08fOqWmDpQ2SKa+TedLrOXsK9aL21aZPZe3G9ZYmgLrb6sYKN4we0R2GgbsBCPab1MaScN15Dr0w==}
+  simlock@0.5.0:
+    resolution: {integrity: sha512-vNA9twkLsqwLkakZO1AL2bXRp4UQsi/8BwPBkr5Z6IwwRrxW/LgBm7iETwi/o8qOHbzqg48BD5Q3i1ZaY2kfJw==}
     engines: {node: '>=22.13'}
     hasBin: true
 
@@ -1086,16 +1070,12 @@ packages:
 
 snapshots:
 
-  '@agent-device/proxy@0.21.28': {}
+  '@agent-device/proxy@0.21.35': {}
 
   '@asteasolutions/zod-to-openapi@9.1.0(zod@4.6.7)':
     dependencies:
       openapi3-ts: 4.6.2
       zod: 4.6.7
-
-  '@hono/node-server@2.0.10(hono@4.13.16)':
-    dependencies:
-      hono: 4.13.16
 
   '@hono/node-server@2.1.5(hono@4.13.16)':
     dependencies:
@@ -1122,28 +1102,6 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
-
-  '@modelcontextprotocol/sdk@1.32.1(zod@4.6.7)':
-    dependencies:
-      '@hono/node-server': 2.0.10(hono@4.13.16)
-      ajv: 8.20.0
-      ajv-formats: 3.0.1(ajv@8.20.0)
-      content-type: 1.0.5
-      cors: 2.8.6
-      cross-spawn: 7.0.6
-      eventsource: 3.0.7
-      eventsource-parser: 3.1.1
-      express: 5.3.0
-      express-rate-limit: 8.7.2(express@5.3.0)
-      hono: 4.13.16
-      jose: 6.2.9
-      json-schema-typed: 8.0.2
-      pkce-challenge: 5.0.1
-      raw-body: 3.0.2
-      zod: 4.6.7
-      zod-to-json-schema: 3.25.2(zod@4.6.7)
-    transitivePeerDependencies:
-      - supports-color
 
   '@modelcontextprotocol/sdk@1.32.2(zod@4.6.7)':
     dependencies:
@@ -1538,9 +1496,9 @@ snapshots:
 
   isexe@2.0.0: {}
 
-  jose@6.2.14: {}
+  jose@6.2.13: {}
 
-  jose@6.2.9: {}
+  jose@6.2.14: {}
 
   json-schema-traverse@1.0.0: {}
 
@@ -1770,14 +1728,14 @@ snapshots:
       side-channel-map: 1.0.1
       side-channel-weakmap: 1.0.2
 
-  simlock@0.4.0:
+  simlock@0.5.0:
     dependencies:
-      '@agent-device/proxy': 0.21.28
-      '@hono/node-server': 2.0.10(hono@4.13.16)
+      '@agent-device/proxy': 0.21.35
+      '@hono/node-server': 2.1.5(hono@4.13.16)
       '@hono/zod-openapi': 1.6.3(hono@4.13.16)(zod@4.6.7)
-      '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.7)
+      '@modelcontextprotocol/sdk': 1.32.2(zod@4.6.7)
       hono: 4.13.16
-      jose: 6.2.9
+      jose: 6.2.13
       ws: 8.22.0
       zod: 4.6.7
     transitivePeerDependencies:
