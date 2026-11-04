@@ -6,7 +6,7 @@ import { pipeline } from "node:stream/promises";
 import { TapdanceError, type ErrorCode } from "@tapdance/core";
 import type { CrashReportInfo } from "./crash-reports.js";
 import type { PlayedTap } from "./touch-sequence.js";
-import type { AppCiInstallResult, TimedTap } from "@tapdance/core";
+import type { AppBuildResult, AppCiInstallResult, TimedTap } from "@tapdance/core";
 
 /** Status → Tapdance code for Simlock's JSON errors (`{"error":{"code","message"}}`). */
 const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
@@ -260,7 +260,7 @@ export class SimlockHttp {
    * A worker guard's build route: builds on the host and installs on the lease, streaming log lines
    * to `onLine`. Answers the result, or throws the build's error.
    */
-  async build(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 4 * 3_600_000): Promise<{ sha: string; seconds: number; artifact: string; installed: boolean; reused?: boolean }> {
+  async build(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 4 * 3_600_000): Promise<AppBuildResult> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/build`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -310,11 +310,17 @@ export class SimlockHttp {
       buffer = lines.pop() ?? "";
       for (const raw of lines) {
         if (!raw.trim()) continue;
-        const msg = JSON.parse(raw) as { log?: string; result?: typeof result; error?: { code: string; message: string; hint?: string; tail?: string } };
+        const msg = JSON.parse(raw) as { log?: string; result?: typeof result; error?: { code: string; message: string; hint?: string; tail?: string; details?: Record<string, unknown> } };
         if (msg.log !== undefined) onLine(msg.log);
         if (msg.result) result = msg.result;
         if (msg.error) {
-          throw new TapdanceError(msg.error.code as never, msg.error.message, { ...(msg.error.hint ? { hint: msg.error.hint } : {}), ...(msg.error.tail ? { details: { tail: msg.error.tail } } : {}) });
+          // The few details a guard names (why, and which app), so a caller can act on them (#85, #89).
+          const given = msg.error.details && typeof msg.error.details === "object" ? msg.error.details : {};
+          const details: Record<string, unknown> = Object.fromEntries(
+            Object.entries(given).filter(([k, v]) => ["reason", "appId", "gitAuth", "keyFingerprint"].includes(k) && typeof v === "string" && v.length <= 300),
+          );
+          if (msg.error.tail) details["tail"] = msg.error.tail;
+          throw new TapdanceError(msg.error.code as never, msg.error.message, { ...(msg.error.hint ? { hint: msg.error.hint } : {}), ...(Object.keys(details).length > 0 ? { details } : {}) });
         }
       }
     }

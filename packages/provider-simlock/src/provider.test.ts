@@ -901,6 +901,31 @@ describe("Android install refusals", () => {
     expect(androidInstallHint(adb)).toMatch(/Uninstall it first/);
     expect(androidInstallHint("Success")).toBeUndefined();
     expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").hint).toMatch(/app uninstall/);
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").details).toMatchObject({ reason: "INSTALL_SIGNATURE" });
+  });
+
+  it("names the real package, and only its reader's syntax, in a downgrade hint (#89)", async () => {
+    const { androidInstallHint, installRefusal, withInstallHintFor } = await import("./agent-device-errors.js");
+    const { TapdanceError } = await import("@tapdance/core");
+    const adb = "adb: failed to install app.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 2 is older than current 3]";
+    expect(installRefusal(adb)).toBe("INSTALL_DOWNGRADE");
+    const both = androidInstallHint(adb, "com.measify.pianolune")!;
+    expect(both).toContain('MCP uninstall_app {app_id: "com.measify.pianolune"}');
+    expect(both).toContain("`tapdance app uninstall com.measify.pianolune`");
+    expect(both).not.toContain("<appId>");
+    const fromGuard = new TapdanceError("DEVICE_ERROR", "Installing the APK failed", { hint: both, details: { reason: "INSTALL_DOWNGRADE", appId: "com.measify.pianolune" } });
+    const mcp = withInstallHintFor(fromGuard, "mcp") as InstanceType<typeof TapdanceError>;
+    expect(mcp.hint).toContain('uninstall_app {app_id: "com.measify.pianolune"}');
+    expect(mcp.hint).not.toContain("tapdance");
+    expect(mcp).toMatchObject({ code: "DEVICE_ERROR", message: "Installing the APK failed", details: { appId: "com.measify.pianolune" } });
+    const cli = withInstallHintFor(fromGuard, "cli") as InstanceType<typeof TapdanceError>;
+    expect(cli.hint).toContain("`tapdance app uninstall com.measify.pianolune`");
+    expect(cli.hint).not.toContain("uninstall_app");
+    // Without a package name the MCP hint points at list_apps instead of a placeholder.
+    expect((withInstallHintFor(new TapdanceError("DEVICE_ERROR", "x", { details: { reason: "INSTALL_DOWNGRADE" } }), "mcp") as InstanceType<typeof TapdanceError>).hint).toContain("list_apps");
+    // Other errors pass through untouched.
+    const other = new TapdanceError("AUTH_FAILED", "git clone failed", { hint: "h", details: { reason: "GIT_AUTH" } });
+    expect(withInstallHintFor(other, "mcp")).toBe(other);
   });
 });
 

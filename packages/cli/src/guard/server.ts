@@ -7,7 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { androidInstallHint, checkCiRequest, fetchCiApk, type CiInstallRequest } from "@tapdance/provider-simlock";
+import { checkCiRequest, fetchCiApk, installRefusal, installRefusalHint, readApkManifest, type ApkManifest, type CiInstallRequest } from "@tapdance/provider-simlock";
 import { checkBuildRequest, checkTimedTaps, clearConsole, consolePaths, crashReportsDir, listCrashReports, playTouches, toFramebuffer, viewportFromConfig, type Orientation, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
@@ -415,6 +415,26 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   const stopTimer = stopSettings ? setInterval(() => void checkHostStop(), options.hostStopIntervalMs ?? 60_000) : undefined;
   stopTimer?.unref();
   if (stopSettings) options.log?.(`cost guard: ${describeHostStop(stopSettings, stopPlatform)}`);
+  /** An install the device refused: an Android hint names the package the host just tried (#89). */
+  const installFailed = (what: string, out: string, android: boolean, manifest: ApkManifest | undefined) => {
+    const reason = android ? installRefusal(out) : undefined;
+    const details = { ...(reason ? { reason } : {}), ...(manifest ? { appId: manifest.appId } : {}) };
+    return new TapdanceError("DEVICE_ERROR", `${what}: ${out.split("\n").slice(-3).join(" ")}`, {
+      ...(reason ? { hint: installRefusalHint(reason, manifest?.appId) } : {}),
+      ...(Object.keys(details).length > 0 ? { details } : {}),
+    });
+  };
+  /** An NDJSON error line: code, message, hint, the log's tail and the few details a client acts on. */
+  const errorLine = (e: TapdanceError) => {
+    const details = Object.fromEntries(Object.entries(e.details ?? {}).filter(([k, v]) => ["reason", "appId", "gitAuth", "keyFingerprint"].includes(k) && typeof v === "string"));
+    return {
+      code: e.code,
+      message: e.message,
+      ...(e.hint ? { hint: e.hint } : {}),
+      ...(e.details?.["tail"] ? { tail: e.details["tail"] } : {}),
+      ...(Object.keys(details).length > 0 ? { details } : {}),
+    };
+  };
   /** The owner's build settings, with the deploy key `host builds key` created, when there is one. */
   const buildSettings = (): BuildSettings => {
     const key = join(guardDir(env), "builds", "deploy_key");
@@ -430,21 +450,31 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     const line = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
     try {
       const result = await runBuild(request, buildSettings(), join(guardDir(env), "builds"), (l) => line({ log: redactSecrets(l) }), options.buildRunner);
+      // The package the host just built, so the reply and any install refusal name it (#89).
+      const manifest = request.platform === "android" ? await readApkManifest(result.artifact) : undefined;
       const install =
         request.platform === "ios"
           ? await execUpstream(leaseId, "simctl", ["install", result.artifact])
           : await execUpstream(leaseId, "adb", ["install", "-r", "-t", result.artifact]);
-      if (install.exitCode !== 0) {
-        const out = (install.stderr || install.stdout).trim();
-        const hint = request.platform === "android" ? androidInstallHint(out) : undefined;
-        throw new TapdanceError("DEVICE_ERROR", `Installing the build failed: ${out.split("\n").slice(-3).join(" ")}`, hint ? { hint } : undefined);
-      }
+      if (install.exitCode !== 0) throw installFailed("Installing the build failed", (install.stderr || install.stdout).trim(), request.platform === "android", manifest);
       await decide("allow", { command: `build installed ${result.sha}`, leaseId });
-      line({ result: { sha: result.sha, seconds: result.seconds, artifact: result.artifact.split(sep).pop(), installed: true, ...(result.reused ? { reused: true } : {}) } });
+      // `reused` always, so an agent knows whether it tests a fresh build (#88).
+      line({
+        result: {
+          sha: result.sha,
+          ref: request.ref,
+          seconds: result.seconds,
+          artifact: result.artifact.split(sep).pop(),
+          installed: true,
+          reused: result.reused === true,
+          ...(result.reused && result.builtAt ? { builtAt: result.builtAt } : {}),
+          ...appOf(manifest),
+        },
+      });
     } catch (error) {
       const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", (error as Error).message);
       await decide("deny", { reason: `build failed: ${e.message}`, leaseId });
-      line({ error: { code: e.code, message: e.message, ...(e.hint ? { hint: e.hint } : {}), ...(e.details?.["tail"] ? { tail: e.details["tail"] } : {}) } });
+      line({ error: errorLine(e) });
     } finally {
       building = false;
       res.end();
@@ -463,19 +493,16 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     try {
       const apk = await fetchCiApk(request, hostPolicy.artifacts, join(guardDir(env), "artifacts"), (l) => line({ log: redactSecrets(l) }), options.ciRunner);
       const what = `${apk.repo} run ${apk.runId} sha ${apk.sha} branch ${apk.branch} artifact ${apk.artifact} apk sha256 ${apk.apkSha256.slice(0, 12)}${apk.cached ? " (cached)" : ""}`;
-      line({ log: `Installing ${apk.artifact} on the lease` });
+      const manifest = await readApkManifest(apk.apk);
+      line({ log: `Installing ${apk.artifact}${manifest ? ` (${manifest.appId}${manifest.versionCode !== undefined ? ` versionCode ${manifest.versionCode}` : ""})` : ""} on the lease` });
       const install = await execUpstream(leaseId, "adb", ["install", "-r", "-t", apk.apk]);
-      if (install.exitCode !== 0) {
-        const out = (install.stderr || install.stdout).trim();
-        const hint = androidInstallHint(out);
-        throw new TapdanceError("DEVICE_ERROR", `Installing the APK failed: ${out.split("\n").slice(-3).join(" ")}`, hint ? { hint } : undefined);
-      }
-      await decide("allow", { command: `ci-install installed ${what}`, leaseId });
-      line({ result: { repo: apk.repo, runId: apk.runId, sha: apk.sha, branch: apk.branch, artifact: apk.artifact, apkSha256: apk.apkSha256.slice(0, 12), cached: apk.cached, installed: true } });
+      if (install.exitCode !== 0) throw installFailed("Installing the APK failed", (install.stderr || install.stdout).trim(), true, manifest);
+      await decide("allow", { command: `ci-install installed ${what}${manifest ? ` app ${manifest.appId}` : ""}`, leaseId });
+      line({ result: { repo: apk.repo, runId: apk.runId, sha: apk.sha, branch: apk.branch, artifact: apk.artifact, apkSha256: apk.apkSha256.slice(0, 12), cached: apk.cached, installed: true, ...appOf(manifest) } });
     } catch (error) {
       const e = error instanceof TapdanceError ? error : new TapdanceError("INTERNAL", (error as Error).message);
       await decide("deny", { reason: `ci-install failed: ${e.message}`, leaseId });
-      line({ error: { code: e.code, message: e.message, ...(e.hint ? { hint: e.hint } : {}) } });
+      line({ error: errorLine(e) });
     } finally {
       fetching = false;
       res.end();
@@ -1086,4 +1113,9 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       server.close(() => resolve());
     }),
   };
+}
+
+/** The installed app's id and version for a reply (#89), when the APK's manifest was readable. */
+function appOf(manifest: ApkManifest | undefined): { appId?: string; versionCode?: number } {
+  return manifest ? { appId: manifest.appId, ...(manifest.versionCode !== undefined ? { versionCode: manifest.versionCode } : {}) } : {};
 }

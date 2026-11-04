@@ -316,8 +316,19 @@ export interface AppBuildResult {
   /** File name of the built .app or .apk (it stays on the host). */
   artifact: string;
   installed: boolean;
-  /** The same commit and settings were built before on the host; that build was installed (#61). */
+  /**
+   * The same commit and settings were built before on the host; that build was installed (#61).
+   * Always set by the SDK (false for a fresh build); a guard from before #88 may leave it out.
+   */
   reused?: boolean;
+  /** The ref the build was asked for (branch, tag or sha), next to the exact `sha` it resolved to. */
+  ref?: string;
+  /** With `reused`: when the host made that earlier build (ISO time). */
+  builtAt?: string;
+  /** Android: the installed app's package, read from the APK on the host (launch_app takes it). */
+  appId?: string;
+  /** Android: the installed APK's versionCode. */
+  versionCode?: number;
 }
 
 /** An APK the user's CI built (a GitHub Actions artifact), fetched by the device's host with its own credentials. */
@@ -345,6 +356,10 @@ export interface AppCiInstallResult {
   /** The host had downloaded this run's artifact before and used that copy. */
   cached: boolean;
   installed: boolean;
+  /** The installed app's package, read from the APK on the host (#89); launch_app takes it. */
+  appId?: string;
+  /** The installed APK's versionCode. */
+  versionCode?: number;
 }
 
 /** One tap of a timed sequence: `t` ms after the start, at (x, y); `hold` ms makes it a long press. */

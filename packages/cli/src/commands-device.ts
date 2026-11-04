@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
-import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, withInstallHintFor, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, table, yellow } from "./output.js";
 
@@ -536,15 +536,25 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .action(async (path: string | undefined, o: { appId?: string; fromCi?: string; artifact?: string; run?: string; branch?: string; launch?: string }) =>
       run(globals(), async (t, out) => {
         const ci = checkInstallArgs(path, o);
-        if (ci) {
-          const r = await t.installFromCi(ci);
+        try {
+          if (ci) {
+            const r = await t.installFromCi(ci);
+            if (o.launch) await t.launchApp(o.launch, { relaunch: true });
+            out.result({ installed: r, ...(o.launch ? { launched: o.launch } : {}) }, () =>
+              [
+                `Installed ${r.appId ? `${r.appId}${r.versionCode !== undefined ? ` (versionCode ${r.versionCode})` : ""}, ` : ""}${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, apk sha256 ${r.apkSha256}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`,
+                ...launchMismatch(r.appId, o.launch),
+              ].join("\n"),
+            );
+            return;
+          }
+          const r = await t.installApp(path!, o.appId);
           if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-          out.result({ installed: r }, () => `Installed ${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, apk sha256 ${r.apkSha256}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`);
-          return;
+          out.result({ installed: r, ...(o.launch ? { launched: o.launch } : {}) }, () => `Installed ${r.appId ?? path}${o.launch ? `; launched ${o.launch}` : ""}`);
+        } catch (error) {
+          // Install refusals name the package and only CLI syntax here (#89).
+          throw withInstallHintFor(error, "cli");
         }
-        const r = await t.installApp(path!, o.appId);
-        if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-        out.result({ installed: r }, () => `Installed ${r.appId ?? path}${o.launch ? `; launched ${o.launch}` : ""}`);
       }),
     );
   app
@@ -615,9 +625,16 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
             ...(o.dir ? { dir: o.dir } : {}),
           },
           { verbose: o.verbose === true },
-        );
+        ).catch((error: unknown) => {
+          throw withInstallHintFor(error, "cli");
+        });
         if (o.launch) await t.launchApp(o.launch, { relaunch: true });
-        out.result(r, () => `${r.reused ? "Reused the earlier build" : "Built"} ${r.artifact} from ${r.sha.slice(0, 12)} in ${r.seconds} s and installed it${o.launch ? `; launched ${o.launch}` : ""}`);
+        out.result({ ...r, ...(o.launch ? { launched: o.launch } : {}) }, () =>
+          [
+            `${r.reused ? `Reused the earlier build (made ${r.builtAt ?? "before"})` : "Built"} ${r.artifact} from ${r.sha.slice(0, 12)} (${r.ref}) in ${r.seconds} s and installed it${r.appId ? ` as ${r.appId}` : ""}${o.launch ? `; launched ${o.launch}` : ""}`,
+            ...launchMismatch(r.appId, o.launch),
+          ].join("\n"),
+        );
       }),
     );
   app
@@ -863,6 +880,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         );
       }),
     );
+}
+
+/** A warning line when --launch names another app than the one just installed. */
+function launchMismatch(installed: string | undefined, launched: string | undefined): string[] {
+  return installed && launched && installed !== launched ? [yellow(`warning: the installed package is ${installed}, but ${launched} was launched`)] : [];
 }
 
 /**

@@ -624,7 +624,7 @@ export class Tapdance {
    * Log lines go to progress: by default only steps, errors and the outcome, with a count of the lines
    * left out; `verbose` passes every line (#53).
    */
-  async buildApp(request: AppBuildRequest, options: { verbose?: boolean } = {}): Promise<AppBuildResult> {
+  async buildApp(request: AppBuildRequest, options: { verbose?: boolean } = {}): Promise<AppBuildResult & { reused: boolean; ref: string }> {
     await this.guardHuman();
     let hidden = 0;
     const onLine = (line: string) => {
@@ -634,10 +634,12 @@ export class Tapdance {
         this.progress(line);
       } else if (++hidden % 5000 === 0) this.progress(`… ${hidden} log lines`);
     };
-    return this.onDevice(async (handle, provider) => {
+    const result = await this.onDevice(async (handle, provider) => {
       if (!provider.buildApp) throw new TapdanceError("NOT_SUPPORTED", `Provider ${provider.name} cannot build apps`);
       return provider.buildApp(handle, request, onLine);
     });
+    // Always say whether this was a fresh build, and of which ref (#88).
+    return { ...result, reused: result.reused === true, ref: result.ref ?? request.ref };
   }
 
   /**

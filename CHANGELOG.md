@@ -237,6 +237,31 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Fixed (#68): `device links` showed web links as a bare `https:`: the log filter missed Launch
   Services' "url scheme" lines (case); the app that took the link shows again.
 
+### Phase 2b cloud field test, round 2: builds and installs (issues #85–#90)
+
+- A host build that cannot sign in to git fails with `AUTH_FAILED` (`details.reason: GIT_AUTH`) instead
+  of `DEVICE_ERROR`. The error and the CLI's quiet log show git's own line (`Permission denied
+  (publickey)`, `Repository not found`), and the hint fits the auth the host used: its deploy key with
+  the key's fingerprint and whether the organization allows deploy keys, `gh`, or an https URL next to
+  a deploy key (#85).
+- `host builds enable` checks that the host can read each `--repo` with that auth (`git ls-remote`) and
+  `host artifacts enable` that `gh` can read each repository's Actions artifacts; both warn with the fix
+  (`--no-check` skips). `host builds status --check` and `host artifacts status --check` run the check
+  again. In `--git-auth gh` mode, github.com submodules listed with ssh URLs are fetched over https
+  (#86).
+- `host builds key --repo <url> --remove` deletes a repository's key and prints its fingerprint;
+  `host builds disable --repo <url>` and `host artifacts disable --repo <owner/repo>` remove one entry
+  and leave the rest on. Output keeps the repository's case; `host builds status` says `not used
+  (https)` for an https URL next to a deploy key, and an https clone no longer gets the ssh key (#87).
+- MCP `build_app` and `install_app` take `launch` (relaunch after install). `build_app` replies always
+  carry `reused` (with `builtAt`) and `ref`; build and install-from-CI replies name the installed
+  Android package (`appId`, `versionCode`), read from the APK's manifest on the host (#88, #89).
+- Install refusals (`INSTALL_FAILED_VERSION_DOWNGRADE`, another signing key) name the package and use
+  MCP syntax in MCP replies and `tapdance` commands in the CLI (#89).
+- Host Android builds let idle Gradle and Kotlin daemons go after 10 minutes instead of Gradle's 3
+  hours; `host builds enable --gradle-idle-minutes <n>` (policy `builds.gradleDaemonIdleMinutes`; 0
+  builds with `--no-daemon`) (#90).
+
 ### Licence
 
 - Changed: Tapdance is now licensed under the GNU AGPL-3.0-only (was MIT). Self-hosting and changes

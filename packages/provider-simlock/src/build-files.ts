@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 import { TapdanceError } from "@tapdance/core";
@@ -40,6 +40,55 @@ export function repoIdentity(url: string): string {
   const m = /^[a-z+]+:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i.exec(normalizeRepo(url));
   if (!m) throw new TapdanceError("USAGE", `${url} is not an https:// or ssh git URL`, { hint: "Use the URL you clone with, e.g. https://github.com/owner/repo or git@github.com:owner/repo.git." });
   return `${m[1]!.toLowerCase()}/${m[2]!.toLowerCase().replace(/\/+/g, "/")}`;
+}
+
+/**
+ * A repository's host and path for people to read: like `repoIdentity` but with the path's case as
+ * the owner typed it (#87). Only the identity (slugs, key and cache folders, comparisons) is lower-case.
+ */
+export function repoDisplay(url: string): string {
+  const m = /^[a-z+]+:\/\/(?:[^@/]+@)?([^/]+)\/(.+)$/i.exec(normalizeRepo(url));
+  if (!m) throw new TapdanceError("USAGE", `${url} is not an https:// or ssh git URL`, { hint: "Use the URL you clone with, e.g. https://github.com/owner/repo or git@github.com:owner/repo.git." });
+  return `${m[1]!.toLowerCase()}/${m[2]!.replace(/\/+/g, "/")}`;
+}
+
+/** True for a URL git fetches over ssh (`git@host:path` or `ssh://`), where a deploy key applies. */
+export function isSshUrl(url: string): boolean {
+  return /^(ssh:\/\/|git@)/i.test(url.trim());
+}
+
+/**
+ * The fingerprint ssh and GitHub show for a public key line (`ssh-ed25519 AAAA… comment`), as
+ * `SHA256:…`, so the owner can find the key on GitHub's deploy keys page. Undefined when unreadable.
+ */
+export function sshFingerprint(publicKeyLine: string): string | undefined {
+  const b64 = publicKeyLine.trim().split(/\s+/)[1];
+  if (!b64 || !/^[A-Za-z0-9+/]+=*$/.test(b64)) return undefined;
+  const blob = Buffer.from(b64, "base64");
+  if (blob.length < 16) return undefined;
+  return `SHA256:${createHash("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
+}
+
+/** The fingerprint of the deploy key at `privateKeyPath` (read from its .pub), if there is one. */
+export function keyFingerprint(privateKeyPath: string): string | undefined {
+  try {
+    return sshFingerprint(readFileSync(`${privateKeyPath}.pub`, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Deletes a repository's own deploy key (`host builds key --repo <url> --remove`, #87). Returns what
+ * was removed (with the fingerprint, to delete it on the git server too), or undefined when there was none.
+ */
+export async function removeRepoKey(buildsRoot: string, repo: string): Promise<{ path: string; fingerprint?: string } | undefined> {
+  const key = repoKeyPath(buildsRoot, repo);
+  if (!existsSync(key) && !existsSync(`${key}.pub`)) return undefined;
+  const fingerprint = keyFingerprint(key);
+  await rm(key, { force: true });
+  await rm(`${key}.pub`, { force: true });
+  return { path: key, ...(fingerprint ? { fingerprint } : {}) };
 }
 
 /**
