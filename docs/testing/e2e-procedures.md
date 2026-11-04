@@ -29,7 +29,7 @@ failures:
 
 - [Simlock](https://github.com/callstackincubator/simlock) (MIT) owns devices: it creates, boots,
   leases and wipes emulators and simulators on a **worker**, and a **gateway** routes leases to
-  workers that dial out to it. Tapdance bundles `simlock@0.4.0`; `tapdance simlock -- …` runs it.
+  workers that dial out to it. Tapdance bundles `simlock@0.5.0` (with its own patch); `tapdance simlock -- …` runs it.
 - [agent-device](https://github.com/callstack/agent-device) (MIT) drives the UI, uploads apps and
   downloads screenshots and recordings. Simlock runs it on each worker.
 - Tapdance adds the session-scoped CLI, MCP server and SDK, the keepalive, the artifact store, the

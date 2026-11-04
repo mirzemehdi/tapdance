@@ -15,7 +15,7 @@ on iOS 18.5, created by Simlock.
 | Component | Version | Status with Tapdance 0.1.0 | Notes |
 | --- | --- | --- | --- |
 | Node.js | 22.22.0 | Tested | Minimum 22.13 (Tapdance's and Simlock's `engines`). `doctor` fails below it. |
-| [Simlock](https://github.com/callstackincubator/simlock) | 0.4.0 | Tested (local worker; gateway + joined worker on one Mac) | Bundled, exact pin. Gateway and worker on two machines not tested. |
+| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Bundled; the runs above used 0.4.0 (local worker; gateway + joined worker on one Mac) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the clean baseline is taken from a calm guest, #79). 0.5.0 not yet run on a device. Gateway and worker on two machines not tested. |
 | [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | Tested | Bundled, exact pin. Simlock runs it through `capabilities.agent-device.command`. |
 | Xcode | 26.5 (17F42) | Tested | iOS 18.5 runtime used; iOS 26.5 runtime installed but not leased in the recorded run. |
 | [asc](https://github.com/rorkai/App-Store-Connect-CLI) | 5.17.1 (Homebrew) | Tested | `--version` and `apps list` through the CLI and `execute_tool`. |
@@ -44,10 +44,10 @@ that can talk to each other; a worker on an incompatible version connects but is
 `incompatible` and gets no requests. A CLI and a running daemon of different versions can also refuse
 each other with `PROTOCOL_VERSION_UNSUPPORTED` (restart the daemon after an upgrade).
 
-Practical rule: run **Simlock 0.4.0 on the gateway and on every worker**, which is what Tapdance 0.1.0
-bundles. Installing Tapdance from the same commit on every machine and using `tapdance worker …` /
+Practical rule: run **Simlock 0.5.0 on the gateway and on every worker**, which is what Tapdance 0.1.0
+bundles (with its patch, which does not change the protocol). Installing Tapdance from the same commit on every machine and using `tapdance worker …` /
 `tapdance gateway …` gives you that. `tapdance doctor` warns when the endpoint reports another Simlock
-version ("Tapdance is tested with 0.4.0").
+version ("Tapdance is tested with 0.5.0").
 
 ## agent-device on workers
 

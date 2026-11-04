@@ -297,7 +297,7 @@ anything. Include:
 | What happened | The exact command and the exact output, trimmed to the relevant part. Include the exit code. | `tapdance app install big.apk` → `PROVIDER_UNREACHABLE … (exit 4)` |
 | What you expected | What should have happened, and why you expected it: the requirement ID, the doc or the `--help` text. | "The APK installs (F-01). e2e-procedures.md procedure 4 says it is uploaded through the gateway." |
 | Minimal reproduction | The shortest list of steps from a known state that shows the problem. Remove steps that do not matter. Say which machine each step runs on. | 1. VPS: lease Android. 2. VPS: install a 150 MB APK. |
-| Environment | From `tapdance report`: versions, OS, provider. Add the machines involved, the network (Caddy, Tailscale), and the tested commit. | `tapdance 0.1.0 @ a1b2c3d, simlock 0.4.0, Ubuntu 24.04 VPS + macOS 26.5 laptop, Tailscale` |
+| Environment | From `tapdance report`: versions, OS, provider. Add the machines involved, the network (Caddy, Tailscale), and the tested commit. | `tapdance 0.1.0 @ a1b2c3d, simlock 0.5.0, Ubuntu 24.04 VPS + macOS 26.5 laptop, Tailscale` |
 | Evidence | Log excerpts, screenshots, the evidence record, timings. | `<details>` with 30 log lines; screenshot attached |
 | How often | Every time, sometimes (how many out of how many tries), once. | "3 of 3 tries" |
 | What you tried | Workarounds, and whether they helped. | "`tapdance worker restart` on the laptop did not help." |

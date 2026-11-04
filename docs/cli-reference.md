@@ -77,7 +77,7 @@ connection through `tailscale serve` can be slow; the time is shown, a failure n
 serves HTTPS is named as such), the token's role, whether
 agent-device, streaming and input are available, capacity per platform (a platform with room but no device on offer fails: the worker skipped that
 driver, so leases would be refused), the Simlock version (warns if
-it is not 0.4.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored),
+it is not 0.5.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored),
 and this session's lease.
 
 Host checks run by default in local mode only. `--no-host` skips them. Exit code 10 when any check
@@ -592,7 +592,7 @@ it or keep it on a private network such as Tailscale. Never commit tokens.
 tapdance simlock -- <simlock arguments>
 ```
 
-Runs the Simlock 0.4.0 CLI bundled with Tapdance, for operators. Put `--` before Simlock's own options
+Runs the Simlock 0.5.0 CLI bundled with Tapdance (with Tapdance's patch), for operators. Put `--` before Simlock's own options
 (`tapdance simlock -- --version`), or Tapdance parses them itself. Agents should not need it.
 
 ## Hosting for a remote agent

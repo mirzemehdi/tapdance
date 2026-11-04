@@ -1,0 +1,157 @@
+diff --git a/dist/core/doctor.js b/dist/core/doctor.js
+index 0e92679a051e24decae7dc4b7850083e7bba36a3..23e2f9767b1928e21cba25b818085e87e7d5e347 100644
+--- a/dist/core/doctor.js
++++ b/dist/core/doctor.js
+@@ -44,6 +44,21 @@ export class Doctor {
+         if (fix) {
+             await this.#applySafeFixes(findings, driversByPlatform);
+         }
++        else {
++            // tapdance patch (#94): an Android record still `ready` whose emulator is gone (the host
++            // restarted, the emulator crashed) is moved to `shutdown` on every reconcile, not only on
++            // `doctor --fix`. The daemon's startup pass runs this before health reports `running` and
++            // before convergence, so the warm pool boots the spare again and no lease is granted a
++            // dead serial ("No Android device with serial ..."). Reuses `--fix`'s own ready->shutdown
++            // transition, with its lease guard; claimed devices never produce this finding.
++            for (const finding of findings) {
++                if (finding.kind === "foreign-state-change" &&
++                    finding.platform === "android" &&
++                    finding.observed === "stopped") {
++                    await this.options.decisions.run(() => this.#fixForeignStateChange(finding));
++                }
++            }
++        }
+         // why: Prerequisites last: a check may run for tens of seconds, and nothing `--fix` or a purge
+         // acts on should wait behind it and go stale. They are never acted on themselves.
+         const remaining = [
+diff --git a/dist/drivers/android/guest-settle.js b/dist/drivers/android/guest-settle.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..9720b997e8de28414b23b6524b6314ccf26f9e10
+--- /dev/null
++++ b/dist/drivers/android/guest-settle.js
+@@ -0,0 +1,69 @@
++// tapdance patch (#79): the clean baseline snapshot is taken only from a settled guest.
++//
++// `sys.boot_completed`, the stopped boot animation and an answering package manager all pass while the
++// guest is still busy for minutes (dexopt, Play services, System UI starting). A clean baseline saved
++// then makes every later restore of it -- each warm spare, each reclaim -- resume a busy guest, so the
++// next lease gets slow commands and "System UI isn't responding" dialogs. So before the baseline is
++// captured (once per device, on its first boot), the driver waits until the guest's CPU, read from the
++// first line of its /proc/stat, has been busy at most `busyThreshold` of the time for `samples`
++// consecutive intervals. The wait is bounded: past `boundMs` (or when the counters cannot be read) the
++// baseline is captured as before this patch. Ordinary boots and reclaims do not wait.
++
++/** The guest counts as settled when it was busy at most this share of an interval. */
++export const GUEST_SETTLED_BUSY = 0.5;
++/** Consecutive calm intervals needed. */
++export const GUEST_SETTLED_SAMPLES = 2;
++export const GUEST_SETTLE_INTERVAL_MS = 1_000;
++/** After this long the baseline is captured anyway, as before the patch. */
++export const GUEST_SETTLE_BOUND_MS = 120_000;
++
++/**
++ * The CPU counters from the `cpu` line of /proc/stat: user nice system idle iowait irq softirq
++ * steal. Waiting on I/O or for the host's CPU (steal) counts as busy. `undefined` when absent.
++ */
++export function parseProcStatCpu(stdout) {
++    const line = stdout.split(/\r?\n/).map((l) => l.trim()).find((l) => /^cpu\s/.test(l));
++    if (line === undefined)
++        return undefined;
++    const fields = line.split(/\s+/).slice(1, 9).map(Number);
++    if (fields.length < 4 || !fields.every((v) => Number.isFinite(v)))
++        return undefined;
++    return { idle: fields[3], total: fields.reduce((a, b) => a + b, 0) };
++}
++
++/** The busy share between two reads, 0..1; `undefined` when it cannot be told. */
++export function busyBetween(previous, current) {
++    const total = current.total - previous.total;
++    const idle = current.idle - previous.idle;
++    if (total <= 0 || idle < 0)
++        return undefined;
++    return Math.min(1, Math.max(0, (total - idle) / total));
++}
++
++/**
++ * Waits until the guest is calm, or the bound passes. `readCpu` resolves to the counters or
++ * `undefined` (unreadable); `now`/`delay` are the driver's clock.
++ * Resolves `{ settled, waitedMs, busy, reason }`; never throws for a busy or unreadable guest.
++ */
++export async function waitForGuestSettled({ readCpu, now, delay, boundMs = GUEST_SETTLE_BOUND_MS, intervalMs = GUEST_SETTLE_INTERVAL_MS, busyThreshold = GUEST_SETTLED_BUSY, samples = GUEST_SETTLED_SAMPLES, }) {
++    const startedAt = now();
++    let previous = await readCpu();
++    if (previous === undefined)
++        return { reason: "unreadable", settled: false, waitedMs: now() - startedAt };
++    let calm = 0;
++    let busy;
++    while (true) {
++        const elapsed = now() - startedAt;
++        if (elapsed >= boundMs)
++            return { busy, reason: "bound", settled: false, waitedMs: elapsed };
++        await delay(Math.min(intervalMs, boundMs - elapsed));
++        const current = await readCpu();
++        if (current === undefined)
++            return { busy, reason: "unreadable", settled: false, waitedMs: now() - startedAt };
++        busy = busyBetween(previous, current);
++        previous = current;
++        calm = busy !== undefined && busy <= busyThreshold ? calm + 1 : 0;
++        if (calm >= samples)
++            return { busy, settled: true, waitedMs: now() - startedAt };
++    }
++}
+diff --git a/dist/drivers/android/index.js b/dist/drivers/android/index.js
+index 7bf83c1283918f3acc6cc579aae04bdbe7e2c451..082ce5271f76f42744d4a0c638e7ffab10a29adf 100644
+--- a/dist/drivers/android/index.js
++++ b/dist/drivers/android/index.js
+@@ -14,6 +14,8 @@ import { LibraryDeviceProfileSource } from "./profiles/index.js";
+ import { createAndroidDeviceInput } from "./input/index.js";
+ import { createAndroidScreenCapture } from "./screen/index.js";
+ import { locateSdk } from "./sdk-paths.js";
++// tapdance patch (#79): the clean baseline is captured only from a settled guest (see guest-settle.js).
++import { waitForGuestSettled, parseProcStatCpu } from "./guest-settle.js";
+ export { AdbServerUnavailableError } from "./adb-server.js";
+ const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
+ // why: Measured at 60-71s for a cold boot to `sys.boot_completed` on an M-series Mac against
+@@ -845,6 +847,10 @@ export class AndroidDriver {
+             state.needsWipe = false;
+             state.snapshotExpected = false;
+             if (!state.baselineCaptured) {
++                // tapdance patch (#79): a baseline snapshotted mid-dexopt makes every later restore of
++                // it busy for minutes, so wait (bounded) for a calm guest before saving it. Only here:
++                // ordinary boots, snapshot loads, recovery and reclaims keep upstream's readiness.
++                await this.#waitForGuestSettled(booted);
+                 await this.#captureBaseline(booted, state);
+                 await this.#shutdown(booted, state);
+                 await this.#startEmulator(booted, state, ["-snapshot", CLEAN_BASELINE], true);
+@@ -1604,6 +1610,31 @@ export class AndroidDriver {
+             await this.#delay(Math.min(PORT_POLL_INTERVAL_MS, this.#readinessTimeoutMs - (this.#clock.now() - startedAt)));
+         }
+     }
++    // tapdance patch (#79): bounded wait for a calm guest CPU before the baseline capture; past the
++    // bound, or when /proc/stat cannot be read, the baseline is captured as before. Never throws.
++    async #waitForGuestSettled(data) {
++        const result = await waitForGuestSettled({
++            delay: (ms) => this.#delay(ms),
++            now: () => this.#clock.now(),
++            readCpu: async () => {
++                try {
++                    const read = await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "shell", "head", "-n", "1", "/proc/stat"], { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS });
++                    return read.code === 0 ? parseProcStatCpu(read.stdout) : undefined;
++                }
++                catch {
++                    return undefined;
++                }
++            },
++        });
++        if (!result.settled) {
++            this.#warnCleanup("Android guest still busy; capturing the clean baseline anyway", {
++                avdName: data.avdName,
++                busy: result.busy,
++                reason: result.reason,
++                waitedMs: result.waitedMs,
++            });
++        }
++    }
+     /**
+      * why: After a snapshot load both boot properties pass before `pm` answers, so a device granted
+      * then fails its first install or package query.

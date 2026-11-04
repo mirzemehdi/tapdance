@@ -5,7 +5,9 @@ Copyright (C) 2026 mirzemehdi. Versions up to and including commit b3ec7e3 were 
 license, and copies obtained under it keep those terms.
 
 Tapdance copies no source code from the projects below. It depends on some of them as npm packages,
-runs others as separate executables, and follows the published formats or designs of a few. Each
+runs others as separate executables, and follows the published formats or designs of a few. Two of
+the npm packages are patched in place when you install from source (see
+[Patches to dependencies](#patches-to-dependencies)). Each
 dependency's own license file travels inside its package. This file lists them so you can check
 the terms in one place.
 
@@ -16,8 +18,8 @@ These are installed with Tapdance. Versions are the exact pins in `packages/*/pa
 
 | Package | Version | License | Copyright | Used for |
 | --- | --- | --- | --- | --- |
-| [simlock](https://github.com/callstackincubator/simlock) | 0.4.0 | MIT | Szymon Chmal | Device leasing, queue, workers, gateway, simulator/emulator lifecycle, screen stream and input sockets. Bundled with the CLI and run as its own daemon. |
-| [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | MIT | Callstack | UI snapshots, selectors, gestures, typing, app upload, screenshots, MP4 recordings, app logs. |
+| [simlock](https://github.com/callstackincubator/simlock) | 0.5.0 (patched, see below) | MIT | Szymon Chmal | Device leasing, queue, workers, gateway, simulator/emulator lifecycle, screen stream and input sockets. Bundled with the CLI and run as its own daemon. |
+| [agent-device](https://github.com/callstack/agent-device) | 0.21.35 (patched, see below) | MIT | Callstack | UI snapshots, selectors, gestures, typing, app upload, screenshots, MP4 recordings, app logs. |
 | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) | 1.32.2 | MIT | Anthropic, PBC | The MCP server (stdio and Streamable HTTP). |
 | [zod](https://github.com/colinhacks/zod) | 4.6.7 | MIT | Colin McDonnell | Config, MCP input and scenario validation. |
 | [commander](https://github.com/tj/commander.js) | 15.0.0 | MIT | TJ Holowaychuk | CLI parsing. |
@@ -43,6 +45,18 @@ Some packages above ship code from other projects, with their own notices:
 
 Tapdance does not modify or redistribute these components separately; they reach you inside the
 upstream packages, with those packages' notices.
+
+## Patches to dependencies
+
+`pnpm install` in this repository applies these patches (listed under `patchedDependencies` in
+`pnpm-workspace.yaml`) to the installed packages. Each changes the package's compiled JavaScript in
+place; the packages stay under their own MIT licenses and copyright, and the changed lines are marked
+with a `tapdance patch` comment. They are Tapdance's own fixes, not upstream releases.
+
+| Patch | Package (license, copyright) | What it changes and why |
+| --- | --- | --- |
+| `patches/agent-device@0.21.35.patch` | agent-device 0.21.35 (MIT, Callstack) | The iOS runner rotates landscape taps against the app's window instead of its own legacy-size screen (#56). |
+| `patches/simlock@0.5.0.patch` | Simlock 0.5.0 (MIT, Szymon Chmal) | `core/doctor.js`: every reconcile, including the daemon's startup pass, moves a `ready` Android record whose emulator is gone to `shutdown`, so a restarted host does not grant a dead emulator (#94). `drivers/android/index.js` and a new `drivers/android/guest-settle.js`: before capturing an Android device's clean baseline snapshot, waits at most 120 s for the guest's CPU to calm down, so the snapshot every warm spare and reclaim restores is not taken mid-dexopt (#79). |
 
 ## Formats and designs Tapdance follows
 
