@@ -45,7 +45,8 @@ import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
 import { GH_FIX, deployKeyState, describeDeployKeyState, ghNeededFor, removeFromAllowList } from "./host/builds.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
-import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, workerRunning, workerServiceInstalled } from "./commands-worker.js";
+import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, restartWorker, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, workerRunning, workerServiceCheck, workerServiceInstalled } from "./commands-worker.js";
+import { hostUpWorkerAction, staleServiceReason } from "./host/worker-service.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
 import { HOST_STOP_COMMAND, HOST_STOP_SUDO_CHECK, describeHostStop, hostStopApplies, sudoersInstallCommand, sudoersRule } from "./guard/host-stop.js";
@@ -329,9 +330,17 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           // worker would end the sessions of an agent that is using this host right now.
           const service = await guardServiceState(platform, homedir(), { run: runCommand, uid: process.getuid?.() ?? 0 });
           const warm = o.warm ? parseWarm(o.warm) : undefined;
-          if (service.running && (await localWorkerStatus()) !== undefined) {
-            if (warm) await applyWarm(out, warm);
-            else out.progress("The worker already runs (from an earlier `host up`); left as is. `tapdance worker install --service` reconfigures it.");
+          const workerStatus = service.running ? ((await localWorkerStatus()) as { leases?: unknown[] } | undefined) : undefined;
+          if (workerStatus !== undefined) {
+            // After an update the worker's login service may still start the old Simlock (#110).
+            const check = await workerServiceCheck();
+            const activeLeases = Array.isArray(workerStatus.leases) ? workerStatus.leases.length : 0;
+            const action = hostUpWorkerAction({ warm: warm !== undefined, service: check, activeLeases });
+            if (action === "apply-warm") await applyWarm(out, warm!);
+            else if (action === "refresh-service") await restartWorker(out);
+            else if (action === "warn-stale-busy") {
+              out.warn(`${staleServiceReason(check)}. ${activeLeases} lease(s) are running, so it was left as is: run \`tapdance worker restart\` once they end.`);
+            } else out.progress("The worker already runs (from an earlier `host up`) and starts this Tapdance's Simlock; left as is. `tapdance worker install --service` reconfigures it.");
             return;
           }
           await installWorker({ stream: true, iosBackend: "agent-device", service: true, checks: prereq.checks, ...(warm ? { warm } : {}) }, out);

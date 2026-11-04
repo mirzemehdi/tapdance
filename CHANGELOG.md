@@ -548,6 +548,37 @@ unit-tested with mocked clients and adb, and not yet re-run on a host.
   `tapdance app list` shows it instead of a placeholder. Other hints that printed a placeholder for a
   value they had (the repository URL in build-file hints, the app id for `logs --app`) now print it.
 
+### Field run 4 on the N2 VM (issues #101, #110-#112)
+
+From a re-run on the Google Cloud N2 host with the #105 Simlock patch; the changes are unit-tested
+with fakes and not yet re-run on a host.
+
+- Removed (#101, #79, Simlock patch): the wait for a calm guest before Simlock saves a device's clean
+  baseline (at most 120 s) and the `cmd package bg-dexopt-job` step before it (at most 90 s). Measured
+  on N2: the dexopt job timed out at 90 s both times, the wait gave up at 120 s every time with the
+  guest still ~95 % busy, cold leases grew to 269-348 s (past the 330 s lease wait), and restores
+  still replayed 61-90 s of busy guest. They cost time and gained nothing, so baseline capture is
+  upstream 0.5.0's again. The #94 reconcile fix stays. The patch now only logs one info line at the
+  capture, "Capturing the Android clean baseline", with the guest CPU then (one `/proc/stat` sample
+  pair, about a second) (#103). Tapdance's own lease settle check is unchanged.
+- Fixed (#110): after `git pull && pnpm install` with a new Simlock patch, the worker's systemd unit
+  (or launchd plist) still started the old `simlock@…_patch_hash=…` folder, through `worker restart`
+  and `host up` too; only `worker install --service` rewrote it. `worker start`/`restart`, `host up`
+  (a running worker, when no lease runs; it warns otherwise) and `host resume` now compare the service
+  with this Tapdance's Simlock and Node and, when it is stale, start the worker with Simlock's
+  `daemon install` (rewrite and reload) instead, saying so. Warm-spare settings are untouched and the
+  device records are checked with `doctor --fix` only, so learned spares are kept. `worker install
+  --service` skips its second `daemon install` when the service is already current.
+- Fixed (#111): `worker logs` printed Simlock's last 100 lines only, so the documented "clean
+  baseline" check found nothing after one lease. It now reads `daemon.log` (and `daemon.log.1`)
+  itself and takes `-n/--lines` (up to 5000), `--contains` and `--since`.
+- Fixed (#112): on a host with both the Play image and `google_apis`, a lease without `--image-tag`
+  got the old Play device, `--image-tag google_apis` alone got Pixel 9 / API 35 instead of the host's
+  default, and "a warm spare is ready" was said for a spare of another kind. A lease without a tag now
+  asks for `google_apis` when the host also has a Play image (and says so), a tag without `--os` asks
+  for the host's default API level when the tag is installed there, the spare line counts only spares
+  of the requested tag, and `host warm` shows each Android spare's tag.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,

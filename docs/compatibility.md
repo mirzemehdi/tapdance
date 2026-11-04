@@ -15,7 +15,7 @@ on iOS 18.5, created by Simlock.
 | Component | Version | Status with Tapdance 0.1.0 | Notes |
 | --- | --- | --- | --- |
 | Node.js | 22.22.0 | Tested | Minimum 22.13 (Tapdance's and Simlock's `engines`). `doctor` fails below it. |
-| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Bundled; the runs above used 0.4.0 (local worker; gateway + joined worker on one Mac) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the clean baseline is taken from a calm guest, #79). 0.5.0 not yet run on a device. Gateway and worker on two machines not tested. |
+| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Bundled; the runs above used 0.4.0 (local worker; gateway + joined worker on one Mac) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when the clean baseline is captured, #103). 0.5.0 not yet run on a device. Gateway and worker on two machines not tested. |
 | [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | Tested | Bundled, exact pin. Simlock runs it through `capabilities.agent-device.command`. |
 | Xcode | 26.5 (17F42) | Tested | iOS 18.5 runtime used; iOS 26.5 runtime installed but not leased in the recorded run. |
 | [asc](https://github.com/rorkai/App-Store-Connect-CLI) | 5.17.1 (Homebrew) | Tested | `--version` and `apps list` through the CLI and `execute_tool`. |
@@ -59,7 +59,8 @@ with Tapdance (0.21.35). If you configure a worker by hand, use the same version
 
 Tapdance pins exact versions of Simlock and agent-device and never upgrades them, Xcode, the Android SDK
 or external tools by itself. To upgrade, update every machine to the same Tapdance commit, run
-`pnpm install && pnpm build`, then `tapdance worker restart` on workers and, on the gateway,
+`pnpm install && pnpm build`, then `tapdance worker restart` on workers (it also installs a login
+service that still names the old Simlock folder again) and, on the gateway,
 `tapdance simlock -- --gateway daemon stop` followed by `tapdance simlock -- --gateway daemon start`, so
 the new Simlock runs everywhere. `tapdance tools versions` shows external tool versions.
 

@@ -55,6 +55,7 @@ import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockStatus, type SimlockWorker } from "./http.js";
 import { describeDialog, dialogAdvice, dialogFromDumpsys, dialogInNodes, SETTLE_INTERVAL_MS, settleGuest, type SettleResult, type SystemDialog } from "./guest-settle.js";
+import { chooseAndroidImage } from "./image-choice.js";
 import { AxeBackend } from "./axe.js";
 
 export const PROVIDER_NAME = "simlock";
@@ -81,11 +82,17 @@ export function isStaleDeviceRecord(error: unknown): error is TapdanceError {
 }
 
 /** The part of the request line that says whether a spare is ready, from Simlock's status (#92). */
-export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion">): string {
+export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion" | "imageTag">): string {
   if (status === undefined) return "queues if busy; a new device can take a few minutes";
   const same = (a: string | undefined, b: string | undefined) => a === undefined || b === undefined || a.toLowerCase() === b.toLowerCase();
-  const targets = (status.warmPool?.targets ?? []).filter((t) => t.platform === request.platform && same(request.device, t.model) && same(request.osVersion, t.osVersion));
-  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (request.device === undefined && (status.capacity?.[request.platform]?.warm ?? 0) > 0);
+  // Simlock grants a spare only of the requested image tag: an untagged request takes untagged
+  // spares only, a tagged one spares of that tag only (#112).
+  const sameTag = (t: { imageTag?: string }) => (t.imageTag ?? "") === (request.imageTag ?? "");
+  const targets = (status.warmPool?.targets ?? []).filter((t) => t.platform === request.platform && same(request.device, t.model) && same(request.osVersion, t.osVersion) && sameTag(t));
+  // Simlock's bare warm count says nothing about the kind: trust it only when there is no per-kind
+  // list to read and the request names no particular kind.
+  const anyKind = status.warmPool?.targets === undefined && request.device === undefined && request.osVersion === undefined && request.imageTag === undefined;
+  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (anyKind && (status.capacity?.[request.platform]?.warm ?? 0) > 0);
   if (ready) return "a warm spare is ready";
   if (targets.some((t) => (t.booting ?? 0) > 0)) return "a spare is booting; this can take a minute or two";
   return "no spare is ready, so a device has to start: this can take a few minutes";
@@ -553,7 +560,21 @@ export class SimlockProvider implements DeviceProvider {
     await releaseStaleDeviceClaims().catch(() => undefined);
   }
 
-  private async leaseOnce(sessionId: string, request: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
+  /**
+   * Fills in the Android image tag and API level from the host's catalog (#112, see image-choice.ts).
+   * An unreadable catalog leaves the request as it is; this never fails a lease.
+   */
+  private async withImageChoice(request: LeaseRequest, options: CallOptions): Promise<LeaseRequest> {
+    if (request.platform !== "android" || request.physical || request.profile) return request;
+    const catalog = await this.http.catalog("android", 5_000).catch(() => undefined);
+    const entry = Array.isArray(catalog?.platforms) ? catalog.platforms.find((p) => p.platform === "android") : undefined;
+    const choice = chooseAndroidImage(request, entry);
+    if (choice.note) options.onProgress?.(choice.note);
+    return { ...request, ...(choice.imageTag ? { imageTag: choice.imageTag } : {}), ...(choice.osVersion ? { osVersion: choice.osVersion } : {}) };
+  }
+
+  private async leaseOnce(sessionId: string, given: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
+    const request = await this.withImageChoice(given, options);
     const leaseId = randomBytes(16).toString("hex");
     // One agent-device session per lease: a session keeps state on the worker (an unfinished screen
     // recording, a device claim) that a later lease under the same name would otherwise inherit.

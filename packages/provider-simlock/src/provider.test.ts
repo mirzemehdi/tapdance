@@ -962,6 +962,7 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     press?: (p: Record<string, unknown>) => Promise<unknown>;
     snapshot?: () => Promise<unknown>;
     warmUpTimeoutMs?: number;
+    catalog?: unknown;
   }) {
     let leaseId: string | undefined;
     const pressed: Array<Record<string, unknown>> = [];
@@ -990,6 +991,7 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     const fetchImpl = (async (url: string) => {
       const path = new URL(url).pathname;
       if (path === "/v1/status") return new Response(JSON.stringify(o.status?.(leaseId) ?? { devices: [], leases: [] }), { status: 200 });
+      if (path === "/v1/catalog" && o.catalog !== undefined) return new Response(JSON.stringify(o.catalog), { status: 200 });
       return new Response(JSON.stringify({ lease: { id: leaseId } }), { status: 200 });
     }) as typeof fetch;
     const p = new (class extends SimlockProvider {
@@ -1065,8 +1067,74 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     expect(spareNote(status, { platform: "android", device: "Pixel 9" })).toMatch(/no spare is ready/);
     expect(spareNote({ ...status, warmPool: { targets: [{ platform: "android", model: "Pixel 8", ready: 0, booting: 1 }] }, capacity: {} }, { platform: "android" })).toMatch(/a spare is booting/);
     expect(spareNote(undefined, { platform: "android" })).toMatch(/a new device can take a few minutes/);
+    // The ready spare must be of the requested image tag (#112).
+    const play = { devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", ready: 1 }] } };
+    expect(spareNote(play, { platform: "android", imageTag: "google_apis" })).toMatch(/no spare is ready/);
+    const tagged = { ...play, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis", ready: 1 }] } };
+    expect(spareNote(tagged, { platform: "android", imageTag: "google_apis", osVersion: "34" })).toBe("a warm spare is ready");
+    expect(spareNote(tagged, { platform: "android" })).toMatch(/no spare is ready/);
+    // Simlock's bare warm count is not a ready spare of another kind.
+    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [] } }, { platform: "android" })).toMatch(/no spare is ready/);
+    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } } }, { platform: "android" })).toBe("a warm spare is ready");
+    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } } }, { platform: "android", imageTag: "google_apis" })).toMatch(/no spare is ready/);
     expect(describeWaiting({ stage: "queued", queuePosition: 2, reason: "full" })).toBe("Queued for a device (position 2, every slot is busy)");
     expect(describeWaiting(undefined)).toBeUndefined();
+  });
+
+  it("on a host with both images, a lease without a tag asks for google_apis at the default API level, and says so (#112; fake catalog)", async () => {
+    const catalog = {
+      platforms: [
+        {
+          platform: "android",
+          models: ["Pixel 8", "Pixel 9"],
+          runtimes: ["34", "35"],
+          defaultRuntime: "34",
+          images: [
+            { runtime: "34", tag: "google_apis", abi: "x86_64" },
+            { runtime: "34", tag: "google_apis_playstore", abi: "x86_64" },
+            { runtime: "35", tag: "google_apis", abi: "x86_64" },
+          ],
+        },
+      ],
+    };
+    const sent: Array<Record<string, unknown>> = [];
+    const { p } = fakeHost({
+      catalog,
+      allocate: async (a) => (sent.push(a as Record<string, unknown>), { ...granted, leaseId: a.leaseId }),
+      // The ready spare is the old untagged (Play) kind: not claimed as ready for this request.
+      status: () => ({ devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", ready: 1 }] } }),
+    });
+    const progress: string[] = [];
+    await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(sent[0]).toMatchObject({ imageTag: "google_apis", osVersion: "34" });
+    expect(progress[0]).toMatch(/^Using the google_apis image \(this host also has google_apis_playstore.*\), API 34, the host's default$/);
+    expect(progress[1]).toMatch(/no spare is ready/);
+
+    // An explicit tag without --os keeps the default API level instead of the newest (35).
+    sent.length = 0;
+    await p.lease("s", { ...request, imageTag: "google_apis" });
+    expect(sent[0]).toMatchObject({ imageTag: "google_apis", osVersion: "34" });
+    // A request that names its OS, or asks for Play, is sent as given (only google_apis exists at 35).
+    sent.length = 0;
+    await p.lease("s", { ...request, osVersion: "35" });
+    expect(sent[0]).toMatchObject({ osVersion: "35" });
+    expect(sent[0]?.["imageTag"]).toBeUndefined();
+    sent.length = 0;
+    await p.lease("s", { ...request, imageTag: "google_apis_playstore", osVersion: "34" });
+    expect(sent[0]).toMatchObject({ imageTag: "google_apis_playstore", osVersion: "34" });
+  });
+
+  it("leaves the request alone on a host with one kind of image, or when the catalog cannot be read (#112; fake catalog)", async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    const one = { platforms: [{ platform: "android", defaultRuntime: "34", images: [{ runtime: "34", tag: "google_apis_playstore", abi: "x86_64" }] }] };
+    const { p } = fakeHost({ catalog: one, allocate: async (a) => (sent.push(a as Record<string, unknown>), { ...granted, leaseId: a.leaseId }) });
+    await p.lease("s", request);
+    expect(sent[0]?.["imageTag"]).toBeUndefined();
+    expect(sent[0]?.["osVersion"]).toBeUndefined();
+    // No catalog route (an older endpoint): the fake answers something else.
+    const other = fakeHost({ allocate: async (a) => (sent.push(a as Record<string, unknown>), { ...granted, leaseId: a.leaseId }) });
+    await other.p.lease("s", request);
+    expect(sent[1]?.["imageTag"]).toBeUndefined();
   });
 
   it("waits for a busy guest, answers a System UI ANR with Wait, and hands it out (#79)", async () => {

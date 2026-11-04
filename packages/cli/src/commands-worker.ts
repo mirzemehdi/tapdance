@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Command } from "commander";
 import { TapdanceError, hostChecks, isPrivateHost, saveCredentials, userConfigPath, writeConfigFile, type DoctorCheck, type TapdanceConfig } from "@tapdance/sdk";
@@ -13,6 +13,8 @@ import { readSecret } from "./commands-setup.js";
 import { registerGuardCommands } from "./commands-guard.js";
 import { describeWarm, linuxEmulatorSettings, warmSettings, withoutWarmSettings, type WarmCounts } from "./host/plan.js";
 import { prepareLinuxUserServices } from "./guard/service.js";
+import { DEFAULT_WORKER_LOG_LINES, MAX_WORKER_LOG_LINES, parseSince, readDaemonLogs, selectDaemonLogLines } from "./host/daemon-log.js";
+import { checkWorkerService, staleServiceLine, workerStartArgs, type WorkerServiceCheck } from "./host/worker-service.js";
 
 const exec = promisify(execFile);
 /** The port Simlock runs its own adb server on (5037 is the developer's). */
@@ -69,10 +71,13 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
     await killStaleAdbServer(out);
     await syncAgentDeviceCommand(out);
   }
+  // A login service written by an earlier Tapdance starts that one's Simlock: install it again (#110).
+  const startArgs = gateway ? ["daemon", "start"] : await workerStartArgsFor(out);
+  const reinstalled = startArgs[1] === "install";
   for (let attempt = 1; ; attempt++) {
     try {
-      await simlock([...flag, "daemon", "start"]);
-      if (!gateway) await reconcileDevices(out);
+      await simlock([...flag, ...startArgs]);
+      if (!gateway) await reconcileDevices(out, { resetIfDoctorFails: !reinstalled });
       return;
     } catch (error) {
       if (attempt >= 3) throw error;
@@ -89,7 +94,7 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
  * cannot run, and no lease is active, does `nuke` (without `--delete-devices`: it deletes nothing)
  * reset the records instead; that also forgets the learned spares.
  */
-async function reconcileDevices(out: ReturnType<typeof output>): Promise<void> {
+async function reconcileDevices(out: ReturnType<typeof output>, options: { resetIfDoctorFails?: boolean } = {}): Promise<void> {
   await cleanupClaims(out).catch(() => undefined);
   const fixed = await simlock(["--local", "doctor", "--fix"]).then(
     () => true,
@@ -99,6 +104,9 @@ async function reconcileDevices(out: ReturnType<typeof output>): Promise<void> {
     out.progress("Checked Simlock's device records against the running devices (warm spares it learned are kept)");
     return;
   }
+  // After a service reinstall (#110) the records are kept as they are rather than reset, so the
+  // learned spares survive; Simlock's own startup reconcile still runs.
+  if (options.resetIfDoctorFails === false) return;
   const status = safeJson(await simlock(["--local", "status", "--json"]).catch(() => "{}")) as { leases?: unknown[] } | undefined;
   if (!status || (Array.isArray(status.leases) && status.leases.length > 0)) return;
   await simlock(["--local", "nuke", "--yes"]).then(() => out.progress("Reset Simlock's device records (no lease was active; the next lease teaches the warm pool again)"), () => undefined);
@@ -224,6 +232,32 @@ function simlockHome(): string {
   return process.env["SIMLOCK_HOME"] ?? join(homedir(), ".simlock");
 }
 
+/** Whether the worker's login service starts this Tapdance's Simlock (#110). */
+export async function workerServiceCheck(): Promise<WorkerServiceCheck> {
+  return checkWorkerService(
+    {
+      platform: osPlatform(),
+      home: homedir(),
+      simlockHome: simlockHome(),
+      env: process.env,
+      wanted: { node: process.execPath, main: resolve(dirname(simlockBin()), "..", "daemon", "main.js") },
+    },
+    { readFile: (path) => readFile(path, "utf8"), exists: async (path) => existsSync(path) },
+  ).catch((): WorkerServiceCheck => ({ state: "none" }));
+}
+
+/** `daemon start`, or `daemon install` when the login service is stale (said on stderr). */
+async function workerStartArgsFor(out: Pick<ReturnType<typeof output>, "progress">): Promise<string[]> {
+  const check = await workerServiceCheck();
+  if (check.state === "stale") out.progress(staleServiceLine(check));
+  return workerStartArgs(check);
+}
+
+/** Restarts the local worker daemon (installing a stale login service again, #110). */
+export async function restartWorker(out: ReturnType<typeof output>): Promise<void> {
+  await restart(false, out);
+}
+
 function checkGatewayUrl(raw: string): string {
   let url: URL;
   try {
@@ -285,8 +319,15 @@ export async function installWorker(
   if (o.warm) await applyWarm(out, o.warm);
   if (o.service) {
     if (osPlatform() === "linux") await prepareLinuxUserServices(out);
-    out.progress("Installing the login service");
-    await simlock(["--local", "daemon", "install"]);
+    // The restart above already installed a stale service again (#110); a second `daemon install`
+    // would stop and start the worker once more for nothing.
+    if ((await workerServiceInstalled()) && (await workerServiceCheck()).state === "current") {
+      out.progress("The login service is installed and starts this Tapdance's Simlock; left as is");
+    } else {
+      out.progress("Installing the login service");
+      await simlock(["--local", "daemon", "install"]);
+      await reconcileDevices(out, { resetIfDoctorFails: false });
+    }
   }
   const status = await simlock(["--local", "status", "--json"]).catch(() => "{}");
   return { settings: settings.map(([k]) => k), checks, status: safeJson(status) };
@@ -402,7 +443,7 @@ export async function startWorker(out: ReturnType<typeof output>): Promise<void>
   if (!(await workerRunning())) {
     await killStaleAdbServer(out);
     await syncAgentDeviceCommand(out);
-    await simlock(["--local", "daemon", "start"]).catch(() => "");
+    await simlock(["--local", ...(await workerStartArgsFor(out))]).catch(() => "");
   }
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline && !(await workerRunning())) await new Promise((r) => setTimeout(r, 1000));
@@ -521,7 +562,6 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
     ["start", ["daemon", "start"], "Start the worker daemon"],
     ["stop", ["daemon", "stop"], "Stop the worker: end its leases, stop the daemon and shut down the emulators and simulators it created"],
     ["status", ["status"], "Show the worker's devices, leases and capabilities"],
-    ["logs", ["daemon", "logs"], "Print the worker daemon log"],
   ] as const) {
     worker
       .command(name)
@@ -534,11 +574,15 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
             out.result({ stopped: true, ...r }, () => `Stopped the worker${r.stoppedDevices.length ? ` and ${r.stoppedDevices.length} device(s): ${r.stoppedDevices.join(", ")}` : ""}.`);
             return;
           }
+          let command: readonly string[] = args;
           if (name === "start") {
             await ensureSimlockHelpersExecutable(out);
-            if (!(await workerRunning())) await killStaleAdbServer(out);
+            if (!(await workerRunning())) {
+              await killStaleAdbServer(out);
+              command = await workerStartArgsFor(out);
+            }
           }
-          const text = await simlock(["--local", ...args, ...(name === "status" && globals().json ? ["--json"] : [])]);
+          const text = await simlock(["--local", ...command, ...(name === "status" && globals().json ? ["--json"] : [])]);
           if (name === "start") await reconcileDevices(out);
           out.result(safeJson(text) ?? { output: text }, () => text);
         } catch (error) {
@@ -546,6 +590,28 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         }
       });
   }
+  worker
+    .command("logs")
+    .description(`Print the worker daemon log (the last ${DEFAULT_WORKER_LOG_LINES} lines unless -n says otherwise), optionally filtered`)
+    .option("-n, --lines <n>", `how many lines (at most ${MAX_WORKER_LOG_LINES}); with a filter, how many matching lines`, String(DEFAULT_WORKER_LOG_LINES))
+    .option("--contains <text>", 'only lines containing this text (case-insensitive), e.g. "clean baseline"')
+    .option("--since <when>", "only lines from the last 30s, 10m, 2h or 1d, or since an ISO time such as 2026-11-04T21:54:00Z")
+    .action(async (o: { lines: string; contains?: string; since?: string }) => {
+      const out = output(globals());
+      try {
+        if (!/^\d{1,5}$/.test(o.lines) || Number(o.lines) < 1 || Number(o.lines) > MAX_WORKER_LOG_LINES) throw new TapdanceError("USAGE", `--lines must be a whole number from 1 to ${MAX_WORKER_LOG_LINES}`);
+        if (o.contains !== undefined && (o.contains.length < 1 || o.contains.length > 200)) throw new TapdanceError("USAGE", "--contains takes 1 to 200 characters");
+        const sinceMs = o.since === undefined ? undefined : parseSince(o.since, Date.now());
+        const { files, path } = await readDaemonLogs(simlockHome());
+        const lines = selectDaemonLogLines(files, { lines: Number(o.lines), ...(o.contains !== undefined ? { contains: o.contains } : {}), ...(sinceMs !== undefined ? { sinceMs } : {}) });
+        const empty = files.every((f) => f.trim() === "");
+        out.result({ path, lines }, () =>
+          empty ? dim(`No worker log yet (${path}); the worker has not run on this machine.`) : lines.length === 0 ? dim(`no matching lines in ${path}`) : lines.join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
   worker
     .command("cleanup")
     .description("Release device claims left by agent-device processes that have gone (a worker restart, the machine going offline mid-lease); live owners are never touched")
@@ -564,7 +630,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
     });
   worker
     .command("restart")
-    .description("Restart the worker daemon (ends agent-device sessions on it); refuses while leases run unless --force")
+    .description("Restart the worker daemon (ends agent-device sessions on it; a login service left from an older Tapdance is installed again); refuses while leases run unless --force")
     .option("--force", "restart even while devices are leased (their agents lose them)")
     .action(async (o: { force?: boolean }) => {
       const out = output(globals());

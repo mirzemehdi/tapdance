@@ -79,6 +79,10 @@ tapdance --version
 everywhere this documentation says `tapdance`, including in MCP configurations.
 
 After `git pull`, run `pnpm install && pnpm build` again. The symlink keeps pointing at the new build.
+On a machine that runs a worker, then run `tapdance worker restart` (or `tapdance host up` on a host)
+so the worker runs the new build's Simlock: its login service names the Simlock folder it was
+installed from, and a new Simlock version or patch lands in a new folder. Both commands install the
+service again when it names another folder, and keep the warm-spare settings.
 
 To check the build, `pnpm test` runs the unit tests. `pnpm test:integration` drives a real device and
 needs a running local worker; see the [evidence page](testing/evidence/2026-11-01-local-ios.md) for the

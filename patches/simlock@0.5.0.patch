@@ -24,42 +24,24 @@ index 0e92679a051e24decae7dc4b7850083e7bba36a3..23e2f9767b1928e21cba25b818085e87
          // why: Prerequisites last: a check may run for tens of seconds, and nothing `--fix` or a purge
          // acts on should wait behind it and go stale. They are never acted on themselves.
          const remaining = [
-diff --git a/dist/drivers/android/guest-settle.js b/dist/drivers/android/guest-settle.js
+diff --git a/dist/drivers/android/baseline-cpu.js b/dist/drivers/android/baseline-cpu.js
 new file mode 100644
-index 0000000000000000000000000000000000000000..7204c18a9f7726b0f3bd4be37644fa21f16e682c
+index 0000000000000000000000000000000000000000..a6fd3fafff120fe622579d4bef8a4b9d5b7df0c4
 --- /dev/null
-+++ b/dist/drivers/android/guest-settle.js
-@@ -0,0 +1,128 @@
-+// tapdance patch (#79): the clean baseline snapshot is taken only from a settled guest.
++++ b/dist/drivers/android/baseline-cpu.js
+@@ -0,0 +1,56 @@
++// tapdance patch (#103): one info line at every clean-baseline capture with the guest CPU at that
++// moment, so the logs show whether the baseline was saved from a calm or a busy guest.
 +//
-+// `sys.boot_completed`, the stopped boot animation and an answering package manager all pass while the
-+// guest is still busy for minutes (dexopt, Play services, System UI starting). A clean baseline saved
-+// then makes every later restore of it -- each warm spare, each reclaim -- resume a busy guest, so the
-+// next lease gets slow commands and "System UI isn't responding" dialogs. So before the baseline is
-+// captured (once per device, on its first boot), the driver waits until the guest's CPU, read from the
-+// first line of its /proc/stat, has been busy at most `busyThreshold` of the time for `samples`
-+// consecutive intervals. The wait is bounded: past `boundMs` (or when the counters cannot be read) the
-+// baseline is captured as before this patch. Ordinary boots and reclaims do not wait.
-+//
-+// tapdance patch (#101): before that wait, Android's background app optimisation runs to completion
-+// (`cmd package bg-dexopt-job`, bounded), so the dexopt work a fresh image does in its first minutes
-+// is finished inside the saved baseline instead of being redone by every restored copy. The job and
-+// the wait share one bound. Measured on a Google Cloud N2 VM (nested virtualisation, Play image), a
-+// fresh guest stayed busy for about 310 s; a bound that long would push the first lease on a new host
-+// (boot, this wait, capture and restart) past Tapdance's 330 s lease wait, so the bound stays at
-+// 120 s and the dexopt job does the work that matters for restores. The trade-off: on such a host the
-+// rest of the start-up work (Play services updates on a Play image) may still be in the baseline.
-+// (#103) The result is logged every time, settled or not.
++// It only observes. An earlier version of this patch (#79, #101) waited (bounded at 120 s) for a calm
++// guest and ran `cmd package bg-dexopt-job` (bounded at 90 s) before the capture. Measured on a Google
++// Cloud N2 VM (nested virtualisation), the dexopt job timed out every time, the wait gave up at its
++// bound every time with the guest still ~95 % busy, cold leases grew to 269-348 s (past Tapdance's
++// 330 s lease wait), and restores still replayed 61-90 s of busy guest. So the capture is upstream's
++// again; the reading below costs one /proc/stat sample pair (about a second).
 +
-+/** The guest counts as settled when it was busy at most this share of an interval. */
-+export const GUEST_SETTLED_BUSY = 0.5;
-+/** Consecutive calm intervals needed. */
-+export const GUEST_SETTLED_SAMPLES = 2;
-+export const GUEST_SETTLE_INTERVAL_MS = 1_000;
-+/** After this long the baseline is captured anyway, as before the patch. The dexopt job counts too. */
-+export const GUEST_SETTLE_BOUND_MS = 120_000;
-+/** The dexopt job runs at most this long (it gets at most this share of the bound). */
-+export const GUEST_DEXOPT_TIMEOUT_MS = 90_000;
++/** The two /proc/stat reads are this far apart. */
++export const BASELINE_CPU_SAMPLE_MS = 1_000;
 +
 +/**
 + * The CPU counters from the `cpu` line of /proc/stat: user nice system idle iowait irq softirq
@@ -85,103 +67,48 @@ index 0000000000000000000000000000000000000000..7204c18a9f7726b0f3bd4be37644fa21
 +}
 +
 +/**
-+ * Waits until the guest is calm, or the bound passes. `readCpu` resolves to the counters or
-+ * `undefined` (unreadable); `now`/`delay` are the driver's clock.
-+ * Resolves `{ settled, waitedMs, busy, reason }`; never throws for a busy or unreadable guest.
++ * One sample pair: read, wait `intervalMs`, read. Resolves the busy share (0..1, two decimals) or
++ * `undefined` when the counters cannot be read. Never throws.
 + */
-+export async function waitForGuestSettled({ readCpu, now, delay, boundMs = GUEST_SETTLE_BOUND_MS, intervalMs = GUEST_SETTLE_INTERVAL_MS, busyThreshold = GUEST_SETTLED_BUSY, samples = GUEST_SETTLED_SAMPLES, }) {
-+    const startedAt = now();
-+    let previous = await readCpu();
-+    if (previous === undefined)
-+        return { reason: "unreadable", settled: false, waitedMs: now() - startedAt };
-+    let calm = 0;
-+    let busy;
-+    while (true) {
-+        const elapsed = now() - startedAt;
-+        if (elapsed >= boundMs)
-+            return { busy, reason: "bound", settled: false, waitedMs: elapsed };
-+        await delay(Math.min(intervalMs, boundMs - elapsed));
-+        const current = await readCpu();
-+        if (current === undefined)
-+            return { busy, reason: "unreadable", settled: false, waitedMs: now() - startedAt };
-+        busy = busyBetween(previous, current);
-+        previous = current;
-+        calm = busy !== undefined && busy <= busyThreshold ? calm + 1 : 0;
-+        if (calm >= samples)
-+            return { busy, settled: true, waitedMs: now() - startedAt };
-+    }
-+}
-+
-+/**
-+ * What `cmd package bg-dexopt-job` answered: `ok`, `timeout` (it ran past its time and the adb call
-+ * was stopped; the job may go on in the guest) or `failed` with a short detail.
-+ */
-+export function dexoptOutcome(read, timedOut) {
-+    if (timedOut || read.code === null)
-+        return { result: "timeout" };
-+    const text = `${read.stdout ?? ""}\n${read.stderr ?? ""}`.trim();
-+    if (read.code === 0 && !/fail|error|exception|unknown command/i.test(text))
-+        return { result: "ok" };
-+    return { detail: text.slice(0, 200), result: "failed" };
-+}
-+
-+/**
-+ * The whole step before the clean baseline: the dexopt job (bounded by `dexoptTimeoutMs`), then the
-+ * settle wait for what is left of `boundMs`. `runDexopt(timeoutMs)` resolves to `dexoptOutcome`'s
-+ * shape and never throws. Resolves the settle result plus `dexopt`, `dexoptMs` (and `dexoptDetail`),
-+ * with `waitedMs` counting both.
-+ */
-+export async function settleBeforeBaseline({ runDexopt, readCpu, now, delay, boundMs = GUEST_SETTLE_BOUND_MS, dexoptTimeoutMs = GUEST_DEXOPT_TIMEOUT_MS, intervalMs, busyThreshold, samples, }) {
-+    const startedAt = now();
-+    let dexopt;
++export async function sampleGuestBusy({ readCpu, delay, intervalMs = BASELINE_CPU_SAMPLE_MS }) {
 +    try {
-+        dexopt = await runDexopt(Math.min(dexoptTimeoutMs, boundMs));
++        const first = await readCpu();
++        if (first === undefined)
++            return undefined;
++        await delay(intervalMs);
++        const second = await readCpu();
++        if (second === undefined)
++            return undefined;
++        const busy = busyBetween(first, second);
++        return busy === undefined ? undefined : Math.round(busy * 100) / 100;
 +    }
-+    catch (error) {
-+        dexopt = { detail: String(error?.message ?? error).slice(0, 200), result: "failed" };
++    catch {
++        return undefined;
 +    }
-+    const dexoptMs = now() - startedAt;
-+    const settle = await waitForGuestSettled({
-+        boundMs: Math.max(0, boundMs - dexoptMs),
-+        delay,
-+        now,
-+        readCpu,
-+        ...(intervalMs === undefined ? {} : { intervalMs }),
-+        ...(busyThreshold === undefined ? {} : { busyThreshold }),
-+        ...(samples === undefined ? {} : { samples }),
-+    });
-+    return {
-+        ...settle,
-+        dexopt: dexopt.result,
-+        ...(dexopt.detail ? { dexoptDetail: dexopt.detail } : {}),
-+        dexoptMs,
-+        waitedMs: now() - startedAt,
-+    };
 +}
 diff --git a/dist/drivers/android/index.js b/dist/drivers/android/index.js
-index 7bf83c1283918f3acc6cc579aae04bdbe7e2c451..fbd491da87b9bd677fcdb2c103c987328c007a92 100644
+index 7bf83c1283918f3acc6cc579aae04bdbe7e2c451..7fb2a7409e333ca061b3fc4359c482fd58405c53 100644
 --- a/dist/drivers/android/index.js
 +++ b/dist/drivers/android/index.js
-@@ -14,6 +14,9 @@ import { LibraryDeviceProfileSource } from "./profiles/index.js";
+@@ -14,6 +14,8 @@ import { LibraryDeviceProfileSource } from "./profiles/index.js";
  import { createAndroidDeviceInput } from "./input/index.js";
  import { createAndroidScreenCapture } from "./screen/index.js";
  import { locateSdk } from "./sdk-paths.js";
-+// tapdance patch (#79, #101, #103): the clean baseline is captured only after the dexopt job and from a
-+// settled guest, and the result is logged (see guest-settle.js).
-+import { settleBeforeBaseline, dexoptOutcome, parseProcStatCpu } from "./guest-settle.js";
++// tapdance patch (#103): the guest CPU is logged at each clean-baseline capture (see baseline-cpu.js).
++import { parseProcStatCpu, sampleGuestBusy } from "./baseline-cpu.js";
  export { AdbServerUnavailableError } from "./adb-server.js";
  const DEFAULT_READINESS_TIMEOUT_MS = 180_000;
  // why: Measured at 60-71s for a cold boot to `sys.boot_completed` on an M-series Mac against
-@@ -356,6 +359,8 @@ export class AndroidDriver {
+@@ -356,6 +358,8 @@ export class AndroidDriver {
      #baselineLaunchInputs;
      #locks = new Map();
      #warnCleanup;
-+    // tapdance patch (#103): info lines for the baseline settle.
++    // tapdance patch (#103): the info line at the baseline capture.
 +    #logInfo;
      #onDiagnostic;
      #portAllocator;
      #processRunner;
-@@ -414,6 +419,7 @@ export class AndroidDriver {
+@@ -414,6 +418,7 @@ export class AndroidDriver {
                      warn: (message, detail) => options.logger?.warn(message, detail),
                  });
          this.#warnCleanup = (message, detail) => options.logger?.warn(message, detail);
@@ -189,39 +116,24 @@ index 7bf83c1283918f3acc6cc579aae04bdbe7e2c451..fbd491da87b9bd677fcdb2c103c98732
          // why: Where an AVD Simlock made before it owned a root still sits: the AVD home the user
          // had configured then, or the SDK's own default. Used only by `findLegacy` /
          // `destroyLegacy` -- the fallback CP3 deleted from the driver proper, kept exactly here
-@@ -845,6 +851,11 @@ export class AndroidDriver {
+@@ -845,6 +850,8 @@ export class AndroidDriver {
              state.needsWipe = false;
              state.snapshotExpected = false;
              if (!state.baselineCaptured) {
-+                // tapdance patch (#79, #101): a baseline snapshotted mid-dexopt makes every later restore
-+                // of it busy for minutes, so run the dexopt job and wait (bounded) for a calm guest before
-+                // saving it. Only here: ordinary boots, snapshot loads, recovery and reclaims keep
-+                // upstream's readiness.
-+                await this.#waitForGuestSettled(booted);
++                // tapdance patch (#103): log the guest CPU at the capture. Observes only.
++                await this.#logBaselineCpu(booted);
                  await this.#captureBaseline(booted, state);
                  await this.#shutdown(booted, state);
                  await this.#startEmulator(booted, state, ["-snapshot", CLEAN_BASELINE], true);
-@@ -1604,6 +1615,50 @@ export class AndroidDriver {
+@@ -1604,6 +1611,23 @@ export class AndroidDriver {
              await this.#delay(Math.min(PORT_POLL_INTERVAL_MS, this.#readinessTimeoutMs - (this.#clock.now() - startedAt)));
          }
      }
-+    // tapdance patch (#79, #101, #103): before the baseline capture, run Android's background dexopt job
-+    // (bounded), then wait (bounded, sharing the bound) for a calm guest CPU; past the bound, or when
-+    // /proc/stat cannot be read, the baseline is captured as before. Logs the outcome. Never throws.
-+    async #waitForGuestSettled(data) {
-+        const result = await settleBeforeBaseline({
++    // tapdance patch (#103): one info line at the clean-baseline capture with the guest CPU then (one
++    // /proc/stat sample pair, about a second). Observes only: never waits longer, never throws.
++    async #logBaselineCpu(data) {
++        const busy = await sampleGuestBusy({
 +            delay: (ms) => this.#delay(ms),
-+            now: () => this.#clock.now(),
-+            runDexopt: async (timeoutMs) => {
-+                const startedAt = Date.now();
-+                try {
-+                    const read = await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "shell", "cmd", "package", "bg-dexopt-job"], { env: this.#env(), timeoutMs });
-+                    return dexoptOutcome(read, Date.now() - startedAt >= timeoutMs);
-+                }
-+                catch (error) {
-+                    return { detail: String(error?.message ?? error).slice(0, 200), result: "failed" };
-+                }
-+            },
 +            readCpu: async () => {
 +                try {
 +                    const read = await this.#processRunner.run(this.#sdk.adb, ["-s", data.serial, "shell", "head", "-n", "1", "/proc/stat"], { env: this.#env(), timeoutMs: OWNERSHIP_PROBE_TIMEOUT_MS });
@@ -232,22 +144,7 @@ index 7bf83c1283918f3acc6cc579aae04bdbe7e2c451..fbd491da87b9bd677fcdb2c103c98732
 +                }
 +            },
 +        });
-+        const fields = {
-+            avdName: data.avdName,
-+            busy: result.busy,
-+            dexopt: result.dexopt,
-+            ...(result.dexoptDetail ? { dexoptDetail: result.dexoptDetail } : {}),
-+            dexoptMs: result.dexoptMs,
-+            reason: result.settled ? "calm" : result.reason,
-+            settled: result.settled,
-+            waitedMs: result.waitedMs,
-+        };
-+        if (result.settled) {
-+            this.#logInfo("Android guest settled before the clean baseline", fields);
-+        }
-+        else {
-+            this.#warnCleanup("Android guest still busy; capturing the clean baseline anyway", fields);
-+        }
++        this.#logInfo("Capturing the Android clean baseline", { avdName: data.avdName, busy: busy ?? null });
 +    }
      /**
       * why: After a snapshot load both boot properties pass before `pm` answers, so a device granted

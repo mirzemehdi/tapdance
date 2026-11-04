@@ -9,7 +9,7 @@ patchedDependencies:
     hash: 6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f
     path: patches/agent-device@0.21.35.patch
   simlock@0.5.0:
-    hash: c76b69d8c2a08708eab1e697eb6716a844599436596722f292c24f88df6f16ce
+    hash: 4857eade3631163499a9fb00caae5f9b2d0c49464f543fa450968abf80aa3e01
     path: patches/simlock@0.5.0.patch
 
 importers:
@@ -48,7 +48,7 @@ importers:
         version: 15.0.0
       simlock:
         specifier: 0.5.0
-        version: 0.5.0(patch_hash=c76b69d8c2a08708eab1e697eb6716a844599436596722f292c24f88df6f16ce)
+        version: 0.5.0(patch_hash=4857eade3631163499a9fb00caae5f9b2d0c49464f543fa450968abf80aa3e01)
       ws:
         specifier: 8.22.1
         version: 8.22.1
@@ -1731,7 +1731,7 @@ snapshots:
       side-channel-map: 1.0.1
       side-channel-weakmap: 1.0.2
 
-  simlock@0.5.0(patch_hash=c76b69d8c2a08708eab1e697eb6716a844599436596722f292c24f88df6f16ce):
+  simlock@0.5.0(patch_hash=4857eade3631163499a9fb00caae5f9b2d0c49464f543fa450968abf80aa3e01):
     dependencies:
       '@agent-device/proxy': 0.21.35
       '@hono/node-server': 2.1.5(hono@4.13.16)
