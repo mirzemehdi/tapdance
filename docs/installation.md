@@ -136,6 +136,11 @@ Studio alone does not always install them. Without them, `tapdance doctor` fails
    sdkmanager "system-images;android-35;google_apis;arm64-v8a"   # use x86_64 on Intel/AMD machines
    ```
 
+   Use `google_apis` unless a test needs the Play Store (Play Billing, a Play sign-in): Play images
+   (`google_apis_playstore`) update Google Play services in the background for minutes after a boot,
+   which is likely (not proven) what keeps the guest busy longer on a slow host. `scripts/host-setup.sh`
+   installs `google_apis` too (`--play-store` for the Play image).
+
    Or let Simlock install an image: `tapdance devices install android 35`. Simlock refuses image
    installs until the SDK licences are accepted: run `sdkmanager --licenses` yourself, or set Simlock's
    `downloads.acceptAndroidLicenses` switch with

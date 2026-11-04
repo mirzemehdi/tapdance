@@ -56,7 +56,7 @@ with a `tapdance patch` comment. They are Tapdance's own fixes, not upstream rel
 | Patch | Package (license, copyright) | What it changes and why |
 | --- | --- | --- |
 | `patches/agent-device@0.21.35.patch` | agent-device 0.21.35 (MIT, Callstack) | The iOS runner rotates landscape taps against the app's window instead of its own legacy-size screen (#56). |
-| `patches/simlock@0.5.0.patch` | Simlock 0.5.0 (MIT, Szymon Chmal) | `core/doctor.js`: every reconcile, including the daemon's startup pass, moves a `ready` Android record whose emulator is gone to `shutdown`, so a restarted host does not grant a dead emulator (#94). `drivers/android/index.js` and a new `drivers/android/guest-settle.js`: before capturing an Android device's clean baseline snapshot, waits at most 120 s for the guest's CPU to calm down, so the snapshot every warm spare and reclaim restores is not taken mid-dexopt (#79). |
+| `patches/simlock@0.5.0.patch` | Simlock 0.5.0 (MIT, Szymon Chmal) | `core/doctor.js`: every reconcile, including the daemon's startup pass, moves a `ready` Android record whose emulator is gone to `shutdown`, so a restarted host does not grant a dead emulator (#94). `drivers/android/index.js` and a new `drivers/android/guest-settle.js`: before capturing an Android device's clean baseline snapshot, runs Android's background dexopt job (`cmd package bg-dexopt-job`, bounded) and waits for the guest's CPU to calm down, at most 120 s in all, so the snapshot every warm spare and reclaim restores is not taken mid-dexopt, and logs the outcome (#79, #101, #103). |
 
 ## Formats and designs Tapdance follows
 

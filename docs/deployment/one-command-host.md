@@ -48,7 +48,7 @@ command's output and a fix, and exits non-zero. Running it again is safe.
 TAPDANCE HOST READY
 endpoint:  https://my-mac.tail1234.ts.net:4720
 token:     saved to /Users/me/.tapdance/worker/pairing-my-mac.token (mode 600), fingerprint 3fa9c2. Copy it: tapdance host token --label my-mac
-devices:   android 34 (google_apis_playstore), ios 26.5
+devices:   android 34 (google_apis), ios 26.5
 self-test: PASS (android lease, screenshot ok)
 on the agent machine:  tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-my-mac.token
 ```
@@ -279,8 +279,13 @@ You can also clone the repository and run `bash scripts/host-setup.sh` from it.
 The script (`set -euo pipefail`):
 
 1. **Checks the prerequisites:** Node.js 22.13+, git, a JDK 17+, the Android command-line tools,
-   platform-tools, emulator and a Google Play system image (API 34 by default; `ANDROID_API`,
-   `ANDROID_TAG`), Tailscale, and on Linux access to `/dev/kvm`. Xcode is optional (iOS) and is only
+   platform-tools, emulator and the `google_apis` system image (API 34 by default; `ANDROID_API`,
+   `ANDROID_TAG`), Tailscale, and on Linux access to `/dev/kvm` and the emulator's system libraries.
+   `--play-store` installs the Google Play image (`google_apis_playstore`) instead: use it only when
+   agents test Play Billing or a Play sign-in (they lease it with `--image-tag google_apis_playstore`).
+   Play images update Google Play services in the background for minutes after a boot, which is
+   likely (not proven) where the extra guest CPU on a slow host comes from. Hosts set up before this
+   default changed keep their Play image; a new run of the script adds `google_apis` next to it. Xcode is optional (iOS) and is only
    reported: the App Store cannot be scripted.
 2. **Lists what is missing and asks once** (on the terminal, even when piped through `curl`;
    `--yes` skips the question, `--check` only reports). Then it installs from the official sources,
@@ -289,7 +294,8 @@ The script (`set -euo pipefail`):
    `~/Library/Java/JavaVirtualMachines` (macOS) or `~/.local/share/tapdance/jdk`; Google's command-line
    tools (SHA-1 from Google's repository XML), then `sdkmanager` for platform-tools, emulator and the
    system image, **accepting the Android SDK licenses**, into `~/Library/Android/sdk` or `~/Android/Sdk`.
-   Only Linux system packages (git, unzip), Tailscale, the kvm group and, on a Linux cloud VM, a
+   Only Linux system packages (git, unzip and the emulator libraries, in one package-manager call),
+   Tailscale, the kvm group and, on a Linux cloud VM, a
    sudoers rule that allows only `/usr/bin/systemctl poweroff` (in `/etc/sudoers.d/tapdance-poweroff`,
    checked with `visudo`, so `--idle-stop` can stop an idle VM) use `sudo`. Tailscale comes from
    Homebrew (`brew install --cask tailscale`) on macOS, where you log in in the app, or tailscale.com's
@@ -310,9 +316,12 @@ The script (`set -euo pipefail`):
      once, without logging out. A reboot drops the ACL; the group stays and applies from your next
      login. Without `/dev/kvm` at all it skips the emulator and the system image, installs Tapdance,
      and stops: that machine can only be the agent's machine.
-   - **Emulator libraries:** when `emulator -version` fails for a missing system library (Ubuntu's cloud
-     image lacks them), it installs `libpulse0 libxkbfile1 libxi6 libsm6 libice6` with apt (dnf and
-     pacman equivalents elsewhere).
+   - **Emulator libraries:** Ubuntu's cloud image lacks some libraries the emulator loads. The script
+     checks the packages themselves (`libpulse0 libxkbfile1 libxi6 libsm6 libice6` with apt; dnf and
+     pacman equivalents elsewhere), so on a fresh machine they are named in the list and in the sudo
+     line before the question, and installed in the same apt step as git and unzip. Once the emulator
+     is installed, `emulator -version` is the check; if it still fails for a library, the script names
+     the packages and asks again before using `sudo`.
    - **User manager:** when your account cannot linger (Google Cloud OS Login), it installs
      `tapdance-user-manager.service`, a system unit that starts your systemd user manager at boot.
 4. **Installs Tapdance from source** if the `tapdance` command is missing: clones to `~/tapdance`

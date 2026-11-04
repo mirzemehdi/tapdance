@@ -174,6 +174,11 @@ Run `check-kvm.sh` after the setup script, not before: on a fresh VM it reports 
 emulator check (no SDK yet). Before setup, only its `vmx`, kvm module and `/dev/kvm` lines tell you
 anything. It finds the SDK in `~/Android/Sdk`, where the setup script installs it.
 
+- The script installs the `google_apis` image. A checklist with Play Billing or a Play sign-in needs
+  `--play-store` (the `google_apis_playstore` image) and leases with `--image-tag google_apis_playstore`.
+- The list before "Install them now?" names the emulator libraries (`libpulse0 libxkbfile1 libxi6
+  libsm6 libice6`) and the sudo line says `emulator-libs`; apt installs them with git and unzip, before
+  the SDK. Report any `sudo` step that was not in that list.
 - For the app checklists add `--with-gh` (installs the GitHub CLI for installs from CI and builds with
   `--git-auth gh`) and, for a build on the host, the app's own SDK packages, for example
   `--sdk-packages "cmake;3.31.6"` for a Kotlin Multiplatform app with native code.
@@ -266,6 +271,9 @@ folder), and decide with the owner whether to go on. Do not edit `packages/` to 
 | `host-setup.sh` time, first run (downloads included) | your clock |
 | `connect` → `doctor` passing | your clock |
 | Cold lease (first) and warm lease | `lease` step in both drivers |
+| Settle on lease: the "Waiting for the device to settle" / "Settled" lines and any "still busy" notice | the lease's stderr (CLI) or `notices` (MCP) |
+| Baseline settle on the first boot: wait, last CPU reading, dexopt result | on the VM: `tapdance worker logs \| grep "clean baseline"` |
+| First `inspect` after a warm lease: time, and whether the daemon log shows `INSTRUMENTATION_FAILED` for it | the drivers' tables; on the VM `grep INSTRUMENTATION_FAILED ~/.simlock/daemon.log` |
 | Key press, tap, `inspect`, screenshot, recording start and stop | the drivers' tables (CLI and MCP separately) |
 | Install: APK upload and from CI | `install_apk`, `install_from_ci` steps; the APK's size |
 | Build on the host (if run) | `build` step |

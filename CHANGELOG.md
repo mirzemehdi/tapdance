@@ -474,6 +474,39 @@ Unit-tested or checked against a stand-in `gcloud`; not yet re-run on a cloud VM
   the target on the host in one call), so there is no repeated read to cache; `settle_ms` / `--no-settle`
   already trade the after-tap diff for speed.
 
+### Phase 2c field run on the N2 VM (issues #100-#103)
+
+Found on a Google Cloud N2 host (nested virtualization, Play image) with the agent on a Linux VPS; the
+fixes are unit-tested with mocked devices, a scripted Simlock driver and a stand-in `dpkg-query`, and
+not yet re-run on a host.
+
+- Fixed (#101): the lease's settle wait ended on one calm 1.5 s reading, so devices went out at 91-96 %
+  guest CPU without a notice. It now needs 3 calm intervals in a row, or a clearly falling load (handed
+  out with a short notice). The bound stays at 90 s on purpose (the busy phase was 65-145 s after a
+  release and about 5 min after a fresh boot, while commands still took 2-10 s); past it the notice
+  gives the last and recent CPU and says commands can take 2-10 s each for a few more minutes. A wait
+  that reported progress ends with a "Settled" line.
+- Changed (#101, Simlock patch): before saving a device's clean baseline, Simlock runs Android's
+  background app optimisation (`cmd package bg-dexopt-job`, at most 90 s) so restored copies do not
+  redo it, then waits for a calm guest; both share the existing 120 s bound, which is not raised to the
+  measured ~5 min because a new host's first lease would then pass the 330 s lease wait. Existing
+  baselines are kept.
+- Changed (#101): `scripts/host-setup.sh` installs the `google_apis` system image by default;
+  `--play-store` (or `ANDROID_TAG=google_apis_playstore`) installs the Play image instead. Play images
+  update Play services in the background after a boot, likely the main source of the extra guest CPU
+  (not proven). A host set up earlier keeps its Play image; running the script again adds `google_apis`.
+- Fixed (#102): the first `ui inspect` after every warm lease failed once inside the worker
+  (`INSTRUMENTATION_FAILED`) and the retry added 2-3 s. The lease now reads the screen once after the
+  settle wait and discards it (errors swallowed, bounded), so the agent's first inspect works at once.
+- Fixed (#103): the Simlock patch logs the baseline settle every time: "Android guest settled before
+  the clean baseline" (info) or the "still busy" warning, with the wait, the last CPU reading and the
+  dexopt result, in `tapdance worker logs`.
+- Fixed (#100): `host-setup.sh` installed the emulator's system libraries with `sudo` after the
+  question without listing them (on a fresh machine the check needed the emulator first). It now checks
+  the packages directly (`dpkg-query`, `rpm`, `pacman`), names them in the list and the sudo line, and
+  installs them in the same package-manager call as git and unzip; a library still missing after the
+  SDK install is named and asked for again.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,

@@ -9,6 +9,9 @@
  *      granted a dead serial.
  * #79: before Simlock captures an Android device's clean baseline snapshot (once, on its first boot),
  *      it waits for a calm guest CPU (bounded at 120 s). Other boots and reclaims do not wait.
+ * #101: before that wait it runs Android's background dexopt job (`cmd package bg-dexopt-job`,
+ *      bounded at 90 s, sharing the 120 s bound), so restored copies do not redo it.
+ * #103: the outcome is logged every time: an info line when the guest settled, a warning when not.
  */
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -177,6 +180,40 @@ describe("simlock patch #79 (fake clock and CPU reads): waitForGuestSettled", ()
     expect(result).toMatchObject({ reason: "bound", settled: false, waitedMs: 120_000 });
   });
 
+  it("reads bg-dexopt-job's answer: ok, a failure, a timeout (#101)", async () => {
+    const { dexoptOutcome } = await load("drivers/android/guest-settle.js");
+    expect(dexoptOutcome({ code: 0, stdout: "Success\n", stderr: "" }, false)).toEqual({ result: "ok" });
+    expect(dexoptOutcome({ code: 0, stdout: "", stderr: "" }, false)).toEqual({ result: "ok" });
+    expect(dexoptOutcome({ code: 0, stdout: "Failure: job did not finish\n", stderr: "" }, false)).toEqual({ result: "failed", detail: "Failure: job did not finish" });
+    expect(dexoptOutcome({ code: 1, stdout: "", stderr: "Unknown command" }, false)).toMatchObject({ result: "failed" });
+    expect(dexoptOutcome({ code: null, stdout: "", stderr: "" }, false)).toEqual({ result: "timeout" });
+    expect(dexoptOutcome({ code: 0, stdout: "", stderr: "" }, true)).toEqual({ result: "timeout" });
+  });
+
+  it("runs the dexopt job first, bounded at 90 s, and the settle wait gets what is left of the 120 s (#101)", async () => {
+    const { settleBeforeBaseline, GUEST_DEXOPT_TIMEOUT_MS } = await load("drivers/android/guest-settle.js");
+    expect(GUEST_DEXOPT_TIMEOUT_MS).toBe(90_000);
+    const order: string[] = [];
+    const c = clock();
+    const reads = cpu([0.98]);
+    // A job that runs to its 90 s limit on a guest that then stays busy: 120 s in all, not 210 s.
+    const result = await settleBeforeBaseline({
+      ...c,
+      runDexopt: async (timeoutMs: number) => (order.push(`dexopt ${timeoutMs}`), await c.delay(timeoutMs), { result: "timeout" }),
+      readCpu: async () => (order.push("cpu"), reads()),
+    });
+    expect(order[0]).toBe("dexopt 90000");
+    expect(order.slice(1).every((o) => o === "cpu")).toBe(true);
+    expect(result).toMatchObject({ dexopt: "timeout", dexoptMs: 90_000, reason: "bound", settled: false, waitedMs: 120_000 });
+    // A quick job on a guest that calms down: settled, the job's time counted in waitedMs.
+    const quick = clock();
+    const calm = await settleBeforeBaseline({ ...quick, runDexopt: async () => (await quick.delay(5_000), { result: "ok" }), readCpu: cpu([0.05]) });
+    expect(calm).toMatchObject({ dexopt: "ok", dexoptMs: 5_000, settled: true, waitedMs: 7_000 });
+    // A runner that throws is a failed job, not a failed boot.
+    const thrown = await settleBeforeBaseline({ ...clock(), runDexopt: async () => Promise.reject(new Error("adb gone")), readCpu: cpu([0.05]) });
+    expect(thrown).toMatchObject({ dexopt: "failed", dexoptDetail: "adb gone", settled: true });
+  });
+
   it("does not wait when /proc/stat cannot be read", async () => {
     const { waitForGuestSettled } = await load("drivers/android/guest-settle.js");
     const c = clock();
@@ -228,7 +265,7 @@ function memoryFs() {
  * A process runner standing in for adb and the emulator: the guest boots at once, and
  * `head -n 1 /proc/stat` answers from `busyShares` (one share per read, the last one repeated).
  */
-function scriptedRunner(busyShares: number[], deviceRoot: string, avdName: string) {
+function scriptedRunner(busyShares: number[], deviceRoot: string, avdName: string, dexopt: { code: number | null; stdout?: string; stderr?: string } = { code: 0, stdout: "Success\n" }) {
   const log: string[] = [];
   let reads = 0;
   let total = 0;
@@ -244,6 +281,7 @@ function scriptedRunner(busyShares: number[], deviceRoot: string, avdName: strin
       return ok(`cpu  ${total - idle} 0 0 ${idle} 0 0 0 0 0 0\n`);
     }
     log.push(line);
+    if (line.endsWith("shell cmd package bg-dexopt-job")) return { stdout: "", stderr: "", ...dexopt };
     if (line.endsWith("getprop sys.boot_completed")) return ok("1\n");
     if (line.endsWith("getprop init.svc.bootanim")) return ok("stopped\n");
     if (line.endsWith("emu avd path")) return ok(`${deviceRoot}/${avdName}.avd\nOK\n`);
@@ -259,16 +297,17 @@ function scriptedRunner(busyShares: number[], deviceRoot: string, avdName: strin
   return { log, processRunner: { run, spawn }, cpuReads: () => reads };
 }
 
-async function androidDriver(busyShares: number[]) {
+async function androidDriver(busyShares: number[], dexopt?: { code: number | null; stdout?: string; stderr?: string }) {
   const { AndroidDriver } = await load("drivers/android/index.js");
   const deviceRoot = "/simlock/android";
   const avdName = "avd1";
   const clock = autoClock();
-  const runner = scriptedRunner(busyShares, deviceRoot, avdName);
+  const runner = scriptedRunner(busyShares, deviceRoot, avdName, dexopt);
   const warnings: Array<{ message: string; detail: Record<string, unknown> }> = [];
+  const infos: Array<{ message: string; detail: Record<string, unknown> }> = [];
   const logger = {
     warn: (message: string, detail: Record<string, unknown>) => void warnings.push({ message, detail }),
-    info: () => undefined,
+    info: (message: string, detail: Record<string, unknown>) => void infos.push({ message, detail }),
     error: () => undefined,
     debug: () => undefined,
     child: () => logger,
@@ -285,7 +324,7 @@ async function androidDriver(busyShares: number[]) {
   const sdk = { adb: "adb", avdmanager: "avdmanager", emulator: "emulator", root: "/sdk" };
   const driver = new AndroidDriver(options, sdk, deviceRoot, {}, {}, 5038);
   const device = { address: "", deviceId: avdName, driverData: { avdName, configHash: "x", imageIdentity: "img", port: 0, serial: "" } };
-  return { clock, device, driver, runner, warnings };
+  return { clock, device, driver, runner, warnings, infos };
 }
 
 describe("simlock patch #79 (scripted adb and emulator, fake clock): AndroidDriver waits for a calm guest only before the baseline capture", () => {
@@ -305,12 +344,40 @@ describe("simlock patch #79 (scripted adb and emulator, fake clock): AndroidDriv
     expect(warnings.filter((w) => w.message.includes("still busy"))).toEqual([]);
   });
 
+  it("runs the dexopt job before the settle wait and the capture, and logs a settled baseline (#101, #103)", async () => {
+    const { device, driver, runner, infos, warnings } = await androidDriver([0.97, 0.97, 0.05]);
+    await driver.makeReady(device, { purpose: "prepare" });
+    const dexopt = runner.log.indexOf("-s emulator-5586 shell cmd package bg-dexopt-job");
+    const firstCpu = runner.log.findIndex((l) => l.startsWith("cpu "));
+    const save = runner.log.indexOf("-s emulator-5586 emu avd snapshot save simlock_clean_baseline");
+    expect(dexopt).toBeGreaterThan(0);
+    expect(dexopt).toBeLessThan(firstCpu);
+    expect(firstCpu).toBeLessThan(save);
+    // Once only: the boot from the new baseline runs neither.
+    expect(runner.log.filter((l) => l.endsWith("bg-dexopt-job"))).toHaveLength(1);
+    expect(infos).toEqual([
+      {
+        message: "Android guest settled before the clean baseline",
+        detail: { avdName: "avd1", busy: 0.05, dexopt: "ok", dexoptMs: 0, reason: "calm", settled: true, waitedMs: 3_000 },
+      },
+    ]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("captures the baseline when the dexopt job fails, and says so in the log line (#101, #103)", async () => {
+    const { device, driver, runner, infos } = await androidDriver([0.05], { code: 255, stdout: "", stderr: "Error: Unknown command: bg-dexopt-job" });
+    await driver.makeReady(device, { purpose: "prepare" });
+    expect(runner.log).toContain("-s emulator-5586 emu avd snapshot save simlock_clean_baseline");
+    expect(infos[0]!.detail).toMatchObject({ dexopt: "failed", dexoptDetail: "Error: Unknown command: bg-dexopt-job", settled: true });
+  });
+
   it("gives up at the 120 s bound on a guest that stays busy and captures the baseline as before", async () => {
     const { clock, device, driver, runner, warnings } = await androidDriver([0.98]);
     const ready = await driver.makeReady(device, { purpose: "prepare" });
     expect(ready.address).toBe("emulator-5586");
     const busy = warnings.filter((w) => w.message.includes("still busy"));
     expect(busy.map((w) => w.detail["reason"])).toEqual(["bound"]);
+    expect(busy[0]!.detail).toMatchObject({ avdName: "avd1", busy: 0.98, dexopt: "ok", settled: false, waitedMs: 120_000 });
     expect(runner.log).toContain("-s emulator-5586 emu avd snapshot save simlock_clean_baseline");
     expect(clock.now()).toBeGreaterThanOrEqual(120_000);
     expect(clock.now()).toBeLessThan(130_000);
