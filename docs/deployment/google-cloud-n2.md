@@ -229,13 +229,20 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
 
 1. **It lists what is missing and asks once** ("Install them now?"). On a fresh VM that is Node.js,
    a JDK 17, the Android command-line tools, platform-tools, the emulator, the system image
-   `system-images;android-34;google_apis_playstore;x86_64` (about 1.5 GB), the emulator's system
-   libraries that Ubuntu's cloud image lacks (`libpulse0 libxkbfile1 libxi6 libsm6 libice6`, from apt),
-   Tailscale, and access to `/dev/kvm`. Saying yes also **accepts the Android SDK licenses** for you; read them first at
+   `system-images;android-34;google_apis;x86_64` (about 1.5 GB), the emulator's system libraries that
+   Ubuntu's cloud image lacks (the list names them: `libpulse0 libxkbfile1 libxi6 libsm6 libice6` and
+   what apt pulls in with them, installed with git and unzip in one apt step), Tailscale, and access to
+   `/dev/kvm`. Add `--play-store` for the Google Play image (`google_apis_playstore`) instead, only
+   when the agent tests Play Billing or a Play sign-in: Play images update Google Play services in the
+   background for minutes after a boot, which is likely (not proven) why the guest stayed busy for
+   about 5 minutes after a fresh boot on this VM (2026-11-04, #101). Leases then pass
+   `--image-tag google_apis_playstore` (MCP `image_tag`). Saying yes also **accepts the Android SDK
+   licenses** for you; read them first at
    [developer.android.com/studio/terms](https://developer.android.com/studio/terms) if you have not.
    Everything goes into your home folder, checked against its publisher's checksum, except the steps
-   that need `sudo`: git and unzip (the Terraform startup script already installed them), the Tailscale
-   installer, the kvm group, and a sudoers rule that lets your user run only
+   that need `sudo`: git, unzip and the emulator libraries (the Terraform startup script already
+   installed git and unzip), the Tailscale installer, the kvm group, and a sudoers rule that lets your
+   user run only
    `/usr/bin/systemctl poweroff`, so the guard can stop the VM when it sits idle
    ([cost guardrails](#cost-guardrails)). For `/dev/kvm` it adds you to the `kvm` group and sets an ACL
    on `/dev/kvm`, so you need not log out and back in.
@@ -274,7 +281,7 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
    TAPDANCE HOST READY
    endpoint:  https://tapdance-n2.tail1234.ts.net:4720
    token:     saved to /home/you/.tapdance/worker/pairing-gcp-n2-1.token (mode 600), fingerprint 3fa9c2. Copy it: tapdance host token --label gcp-n2-1
-   devices:   android 34 (google_apis_playstore)
+   devices:   android 34 (google_apis)
    self-test: PASS (android lease, screenshot ok)
    cost guard: idle stop after 30 min, uptime cap off
    cloud VM:  Google Cloud, billed while running; its disk bills even when stopped. Delete it when you are done: see docs/deployment/google-cloud-n2.md#tear-down
@@ -350,6 +357,17 @@ The VM serves one emulator at a time (`limits.maxSessions` is 1, and Simlock's c
 machine size is one). After the first lease, Simlock keeps that emulator booted as a warm spare so the
 next lease is fast; `tapdance host warm android=0,ios=0` on the VM turns that off. Other Android
 versions: `tapdance devices install android 35` on the VM.
+
+**A busy guest after a boot or release.** Under nested virtualisation the guest stays busy for a while
+after it starts: on the 2026-11-04 run (Play image), 65-145 s after a release and about 5 minutes after
+a fresh boot, with commands taking 2-10 s instead of 2-6 s and no "isn't responding" dialog. A lease
+waits up to 90 s for 3 calm readings in a row (or a clearly falling load) and otherwise hands the
+device out with a notice that says how busy it still is. Simlock's first boot of a device runs
+Android's background app optimisation (`cmd package bg-dexopt-job`) and waits for a calm guest before
+it saves the clean snapshot every spare restores, together at most 120 s (more would push the first
+lease past the 330 s lease wait). `tapdance worker logs` shows the outcome on the VM: "Android guest
+settled before the clean baseline" (or "still busy; capturing the clean baseline anyway") with the
+wait, the last CPU reading and the dexopt result. None of this is measured on a host yet.
 
 ### Use it from your agent
 

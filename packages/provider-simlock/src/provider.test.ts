@@ -929,7 +929,7 @@ describe("Android install refusals", () => {
   });
 });
 
-describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-device client and Simlock HTTP)", () => {
+describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCKED agent-device client and Simlock HTTP)", () => {
   const SETTLED = "1\ncpu  100 0 0 900 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
   const CALMER = "1\ncpu  110 0 0 990 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
   /** A provider whose agent-device client, Simlock HTTP and device exec are fakes. */
@@ -940,10 +940,19 @@ describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-dev
     dumpsys?: string;
     press?: (p: Record<string, unknown>) => Promise<unknown>;
     snapshot?: () => Promise<unknown>;
+    warmUpTimeoutMs?: number;
   }) {
     let leaseId: string | undefined;
     const pressed: Array<Record<string, unknown>> = [];
+    const calls: string[] = [];
     const probes = [...(o.probes ?? [SETTLED, CALMER])];
+    // Once the scripted answers run out, the guest stays calm: 10 % busy per read.
+    let calmReads = 0;
+    const nextProbe = () => {
+      if (probes.length > 0) return probes.shift()!;
+      calmReads++;
+      return `1\ncpu  ${1000 + calmReads * 10} 0 0 ${10_000 + calmReads * 90} 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n`;
+    };
     const client = {
       leases: {
         allocate: async (p: { leaseId: string }) => {
@@ -955,7 +964,7 @@ describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-dev
       sessions: { close: async () => ({}) },
       apps: { open: async () => ({}) },
       interactions: { press: async (p: Record<string, unknown>) => (pressed.push(p), o.press ? o.press(p) : {}) },
-      capture: { snapshot: o.snapshot ?? (async () => ({ nodes: [] })) },
+      capture: { snapshot: async () => (calls.push("snapshot"), (o.snapshot ?? (async () => ({ nodes: [] })))()) },
     };
     const fetchImpl = (async (url: string) => {
       const path = new URL(url).pathname;
@@ -965,6 +974,8 @@ describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-dev
     const p = new (class extends SimlockProvider {
       protected override staleRecordRetryMs = 5;
       protected override queuePollMs = 10;
+      protected override settleIntervalMs = 5;
+      protected override warmUpTimeoutMs = o.warmUpTimeoutMs ?? 20_000;
       protected override leaseClient() {
         return client as never;
       }
@@ -972,11 +983,11 @@ describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-dev
         return client as never;
       }
       protected override async execOn(_h: unknown, _tool: string, args: string[]) {
-        if (args[1]?.startsWith("getprop")) return { exitCode: 0, stdout: probes.length > 1 ? probes.shift()! : probes[0]!, stderr: "" };
+        if (args[1]?.startsWith("getprop")) return (calls.push("probe"), { exitCode: 0, stdout: nextProbe(), stderr: "" });
         return { exitCode: 0, stdout: o.dumpsys ?? "", stderr: "" };
       }
     })({ kind: "remote", baseUrl: "https://host.example:4720", token: "t", tenant: "t", runId: "r", clientId: "c", source: "test" }, {}, fetchImpl);
-    return { p, pressed };
+    return { p, pressed, calls };
   }
   const granted = { leaseId: "x", deviceKey: "android:mobile:emulator-5554", device: { model: "Pixel 8", osVersion: "34" } };
   const request = { platform: "android" as const, ttlMs: 60_000 };
@@ -1046,6 +1057,39 @@ describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-dev
     expect(progress.some((m) => /System UI isn't responding" dialog with Wait/.test(m))).toBe(true);
     expect(handle.notices).toBeUndefined();
   }, 15_000);
+
+  it("warms agent-device's snapshot helper once the device has settled, so the agent's first inspect works (#102)", async () => {
+    // The helper fails its first start on a restored spare, as on every warm lease of the N2 run.
+    let snapshots = 0;
+    const { p, calls } = fakeHost({
+      allocate: async (a) => ({ ...granted, leaseId: a.leaseId }),
+      snapshot: async () => {
+        if (++snapshots === 1) throw new Error("Android snapshot helper failed: INSTRUMENTATION_FAILED");
+        return { nodes: [{ ref: "e1", label: "Settings" }] };
+      },
+    });
+    await p.lease("s", request);
+    // Settle probes first, then the warm-up: a failed read and one more after the back-off.
+    expect(calls.filter((c) => c === "snapshot")).toHaveLength(2);
+    expect(calls.indexOf("snapshot")).toBeGreaterThan(calls.lastIndexOf("probe"));
+    // The agent's first inspect then reads the screen at once.
+    const screen = await p.inspect(androidHandle);
+    expect(snapshots).toBe(3);
+    expect(screen.elements.map((e) => e.label)).toEqual(["Settings"]);
+  });
+
+  it("never fails or holds up a lease over the warm-up (#102)", async () => {
+    // A helper that keeps failing, another error, and a read that never answers: the lease stands.
+    const failing = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), snapshot: async () => Promise.reject(new Error("INSTRUMENTATION_FAILED")) });
+    const handle = await failing.p.lease("s", request);
+    expect(handle.deviceId).toBe("emulator-5554");
+    expect(failing.calls.filter((c) => c === "snapshot")).toHaveLength(2);
+    const other = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), snapshot: async () => Promise.reject(new Error("device offline")) });
+    await expect(other.p.lease("s", request)).resolves.toMatchObject({ deviceId: "emulator-5554" });
+    expect(other.calls.filter((c) => c === "snapshot")).toHaveLength(1);
+    const hung = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), snapshot: () => new Promise(() => undefined), warmUpTimeoutMs: 20 });
+    await expect(hung.p.lease("s", request)).resolves.toMatchObject({ deviceId: "emulator-5554" });
+  });
 
   it("reports an ANR dialog from inspect, launch and a missed tap instead of a plain miss (#80)", async () => {
     const nodes = [

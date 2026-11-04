@@ -53,7 +53,7 @@ import { WebSocket } from "ws";
 import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockStatus, type SimlockWorker } from "./http.js";
-import { describeDialog, dialogAdvice, dialogFromDumpsys, dialogInNodes, settleGuest, type SettleResult, type SystemDialog } from "./guest-settle.js";
+import { describeDialog, dialogAdvice, dialogFromDumpsys, dialogInNodes, SETTLE_INTERVAL_MS, settleGuest, type SettleResult, type SystemDialog } from "./guest-settle.js";
 import { AxeBackend } from "./axe.js";
 
 export const PROVIDER_NAME = "simlock";
@@ -528,6 +528,10 @@ export class SimlockProvider implements DeviceProvider {
   protected staleRecordRetryMs = 10_000;
   /** How often to ask Simlock where a waiting lease request stands (#92). */
   protected queuePollMs = 5_000;
+  /** Time between guest probes while a lease waits for the device to settle (#79, #101). */
+  protected settleIntervalMs = SETTLE_INTERVAL_MS;
+  /** Bound on the snapshot-helper warm-up after a lease (#102); the lease never fails on it. */
+  protected warmUpTimeoutMs = 20_000;
 
   private async leaseClearingClaims(sessionId: string, request: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
     // Claims left by a dead worker process block the devices they name; settle them first when the
@@ -629,8 +633,42 @@ export class SimlockProvider implements DeviceProvider {
     if (handle.platform === "android" && !handle.physical) {
       const settled = await this.settle(handle, options);
       if (settled.notices.length > 0) handle.notices = settled.notices;
+      await this.warmUpSnapshotHelper(handle);
     }
     return handle;
+  }
+
+  /**
+   * Reads the screen once and throws the answer away (#102). On a warm spare restored from the
+   * baseline snapshot, agent-device's snapshot helper failed its first start (INSTRUMENTATION_FAILED)
+   * on every lease of the N2 field run and worked from then on, so the agent's first inspect paid a
+   * failure and a back-off. Doing that first read here, after the settle wait (so it does not skew
+   * the CPU readings), lets the agent's first inspect work at once. One retry after the first
+   * back-off pause on a helper failure; every error is swallowed and the whole step is bounded: it
+   * never fails or holds up a lease for long. Resolves true when a read succeeded.
+   */
+  protected async warmUpSnapshotHelper(handle: LeaseHandle): Promise<boolean> {
+    const read = async (): Promise<"ok" | "helper-failed" | "failed"> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          this.agentClient(handle).capture.snapshot({ interactiveOnly: true, ...this.scope(handle) } as never),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("snapshot warm-up timed out")), this.warmUpTimeoutMs);
+          }),
+        ]);
+        return "ok";
+      } catch (error) {
+        return HELPER_FLAKE.test(String((error as Error)?.message ?? error)) ? "helper-failed" : "failed";
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const first = await read();
+    // Only a helper failure is worth one more read; anything else is left to the agent's inspect.
+    if (first !== "helper-failed") return first === "ok";
+    await new Promise((r) => setTimeout(r, SNAPSHOT_BACKOFF_MS[0]));
+    return (await read()) === "ok";
   }
 
   /** The agent-device client a new lease is requested through. */
@@ -639,9 +677,10 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   /**
-   * Waits for a just-leased emulator to settle (#79): boot complete, no "isn't responding" dialog
-   * (answered with Wait), and the guest's CPU calm. Never fails the lease: past the budget it hands
-   * the device out with a notice.
+   * Waits for a just-leased emulator to settle (#79, #101): boot complete, no "isn't responding"
+   * dialog (answered with Wait), and the guest's CPU calm for several readings in a row (or clearly
+   * falling). Never fails the lease: past the budget (about 90 s, see SETTLE_BUDGET_MS for why) it
+   * hands the device out with a notice that says how busy it still is.
    */
   protected async settle(handle: LeaseHandle, options: CallOptions): Promise<SettleResult> {
     const probe = deviceCommands.android.guestState();
@@ -657,6 +696,7 @@ export class SimlockProvider implements DeviceProvider {
       },
       ...(options.onProgress ? { progress: options.onProgress } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
+      intervalMs: this.settleIntervalMs,
     });
   }
 

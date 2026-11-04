@@ -4,8 +4,9 @@
 #   curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label my-mac
 #
 # 1. Checks the prerequisites: Node.js 22.13+, git, a JDK 17+, the Android SDK (command-line tools,
-#    platform-tools, emulator, a Google Play system image), Tailscale, and on Linux KVM access. Xcode is
-#    optional (iOS); it cannot be installed from a script.
+#    platform-tools, emulator, the google_apis system image; --play-store for the Google Play image),
+#    Tailscale, and on Linux KVM access and the emulator's system libraries. Xcode is optional (iOS); it
+#    cannot be installed from a script.
 # 2. Lists what is missing and asks once (or --yes). Then installs from the official sources, each
 #    download checked against the checksum its publisher lists:
 #      Node.js   nodejs.org tarball (SHASUMS256)            -> ~/.local/share/tapdance/node
@@ -21,9 +22,10 @@
 #      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there (you log in in the app);
 #                Linux: tailscale.com's installer, then `sudo tailscale up --operator=$USER`, which
 #                prints a login link (asked first), so the guard can be served without root.
-#    Only system packages (Linux: git, unzip; Tailscale), the kvm group and, on a Linux cloud VM, a
-#    sudoers rule that allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle)
-#    use sudo, and only after you said yes. Everything else goes into your home folder.
+#    Only system packages (Linux: git, unzip and the emulator's libraries, named in the list, in one
+#    package-manager call; Tailscale), the kvm group and, on a Linux cloud VM, a sudoers rule that
+#    allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle) use sudo, and
+#    only after you said yes. Everything else goes into your home folder.
 # 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, corepack pnpm,
 #    build, a link in ~/.local/bin). On Linux it then offers the Tailscale login (`sudo tailscale up`
 #    waits until someone approves the machine in a browser, so it comes after the install), and runs
@@ -39,12 +41,17 @@
 #   --skip-prerequisites do not check or install prerequisites
 #   --prerequisites-only install the prerequisites, then stop (no Tapdance install, no host up)
 #   --no-system-image    do not install the Android system image (about 1.5 GB)
+#   --play-store         install the Google Play image (google_apis_playstore) instead of google_apis:
+#                        only for Play Billing or Play sign-in tests. Play images update Play services
+#                        in the background after boot, which keeps the guest busy longer (lease one
+#                        with `tapdance device lease --image-tag google_apis_playstore`)
 #   --with-gh            also install the GitHub CLI (gh) for installs from CI and builds with --git-auth gh
 #   --sdk-packages LIST  also install these SDK packages, comma-separated, e.g. "cmake;3.31.6" (host
 #                        builds need the app's own packages; quote the list, `;` is special in a shell)
 #
 # Settings: TAPDANCE_REPO (git URL; an SSH URL works for a private repository), TAPDANCE_REF (main),
-# TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis_playstore).
+# TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis; --play-store sets
+# google_apis_playstore).
 # The script never prints or stores tokens: `tapdance host up` writes the pairing token to a mode-600
 # file and prints only its path. Windows: use scripts/host-setup.ps1, which explains the options.
 
@@ -57,7 +64,7 @@ BIN_DIR="$HOME/.local/bin"
 SHARE="$HOME/.local/share/tapdance"
 ENV_FILE="$HOME/.tapdance/env.sh"
 API="${ANDROID_API:-34}"
-TAG="${ANDROID_TAG:-google_apis_playstore}"
+TAG="${ANDROID_TAG:-google_apis}"
 
 die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
@@ -79,6 +86,7 @@ while (( $# )); do
     --skip-prerequisites) SKIP_PREREQ=1 ;;
     --prerequisites-only) ONLY_PREREQ=1 ;;
     --no-system-image) NO_IMAGE=1 ;;
+    --play-store) TAG=google_apis_playstore ;;
     --with-gh) WITH_GH=1 ;;
     --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
     --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
@@ -129,11 +137,46 @@ cmdline_ok() { [[ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]]; }
 pkg_ok() { [[ -d "$SDK/${1//;//}" ]]; }
 image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
 # The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
+# A fixed list per package manager (the same as `tapdance doctor`'s hint), checked by package, so on a
+# fresh machine the list is known before the emulator is installed and goes into the one question.
+EMULATOR_LIBS_APT=(libpulse0 libxkbfile1 libxi6 libsm6 libice6)
+EMULATOR_LIBS_DNF=(pulseaudio-libs libxkbfile libXi libSM libICE)
+EMULATOR_LIBS_PACMAN=(libpulse libxkbfile libxi libsm libice)
+# The emulator libraries this machine's package manager lacks, one per line (Linux only).
+missing_emulator_libs() {
+  [[ "$OS" == Linux ]] || return 0
+  local p st
+  if command -v apt-get >/dev/null 2>&1 && command -v dpkg-query >/dev/null 2>&1; then
+    for p in "${EMULATOR_LIBS_APT[@]}"; do
+      st="$(dpkg-query -W -f='${Status}' "$p" 2>/dev/null || true)"
+      [[ "$st" == *"install ok installed"* ]] || echo "$p"
+    done
+  elif command -v dnf >/dev/null 2>&1 && command -v rpm >/dev/null 2>&1; then
+    for p in "${EMULATOR_LIBS_DNF[@]}"; do rpm -q "$p" >/dev/null 2>&1 || echo "$p"; done
+  elif command -v pacman >/dev/null 2>&1; then
+    for p in "${EMULATOR_LIBS_PACMAN[@]}"; do pacman -Q "$p" >/dev/null 2>&1 || echo "$p"; done
+  fi
+}
+# The packages to install for the emulator: the missing ones, or the whole list when the emulator
+# fails to load a library although they are all there (a library under another package name).
+emulator_lib_packages() {
+  local m; m="$(missing_emulator_libs)"
+  if [[ -n "$m" ]]; then echo $m; return; fi
+  if command -v apt-get >/dev/null 2>&1; then echo "${EMULATOR_LIBS_APT[*]}"
+  elif command -v dnf >/dev/null 2>&1; then echo "${EMULATOR_LIBS_DNF[*]}"
+  elif command -v pacman >/dev/null 2>&1; then echo "${EMULATOR_LIBS_PACMAN[*]}"; fi
+}
 emulator_libs_ok() {
-  [[ "$OS" == Linux && -x "$SDK/emulator/emulator" ]] || return 0
-  # Captured first: with pipefail, `grep -q` closing the pipe early would make the check pass.
-  local out; out="$("$SDK/emulator/emulator" -version 2>&1 || true)"
-  [[ "$out" != *"error while loading shared libraries"* ]]
+  [[ "$OS" == Linux ]] || return 0
+  if [[ -x "$SDK/emulator/emulator" ]]; then
+    # The emulator itself is the authority once it is there.
+    # Captured first: with pipefail, `grep -q` closing the pipe early would make the check pass.
+    local out; out="$("$SDK/emulator/emulator" -version 2>&1 || true)"
+    [[ "$out" != *"error while loading shared libraries"* ]]
+    return
+  fi
+  # Not installed yet: check the packages, so they are listed (and asked for) up front.
+  [[ -z "$(missing_emulator_libs)" ]]
 }
 tailscale_bin() {
   command -v tailscale 2>/dev/null && return
@@ -203,7 +246,7 @@ describe() {
     system-image) echo "Android system image $IMAGE (sdkmanager, about 1.5 GB)" ;;
     tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
     kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
-    emulator-libs) echo "system libraries the Android emulator needs (libpulse, libxkbfile, libXi, libSM, libICE; sudo)" ;;
+    emulator-libs) echo "system libraries the Android emulator needs: $(emulator_lib_packages) and what they depend on (system packages, sudo)" ;;
     gh) [[ "$OS" == Darwin ]] && echo "GitHub CLI gh (Homebrew)" || echo "GitHub CLI gh (system package, sudo)" ;;
     sdk:*) echo "Android SDK package ${1#sdk:} (sdkmanager)" ;;
     poweroff-rule) echo "a sudoers rule that lets $(id -un) run only /usr/bin/systemctl poweroff, so the guard can stop this cloud VM when it sits idle (sudo; /etc/sudoers.d/tapdance-poweroff, checked with visudo)" ;;
@@ -330,9 +373,16 @@ android_metrics_off() {
   say "turned off the Android CLI's usage metrics (--no-metrics in $rc)"
 }
 
+# One package-manager call for every system package in the list (git, unzip, emulator-libs), so the
+# libraries named in the question are installed in the same sudo step.
 install_system_packages() {
-  local pkgs=()
-  for s in "$@"; do case "$s" in git|unzip) pkgs+=("$s") ;; esac; done
+  local pkgs=() s p
+  for s in "$@"; do
+    case "$s" in
+      git|unzip) pkgs+=("$s") ;;
+      emulator-libs) for p in $(emulator_lib_packages); do pkgs+=("$p"); done ;;
+    esac
+  done
   (( ${#pkgs[@]} )) || return 0
   if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y "${pkgs[@]}"
   elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y "${pkgs[@]}"
@@ -340,11 +390,15 @@ install_system_packages() {
   else die "install ${pkgs[*]} with your package manager, then run this script again"; fi
 }
 
-install_emulator_libs() {
-  if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6
-  elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y pulseaudio-libs libxkbfile libXi libSM libICE
-  elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm libpulse libxkbfile libxi libsm libice
-  else die "install the libraries \`$SDK/emulator/emulator -version\` reports missing, then run this script again"; fi
+# After sdkmanager: the emulator just installed still cannot load a library (one the package check
+# could not see). Name the packages and ask again before using sudo; never install unannounced.
+emulator_libs_after_install() {
+  emulator_libs_ok && return 0
+  local pkgs; pkgs="$(emulator_lib_packages)"
+  [[ -n "$pkgs" ]] || die "the emulator cannot load a system library: install what \`$SDK/emulator/emulator -version\` reports missing, then run this script again"
+  say "the Android emulator still cannot load a system library; it needs: $pkgs (system packages, sudo)"
+  ask "Install them now?" || die "not installed. Install them yourself, then run this script again."
+  install_system_packages emulator-libs
 }
 
 install_gh() {
@@ -453,15 +507,15 @@ if (( ! SKIP_PREREQ )); then
     (( CHECK )) && exit 0
     if (( ${#SUDO_STEPS[@]} )); then say "these steps ask for your password (sudo): ${SUDO_STEPS[*]}"; fi
     ask "Install them now?" || die "nothing installed. Run again when ready, or install them yourself (docs/installation.md)."
+    # System packages first (unzip is needed for the command-line tools), all in one sudo step.
+    install_system_packages "${MISSING[@]}"
     for m in "${MISSING[@]}"; do
       case "$m" in
         node) install_node ;;
         jdk) node_ok || install_node; install_jdk ;;
         android-cmdline-tools) node_ok || install_node; install_cmdline_tools; android_metrics_off ;;
-        git|unzip) install_system_packages "$m" ;;
         gh) install_gh ;;
         tailscale) install_tailscale ;;
-        emulator-libs) install_emulator_libs ;;
         kvm-group)
           sudo usermod -aG kvm "$(id -un)"
           # The group applies to new logins only; an ACL lets this login and its running systemd user
@@ -478,8 +532,8 @@ if (( ! SKIP_PREREQ )); then
     (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
     for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || SDK_PKGS+=("$p"); done
     (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
-    # The emulator just installed may need system libraries this machine lacks.
-    emulator_libs_ok || install_emulator_libs
+    # The emulator just installed may still miss a library the package check could not see.
+    emulator_libs_after_install
     write_env_file
     check_all
     for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done

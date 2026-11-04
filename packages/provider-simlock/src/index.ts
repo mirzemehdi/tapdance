@@ -25,7 +25,7 @@ export {
 } from "./profile-provider.js";
 export { androidInstallHint, fromAgentDeviceError, installRefusal, installRefusalHint, withInstallHintFor, type HintSurface, type InstallRefusal } from "./agent-device-errors.js";
 export { readApkManifest, parseBinaryManifest, type ApkManifest } from "./apk-manifest.js";
-export { settleGuest, parseGuestState, busyBetween, dialogFromDumpsys, dialogInNodes, dialogAdvice, SETTLED_CPU, SETTLE_BUDGET_MS, type GuestSample, type SystemDialog, type SettleResult } from "./guest-settle.js";
+export { settleGuest, parseGuestState, busyBetween, dialogFromDumpsys, dialogInNodes, dialogAdvice, SETTLED_CPU, SETTLED_SAMPLES, SETTLE_BUDGET_MS, fallingTrend, type GuestSample, type SystemDialog, type SettleResult } from "./guest-settle.js";
 export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";
 export { releaseStaleDeviceClaims, agentDeviceCli, simlockHomeDir, type StaleClaimReport, type StaleClaimOptions } from "./stale-claims.js";
 export { checkBuildRequest, runBuild, FailureDigest, isNotableBuildLine, hostSimulatorArch, hostNetworkHint, XCODE_SETTING_KEYS, normalizeRepo, buildCacheDir, spawnRunner, deployKeyFor, gitEnv, gitAuthHint, gitAuthContext, describeGitAuth, githubOverHttps, gitAccessProbe, gradleDaemonArgs, buildKey, type GitAuthContext, type GitAccess, type BuildRequest, type BuildSettings, type BuildResult, type CommandRunner } from "./build.js";
