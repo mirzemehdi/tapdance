@@ -1,5 +1,5 @@
 export { AxeBackend, flattenAxe, type AxeNode } from "./axe.js";
-export { SimlockProvider, describeBadHealth, iosAppPredicate, parseSimctlApps, switchKnobPoint, PROVIDER_NAME, TESTED_SIMLOCK_VERSION, type SimlockProviderOptions, toAgentDeviceTarget, toUiElement, validateAppPath, checkAppId } from "./provider.js";
+export { SimlockProvider, STALE_RECORD_REASON, describeBadHealth, iosAppPredicate, parseSimctlApps, switchKnobPoint, PROVIDER_NAME, TESTED_SIMLOCK_VERSION, type SimlockProviderOptions, toAgentDeviceTarget, toUiElement, validateAppPath, checkAppId } from "./provider.js";
 export { SimlockHttp, parseExecStream, type SimlockStatus, type SimlockLease, type SimlockWorker } from "./http.js";
 export {
   readLocalProfile,
@@ -24,6 +24,7 @@ export {
   type ProfileRecord,
 } from "./profile-provider.js";
 export { androidInstallHint, fromAgentDeviceError } from "./agent-device-errors.js";
+export { settleGuest, parseGuestState, busyBetween, dialogFromDumpsys, dialogInNodes, dialogAdvice, SETTLED_CPU, SETTLE_BUDGET_MS, type GuestSample, type SystemDialog, type SettleResult } from "./guest-settle.js";
 export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";
 export { releaseStaleDeviceClaims, agentDeviceCli, simlockHomeDir, type StaleClaimReport, type StaleClaimOptions } from "./stale-claims.js";
 export { checkBuildRequest, runBuild, FailureDigest, isNotableBuildLine, hostSimulatorArch, hostNetworkHint, XCODE_SETTING_KEYS, normalizeRepo, buildCacheDir, spawnRunner, deployKeyFor, gitEnv, gitAuthHint, buildKey, type BuildRequest, type BuildSettings, type BuildResult, type CommandRunner } from "./build.js";

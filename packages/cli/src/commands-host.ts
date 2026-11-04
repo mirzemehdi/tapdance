@@ -34,7 +34,7 @@ import {
 import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
-import { applyWarm, installWorker, localWorkerStatus, readUserConfig, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, workerRunning, workerServiceInstalled } from "./commands-worker.js";
+import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, workerRunning, workerServiceInstalled } from "./commands-worker.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
 import { HOST_STOP_COMMAND, HOST_STOP_SUDO_CHECK, describeHostStop, hostStopApplies, sudoersInstallCommand, sudoersRule } from "./guard/host-stop.js";
@@ -561,12 +561,33 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
 
   host
-    .command("warm <counts>")
-    .description("Set how many booted spare devices the worker keeps (e.g. android=0,ios=0), without re-running host up; restarts the worker only when nothing is leased")
+    .command("warm [counts]")
+    .description(
+      "Set how many booted spare devices the worker keeps (e.g. android=0,ios=0), or `default` for Simlock's own (one spare per device kind leases used), without re-running host up; restarts the worker only when nothing is leased. With no counts, shows the current setting and spares",
+    )
     .option("--now", "restart the worker even if a lease is running (that ends the lease)")
-    .action(async (counts: string, o: { now?: boolean }) => {
+    .action(async (counts: string | undefined, o: { now?: boolean }) => {
       const out = output(globals());
       try {
+        if (counts === undefined) {
+          const report = await warmReport();
+          out.result(report, () => report.text);
+          return;
+        }
+        if (counts === "default") {
+          const running = await workerRunning();
+          const r = await resetWarm(out, { restart: !running ? "never" : o.now ? "always" : "if-idle" });
+          out.result(r, () =>
+            r.removed.length === 0
+              ? "The worker already uses Simlock's default spares (nothing to remove)."
+              : !running
+                ? "Back to Simlock's default spares; the worker is not running, so it applies when it starts."
+                : r.restarted
+                  ? "Back to Simlock's default spares; the worker restarted with it."
+                  : `Back to Simlock's default spares in the config, but ${r.activeLeases} lease(s) are running, so the worker was not restarted. It applies at the next \`tapdance worker restart\`, or now with --now, which ends the running lease(s).`,
+          );
+          return;
+        }
         const warm = parseWarm(counts);
         if (!(await workerRunning())) {
           const r = await applyWarm(out, warm, { restart: "never" });

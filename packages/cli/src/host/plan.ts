@@ -408,6 +408,58 @@ export function warmSettings(warm: WarmCounts, limits: { android: number; ios: n
   ];
 }
 
+/** The warm-pool keys `warmSettings` writes; `host warm default` removes exactly these (#91). */
+export const WARM_KEYS = ["warmPool.enabled", "warmPool.reserveRunning.android", "warmPool.reserveRunning.ios"] as const;
+
+/**
+ * Simlock's config without the warm-pool keys Tapdance writes, so Simlock's own default applies
+ * again: one booted spare per device kind leases used (learned). Objects left empty are dropped;
+ * any other key stays as it is. Returns the keys that were present.
+ */
+export function withoutWarmSettings(config: Record<string, unknown>): { config: Record<string, unknown>; removed: string[] } {
+  const copy = structuredClone(config);
+  const removed: string[] = [];
+  for (const key of WARM_KEYS) {
+    const path = key.split(".");
+    const parents: Array<Record<string, unknown>> = [copy];
+    for (const segment of path.slice(0, -1)) {
+      const next = parents.at(-1)![segment];
+      if (next === null || typeof next !== "object" || Array.isArray(next)) break;
+      parents.push(next as Record<string, unknown>);
+    }
+    if (parents.length !== path.length) continue;
+    const last = path.at(-1)!;
+    if (!(last in parents.at(-1)!)) continue;
+    delete parents.at(-1)![last];
+    removed.push(key);
+    // Drop objects the removal left empty (reserveRunning, then warmPool), innermost first.
+    for (let i = parents.length - 1; i > 0; i--) {
+      if (Object.keys(parents[i]!).length > 0) break;
+      delete parents[i - 1]![path[i - 1]!];
+    }
+  }
+  return { config: copy, removed };
+}
+
+/** How the worker's warm spares are set, for `host warm` with no counts (#91). */
+export function describeWarm(
+  config: Record<string, unknown> | undefined,
+  pool: { enabled?: boolean; targets?: Array<{ platform?: string; model?: string; osVersion?: string; origin?: string; ready?: number; booting?: number }> } | undefined,
+): string {
+  const warm = (config?.["warmPool"] ?? {}) as { enabled?: unknown; reserveRunning?: Record<string, unknown> };
+  const set = WARM_KEYS.filter((k) => withoutWarmSettings(config ?? {}).removed.includes(k));
+  const lines: string[] = [];
+  if (warm.enabled === false) lines.push("Warm spares: off (tapdance host warm android=0,ios=0); idle devices shut down.");
+  else if (set.length === 0) lines.push("Warm spares: Simlock's default: one booted spare of each device kind a lease used (learned from leases).");
+  else lines.push(`Warm spares: set by tapdance host warm (reserved running slots: android ${String(warm.reserveRunning?.["android"] ?? 0)}, ios ${String(warm.reserveRunning?.["ios"] ?? 0)}); spares are still the device kinds leases used.`);
+  const targets = pool?.targets ?? [];
+  if (pool === undefined) lines.push("The worker is not running, so there is no spare right now.");
+  else if (targets.length === 0) lines.push(pool.enabled === false ? "No spares." : "No spare yet: the next lease boots a device, and the worker keeps one of that kind ready afterwards.");
+  for (const t of targets) lines.push(`  ${t.platform ?? "?"} ${t.model ?? "?"}${t.osVersion ? ` / ${t.osVersion}` : ""} (${t.origin ?? "?"}): ready ${t.ready ?? 0}${t.booting ? `, booting ${t.booting}` : ""}`);
+  lines.push("Change: tapdance host warm android=1,ios=0 · off: tapdance host warm android=0,ios=0 · back to the default: tapdance host warm default");
+  return lines.join("\n");
+}
+
 /** A short, safe-to-show tag for a token: the first 6 hex characters of its SHA-256. */
 export function tokenFingerprint(token: string): string {
   return createHash("sha256").update(token.trim()).digest("hex").slice(0, 6);

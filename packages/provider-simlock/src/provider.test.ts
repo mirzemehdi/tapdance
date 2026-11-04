@@ -903,3 +903,147 @@ describe("Android install refusals", () => {
     expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").hint).toMatch(/app uninstall/);
   });
 });
+
+describe("leases on a slow or just-started host (#79, #92, #94; MOCKED agent-device client and Simlock HTTP)", () => {
+  const SETTLED = "1\ncpu  100 0 0 900 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
+  const CALMER = "1\ncpu  110 0 0 990 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n";
+  /** A provider whose agent-device client, Simlock HTTP and device exec are fakes. */
+  function fakeHost(o: {
+    allocate: (p: { leaseId: string }) => Promise<unknown>;
+    status?: (leaseId: string | undefined) => unknown;
+    probes?: string[];
+    dumpsys?: string;
+    press?: (p: Record<string, unknown>) => Promise<unknown>;
+    snapshot?: () => Promise<unknown>;
+  }) {
+    let leaseId: string | undefined;
+    const pressed: Array<Record<string, unknown>> = [];
+    const probes = [...(o.probes ?? [SETTLED, CALMER])];
+    const client = {
+      leases: {
+        allocate: async (p: { leaseId: string }) => {
+          leaseId = p.leaseId;
+          return o.allocate(p);
+        },
+        release: async () => ({ released: true }),
+      },
+      sessions: { close: async () => ({}) },
+      apps: { open: async () => ({}) },
+      interactions: { press: async (p: Record<string, unknown>) => (pressed.push(p), o.press ? o.press(p) : {}) },
+      capture: { snapshot: o.snapshot ?? (async () => ({ nodes: [] })) },
+    };
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      if (path === "/v1/status") return new Response(JSON.stringify(o.status?.(leaseId) ?? { devices: [], leases: [] }), { status: 200 });
+      return new Response(JSON.stringify({ lease: { id: leaseId } }), { status: 200 });
+    }) as typeof fetch;
+    const p = new (class extends SimlockProvider {
+      protected override staleRecordRetryMs = 5;
+      protected override queuePollMs = 10;
+      protected override leaseClient() {
+        return client as never;
+      }
+      protected override agentClient() {
+        return client as never;
+      }
+      protected override async execOn(_h: unknown, _tool: string, args: string[]) {
+        if (args[1]?.startsWith("getprop")) return { exitCode: 0, stdout: probes.length > 1 ? probes.shift()! : probes[0]!, stderr: "" };
+        return { exitCode: 0, stdout: o.dumpsys ?? "", stderr: "" };
+      }
+    })({ kind: "remote", baseUrl: "https://host.example:4720", token: "t", tenant: "t", runId: "r", clientId: "c", source: "test" }, {}, fetchImpl);
+    return { p, pressed };
+  }
+  const granted = { leaseId: "x", deviceKey: "android:mobile:emulator-5554", device: { model: "Pixel 8", osVersion: "34" } };
+  const request = { platform: "android" as const, ttlMs: 60_000 };
+  const androidHandle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", physical: false, providerData: { baseUrl: "https://host.example:4720", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "t", runId: "r", clientId: "c" } } as never;
+
+  it("asks again while the host offers a device that is not running, then leases (#94)", async () => {
+    let calls = 0;
+    const { p } = fakeHost({
+      allocate: async (a) => {
+        if (++calls < 3) throw { code: "DEVICE_NOT_FOUND", message: "No Android device with serial emulator-5586" };
+        return { ...granted, leaseId: a.leaseId };
+      },
+    });
+    const progress: string[] = [];
+    const handle = await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(calls).toBe(3);
+    expect(handle.deviceId).toBe("emulator-5554");
+    expect(progress.filter((m) => /not running \(its records are stale/.test(m))).toHaveLength(2);
+  });
+
+  it("gives up with a hint that says the host just started, not to check selectors (#94)", async () => {
+    const { p } = fakeHost({ allocate: async () => Promise.reject({ code: "DEVICE_NOT_FOUND", message: "No Android device with serial emulator-5586" }) });
+    await expect(p.lease("s", { ...request, waitTimeoutMs: 1 })).rejects.toMatchObject({
+      code: "DEVICE_UNAVAILABLE",
+      retryable: true,
+      hint: expect.stringMatching(/about a minute after the host \(re\)starts/),
+      details: expect.objectContaining({ reason: "STALE_DEVICE_RECORD" }),
+    });
+    // Any other refusal is not retried.
+    let calls = 0;
+    const other = fakeHost({ allocate: async () => (calls++, Promise.reject({ code: "INVALID_ARGS", message: "refused by simlock: unknown model Pixel 99" })) });
+    await expect(other.p.lease("s", request)).rejects.toMatchObject({ code: "DEVICE_UNAVAILABLE" });
+    expect(calls).toBe(1);
+  });
+
+  it("says whether a spare is ready and where a waiting request stands (#92)", async () => {
+    const { p } = fakeHost({
+      allocate: async (a) => (await new Promise((r) => setTimeout(r, 80)), { ...granted, leaseId: a.leaseId }),
+      status: (id) => ({ devices: [], leases: [], capacity: { android: { warm: 0 } }, warmPool: { enabled: true, targets: [] }, waiting: id ? [{ id: "w1", requesterId: id, stage: "starting" }] : [] }),
+    });
+    const progress: string[] = [];
+    await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(progress[0]).toMatch(/no spare is ready, so a device has to start/);
+    expect(progress.some((m) => /^Starting a device for this lease .*\(\d+ s\)$/.test(m))).toBe(true);
+    // Said once per stage, not on every poll.
+    expect(progress.filter((m) => m.startsWith("Starting a device")).length).toBe(1);
+  });
+
+  it("names a ready spare instead of warning that a device may take minutes (#92)", async () => {
+    const { spareNote, describeWaiting } = await import("./provider.js");
+    const status = { devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", ready: 1 }] } };
+    expect(spareNote(status, { platform: "android" })).toBe("a warm spare is ready");
+    expect(spareNote(status, { platform: "android", device: "pixel 8" })).toBe("a warm spare is ready");
+    expect(spareNote(status, { platform: "android", device: "Pixel 9" })).toMatch(/no spare is ready/);
+    expect(spareNote({ ...status, warmPool: { targets: [{ platform: "android", model: "Pixel 8", ready: 0, booting: 1 }] }, capacity: {} }, { platform: "android" })).toMatch(/a spare is booting/);
+    expect(spareNote(undefined, { platform: "android" })).toMatch(/a new device can take a few minutes/);
+    expect(describeWaiting({ stage: "queued", queuePosition: 2, reason: "full" })).toBe("Queued for a device (position 2, every slot is busy)");
+    expect(describeWaiting(undefined)).toBeUndefined();
+  });
+
+  it("waits for a busy guest, answers a System UI ANR with Wait, and hands it out (#79)", async () => {
+    const ANR = "1\ncpu  0 0 0 0 0 0 0 0 0 0\n  mCurrentFocus=Window{4f u0 Application Not Responding: com.android.systemui}\n";
+    const { p, pressed } = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), probes: [ANR, SETTLED, CALMER] });
+    const progress: string[] = [];
+    const handle = await p.lease("s", request, { onProgress: (m) => progress.push(m) });
+    expect(pressed).toEqual([expect.objectContaining({ selector: 'id="android:id/aerr_wait"' })]);
+    expect(progress.some((m) => /System UI isn't responding" dialog with Wait/.test(m))).toBe(true);
+    expect(handle.notices).toBeUndefined();
+  }, 15_000);
+
+  it("reports an ANR dialog from inspect, launch and a missed tap instead of a plain miss (#80)", async () => {
+    const nodes = [
+      { ref: "e1", label: "System UI isn't responding", identifier: "android:id/alertTitle" },
+      { ref: "e2", label: "Close app", identifier: "android:id/aerr_close" },
+      { ref: "e3", label: "Wait", identifier: "android:id/aerr_wait" },
+    ];
+    const { p } = fakeHost({
+      allocate: async () => granted,
+      dumpsys: "  mCurrentFocus=Window{4f u0 Application Not Responding: com.android.systemui}\n",
+      snapshot: async () => ({ nodes, appBundleId: "com.measify.pianolune", warnings: ["A system surface (notification shade, quick settings, or another system overlay) covers the app"] }),
+      press: async () => Promise.reject({ code: "COMMAND_FAILED", message: 'Selector did not match: label="Let me try"' }),
+    });
+    const screen = await p.inspect(androidHandle);
+    expect(screen.app).toBe("android");
+    expect(screen.warnings).toHaveLength(1);
+    expect(screen.warnings[0]).toMatch(/"System UI isn't responding" covers the screen.*aerr_wait/);
+    const launched = await p.launchApp(androidHandle, "com.measify.pianolune");
+    expect(launched).toMatchObject({ ok: true, message: expect.stringMatching(/system dialog is in front/), warning: expect.stringMatching(/Wait/) });
+    await expect(p.tap(androidHandle, { kind: "text", text: "Let me try" })).rejects.toMatchObject({
+      code: "ELEMENT_NOT_FOUND",
+      message: expect.stringMatching(/a system dialog "System UI isn't responding" is in front/),
+      hint: expect.stringMatching(/aerr_wait/),
+    });
+  });
+});

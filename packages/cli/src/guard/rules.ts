@@ -333,6 +333,8 @@ export function execOf(body: unknown, policy: GuardPolicy, lease: { physical?: b
   if (s[0] === "am" && s[1] === "start" && s[2] === "-W" && intentArgs(s.slice(3))) return plain("interaction");
   // The system's view of every window (ui inspect --system).
   if (s.length === 1 && s[0] === deviceCommands.UIAUTOMATOR_DUMP) return plain("inspection");
+  // Whether a just-leased emulator has settled (#79): boot flag, CPU counters, focused window.
+  if (s.length === 1 && s[0] === deviceCommands.GUEST_STATE) return plain("inspection");
   // One app's language (Android 13+).
   if (s.length === 6 && s[0] === "cmd" && s[1] === "locale" && s[2] === "set-app-locales" && APP_ID.test(s[3]!) && s[4] === "--locales" && deviceCommands.LOCALE.test(s[5]!)) return plain("settings");
   // Chrome without its first-run screens (a setting).

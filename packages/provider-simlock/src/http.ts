@@ -50,6 +50,14 @@ export interface SimlockStatus {
   daemon?: { health?: string; mode?: string; version?: string };
   host?: { os?: string; osVersion?: string; arch?: string; tools?: Array<{ platform: string; name: string; version?: string }> };
   queueDepth?: number;
+  /** Requests still waiting for a device; `requesterId` is the lease id Tapdance chose. */
+  waiting?: Array<{ id?: string; requesterId?: string; stage?: string; queuePosition?: number; reason?: string }>;
+  /** Spares kept booted: configured targets and kinds learned from leases, with how many are ready. */
+  warmPool?: {
+    enabled?: boolean;
+    reserveRunning?: Record<string, number>;
+    targets?: Array<{ platform?: string; model?: string; osVersion?: string; origin?: string; count?: number; ready?: number; booting?: number }>;
+  };
 }
 
 export interface SimlockLease {
@@ -149,8 +157,8 @@ export class SimlockHttp {
     return this.json("/v1/identity");
   }
 
-  status(): Promise<SimlockStatus> {
-    return this.json("/v1/status");
+  status(timeoutMs?: number): Promise<SimlockStatus> {
+    return this.json("/v1/status", timeoutMs === undefined ? {} : { timeoutMs });
   }
 
   catalog(platform?: string): Promise<SimlockCatalog> {

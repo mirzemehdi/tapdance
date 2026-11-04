@@ -46,6 +46,11 @@ export interface LeaseHandle {
   createdAt: string;
   expiresAt: string;
   providerData: Record<string, unknown>;
+  /**
+   * What the agent should know about the device at lease time (still starting, a system dialog on
+   * screen). Set by `lease` only; not kept in the session record.
+   */
+  notices?: string[];
 }
 
 export type LeaseState = "active" | "ended" | "unknown";
