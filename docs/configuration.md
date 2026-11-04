@@ -81,6 +81,7 @@ ignored value never takes effect. In addition, a `tools.paths.<name>` entry must
 | `session.maxSessionMinutes` | `240` | 1–1440 | The keepalive stops renewing after this long; the lease then expires on its own. |
 | `session.leaseWaitSeconds` | `330` | 0–3600 | How long a lease request may wait in the queue. The Simlock provider caps it at 330 s. |
 | `session.idleReleaseMinutes` | `30` | 0–1440 | Release a lease nobody has used for this long. `0` never. Enforced by the background keepalive and the MCP server (not by `device lease --hold`). |
+| `session.settleSeconds` | `15` | 0–300 | Android emulators: once the leased guest has booted with no "isn't responding" or crash dialog in front (waited for up to 90 s, an ANR answered with Wait), how long the lease checks its CPU before handing it out. 3 calm readings in a row or a clearly falling load end the check early; a guest still busy goes out with a notice (commands work, 2-10 s each for a few minutes). `0` skips the CPU check (the boot and dialog checks still run). Raise it when the first minute's slower commands matter (timing-sensitive tests); each lease then waits up to that long on a busy host. `device lease --settle` and MCP `lease_device` `settle_seconds` override it per lease. A project file may set it. |
 
 ### iOS backend
 
@@ -193,6 +194,7 @@ What the tokens can do, plainly:
 | `TAPDANCE_ENDPOINT` | `endpoint` | |
 | `TAPDANCE_ARTIFACTS_DIR` | `artifacts.directory` | |
 | `TAPDANCE_TTL_MINUTES` | `session.defaultTtlMinutes` | Must be an integer. |
+| `TAPDANCE_SETTLE_SECONDS` | `session.settleSeconds` | Must be an integer, 0–300. |
 | `TAPDANCE_VIEWER_PORT` | `viewer.port` | Must be an integer. |
 | `TAPDANCE_SIMLOCK_PROFILE` | `simlock.profilePath` | |
 

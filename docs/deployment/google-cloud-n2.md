@@ -361,13 +361,15 @@ versions: `tapdance devices install android 35` on the VM.
 **A busy guest after a boot or release.** Under nested virtualisation the guest stays busy for a while
 after it starts: on the 2026-11-04 run (Play image), 65-145 s after a release and about 5 minutes after
 a fresh boot, with commands taking 2-10 s instead of 2-6 s and no "isn't responding" dialog. A lease
-waits up to 90 s for 3 calm readings in a row (or a clearly falling load) and otherwise hands the
-device out with a notice that says how busy it still is. Simlock's first boot of a device runs
-Android's background app optimisation (`cmd package bg-dexopt-job`) and waits for a calm guest before
-it saves the clean snapshot every spare restores, together at most 120 s (more would push the first
-lease past the 330 s lease wait). `tapdance worker logs` shows the outcome on the VM: "Android guest
-settled before the clean baseline" (or "still busy; capturing the clean baseline anyway") with the
-wait, the last CPU reading and the dexopt result. None of this is measured on a host yet.
+waits for boot and for no "isn't responding" dialog (answered with Wait), then checks the CPU for
+`session.settleSeconds` (15 s by default) and hands the device out, with a notice that says how busy it
+still is when it is. On this VM most leases right after a release or boot will carry that notice; a
+longer check (up to 300 s) would wait out more of the busy phase, at that much extra lease time. When
+Simlock saves a device's clean snapshot (the one every spare restores, on the device's first boot) it
+logs the guest CPU at that moment; on the VM, `tapdance worker logs --contains "clean baseline"` shows
+"Capturing the Android clean baseline" with `busy` (0 to 1). An earlier patch waited up to 120 s for a
+calm guest and ran Android's background dexopt job before that snapshot; on the 2026-11-04 run both
+gave up every time at ~95 % guest CPU and pushed cold leases to 269-348 s, so they were removed.
 
 ### Use it from your agent
 

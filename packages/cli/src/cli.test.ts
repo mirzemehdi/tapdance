@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { repoKeyPath } from "@tapdance/provider-simlock";
+import { BACKEND_SYNTAX, fromAgentDeviceError, installRefusalHint, repoKeyPath } from "@tapdance/provider-simlock";
 
 const cli = fileURLToPath(new URL("../dist/main.js", import.meta.url));
 const root = fileURLToPath(new URL("../../..", import.meta.url));
@@ -32,7 +32,9 @@ function sourceFiles(dir: string): string[] {
 
 /**
  * The string literals in every `hint:` and `fix:` value of a source file: the text after the colon
- * up to the comma, brace or parenthesis that ends the value, with nested brackets and strings skipped.
+ * up to the comma, brace, parenthesis or semicolon that ends the value, with nested brackets and
+ * strings skipped. (A semicolon ends a declaration such as `let hint: string;`, whose "value" would
+ * otherwise run on through the code that follows.)
  */
 function hintStrings(source: string): string[] {
   const found: string[] = [];
@@ -47,6 +49,7 @@ function hintStrings(source: string): string[] {
         found.push(source.slice(i + 1, j));
         i = j;
       } else if (ch === "(" || ch === "[" || ch === "{") depth++;
+      else if (ch === ";" && depth === 0) break;
       else if (ch === ")" || ch === "]" || ch === "}" || ch === ",") {
         if (depth === 0) break;
         if (ch !== ",") depth--;
@@ -261,6 +264,52 @@ describe("tapdance CLI (built)", () => {
     expect(bad).toEqual([]);
     // The extractor itself must see the hints, or the check above proves nothing.
     expect(hintStrings('x({ hint: "a" + `b ${c}`, fix: d ? "e" : "f", other: "g" })')).toEqual(["a", "b ${c}", "e", "f"]);
+    expect(hintStrings('let hint: string | undefined; const x = "not a hint";')).toEqual([]);
+  });
+
+  it("hints name only MCP tools that exist, never agent-device's own CLI syntax or <appId> (#108, #109)", async () => {
+    const { TOOLS } = await import("@tapdance/mcp");
+    const tools = new Set(TOOLS.map((t) => t.name));
+    // The first word of every multi-word tool name: a snake_case word that starts with one of them is
+    // meant as a tool (get_logs, launch_app), so it must be one.
+    const verbs = new Set(TOOLS.filter((t) => t.name.includes("_")).map((t) => t.name.split("_")[0]!));
+    const agentDeviceOnly = /snapshot -i|\bfind <|--debug\b|diagnostics log|--save-script|\bopen <app>/;
+    const bad: string[] = [];
+    for (const dir of ["cli", "provider-simlock", "sdk", "core", "mcp"]) {
+      for (const file of sourceFiles(join(root, "packages", dir, "src"))) {
+        for (const text of hintStrings(readFileSync(file, "utf8"))) {
+          const where = `${file.replace(root, "")}: ${text}`;
+          if (agentDeviceOnly.test(text)) bad.push(`agent-device syntax in ${where}`);
+          // Every app-specific hint knows its app: name it, or say where to find it (#109).
+          if (/<app-?id>/i.test(text)) bad.push(`placeholder in ${where}`);
+          for (const m of text.matchAll(/\b([a-z]+)_[a-z_]+\b/g)) if (verbs.has(m[1]!) && !tools.has(m[0])) bad.push(`no MCP tool ${m[0]} in ${where}`);
+        }
+      }
+    }
+    expect(bad).toEqual([]);
+
+    // agent-device's own hints, passed through the error mapping, come out without its syntax (#108).
+    const backend = [
+      { code: "ELEMENT_NOT_FOUND", message: 'Selector did not match: text="No such button"', details: { hint: 'Selector text/label values match exactly (quote multi-word values: text="Sign in"). Run snapshot -i to see current elements and refs, or use find <text> for contains matching.' } },
+      { code: "COMMAND_FAILED", message: "Android helper could not launch the application", details: { hint: "Retry with --debug and inspect diagnostics log for details." } },
+      { code: "COMMAND_FAILED", message: "fill failed", details: { hint: "The tap most likely missed the field. Re-check the target with snapshot -i and fill the element it reports, rather than retrying the same coordinates." } },
+      { code: "COMMAND_FAILED", message: "session closed", details: { hint: "Close this session and start a fresh one with open <app> --save-script[=<path>]." } },
+      { code: "AMBIGUOUS_MATCH", message: "find matched 2 elements", details: { hint: "Multiple candidates matched. Narrow the query or pass an exact identifier." } },
+    ];
+    for (const e of backend) {
+      const hint = fromAgentDeviceError(e, "tap").hint ?? "";
+      expect(hint, e.details.hint).not.toMatch(BACKEND_SYNTAX);
+      expect(hint).not.toMatch(agentDeviceOnly);
+    }
+    // An install refusal names the package when it is known, and never prints a placeholder.
+    for (const reason of ["INSTALL_SIGNATURE", "INSTALL_DOWNGRADE", "INSTALL_STORAGE"] as const) {
+      for (const surface of ["cli", "mcp", "both"] as const) {
+        expect(installRefusalHint(reason, undefined, surface)).not.toMatch(/<[A-Za-z-]+>/);
+        const named = installRefusalHint(reason, "com.example.app", surface);
+        expect(named).not.toMatch(/<[A-Za-z-]+>/);
+        if (reason !== "INSTALL_STORAGE") expect(named).toContain("com.example.app");
+      }
+    }
   });
 
   it("only names commands that exist, in code hints and in every doc", () => {

@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { TapdanceError } from "@tapdance/core";
 import {
   buildCacheDir,
+  buildKey,
   checkBuildRequest,
   deployKeyFor,
   describeGitAuth,
@@ -215,6 +216,23 @@ describe("builds on the host (#45)", () => {
     expect(missingSdkHint("No version of NDK matched the requested version 27.0.12077973")).toContain('sdkmanager "ndk;27.0.12077973"');
     expect(missingSdkHint("Failed to find target with hash string 'android-35'")).toContain('sdkmanager "platforms;android-35"');
     expect(missingSdkHint("e: Unresolved reference")).toBeUndefined();
+  });
+
+  it("keys a build by its effective settings, so the CLI's and MCP's requests for one commit match (#104)", () => {
+    const sha = "2af7bdd49255aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const repo = "https://github.com/acme/pianolune";
+    // The CLI before #104 sent its defaults and the iOS configuration on an Android build; MCP sends neither.
+    const cli = buildKey(sha, { repo, ref: "main", platform: "android", configuration: "Debug", gradleTask: "assembleDebug", dir: "MobileApp" });
+    const mcp = buildKey(sha, { repo, ref: "main", platform: "android", dir: "MobileApp" });
+    expect(mcp).toBe(cli);
+    expect(buildKey(sha, { repo, ref: "main", platform: "android", dir: "./MobileApp/" })).toBe(cli);
+    expect(buildKey(sha, { repo, ref: "main", platform: "android", gradleTask: ":androidApp:assembleDebug", dir: "MobileApp" })).not.toBe(cli);
+    expect(buildKey(sha, { repo, ref: "main", platform: "android" })).toBe(buildKey(sha, { repo, ref: "main", platform: "android", dir: "." }));
+    // iOS: Debug is the default configuration; Android's options do not change an iOS build.
+    const ios = buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App" });
+    expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", configuration: "Debug", gradleTask: "assembleDebug" })).toBe(ios);
+    expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", configuration: "Release" })).not.toBe(ios);
+    expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App" }, "abc")).not.toBe(ios);
   });
 
   it("names a host network failure, builds a known commit from the cache, and reuses a build (#61)", async () => {

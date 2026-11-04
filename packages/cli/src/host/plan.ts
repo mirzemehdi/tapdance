@@ -484,7 +484,7 @@ export function withoutWarmSettings(config: Record<string, unknown>): { config: 
 /** How the worker's warm spares are set, for `host warm` with no counts (#91). */
 export function describeWarm(
   config: Record<string, unknown> | undefined,
-  pool: { enabled?: boolean; targets?: Array<{ platform?: string; model?: string; osVersion?: string; origin?: string; ready?: number; booting?: number }> } | undefined,
+  pool: { enabled?: boolean; targets?: Array<{ platform?: string; model?: string; osVersion?: string; imageTag?: string; origin?: string; ready?: number; booting?: number }> } | undefined,
 ): string {
   const warm = (config?.["warmPool"] ?? {}) as { enabled?: unknown; reserveRunning?: Record<string, unknown> };
   const set = WARM_KEYS.filter((k) => withoutWarmSettings(config ?? {}).removed.includes(k));
@@ -495,7 +495,8 @@ export function describeWarm(
   const targets = pool?.targets ?? [];
   if (pool === undefined) lines.push("The worker is not running, so there is no spare right now.");
   else if (targets.length === 0) lines.push(pool.enabled === false ? "No spares." : "No spare yet: the next lease boots a device, and the worker keeps one of that kind ready afterwards.");
-  for (const t of targets) lines.push(`  ${t.platform ?? "?"} ${t.model ?? "?"}${t.osVersion ? ` / ${t.osVersion}` : ""} (${t.origin ?? "?"}): ready ${t.ready ?? 0}${t.booting ? `, booting ${t.booting}` : ""}`);
+  // The image tag tells two kinds of one model apart (#112); an untagged kind is whatever image it was made from.
+  for (const t of targets) lines.push(`  ${t.platform ?? "?"} ${t.model ?? "?"}${t.osVersion ? ` / ${t.osVersion}` : ""}${t.platform === "android" ? ` ${t.imageTag ?? "(no image tag)"}` : t.imageTag ? ` ${t.imageTag}` : ""} (${t.origin ?? "?"}): ready ${t.ready ?? 0}${t.booting ? `, booting ${t.booting}` : ""}`);
   lines.push("Change: tapdance host warm android=1,ios=0 · off: tapdance host warm android=0,ios=0 · back to the default: tapdance host warm default");
   return lines.join("\n");
 }

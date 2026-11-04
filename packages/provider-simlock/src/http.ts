@@ -56,7 +56,7 @@ export interface SimlockStatus {
   warmPool?: {
     enabled?: boolean;
     reserveRunning?: Record<string, number>;
-    targets?: Array<{ platform?: string; model?: string; osVersion?: string; origin?: string; count?: number; ready?: number; booting?: number }>;
+    targets?: Array<{ platform?: string; model?: string; osVersion?: string; imageTag?: string; origin?: string; count?: number; ready?: number; booting?: number }>;
   };
 }
 
@@ -86,6 +86,8 @@ export interface SimlockCatalog {
     modelRuntimes?: Record<string, string[]>;
     osVersions?: string[];
     imageTags?: string[];
+    /** Simlock 0.5: each installed system image (Android: `runtime` is the API level). */
+    images?: Array<{ runtime: string; tag: string; abi?: string }>;
   }>;
 }
 
@@ -161,8 +163,8 @@ export class SimlockHttp {
     return this.json("/v1/status", timeoutMs === undefined ? {} : { timeoutMs });
   }
 
-  catalog(platform?: string): Promise<SimlockCatalog> {
-    return this.json(`/v1/catalog${platform === undefined ? "" : `?platform=${encodeURIComponent(platform)}`}`);
+  catalog(platform?: string, timeoutMs?: number): Promise<SimlockCatalog> {
+    return this.json(`/v1/catalog${platform === undefined ? "" : `?platform=${encodeURIComponent(platform)}`}`, timeoutMs === undefined ? {} : { timeoutMs });
   }
 
   async workers(operatorToken: string): Promise<SimlockWorker[]> {

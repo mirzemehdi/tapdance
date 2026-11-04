@@ -43,7 +43,8 @@ import {
   type AppCiInstallResult,
 } from "@tapdance/core";
 import { runDeviceOperation } from "./device-operations.js";
-import { fromAgentDeviceError, STALE_CLAIM_REASON } from "./agent-device-errors.js";
+import { fromAgentDeviceError, readerHint, STALE_CLAIM_REASON, withRefusalAppId } from "./agent-device-errors.js";
+import { readApkManifest } from "./apk-manifest.js";
 import { releaseStaleDeviceClaims } from "./stale-claims.js";
 import { crashReportsDir, listCrashReports, readCrashReport, summarizeCrash } from "./crash-reports.js";
 import { clearConsole, consolePaths, readConsole } from "./console-capture.js";
@@ -54,6 +55,7 @@ import * as deviceCommands from "./device-commands.js";
 import type { SimlockConnection } from "./connection.js";
 import { SimlockHttp, type ExecResult, type SimlockStatus, type SimlockWorker } from "./http.js";
 import { describeDialog, dialogAdvice, dialogFromDumpsys, dialogInNodes, SETTLE_INTERVAL_MS, settleGuest, type SettleResult, type SystemDialog } from "./guest-settle.js";
+import { chooseAndroidImage } from "./image-choice.js";
 import { AxeBackend } from "./axe.js";
 
 export const PROVIDER_NAME = "simlock";
@@ -80,11 +82,17 @@ export function isStaleDeviceRecord(error: unknown): error is TapdanceError {
 }
 
 /** The part of the request line that says whether a spare is ready, from Simlock's status (#92). */
-export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion">): string {
+export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion" | "imageTag">): string {
   if (status === undefined) return "queues if busy; a new device can take a few minutes";
   const same = (a: string | undefined, b: string | undefined) => a === undefined || b === undefined || a.toLowerCase() === b.toLowerCase();
-  const targets = (status.warmPool?.targets ?? []).filter((t) => t.platform === request.platform && same(request.device, t.model) && same(request.osVersion, t.osVersion));
-  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (request.device === undefined && (status.capacity?.[request.platform]?.warm ?? 0) > 0);
+  // Simlock grants a spare only of the requested image tag: an untagged request takes untagged
+  // spares only, a tagged one spares of that tag only (#112).
+  const sameTag = (t: { imageTag?: string }) => (t.imageTag ?? "") === (request.imageTag ?? "");
+  const targets = (status.warmPool?.targets ?? []).filter((t) => t.platform === request.platform && same(request.device, t.model) && same(request.osVersion, t.osVersion) && sameTag(t));
+  // Simlock's bare warm count says nothing about the kind: trust it only when there is no per-kind
+  // list to read and the request names no particular kind.
+  const anyKind = status.warmPool?.targets === undefined && request.device === undefined && request.osVersion === undefined && request.imageTag === undefined;
+  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (anyKind && (status.capacity?.[request.platform]?.warm ?? 0) > 0);
   if (ready) return "a warm spare is ready";
   if (targets.some((t) => (t.booting ?? 0) > 0)) return "a spare is booting; this can take a minute or two";
   return "no spare is ready, so a device has to start: this can take a few minutes";
@@ -552,7 +560,21 @@ export class SimlockProvider implements DeviceProvider {
     await releaseStaleDeviceClaims().catch(() => undefined);
   }
 
-  private async leaseOnce(sessionId: string, request: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
+  /**
+   * Fills in the Android image tag and API level from the host's catalog (#112, see image-choice.ts).
+   * An unreadable catalog leaves the request as it is; this never fails a lease.
+   */
+  private async withImageChoice(request: LeaseRequest, options: CallOptions): Promise<LeaseRequest> {
+    if (request.platform !== "android" || request.physical || request.profile) return request;
+    const catalog = await this.http.catalog("android", 5_000).catch(() => undefined);
+    const entry = Array.isArray(catalog?.platforms) ? catalog.platforms.find((p) => p.platform === "android") : undefined;
+    const choice = chooseAndroidImage(request, entry);
+    if (choice.note) options.onProgress?.(choice.note);
+    return { ...request, ...(choice.imageTag ? { imageTag: choice.imageTag } : {}), ...(choice.osVersion ? { osVersion: choice.osVersion } : {}) };
+  }
+
+  private async leaseOnce(sessionId: string, given: LeaseRequest, options: CallOptions): Promise<LeaseHandle> {
+    const request = await this.withImageChoice(given, options);
     const leaseId = randomBytes(16).toString("hex");
     // One agent-device session per lease: a session keeps state on the worker (an unfinished screen
     // recording, a device claim) that a later lease under the same name would otherwise inherit.
@@ -631,7 +653,7 @@ export class SimlockProvider implements DeviceProvider {
       throw fromAgentDeviceError(error, "open device session");
     }
     if (handle.platform === "android" && !handle.physical) {
-      const settled = await this.settle(handle, options);
+      const settled = await this.settle(handle, options, request.settleMs);
       if (settled.notices.length > 0) handle.notices = settled.notices;
       await this.warmUpSnapshotHelper(handle);
     }
@@ -677,12 +699,13 @@ export class SimlockProvider implements DeviceProvider {
   }
 
   /**
-   * Waits for a just-leased emulator to settle (#79, #101): boot complete, no "isn't responding"
-   * dialog (answered with Wait), and the guest's CPU calm for several readings in a row (or clearly
-   * falling). Never fails the lease: past the budget (about 90 s, see SETTLE_BUDGET_MS for why) it
-   * hands the device out with a notice that says how busy it still is.
+   * Waits for a just-leased emulator to settle (#79, #101): boot complete and no "isn't responding"
+   * dialog (answered with Wait), up to 90 s; then checks the guest's CPU for `cpuCheckMs` (the
+   * request's `settleMs`, `session.settleSeconds`, 15 s by default, 0 = not at all), ending early on
+   * calm readings in a row or a clearly falling load. Never fails the lease: a device still busy is
+   * handed out with a notice that says how busy it is (see DEFAULT_CPU_CHECK_MS for why it is short).
    */
-  protected async settle(handle: LeaseHandle, options: CallOptions): Promise<SettleResult> {
+  protected async settle(handle: LeaseHandle, options: CallOptions, cpuCheckMs?: number): Promise<SettleResult> {
     const probe = deviceCommands.android.guestState();
     return settleGuest({
       probe: async () => {
@@ -696,6 +719,7 @@ export class SimlockProvider implements DeviceProvider {
       },
       ...(options.onProgress ? { progress: options.onProgress } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(cpuCheckMs !== undefined ? { cpuBudgetMs: cpuCheckMs } : {}),
       intervalMs: this.settleIntervalMs,
     });
   }
@@ -806,7 +830,11 @@ export class SimlockProvider implements DeviceProvider {
       if (!appId && handle.platform === "ios") appId = await bundleIdOf(path);
       return { path, platform: handle.platform, ...(appId ? { appId } : {}) };
     } catch (error) {
-      throw fromAgentDeviceError(error, "install");
+      const mapped = fromAgentDeviceError(error, "install");
+      if (mapped.details?.["reason"] !== "INSTALL_SIGNATURE" && mapped.details?.["reason"] !== "INSTALL_DOWNGRADE") throw mapped;
+      // A refused upload names the package as the CI path does (#109): the caller's id, else the APK's.
+      const appId = options.appId ?? (handle.platform === "android" && /\.apk$/i.test(path) ? (await readApkManifest(path))?.appId : undefined);
+      throw withRefusalAppId(mapped, appId);
     }
   }
 
@@ -814,8 +842,8 @@ export class SimlockProvider implements DeviceProvider {
     checkAppId(appId);
     if (options.args?.some((a) => typeof a !== "string" || a.length > 1024 || a.includes("\u0000"))) throw new TapdanceError("USAGE", "Launch arguments must be short plain strings");
     if (options.console) return this.launchWithConsole(handle, appId, options.args ?? []);
-    try {
-      await this.agentClient(handle).apps.open({
+    const open = () =>
+      this.agentClient(handle).apps.open({
         app: appId,
         ...(options.url ? { url: options.url } : {}),
         ...(options.relaunch || options.args?.length ? { relaunch: true } : {}),
@@ -823,12 +851,46 @@ export class SimlockProvider implements DeviceProvider {
         ...this.selection(handle),
         ...this.scope(handle),
       } as never);
+    let late: string | undefined;
+    try {
+      await open();
     } catch (error) {
-      throw await this.withDialog(handle, fromAgentDeviceError(error, `launch ${appId}`));
+      // agent-device's Android helper can stall while the app it just started is still coming up (a
+      // first start after clear_app_data): the app is often in front all the same (#107). Look, and
+      // open once more if it is not, before calling the launch failed.
+      if (handle.platform !== "android" || !LAUNCH_HELPER_FLAKE.test(String((error as Error)?.message ?? error))) {
+        throw await this.withDialog(handle, launchFailed(error, appId));
+      }
+      late = await this.launchedAnyway(handle, appId, open, error);
     }
     // A launch "succeeds" under a system dialog that keeps the app out of reach (#80): say so.
     const dialog = handle.platform === "android" ? await this.dialogInFront(handle) : undefined;
-    return dialog ? { ok: true, message: `Launched ${appId}, but a system dialog is in front of it`, warning: dialogAdvice(dialog) } : { ok: true, message: `Launched ${appId}` };
+    if (dialog) return { ok: true, message: `Launched ${appId}, but a system dialog is in front of it`, warning: dialogAdvice(dialog) };
+    return late ? { ok: true, message: `Launched ${appId}`, warning: late } : { ok: true, message: `Launched ${appId}` };
+  }
+
+  /**
+   * After agent-device's helper failed a launch (#107): a note when the app is in front anyway, or
+   * after one more open succeeds; the original error otherwise.
+   */
+  private async launchedAnyway(handle: LeaseHandle, appId: string, open: () => Promise<unknown>, error: unknown): Promise<string> {
+    const reason = String((error as Error)?.message ?? error).split("\n")[0]!.slice(0, 160);
+    const inFront = async () => {
+      for (const pause of LAUNCH_CHECK_MS) {
+        await new Promise((r) => setTimeout(r, pause));
+        const r = await this.execOn(handle, "adb", deviceCommands.android.focusedWindow().args, 10_000).catch(() => undefined);
+        if (r && appInFront(r.stdout, appId)) return true;
+      }
+      return false;
+    };
+    if (await inFront()) return `agent-device reported "${reason}", but ${appId} is in front: it launched.`;
+    try {
+      await open();
+      return `The first launch attempt failed ("${reason}"); a second one worked.`;
+    } catch (again) {
+      if (await inFront()) return `agent-device reported "${reason}", but ${appId} is in front: it launched.`;
+      throw await this.withDialog(handle, launchFailed(again, appId));
+    }
   }
 
   /** An "isn't responding" or crash dialog that has the focus on an Android device, from the window manager (#80). */
@@ -1229,7 +1291,8 @@ export class SimlockProvider implements DeviceProvider {
       condition.kind === "text" ? { text: condition.text } : condition.kind === "absent" ? { absent: textSelector(condition.text) } : { stable: true };
     try {
       const r = await command.wait({ ...target, timeoutMs, ...this.scope(handle) });
-      return { found: true, waitedMs: r.waitedMs ?? Date.now() - started, ...(r.hint ? { hint: r.hint } : {}) };
+      const hint = readerHint(r.hint);
+      return { found: true, waitedMs: r.waitedMs ?? Date.now() - started, ...(hint ? { hint } : {}) };
     } catch (error) {
       const mapped = fromAgentDeviceError(error, "wait");
       if (mapped.code === "TIMEOUT" || mapped.code === "ELEMENT_NOT_FOUND" || /timed? ?out/i.test(mapped.message)) {
@@ -1511,7 +1574,7 @@ export class SimlockProvider implements DeviceProvider {
   /** iOS: relaunches the app with its stdout and stderr captured on the Mac; `logs --app` reads them (#59). */
   private async launchWithConsole(handle: LeaseHandle, appId: string, args: string[]): Promise<ActionResult> {
     if (handle.platform !== "ios") {
-      throw new TapdanceError("NOT_SUPPORTED", "Console capture is for the iOS simulator", { hint: "On Android, an app's println and Log lines are in logcat already: `tapdance logs --app <id>`." });
+      throw new TapdanceError("NOT_SUPPORTED", "Console capture is for the iOS simulator", { hint: `On Android, an app's println and Log lines are in logcat already: \`tapdance logs --app ${appId}\` (MCP get_logs app_id).` });
     }
     if (this.isLocal()) {
       const dir = this.consoleDir();
@@ -1766,7 +1829,8 @@ export function actionResult(result: unknown, fallback: string): ActionResult {
   }
   const warning = asText(r["warning"]);
   if (warning) warnings.push(warning);
-  for (const h of [asText(r["hint"]), asText(settle["hint"])]) if (h && !hints.includes(h)) hints.push(h);
+  // agent-device's hints name its own CLI's syntax: keep only what a Tapdance reader can use (#108).
+  for (const h of [readerHint(asText(r["hint"])), readerHint(asText(settle["hint"]))]) if (h && !hints.includes(h)) hints.push(h);
 
   const resolution = asRecord(r["resolution"]);
   if (resolution["kind"] === "label-fallback" || resolution["kind"] === "disambiguated") {
@@ -2049,6 +2113,30 @@ export const RAW_INPUT_APPS = new Set([
 
 /** agent-device snapshot failures that pass on their own a moment later (a busy or just-started guest). */
 const HELPER_FLAKE = /INSTRUMENTATION_FAILED|snapshot helper failed|could not get idle state|idle state/i;
+/** agent-device launch failures where the app may well have started: its helper stalled, not the app (#107). */
+const LAUNCH_HELPER_FLAKE = /helper could not launch the application|snapshot helper session request timed out|INSTRUMENTATION_FAILED|snapshot helper failed|idle state/i;
+/** Pauses between looks at the focused window after such a failure (a cleared app's first start is slow). */
+export const LAUNCH_CHECK_MS = [500, 1500, 3000];
+
+/** True when the window manager's focused window or focused activity belongs to `appId`. */
+export function appInFront(dumpsys: string, appId: string): boolean {
+  if (focusedPackage(dumpsys) === appId) return true;
+  const focusedApp = /mFocusedApp=(?:AppWindowToken|ActivityRecord)\{\S+ \S+ ([A-Za-z][A-Za-z0-9_.]*)\//.exec(dumpsys)?.[1];
+  return focusedApp === appId;
+}
+
+/** A launch failure with a fix a Tapdance reader can follow (agent-device's own names its CLI, #108). */
+function launchFailed(error: unknown, appId: string): TapdanceError {
+  const mapped = fromAgentDeviceError(error, `launch ${appId}`);
+  if (mapped.hint || mapped.code !== "DEVICE_ERROR") return mapped;
+  return new TapdanceError(mapped.code, mapped.message, {
+    hint: `The app may have started anyway: check with inspect_screen / \`tapdance ui inspect\`, and launch it again if it is not in front.`,
+    ...(mapped.details ? { details: mapped.details } : {}),
+    retryable: mapped.retryable,
+    cause: error,
+  });
+}
+
 /** Pauses before reading again after such a failure, then a uiautomator dump is used. */
 export const SNAPSHOT_BACKOFF_MS = [500, 1000, 2000];
 

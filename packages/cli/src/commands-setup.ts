@@ -130,7 +130,7 @@ export function registerSetupCommands(program: Command, globals: () => GlobalOpt
         const config: Partial<TapdanceConfig> = {
           provider: mode,
           ...(endpoint ? { endpoint } : {}),
-          session: { defaultTtlMinutes: Number(o.ttl), keepalive: true, maxSessionMinutes: 240, leaseWaitSeconds: 330, idleReleaseMinutes: 30 },
+          session: { defaultTtlMinutes: Number(o.ttl), keepalive: true, maxSessionMinutes: 240, leaseWaitSeconds: 330, idleReleaseMinutes: 30, settleSeconds: 15 },
           artifacts: { directory: o.artifacts },
         };
         await writeConfigFile(target, config);

@@ -85,7 +85,8 @@ export function installRefusalHint(reason: InstallRefusal, appId?: string, surfa
   }
   const id = appId && /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/.test(appId) ? appId : undefined;
   const mcp = id ? `uninstall_app {app_id: "${id}"}` : "uninstall_app with the app's package (list_apps shows it)";
-  const cli = `\`tapdance app uninstall ${id ?? "<appId>"}\``;
+  // No placeholder when the package is unknown (#109): say where to find it instead.
+  const cli = id ? `\`tapdance app uninstall ${id}\`` : "`tapdance app uninstall` with the app's package (`tapdance app list` shows it)";
   const how = surface === "mcp" ? mcp : surface === "cli" ? cli : `MCP ${mcp}; CLI ${cli}`;
   const what = id ?? "it";
   if (reason === "INSTALL_SIGNATURE") {
@@ -111,6 +112,22 @@ export function withInstallHintFor(error: unknown, surface: "cli" | "mcp"): unkn
   });
 }
 
+/**
+ * An install refusal that names `appId` (the package the caller knows, e.g. read from the uploaded
+ * APK) when it did not name one yet (#109); any other error as it is.
+ */
+export function withRefusalAppId(error: TapdanceError, appId: string | undefined): TapdanceError {
+  const reason = error.details?.["reason"];
+  if (!appId || typeof error.details?.["appId"] === "string") return error;
+  if (reason !== "INSTALL_SIGNATURE" && reason !== "INSTALL_DOWNGRADE") return error;
+  return new TapdanceError(error.code, error.message, {
+    hint: installRefusalHint(reason, appId),
+    details: { ...error.details, appId },
+    retryable: error.retryable,
+    ...(error.cause !== undefined ? { cause: error.cause } : {}),
+  });
+}
+
 export function fromAgentDeviceError(error: unknown, action: string): TapdanceError {
   if (error instanceof TapdanceError) return error;
   const e = (error ?? {}) as AgentDeviceLikeError;
@@ -124,7 +141,15 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   const rawCode = typeof e.code === "string" ? e.code : "";
   const message = typeof e.message === "string" ? e.message : String(error);
   const refusal = action === "install" ? installRefusal(`${message} ${JSON.stringify(e.details ?? "")}`) : undefined;
-  if (refusal) return new TapdanceError("DEVICE_ERROR", `install failed: ${message.split("\n")[0]}`, { hint: installRefusalHint(refusal), details: { reason: refusal } });
+  if (refusal) {
+    // adb names the installed package in a signature refusal ("Existing package com.x signatures do
+    // not match"), so an upload names it too (#109).
+    const appId = /Existing package ([A-Za-z][A-Za-z0-9_.]*[A-Za-z0-9_])/.exec(`${message} ${JSON.stringify(e.details ?? "")}`)?.[1];
+    return new TapdanceError("DEVICE_ERROR", `install failed: ${message.split("\n")[0]}`, {
+      hint: installRefusalHint(refusal, appId),
+      details: { reason: refusal, ...(appId ? { appId } : {}) },
+    });
+  }
   const backendDetails = e.details !== null && typeof e.details === "object" ? (e.details as Record<string, unknown>) : {};
   const reason = typeof backendDetails["reason"] === "string" ? backendDetails["reason"] : "";
   let code: ErrorCode = CODE_MAP[rawCode] ?? "DEVICE_ERROR";
@@ -178,7 +203,10 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
   } else if (/requires an active app session|Run open first|app '[^']*' is not running/i.test(message)) {
     // agent-device's iOS reads need the session's app running; on the Home Screen there is none (#50).
     code = "DEVICE_ERROR";
-    hint = "No app is in front (the Home Screen, or the app was killed). agent-device reads the session's app: launch it again (launch_app / `tapdance app launch <id>`), or read the Home Screen with `tapdance ui inspect --app com.apple.springboard` (inspect_screen app_id).";
+    // Name the app when agent-device does ("app 'com.x' is not running"), never a placeholder (#109).
+    const app = /app \x27([A-Za-z][A-Za-z0-9_.-]*)\x27 is not running/i.exec(message)?.[1];
+    const launch = app ? `launch_app {app_id: "${app}"} / \`tapdance app launch ${app}\`` : "launch_app / `tapdance app launch` with the app's id";
+    hint = `No app is in front (the Home Screen, or the app was killed). agent-device reads the session's app: launch it again (${launch}), or read the Home Screen with \`tapdance ui inspect --app com.apple.springboard\` (inspect_screen app_id).`;
     noBackendHint = true;
   } else if (STALE_REF.test(rawCode) || STALE_REF.test(reason) || STALE_REF.test(message)) {
     code = "ELEMENT_NOT_FOUND";
@@ -198,7 +226,7 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     if (candidates.length > 0) details["candidates"] = candidates;
   }
   // agent-device's own fix for a stale claim names a command only the worker machine can run.
-  const backendHint = staleClaim || noBackendHint ? undefined : extractHint(e.details);
+  const backendHint = staleClaim || noBackendHint ? undefined : readerHint(extractHint(e.details));
   const ownHint = hint ?? HINTS[code];
   const joined = [ownHint, backendHint === ownHint ? undefined : backendHint].filter(Boolean).join(" ");
   return new TapdanceError(code, `${action} failed: ${firstLine(message)}`, {
@@ -232,6 +260,27 @@ function extractHint(details: unknown): string | undefined {
     if (typeof hint === "string" && hint.trim() !== "" && !/run --help/i.test(hint)) return hint;
   }
   return undefined;
+}
+
+/**
+ * Syntax only agent-device's own CLI understands: `snapshot -i`, `find <text>`, `--debug`, its
+ * diagnostics log, `open <app>`. A Tapdance reader can run none of it (#108).
+ */
+export const BACKEND_SYNTAX =
+  /--[a-z][\w-]*|\bsnapshot\b|\bfind\b|\bopen <|<app>|diagnostics|agent-device|AGENT_DEVICE_|react-devtools|\brecord (?:start|stop)\b|\bperf\b|\balert (?:accept|dismiss|get|wait)\b|\bkeyboard (?:dismiss|enter|status|get)\b|\bscroll <|\buse press\b|\bgesture\b|\btv-remote\b|\bauth login\b|\bxcrun\b|\bDEVELOPER_DIR\b/i;
+
+/**
+ * agent-device's hint with every sentence that names its own syntax dropped (#108); plain advice
+ * ("Narrow the query or pass an exact identifier.") is kept. Undefined when nothing is left.
+ */
+export function readerHint(hint: string | undefined): string | undefined {
+  if (hint === undefined) return undefined;
+  const kept = hint
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !BACKEND_SYNTAX.test(sentence))
+    .join(" ")
+    .trim();
+  return kept === "" ? undefined : kept;
 }
 
 function firstLine(text: string): string {

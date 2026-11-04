@@ -395,7 +395,10 @@ describe("rendering", () => {
 
   it("says how the warm spares are set and which are ready (#91)", () => {
     const learned = { enabled: true, targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", origin: "learned", ready: 1, booting: 0 }] };
-    expect(describeWarm({}, learned)).toMatch(/Simlock's default[\s\S]*android Pixel 8 \/ 34 \(learned\): ready 1/);
+    expect(describeWarm({}, learned)).toMatch(/Simlock's default[\s\S]*android Pixel 8 \/ 34 \(no image tag\) \(learned\): ready 1/);
+    // Two kinds of one model are told apart by their image tag (#112).
+    const both = { enabled: true, targets: [learned.targets[0]!, { ...learned.targets[0]!, imageTag: "google_apis", ready: 0 }] };
+    expect(describeWarm({}, both)).toMatch(/android Pixel 8 \/ 34 \(no image tag\) \(learned\): ready 1\n {2}android Pixel 8 \/ 34 google_apis \(learned\): ready 0/);
     expect(describeWarm({ warmPool: { enabled: true, reserveRunning: { android: 0, ios: 4 } } }, learned)).toMatch(/set by tapdance host warm \(reserved running slots: android 0, ios 4\)/);
     expect(describeWarm({ warmPool: { enabled: false } }, { enabled: false, targets: [] })).toMatch(/off[\s\S]*No spares\./);
     // Before the first lease, or after a reset that forgot the learned kind.

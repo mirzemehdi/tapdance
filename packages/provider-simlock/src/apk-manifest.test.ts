@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
+import type { TapdanceError } from "@tapdance/core";
+import { withInstallHintFor } from "./agent-device-errors.js";
 import { parseBinaryManifest, readApkManifest } from "./apk-manifest.js";
+import { SimlockProvider } from "./provider.js";
 
 /**
  * A compiled AndroidManifest.xml as aapt2 writes it (Android's binary XML): a UTF-16 string pool, the
@@ -153,5 +156,48 @@ describe("reading an APK's package without Android tools (#89)", () => {
     await writeFile(notZip, "APK");
     expect(await readApkManifest(notZip)).toBeUndefined();
     expect(await readApkManifest(join(dir, "missing.apk"))).toBeUndefined();
+  });
+});
+
+describe("a refused upload names the package (#109, MOCKED agent-device client)", () => {
+  const handle = { provider: "simlock", leaseId: "l", sessionId: "s", platform: "android", deviceId: "emulator-5554", providerData: { baseUrl: "http://x", agentDeviceSession: "td-x", deviceKey: "android:mobile:emulator-5554", tenant: "local", runId: "r", clientId: "c" } } as never;
+  const conn = { kind: "local", baseUrl: "http://x", token: "t", tenant: "local", runId: "r", clientId: "c", source: "test" } as const;
+  const refusing = (message: string) =>
+    new (class extends SimlockProvider {
+      protected override agentClient() {
+        return { apps: { install: async () => Promise.reject({ code: "COMMAND_FAILED", message }) } } as never;
+      }
+    })(conn);
+
+  it("reads the package from the uploaded APK when adb's message does not name it", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "td-apk-"));
+    const apk = join(dir, "androidApp-debug.apk");
+    await writeFile(apk, zipOf([{ name: "AndroidManifest.xml", data: binaryManifest({ appId: "com.measify.pianolune", versionCode: 2 }), deflate: true }]));
+    const error = (await refusing("failed to install: Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 2 is older than current 3]")
+      .installApp(handle, apk)
+      .catch((e: unknown) => e)) as TapdanceError;
+    expect(error.details).toMatchObject({ reason: "INSTALL_DOWNGRADE", appId: "com.measify.pianolune" });
+    expect(error.hint).toContain("com.measify.pianolune");
+    expect(error.hint).not.toMatch(/<[A-Za-z]+>/);
+    for (const surface of ["cli", "mcp"] as const) {
+      const hint = (withInstallHintFor(error, surface) as TapdanceError).hint!;
+      expect(hint).toContain(surface === "cli" ? "`tapdance app uninstall com.measify.pianolune`" : 'uninstall_app {app_id: "com.measify.pianolune"}');
+      expect(hint).not.toMatch(/<[A-Za-z]+>/);
+    }
+  });
+
+  it("takes the package from adb's own message for a signature refusal, and never leaves a placeholder", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "td-apk-"));
+    const notReadable = join(dir, "app.apk");
+    await writeFile(notReadable, "not a zip");
+    const adb = "failed to install /tmp/agent-device-artifact-upload-fqjnAf/androidApp-debug.apk: Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.measify.pianolune signatures do not match newer version; ignoring!]";
+    const named = (await refusing(adb).installApp(handle, notReadable).catch((e: unknown) => e)) as TapdanceError;
+    expect(named.details).toMatchObject({ reason: "INSTALL_SIGNATURE", appId: "com.measify.pianolune" });
+    expect((withInstallHintFor(named, "cli") as TapdanceError).hint).toContain("`tapdance app uninstall com.measify.pianolune`");
+    // Neither the APK nor adb names it: the hint says where to look instead of printing <appId>.
+    const unnamed = (await refusing("Failure [INSTALL_FAILED_VERSION_DOWNGRADE]").installApp(handle, notReadable).catch((e: unknown) => e)) as TapdanceError;
+    expect(unnamed.details?.["appId"]).toBeUndefined();
+    for (const surface of ["cli", "mcp"] as const) expect((withInstallHintFor(unnamed, surface) as TapdanceError).hint).not.toMatch(/<[A-Za-z]+>/);
+    expect((withInstallHintFor(unnamed, "cli") as TapdanceError).hint).toContain("`tapdance app list`");
   });
 });

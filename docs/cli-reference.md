@@ -162,11 +162,12 @@ tapdance device done
 | `-p, --platform` | Required. `android` or `ios`. |
 | `-d, --device <model>` | Model, e.g. `"Pixel 8"` or `"iPhone 16"`. See `tapdance devices`. |
 | `--os <version>` | OS version or range; for Android, the API level. |
-| `--image-tag <tag>` | Android system image tag, e.g. `google_apis_playstore`. |
+| `--image-tag <tag>` | Android system image tag, e.g. `google_apis_playstore`. Leave it out for normal testing: on a host that has both a Play image and `google_apis` (a host set up before `host-setup.sh` installed `google_apis`, then set up again), Tapdance asks for `google_apis` and says so; on a host with one kind, Simlock picks it. With a tag (given or chosen) and no `--os`, Tapdance asks for the host's default API level (the one `tapdance devices` shows as default) when that tag is installed there, instead of the newest level that has it. The "a warm spare is ready" line counts only a spare of the requested tag. |
 | `--physical` | Lease an enrolled physical device instead. Untested. |
 | `--profile <name>` | Boot a [device profile](#device-profiles) from this machine instead of a Simlock device. |
 | `--ttl <minutes>` | Lease TTL, 1–240. Default `session.defaultTtlMinutes` (30). |
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
+| `--settle <seconds>` | Android emulators: how long to check the guest's CPU after it has booted with no dialog in front, 0–300. Default `session.settleSeconds` (15). `0` skips the CPU check. |
 | `--no-keepalive` | Do not renew in the background. The lease ends after its TTL unless you run `device renew`. |
 | `--hold` | Stay in the foreground, renew, and release on Ctrl-C. |
 
@@ -194,10 +195,12 @@ A session that already holds a lease gets `LEASE_ALREADY_HELD` (exit 3) from `de
 
 While it waits, `device lease` prints progress on stderr: whether a warm spare is ready, the request's
 place in the queue or that a device is being started, and, for an Android emulator, how long it waits
-for the device to settle. An emulator handed out while still starting (boot not complete, its CPU busy,
-a "System UI isn't responding" dialog) is checked for up to 90 s; an "isn't responding" dialog is
-answered with Wait. A device still busy after that is handed out with a warning (in `--json`,
-`notices`). When a host that just started still lists its old emulator ("No Android device with
+for the device to settle. An emulator handed out while still starting waits up to 90 s for boot to
+complete and for no "isn't responding" or crash dialog to be in front (an "isn't responding" dialog is
+answered with Wait); then its CPU is checked for up to `--settle` seconds (default
+`session.settleSeconds`, 15), ending early on 3 calm readings in a row or a clearly falling load. A
+device still busy after that is handed out with a warning (in `--json`, `notices`): commands work but
+can take 2-10 s each for a few more minutes. When a host that just started still lists its old emulator ("No Android device with
 serial …"), the lease asks again every 10 s for up to 2 minutes while the host boots a new one.
 
 `device status` shows the device, platform and OS, provider and worker, endpoint and whether it is TLS,
@@ -367,7 +370,8 @@ tapdance app install --from-ci acme/app --artifact app-debug --launch com.acme.a
 The reply names the installed package and its `versionCode`, which the host reads from the APK's
 manifest (unit-tested only). When the device refuses the APK (`INSTALL_FAILED_VERSION_DOWNGRADE`, or a
 build signed with another key), the hint names that package: `tapdance app uninstall <package>`, then
-install again. `--launch` warns when it names another app than the one installed.
+install again. An upload from a path names it too (from `--app-id`, adb's message or the APK's
+manifest); when nothing names it, the hint says `tapdance app list` shows it. `--launch` warns when it names another app than the one installed.
 
 `launch` starts or brings an installed app to the front; `--relaunch` kills and restarts it; `--url`
 opens a deep link; `--arg` passes launch arguments (and relaunches). The `--intent-*` options start an
@@ -393,7 +397,7 @@ the leased device, from an allow-listed git repository and ref, and installs it 
 streams as progress and the reply names the exact commit. This is how an agent without Xcode gets an
 iOS app onto a remote simulator. See [Builds on the host](deployment/one-command-host.md#builds-on-the-host).
 The reply says whether the host built it or reused its earlier build of the same commit and settings
-(`reused`, with `builtAt`), the ref you asked for next to the exact commit, and on Android the installed
+(`reused`, with `builtAt`; a build from MCP `build_app` counts, and an option left out equals its default), the ref you asked for next to the exact commit, and on Android the installed
 package (`appId`). When the host cannot sign in to the repository the error is `AUTH_FAILED` (exit 5),
 not `DEVICE_ERROR`: it prints git's own line (`Permission denied (publickey)`, `Repository not found`)
 and a hint for the auth the host used (its deploy key and fingerprint, or `gh`); only the host's owner
@@ -471,8 +475,11 @@ system log has the app's `os_log`/`NSLog` lines, not `print`/`println` output, w
 the full iOS crash report use `device crashes`. The output is also saved as an artifact.
 
 `--contains` keeps lines that contain the text (case-insensitive, 1–200 characters; it matches the
-tag and level as well as the message). `--level error` keeps error, fault, fatal and exception lines
-(and Android `E`/`F` lines); `--level fault` keeps fault, fatal and crash lines. With either filter,
+tag and level as well as the message). `--level error` keeps Android `E` and `F` lines (the logcat line's
+own level decides, so an `I` line that mentions an exception is left out) and, on iOS, error and fault
+lines plus lines with the words error, fault, fatal or exception; `--level fault` keeps Android `F`
+lines and `E` lines that say fatal or crash, and iOS fault lines plus lines with fault, fatal or crash.
+"default" does not count as "fault". With either filter,
 `-n` counts matching lines, and on Android Tapdance reads the whole logcat buffer rather than the last
 N lines, so a search reaches as far back as the device keeps logs; the footer says how many lines
 matched and the time of the oldest line in the buffer. On iOS the window stays the last 3 minutes (10
@@ -566,7 +573,8 @@ machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
 | `worker guard start` / `pair [--scope <areas>]` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator: H-02; dedicated-account script and Tailscale exposure untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
 | `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`, log `~/.tapdance/worker/guard.log`, moved to `guard.log.1` at 5 MB when the service is installed; the user journal is not always kept on cloud VMs) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). Not yet installed on a real machine (H-03). See [security/personal-mac.md](security/personal-mac.md#keep-the-guard-running). |
 | `worker cleanup` | Release device claims left behind by agent-device processes that have gone (a worker restart, the machine going offline mid-lease). Such a claim blocks the next lease of that emulator with "owned by session …". Only claims whose owner process is provably dead are touched; an unfinished screen recording of such a session is set aside (renamed `*.abandoned-<time>`) so its claim can go. `worker start`/`restart` and the worker guard (before each lease) do this on their own. |
-| `worker start` / `stop` / `status` / `logs` / `restart` | Start, stop, show, print the log of, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. |
+| `worker start` / `stop` / `status` / `restart` | Start, stop, show, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. `start` and `restart` check the worker's login service first: when it starts another Simlock than this Tapdance ships (after `git pull && pnpm install` with a new Simlock patch, pnpm puts it in a new `simlock@…_patch_hash=…` folder, and the unit or plist still names the old one) or a Node or Simlock that is gone, they install it again (Simlock's `daemon install`: rewrites `~/.config/systemd/user/com.callstack.simlock.worker.service` or `~/Library/LaunchAgents/com.callstack.simlock.worker.plist` and reloads systemd/launchd) instead of starting the old one, and say so. Simlock's config, including the warm-spare settings, is not touched, and its device records are checked with `doctor --fix`, never reset, so learned spares are kept. |
+| `worker logs [-n, --lines <n>] [--contains <text>] [--since <when>]` | Print the worker daemon's log, read from Simlock's `daemon.log` (and `daemon.log.1`, where Simlock moves it at 5 MB): the last 100 lines by default, up to 5000 with `-n`; with a filter, the last `n` matching lines. `--contains` keeps lines containing the text (case-insensitive, like `tapdance logs`); `--since` keeps lines from the last `30s`, `10m`, `2h` or `1d`, or since an ISO time. For example `tapdance worker logs --contains "clean baseline"` finds the line Simlock logs when it saves a device's clean snapshot, however many lines came after it. `--json` returns `{ path, lines }`. |
 
 **Security.** Joining gives the gateway operator rights on this machine's devices: whoever controls the
 gateway or holds an operator token for it can lease any device here, install runtimes and read the
@@ -606,7 +614,7 @@ Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp
 
 | Command | Meaning |
 | --- | --- |
-| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>] [--idle-stop <minutes\|off>] [--max-uptime <hours\|off>] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`, which on Linux without a display also sets headless emulators with the `swiftshader_indirect` GPU mode; left alone on a re-run when it already runs with the guard service), guard service (`worker guard install`), pairing (a guard token labelled with `--label`; without it, the host's only active pairing is kept, so `host up --idle-stop 10` never pairs a new machine, and with none it is the hostname; several pairings and no `--label` are refused. Approved at a terminal or with `--yes`, and a run that would need approval without a terminal is refused before any step changes anything, naming the pairing the host already has. The token is written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line, a security note on what the token allows (the iOS simulator sentence on macOS only), and on Tailscale a suggested ACL). At the end it offers to copy the token to the clipboard, except on Linux without a display or without a clipboard tool, where it points at the token file and `host token --show` instead. `--scope` limits a newly issued pairing token to those policy areas (see [threat model](security/threat-model.md)). `--idle-stop` and `--max-uptime` set the cost guard (`hostStop` in the guard policy; Linux only, refused on macOS): power the machine off after that many minutes with no lease, guard request or build (30 by default on a detected cloud VM, off elsewhere), and after that many hours up take no new leases and power off when the last one ends (off by default). The stop command is fixed (`sudo -n /usr/bin/systemctl poweroff`); when sudo does not allow it, `host up` prints the one sudoers rule to add. A changed setting restarts an idle guard; the ready block shows it on a `cost guard:` line ([cost guardrails](deployment/google-cloud-n2.md#cost-guardrails)). On a detected cloud VM the block adds a `cloud VM:` line: it bills while running, its disk bills even when stopped, and where to read how to delete it ([tear down](deployment/google-cloud-n2.md#tear-down) on Google Cloud, otherwise [the overview](deployment/self-hosted-overview.md#when-you-are-done-with-a-rented-machine)). For a short-lived test host, pass `--idle-stop off` with Terraform's ephemeral mode ([field test](testing/field-test-cloud-android.md)). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>] [--idle-stop <minutes\|off>] [--max-uptime <hours\|off>] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`, which on Linux without a display also sets headless emulators with the `swiftshader_indirect` GPU mode; left alone on a re-run when it already runs with the guard service, except that a login service still starting another Simlock than this Tapdance's, as after an update, is installed again with a worker restart when no lease runs, and only warned about while one does), guard service (`worker guard install`), pairing (a guard token labelled with `--label`; without it, the host's only active pairing is kept, so `host up --idle-stop 10` never pairs a new machine, and with none it is the hostname; several pairings and no `--label` are refused. Approved at a terminal or with `--yes`, and a run that would need approval without a terminal is refused before any step changes anything, naming the pairing the host already has. The token is written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line, a security note on what the token allows (the iOS simulator sentence on macOS only), and on Tailscale a suggested ACL). At the end it offers to copy the token to the clipboard, except on Linux without a display or without a clipboard tool, where it points at the token file and `host token --show` instead. `--scope` limits a newly issued pairing token to those policy areas (see [threat model](security/threat-model.md)). `--idle-stop` and `--max-uptime` set the cost guard (`hostStop` in the guard policy; Linux only, refused on macOS): power the machine off after that many minutes with no lease, guard request or build (30 by default on a detected cloud VM, off elsewhere), and after that many hours up take no new leases and power off when the last one ends (off by default). The stop command is fixed (`sudo -n /usr/bin/systemctl poweroff`); when sudo does not allow it, `host up` prints the one sudoers rule to add. A changed setting restarts an idle guard; the ready block shows it on a `cost guard:` line ([cost guardrails](deployment/google-cloud-n2.md#cost-guardrails)). On a detected cloud VM the block adds a `cloud VM:` line: it bills while running, its disk bills even when stopped, and where to read how to delete it ([tear down](deployment/google-cloud-n2.md#tear-down) on Google Cloud, otherwise [the overview](deployment/self-hosted-overview.md#when-you-are-done-with-a-rented-machine)). For a short-lived test host, pass `--idle-stop off` with Terraform's ephemeral mode ([field test](testing/field-test-cloud-android.md)). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, cost guard, pairings, Tailscale) and the endpoint. The prerequisites row says `ios needs a Mac` on Linux, and when the Android SDK is not found from this shell it says so (it also looks in `~/Android/Sdk`, so a command over ssh without a login profile still finds what `host-setup.sh` installed). The worker row reads Simlock's RAM budget from `capacity.ramBudget`. The cost guard row shows the idle stop and uptime cap, how long the host has been idle and when it will power off (`idle 1 min, powers off in about 9 min (around 15:43 UTC)`; the guard checks once a minute and the shutdown takes a minute or two more), and fails when sudo does not allow the stop command. On a detected cloud VM a `cloud VM` row says what still bills and links the tear-down steps. When builds with `--git-auth gh` or installs from CI are on, a `gh` row says whether `gh auth status` works (`host up` warns when it does not). |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
@@ -1049,6 +1057,9 @@ Options:
                              the lease's changes are discarded)
   --ttl <minutes>            lease time to live in minutes
   --wait <seconds>           how long to wait in the queue
+  --settle <seconds>         Android emulator: how long to check the guest's CPU
+                             after boot before handing it out, 0-300 (0 skips
+                             the check)
   --no-keepalive             do not renew in the background (the lease expires
                              after its TTL)
   --hold                     stay in the foreground, renew, and release on
@@ -1830,12 +1841,14 @@ Commands:
   stop               Stop the worker: end its leases, stop the daemon and shut
                      down the emulators and simulators it created
   status             Show the worker's devices, leases and capabilities
-  logs               Print the worker daemon log
+  logs [options]     Print the worker daemon log (the last 100 lines unless -n
+                     says otherwise), optionally filtered
   cleanup            Release device claims left by agent-device processes that
                      have gone (a worker restart, the machine going offline
                      mid-lease); live owners are never touched
   restart [options]  Restart the worker daemon (ends agent-device sessions on
-                     it); refuses while leases run unless --force
+                     it; a login service left from an older Tapdance is
+                     installed again); refuses while leases run unless --force
   help [command]     display help for command
 ```
 
@@ -2067,10 +2080,17 @@ Options:
 ```text
 Usage: tapdance worker logs [options]
 
-Print the worker daemon log
+Print the worker daemon log (the last 100 lines unless -n says otherwise),
+optionally filtered
 
 Options:
-  -h, --help  display help for command
+  -n, --lines <n>    how many lines (at most 5000); with a filter, how many
+                     matching lines (default: "100")
+  --contains <text>  only lines containing this text (case-insensitive), e.g.
+                     "clean baseline"
+  --since <when>     only lines from the last 30s, 10m, 2h or 1d, or since an
+                     ISO time such as 2026-11-04T21:54:00Z
+  -h, --help         display help for command
 ```
 
 ### `tapdance worker cleanup`
@@ -2090,8 +2110,9 @@ Options:
 ```text
 Usage: tapdance worker restart [options]
 
-Restart the worker daemon (ends agent-device sessions on it); refuses while
-leases run unless --force
+Restart the worker daemon (ends agent-device sessions on it; a login service
+left from an older Tapdance is installed again); refuses while leases run unless
+--force
 
 Options:
   --force     restart even while devices are leased (their agents lose them)

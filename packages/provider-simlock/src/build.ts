@@ -120,7 +120,7 @@ export function checkBuildRequest(body: unknown, settings: BuildSettings): Build
   if (!repo || !ref || (platform !== "ios" && platform !== "android")) throw new TapdanceError("USAGE", "A build needs repo, ref and platform (ios or android)");
   if (!/^(https:\/\/|ssh:\/\/|git@)/.test(repo)) throw new TapdanceError("USAGE", "repo must be an https:// or ssh git URL");
   if (!settings.repos.map(normalizeRepo).includes(normalizeRepo(repo))) {
-    throw new TapdanceError("FORBIDDEN", `${repo} is not on this host's build allow-list`, { hint: "The host owner adds it: tapdance host builds enable --repo <url>" });
+    throw new TapdanceError("FORBIDDEN", `${repo} is not on this host's build allow-list`, { hint: `The host owner adds it: tapdance host builds enable --repo ${repo}` });
   }
   if (!REF.test(ref)) throw new TapdanceError("USAGE", "ref must be a branch, tag or commit sha");
   const req: BuildRequest = { repo, ref, platform };
@@ -284,9 +284,20 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
  * host's build files for the repository (`filesDigest`, empty when it has none).
  */
 export function buildKey(sha: string, req: BuildRequest, filesDigest = ""): string {
-  const inputs = [sha, req.platform, req.project ?? "", req.scheme ?? "", req.configuration ?? "", (req.xcodeSettings ?? []).join(" "), req.gradleTask ?? "", req.dir ?? ""];
+  // The effective settings, not the request's shape: the CLI sends its defaults (configuration Debug,
+  // gradleTask assembleDebug) and the other platform's options, MCP sends only what it was given, and
+  // both must land on one key (#104).
+  const inputs =
+    req.platform === "ios"
+      ? [sha, req.platform, req.project ?? "", req.scheme ?? "", req.configuration ?? "Debug", (req.xcodeSettings ?? []).join(" ")]
+      : [sha, req.platform, req.gradleTask ?? "assembleDebug", normalDir(req.dir)];
   if (filesDigest) inputs.push(`files:${filesDigest}`);
   return createHash("sha256").update(inputs.join("\u0000")).digest("hex").slice(0, 16);
+}
+
+/** `dir` as one spelling: "", ".", "./" and a trailing slash name the same folder. */
+function normalDir(dir: string | undefined): string {
+  return (dir ?? "").replace(/^(\.\/)+/, "").replace(/\/+$/, "").replace(/^\.$/, "");
 }
 
 /** The kept build for `key`, if its artifact is still there. */
