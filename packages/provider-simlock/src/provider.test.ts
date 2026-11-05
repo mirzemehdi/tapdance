@@ -1053,7 +1053,7 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     });
     const progress: string[] = [];
     await p.lease("s", request, { onProgress: (m) => progress.push(m) });
-    expect(progress[0]).toMatch(/no spare is ready, so a device has to start/);
+    expect(progress[0]).toMatch(/no device of this kind exists yet, so one has to be created and booted: a first boot can take a few minutes/);
     expect(progress.some((m) => /^Starting a device for this lease .*\(\d+ s\)$/.test(m))).toBe(true);
     // Said once per stage, not on every poll.
     expect(progress.filter((m) => m.startsWith("Starting a device")).length).toBe(1);
@@ -1064,21 +1064,46 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     const status = { devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", ready: 1 }] } };
     expect(spareNote(status, { platform: "android" })).toBe("a warm spare is ready");
     expect(spareNote(status, { platform: "android", device: "pixel 8" })).toBe("a warm spare is ready");
-    expect(spareNote(status, { platform: "android", device: "Pixel 9" })).toMatch(/no spare is ready/);
+    expect(spareNote(status, { platform: "android", device: "Pixel 9" })).toMatch(/no device of this kind exists yet/);
     expect(spareNote({ ...status, warmPool: { targets: [{ platform: "android", model: "Pixel 8", ready: 0, booting: 1 }] }, capacity: {} }, { platform: "android" })).toMatch(/a spare is booting/);
-    expect(spareNote(undefined, { platform: "android" })).toMatch(/a new device can take a few minutes/);
+    expect(spareNote(undefined, { platform: "android" })).toBe("queues if busy; starting a device usually takes under a minute, longer on a first boot");
     // The ready spare must be of the requested image tag (#112).
     const play = { devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", ready: 1 }] } };
-    expect(spareNote(play, { platform: "android", imageTag: "google_apis" })).toMatch(/no spare is ready/);
+    expect(spareNote(play, { platform: "android", imageTag: "google_apis" })).toMatch(/no device of this kind exists yet/);
     const tagged = { ...play, warmPool: { targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis", ready: 1 }] } };
     expect(spareNote(tagged, { platform: "android", imageTag: "google_apis", osVersion: "34" })).toBe("a warm spare is ready");
-    expect(spareNote(tagged, { platform: "android" })).toMatch(/no spare is ready/);
+    expect(spareNote(tagged, { platform: "android" })).toMatch(/no device of this kind exists yet/);
     // Simlock's bare warm count is not a ready spare of another kind.
-    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [] } }, { platform: "android" })).toMatch(/no spare is ready/);
+    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } }, warmPool: { targets: [] } }, { platform: "android" })).toMatch(/no device of this kind exists yet/);
     expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } } }, { platform: "android" })).toBe("a warm spare is ready");
-    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } } }, { platform: "android", imageTag: "google_apis" })).toMatch(/no spare is ready/);
+    expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } } }, { platform: "android", imageTag: "google_apis" })).toMatch(/no device of this kind exists yet/);
     expect(describeWaiting({ stage: "queued", queuePosition: 2, reason: "full" })).toBe("Queued for a device (position 2, every slot is busy)");
     expect(describeWaiting(undefined)).toBeUndefined();
+    expect(describeWaiting({ stage: "reclaiming" })).toMatch(/released device of this kind to be restored/);
+  });
+
+  it("says a released device is restored in seconds instead of warning about minutes (#117; fake status)", async () => {
+    const { spareNote } = await import("./provider.js");
+    const empty = { leases: [], capacity: { android: { warm: 0 } }, warmPool: { enabled: true, targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis", ready: 0 }] } };
+    const device = (state: string, spec: Record<string, unknown> = {}) => ({ id: "d1", state, spec: { platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis", physical: false, ...spec } });
+    const req = { platform: "android" as const, osVersion: "34", imageTag: "google_apis" };
+    // Right after a release the emulator is reclaimed from its clean snapshot (N2 field run: Granted in about 4 s).
+    expect(spareNote({ ...empty, devices: [device("reclaiming")] }, req)).toBe("a released device is being restored from its snapshot: usually ready in seconds");
+    expect(spareNote({ ...empty, devices: [device("reclaiming")] }, req)).not.toMatch(/few minutes/);
+    // A free device of that kind is a ready spare even when the warm pool counts none.
+    expect(spareNote({ ...empty, devices: [device("ready")] }, req)).toBe("a warm spare is ready");
+    expect(spareNote({ ...empty, devices: [device("provisioning")] }, req)).toMatch(/a spare is booting/);
+    expect(spareNote({ ...empty, devices: [device("shutdown")] }, req)).toBe("a stopped device of this kind will start: usually under a minute, longer on a first boot");
+    // Only a host with no device of this kind needs a first boot: the long-wait text.
+    expect(spareNote({ ...empty, devices: [] }, req)).toMatch(/no device of this kind exists yet.*a first boot can take a few minutes/);
+    expect(spareNote({ ...empty, devices: [device("reclaiming", { imageTag: undefined })] }, req)).toMatch(/no device of this kind exists yet/);
+    expect(spareNote({ ...empty, devices: [device("reclaiming", { model: "Pixel 9" })] }, { ...req, device: "Pixel 8" })).toMatch(/no device of this kind exists yet/);
+    expect(spareNote({ ...empty, devices: [device("leased")] }, req)).toMatch(/^every device of this kind is busy/);
+    // iOS: a released simulator is erased and booted again.
+    const ios = { id: "s1", state: "reclaiming", spec: { platform: "ios", model: "iPhone 16", osVersion: "18.5", physical: false } };
+    expect(spareNote({ devices: [ios], leases: [] }, { platform: "ios" })).toBe("a released device is being reset: usually ready in under a minute");
+    // Through a worker guard the list holds only the client's own devices: no claim about the host.
+    expect(spareNote({ ...empty, devices: [], devicesScope: "held" }, req)).toBe("no spare is ready, so a device has to start: usually under a minute, longer on a first boot");
   });
 
   it("on a host with both images, a lease without a tag asks for google_apis at the default API level, and says so (#112; fake catalog)", async () => {
@@ -1108,7 +1133,7 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     await p.lease("s", request, { onProgress: (m) => progress.push(m) });
     expect(sent[0]).toMatchObject({ imageTag: "google_apis", osVersion: "34" });
     expect(progress[0]).toMatch(/^Using the google_apis image \(this host also has google_apis_playstore.*\), API 34, the host's default$/);
-    expect(progress[1]).toMatch(/no spare is ready/);
+    expect(progress[1]).toMatch(/no device of this kind exists yet/);
 
     // An explicit tag without --os keeps the default API level instead of the newest (35).
     sent.length = 0;

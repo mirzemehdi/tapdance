@@ -600,6 +600,31 @@ devices, a mocked provider and a fake clock; not yet re-run on a host.
 - Expected for a lease right after a release: about 3.5 + 8.5-15 + 6-9 s, roughly 18-28 s (not yet
   measured).
 
+### Field run 2e on the N2 VM (issues #117, #118)
+
+Unit-tested with a fake Simlock status, a fake runner and fake files; not yet re-run on a host.
+
+- Fixed (#117): a lease right after a release said "no spare is ready, so a device has to start: this
+  can take a few minutes" while the emulator was restored from its snapshot (Granted in about 4 s,
+  Ready in about 21 s). The request line now reads the host's devices in Simlock's status: a released
+  device being reclaimed says it is being restored from its snapshot (usually seconds on Android, under
+  a minute for an iOS erase and boot), a free device of that kind counts as a ready spare, a stopped
+  one says "usually under a minute, longer on a first boot", and only a host with no device of the
+  requested kind says a first boot can take a few minutes. Without device information (Simlock's
+  status cannot be read, or a worker guard, which lists only the client's own devices) the line says
+  "usually under a minute, longer on a first boot". A queued request waiting on a reclaim says so.
+- Fixed (#118): over a non-interactive ssh command, `worker restart` with a stale login service (#110)
+  failed in Simlock's `daemon install` ("Failed to connect to bus: No medium found"), which had
+  already removed the old unit; a second `worker restart` then said "Restarted" with no login service
+  and no warning. Every Tapdance call to Simlock (start, stop, install, uninstall) and to
+  `systemctl --user` for the guard now points at the user manager's bus first. Before a stale service
+  is installed again, `worker start`/`restart`, `host up` and `host resume` set up the user manager
+  and check that `systemctl --user` answers, and refuse with nothing changed when it does not. If the
+  install still fails, the worker is started without the service, the command says the login service
+  is now missing and prints `tapdance worker install --service`, and exits non-zero (10,
+  `HOST_CHECK_FAILED`); later `worker start`, `worker restart` and `host status` warn until a service
+  is installed again.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,

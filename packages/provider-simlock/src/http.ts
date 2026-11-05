@@ -41,10 +41,13 @@ export interface SimlockStatus {
     id: string;
     state: string;
     platform?: string;
-    spec?: { platform?: string; model?: string; osVersion?: string };
+    physical?: boolean;
+    spec?: { platform?: string; model?: string; osVersion?: string; imageTag?: string; physical?: boolean };
     workerId?: string;
   }>;
   leases: Array<{ id: string; deviceId?: string }>;
+  /** Set by a Tapdance worker guard: `devices` holds only the calling client's own devices. */
+  devicesScope?: "held";
   capacity?: Record<string, { running?: number; limit?: number; warm?: number; used?: number } | undefined>;
   capabilities?: Array<{ name: string; state: string; reason?: string }>;
   daemon?: { health?: string; mode?: string; version?: string };

@@ -4,7 +4,22 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { checkWorkerService, describeSimlockPath, hostUpWorkerAction, installedServicePaths, staleServiceLine, workerServiceFile, workerStartArgs } from "./worker-service.js";
+import { ERROR_CODES, TapdanceError } from "@tapdance/sdk";
+import {
+  checkWorkerService,
+  describeSimlockPath,
+  hostUpWorkerAction,
+  installServiceOrReport,
+  installedServicePaths,
+  missingServiceWarning,
+  parseMissingServiceRecord,
+  precheckServiceRefresh,
+  staleServiceLine,
+  workerServiceFile,
+  workerStartArgs,
+  type MissingServiceRecord,
+  type ServiceRefreshIo,
+} from "./worker-service.js";
 
 const store = "/home/u/tapdance/node_modules/.pnpm";
 const OLD = `${store}/simlock@0.5.0_patch_hash=52e37d12aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/node_modules/simlock/dist/daemon/main.js`;
@@ -125,5 +140,96 @@ describe("worker login service after an update (#110; MOCKED service files)", ()
     expect(hostUpWorkerAction({ warm: false, service: { state: "none" }, activeLeases: 0 })).toBe("leave");
     // applyWarm restarts the worker, and that restart installs a stale service again.
     expect(hostUpWorkerAction({ warm: true, service: stale, activeLeases: 0 })).toBe("apply-warm");
+  });
+});
+
+/**
+ * #118: refreshing a stale service over a non-interactive ssh command. MOCKED: systemctl, Simlock's
+ * `daemon install`/`start` and the record file are fakes; nothing runs systemctl or touches ~/.tapdance.
+ */
+describe("login service refresh without a user bus (#118; MOCKED runner and files)", () => {
+  const stale = { state: "stale" as const, path: UNIT, manager: "systemd" as const, reasons: ["it starts simlock 0.5.0 (patch 52e37d12), this Tapdance ships simlock 0.5.0 (patch c76b69d8)"] };
+  const NO_BUS = 'simlock --local daemon install failed: {"error":{"code":"SERVICE_FAILED","message":"systemctl --user daemon-reload failed: Failed to connect to bus: No medium found"}}';
+
+  /** A fake host: Simlock's install removes the unit first, then fails without a bus (as on the N2 VM). */
+  function fakeHost(o: { bus: boolean; platform?: NodeJS.Platform; startFails?: boolean }) {
+    const files: Record<string, string> = { [UNIT]: unit(OLD) };
+    const calls: string[] = [];
+    let record: MissingServiceRecord | undefined;
+    const io: ServiceRefreshIo = {
+      platform: o.platform ?? "linux",
+      prepareUserServices: async () => void calls.push("prepare"),
+      userManagerReachable: async () => (calls.push("systemctl --user show-environment"), o.bus ? { ok: true, out: "HOME=/home/u" } : { ok: false, out: "Failed to connect to bus: No medium found" }),
+      install: async () => {
+        calls.push("daemon install");
+        delete files[UNIT];
+        if (!o.bus) throw new TapdanceError("PROVIDER_UNAVAILABLE", NO_BUS);
+        files[UNIT] = unit(NEW);
+      },
+      start: async () => {
+        calls.push("daemon start");
+        if (o.startFails) throw new Error("no");
+      },
+      serviceFileExists: async () => UNIT in files,
+      recordMissing: async (r) => void (record = r),
+      clearMissing: async () => void (record = undefined),
+      now: () => new Date("2026-11-05T10:00:00Z"),
+    };
+    return { io, files, calls, record: () => record };
+  }
+
+  it("checks that systemctl --user answers before anything is stopped, and changes nothing when it does not", async () => {
+    const h = fakeHost({ bus: false });
+    const error = await precheckServiceRefresh(stale, h.io).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(TapdanceError);
+    expect(error).toMatchObject({ code: "HOST_CHECK_FAILED", hint: expect.stringContaining("tapdance worker install --service") });
+    expect((error as Error).message).toMatch(/cannot reach this account's user manager \(Failed to connect to bus: No medium found\).*Nothing was changed/);
+    expect(h.calls).toEqual(["prepare", "systemctl --user show-environment"]);
+    expect(h.files[UNIT]).toBe(unit(OLD));
+    // With a bus, with nothing stale, or on macOS, the check passes.
+    await expect(precheckServiceRefresh(stale, fakeHost({ bus: true }).io)).resolves.toBeUndefined();
+    const none = fakeHost({ bus: false });
+    await precheckServiceRefresh({ state: "current" }, none.io);
+    await precheckServiceRefresh(stale, { ...none.io, platform: "darwin" });
+    expect(none.calls).toEqual([]);
+  });
+
+  it("a failed install says the login service is now missing, starts the worker without it, records it and exits non-zero", async () => {
+    const h = fakeHost({ bus: false });
+    const error = (await installServiceOrReport(stale, h.io).catch((e: unknown) => e)) as TapdanceError;
+    expect(error).toBeInstanceOf(TapdanceError);
+    expect(error.code).toBe("HOST_CHECK_FAILED");
+    expect(ERROR_CODES[error.code]).not.toBe(0);
+    expect(error.message).toContain(`The login service is now missing (${UNIT} was removed): the worker was started without it`);
+    expect(error.hint).toMatch(/^Run `tapdance worker install --service` to install it again/);
+    expect(h.calls).toEqual(["daemon install", "daemon start"]);
+    expect(h.record()).toEqual({ path: UNIT, failedAt: "2026-11-05T10:00:00.000Z", reason: NO_BUS });
+    // A worker that does not start either is said to be stopped.
+    const dead = fakeHost({ bus: false, startFails: true });
+    await expect(installServiceOrReport(stale, dead.io)).rejects.toThrow(/the worker is stopped/);
+  });
+
+  it("a successful install clears an earlier record", async () => {
+    const h = fakeHost({ bus: true });
+    await h.io.recordMissing({ path: UNIT, failedAt: "x", reason: "y" });
+    await installServiceOrReport(stale, h.io);
+    expect(h.files[UNIT]).toBe(unit(NEW));
+    expect(h.record()).toBeUndefined();
+    expect(h.calls).toEqual(["daemon install"]);
+  });
+
+  it("a later restart, start or host status warns while the recorded service is still missing", () => {
+    const record = parseMissingServiceRecord(JSON.stringify({ path: UNIT, failedAt: "2026-11-05T10:00:00.000Z", reason: NO_BUS }));
+    expect(record).toBeDefined();
+    const warning = missingServiceWarning(record, { state: "none" });
+    expect(warning).toMatch(/^The worker has no login service \(.*com\.callstack\.simlock\.worker\.service\): installing it again failed at 2026-11-05T10:00:00\.000Z/);
+    expect(warning).toContain("Run `tapdance worker install --service`.");
+    // Once a service is back (current or stale), or without a record, there is nothing to say.
+    expect(missingServiceWarning(record, { state: "current" })).toBeUndefined();
+    expect(missingServiceWarning(record, stale)).toBeUndefined();
+    expect(missingServiceWarning(undefined, { state: "none" })).toBeUndefined();
+    expect(parseMissingServiceRecord("not json")).toBeUndefined();
+    expect(parseMissingServiceRecord(JSON.stringify({ path: 1 }))).toBeUndefined();
+    expect(parseMissingServiceRecord(undefined)).toBeUndefined();
   });
 });

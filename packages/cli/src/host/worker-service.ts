@@ -16,6 +16,7 @@
  */
 import { createHash } from "node:crypto";
 import { isAbsolute, join, resolve } from "node:path";
+import { TapdanceError } from "@tapdance/sdk";
 
 export type ServiceManagerKind = "systemd" | "launchd";
 
@@ -128,4 +129,108 @@ export function hostUpWorkerAction(o: { warm: boolean; service: WorkerServiceChe
   if (o.warm) return "apply-warm";
   if (o.service.state !== "stale") return "leave";
   return o.activeLeases > 0 ? "warn-stale-busy" : "refresh-service";
+}
+
+/**
+ * Installing a stale login service again over a non-interactive ssh command (#118). Simlock's
+ * `daemon install` removes the old service file before it runs `systemctl --user daemon-reload`, so
+ * when that has no user bus the worker is left with no login service. Tapdance therefore points
+ * this process at the user manager and checks that `systemctl --user` answers *before* it stops the
+ * worker; when the install still fails it starts the worker without the service, records that the
+ * service is missing, and says so with the fix. Every effect goes through `ServiceRefreshIo`.
+ */
+export interface ServiceRefreshIo {
+  platform: NodeJS.Platform;
+  /** Linux: linger and the user manager's bus (prepareLinuxUserServices). Throws when there is none. */
+  prepareUserServices: () => Promise<void>;
+  /** Linux: whether `systemctl --user` reaches the user manager (a read-only call), with its output. */
+  userManagerReachable: () => Promise<{ ok: boolean; out: string }>;
+  /** Simlock's `daemon install`. */
+  install: () => Promise<unknown>;
+  /** Simlock's `daemon start` (no service), used when the install failed. */
+  start: () => Promise<unknown>;
+  serviceFileExists: () => Promise<boolean>;
+  recordMissing: (record: MissingServiceRecord) => Promise<void>;
+  clearMissing: () => Promise<void>;
+  now?: () => Date;
+}
+
+/** Written to TAPDANCE_HOME when a refresh left the worker without its login service (#118). */
+export interface MissingServiceRecord {
+  path: string;
+  failedAt: string;
+  reason: string;
+}
+
+export const MISSING_SERVICE_FILE = "worker-service-missing.json";
+export const SERVICE_FIX = "tapdance worker install --service";
+
+/** Fails before anything is stopped or removed when the login service cannot be installed here. */
+export async function precheckServiceRefresh(check: WorkerServiceCheck, io: Pick<ServiceRefreshIo, "platform" | "prepareUserServices" | "userManagerReachable">): Promise<void> {
+  if (check.state !== "stale" || io.platform !== "linux") return;
+  await io.prepareUserServices();
+  const reach = await io.userManagerReachable();
+  if (reach.ok) return;
+  throw new TapdanceError(
+    "HOST_CHECK_FAILED",
+    `${staleServiceReason(check)}, but \`systemctl --user\` cannot reach this account's user manager (${firstLine(reach.out)}), so it cannot be installed again from here. Nothing was changed: the worker and its old login service are as they were`,
+    {
+      hint: `Run \`sudo loginctl enable-linger $USER\` (it starts the user manager and keeps it running), or log in over an interactive ssh session, then run \`${SERVICE_FIX}\`.`,
+    },
+  );
+}
+
+/**
+ * Runs `daemon install`; on failure starts the worker without the service, records the missing
+ * service when its file is gone, and throws an error that says so with the fix. A success clears
+ * an earlier record.
+ */
+export async function installServiceOrReport(check: WorkerServiceCheck, io: ServiceRefreshIo): Promise<void> {
+  try {
+    await io.install();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const present = await io.serviceFileExists().catch(() => false);
+    const started = await io.start().then(
+      () => true,
+      () => false,
+    );
+    const where = check.path ?? "the worker's login service";
+    if (!present) await io.recordMissing({ path: where, failedAt: (io.now?.() ?? new Date()).toISOString(), reason }).catch(() => undefined);
+    const state = started ? "the worker was started without it" : "the worker is stopped";
+    throw new TapdanceError(
+      "HOST_CHECK_FAILED",
+      present
+        ? `Installing the worker's login service again failed (${reason}); ${state}`
+        : `Installing the worker's login service again failed (${reason}). The login service is now missing (${where} was removed): ${state}, and it will not start at boot or keep running after you log out`,
+      {
+        hint: `Run \`${SERVICE_FIX}\` to install it again${io.platform === "linux" ? " (if it says no user manager runs, run `sudo loginctl enable-linger $USER` first)" : ""}.`,
+      },
+    );
+  }
+  await io.clearMissing().catch(() => undefined);
+}
+
+/**
+ * The warning for a worker that runs without the login service an earlier refresh failed to
+ * install (#118), or undefined. `record` is the saved record; `check` is the service now.
+ */
+export function missingServiceWarning(record: MissingServiceRecord | undefined, check: WorkerServiceCheck): string | undefined {
+  if (record === undefined || check.state !== "none") return undefined;
+  return `The worker has no login service (${record.path}): installing it again failed at ${record.failedAt} (${firstLine(record.reason)}), so the worker does not start at boot or keep running after you log out. Run \`${SERVICE_FIX}\`.`;
+}
+
+/** Parses the saved record; undefined when there is none or it is not one. */
+export function parseMissingServiceRecord(text: string | undefined): MissingServiceRecord | undefined {
+  if (text === undefined) return undefined;
+  try {
+    const r = JSON.parse(text) as Partial<MissingServiceRecord>;
+    return typeof r.path === "string" && typeof r.failedAt === "string" && typeof r.reason === "string" ? { path: r.path, failedAt: r.failedAt, reason: r.reason } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function firstLine(text: string): string {
+  return (text.trim().split("\n")[0] ?? "").slice(0, 300) || "no output";
 }

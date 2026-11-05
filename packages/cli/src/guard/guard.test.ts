@@ -389,6 +389,7 @@ describe("worker guard: hardening", () => {
     expect(seen.leases.map((l) => l.id)).toEqual([B]);
     expect(seen.waiting.map((w) => w.requesterId)).toEqual([B]);
     expect(seen.devices.map((d) => d.id)).toEqual(["dev-b"]);
+    expect((seen as { devicesScope?: string }).devicesScope).toBe("held");
   });
 
   it("an allocate answered with a JSON-RPC error leaves no ownership behind", async () => {
