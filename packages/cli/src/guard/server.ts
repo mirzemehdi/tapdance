@@ -661,6 +661,9 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               leases,
               ...(d.waiting !== undefined ? { waiting: d.waiting.filter((w) => typeof w.requesterId === "string" && owners.get(w.requesterId) === token!.id) } : {}),
               devices: (d.devices ?? []).filter((dev) => (dev.id !== undefined && held.has(dev.id)) || (dev.udid !== undefined && held.has(dev.udid))),
+              // Tells a client the list holds only its own devices, so it does not read an empty
+              // list as "this host has no device of that kind" (#117).
+              devicesScope: "held",
             };
           });
           return;

@@ -1,20 +1,33 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, platform as osPlatform } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Command } from "commander";
-import { TapdanceError, hostChecks, isPrivateHost, saveCredentials, userConfigPath, writeConfigFile, type DoctorCheck, type TapdanceConfig } from "@tapdance/sdk";
+import { TapdanceError, hostChecks, isPrivateHost, redactSecrets, saveCredentials, tapdanceHome, userConfigPath, writeConfigFile, type DoctorCheck, type TapdanceConfig } from "@tapdance/sdk";
 import { releaseStaleDeviceClaims, type StaleClaimReport } from "@tapdance/provider-simlock";
 import { agentDeviceBin, output, simlockBin, type GlobalOptions } from "./context.js";
 import { bold, dim, renderChecks, yellow } from "./output.js";
 import { readSecret } from "./commands-setup.js";
 import { registerGuardCommands } from "./commands-guard.js";
 import { describeWarm, linuxEmulatorSettings, warmSettings, withoutWarmSettings, type WarmCounts } from "./host/plan.js";
-import { prepareLinuxUserServices } from "./guard/service.js";
+import { prepareLinuxUserServices, runCommand, useUserBus } from "./guard/service.js";
 import { DEFAULT_WORKER_LOG_LINES, MAX_WORKER_LOG_LINES, parseSince, readDaemonLogs, selectDaemonLogLines } from "./host/daemon-log.js";
-import { checkWorkerService, staleServiceLine, workerStartArgs, type WorkerServiceCheck } from "./host/worker-service.js";
+import {
+  MISSING_SERVICE_FILE,
+  checkWorkerService,
+  installServiceOrReport,
+  missingServiceWarning,
+  parseMissingServiceRecord,
+  precheckServiceRefresh,
+  staleServiceLine,
+  workerServiceFile,
+  workerStartArgs,
+  type MissingServiceRecord,
+  type ServiceRefreshIo,
+  type WorkerServiceCheck,
+} from "./host/worker-service.js";
 
 const exec = promisify(execFile);
 /** The port Simlock runs its own adb server on (5037 is the developer's). */
@@ -22,6 +35,9 @@ const SIMLOCK_ADB_PORT = 5038;
 
 /** Runs the bundled Simlock CLI. Its output is returned, never printed raw (it can contain secrets). */
 async function simlock(args: string[], timeoutMs = 180_000): Promise<string> {
+  // Simlock's daemon start/stop/install/uninstall run `systemctl --user`; over a non-interactive ssh
+  // command (no XDG_RUNTIME_DIR) that needs the user manager's bus pointed at first (#118).
+  if (osPlatform() === "linux") useUserBus(process.getuid?.() ?? 0);
   try {
     const { stdout, stderr } = await exec(process.execPath, [simlockBin(), ...args], { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, env: process.env });
     return `${stdout}${stderr}`.trim();
@@ -49,9 +65,16 @@ async function ensureSimlockHelpersExecutable(out: ReturnType<typeof output>): P
   }
 }
 
-async function restart(gateway: boolean, out: ReturnType<typeof output>): Promise<void> {
+async function restart(gateway: boolean, out: ReturnType<typeof output>, options: { warnMissingService?: boolean } = {}): Promise<void> {
   const flag = gateway ? ["--gateway"] : ["--local"];
   out.progress(`Restarting the ${gateway ? "gateway" : "worker"} daemon`);
+  // A login service written by an earlier Tapdance starts that one's Simlock: install it again (#110).
+  // Check first that it can be installed here, before anything is stopped or removed (#118).
+  const service = gateway ? undefined : await workerServiceCheck();
+  if (service?.state === "stale") {
+    out.progress(staleServiceLine(service));
+    await precheckServiceRefresh(service, serviceRefreshIo(out));
+  }
   await ensureSimlockHelpersExecutable(out);
   await simlock([...flag, "daemon", "stop"]).catch(() => "");
   // `daemon stop` returns while the old daemon is still draining; a start before it has gone loses
@@ -71,19 +94,74 @@ async function restart(gateway: boolean, out: ReturnType<typeof output>): Promis
     await killStaleAdbServer(out);
     await syncAgentDeviceCommand(out);
   }
-  // A login service written by an earlier Tapdance starts that one's Simlock: install it again (#110).
-  const startArgs = gateway ? ["daemon", "start"] : await workerStartArgsFor(out);
-  const reinstalled = startArgs[1] === "install";
-  for (let attempt = 1; ; attempt++) {
-    try {
-      await simlock([...flag, ...startArgs]);
-      if (!gateway) await reconcileDevices(out, { resetIfDoctorFails: !reinstalled });
-      return;
-    } catch (error) {
-      if (attempt >= 3) throw error;
-      await new Promise((r) => setTimeout(r, 2000 * attempt));
+  const retried = async (args: string[]) => {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await simlock([...flag, ...args]);
+      } catch (error) {
+        if (attempt >= 3) throw error;
+        await new Promise((r) => setTimeout(r, 2000 * attempt));
+      }
     }
+  };
+  if (service?.state === "stale") {
+    // On failure this starts the worker without the service, records it and throws with the fix.
+    await installServiceOrReport(service, { ...serviceRefreshIo(out), install: () => retried(["daemon", "install"]) });
+    await reconcileDevices(out, { resetIfDoctorFails: false });
+    return;
   }
+  await retried(["daemon", "start"]);
+  if (!gateway) {
+    await reconcileDevices(out);
+    if (options.warnMissingService !== false) await warnIfServiceMissing(out, service);
+  }
+}
+
+/** Where a failed service refresh is recorded (#118). */
+function missingServicePath(): string {
+  return join(tapdanceHome(), MISSING_SERVICE_FILE);
+}
+
+/** The effects of a login-service refresh (#118), for `installServiceOrReport` and its precheck. */
+function serviceRefreshIo(out: Pick<ReturnType<typeof output>, "progress" | "warn">): ServiceRefreshIo {
+  return {
+    platform: osPlatform(),
+    prepareUserServices: () => prepareLinuxUserServices(out),
+    userManagerReachable: () => runCommand("systemctl", ["--user", "show-environment"]),
+    install: () => simlock(["--local", "daemon", "install"]),
+    start: () => simlock(["--local", "daemon", "start"]),
+    serviceFileExists: async () => {
+      const file = workerServiceFile({ platform: osPlatform(), home: homedir(), simlockHome: simlockHome(), env: process.env });
+      return file !== undefined && existsSync(file.path);
+    },
+    recordMissing: async (record: MissingServiceRecord) => {
+      await mkdir(tapdanceHome(), { recursive: true, mode: 0o700 });
+      await writeFile(missingServicePath(), `${JSON.stringify({ ...record, reason: redactSecrets(record.reason) }, null, 2)}\n`, { mode: 0o600 });
+    },
+    clearMissing: () => rm(missingServicePath(), { force: true }),
+  };
+}
+
+/**
+ * Warns when the worker runs without the login service an earlier refresh failed to install (#118),
+ * and forgets that record once a service is back. Returns the warning.
+ */
+export async function warnIfServiceMissing(out: Pick<ReturnType<typeof output>, "warn">, check?: WorkerServiceCheck): Promise<string | undefined> {
+  const record = parseMissingServiceRecord(await readFile(missingServicePath(), "utf8").catch(() => undefined));
+  if (record === undefined) return undefined;
+  const now = check ?? (await workerServiceCheck());
+  if (now.state !== "none") {
+    await rm(missingServicePath(), { force: true }).catch(() => undefined);
+    return undefined;
+  }
+  const warning = missingServiceWarning(record, now);
+  if (warning) out.warn(warning);
+  return warning;
+}
+
+/** Forgets a recorded missing service after a successful `daemon install` (#118). */
+async function clearMissingService(): Promise<void> {
+  await rm(missingServicePath(), { force: true }).catch(() => undefined);
 }
 
 /**
@@ -246,11 +324,24 @@ export async function workerServiceCheck(): Promise<WorkerServiceCheck> {
   ).catch((): WorkerServiceCheck => ({ state: "none" }));
 }
 
-/** `daemon start`, or `daemon install` when the login service is stale (said on stderr). */
-async function workerStartArgsFor(out: Pick<ReturnType<typeof output>, "progress">): Promise<string[]> {
+/**
+ * Starts a stopped worker daemon: `daemon start`, or `daemon install` when the login service is stale
+ * (said on stderr, #110), checked first and reported when it fails (#118). Returns Simlock's output.
+ */
+async function startStoppedWorker(out: Pick<ReturnType<typeof output>, "progress" | "warn">): Promise<string> {
   const check = await workerServiceCheck();
-  if (check.state === "stale") out.progress(staleServiceLine(check));
-  return workerStartArgs(check);
+  if (workerStartArgs(check)[1] !== "install") return simlock(["--local", "daemon", "start"]);
+  out.progress(staleServiceLine(check));
+  const io = serviceRefreshIo(out);
+  await precheckServiceRefresh(check, io);
+  let text = "";
+  await installServiceOrReport(check, {
+    ...io,
+    install: async () => {
+      text = await simlock(["--local", "daemon", "install"]);
+    },
+  });
+  return text;
 }
 
 /** Restarts the local worker daemon (installing a stale login service again, #110). */
@@ -315,7 +406,8 @@ export async function installWorker(
     out.progress(`simlock config set ${key} ${key.endsWith("command") ? dim(value) : value}`);
     await simlock(["--local", "config", "set", key, value]);
   }
-  await restart(false, out);
+  // With --service a missing login service is installed below: no warning about it first.
+  await restart(false, out, { warnMissingService: !o.service });
   if (o.warm) await applyWarm(out, o.warm);
   if (o.service) {
     if (osPlatform() === "linux") await prepareLinuxUserServices(out);
@@ -323,9 +415,11 @@ export async function installWorker(
     // would stop and start the worker once more for nothing.
     if ((await workerServiceInstalled()) && (await workerServiceCheck()).state === "current") {
       out.progress("The login service is installed and starts this Tapdance's Simlock; left as is");
+      await clearMissingService();
     } else {
       out.progress("Installing the login service");
       await simlock(["--local", "daemon", "install"]);
+      await clearMissingService();
       await reconcileDevices(out, { resetIfDoctorFails: false });
     }
   }
@@ -410,8 +504,11 @@ export async function workerServiceInstalled(): Promise<boolean> {
   return /Service: installed/i.test(await simlock(["--local", "daemon", "status"], 20_000).catch(() => ""));
 }
 
-export async function setWorkerService(on: boolean): Promise<void> {
+export async function setWorkerService(on: boolean, out?: Pick<ReturnType<typeof output>, "progress" | "warn">): Promise<void> {
+  // Installing needs the user manager on Linux; check it (with its fix) before Simlock tries (#118).
+  if (on && out && osPlatform() === "linux") await prepareLinuxUserServices(out);
   await simlock(["--local", "daemon", on ? "install" : "uninstall"]);
+  if (on) await clearMissingService();
 }
 
 /** Starts the worker after a pause and resets stale device records when nothing is leased. */
@@ -443,11 +540,17 @@ export async function startWorker(out: ReturnType<typeof output>): Promise<void>
   if (!(await workerRunning())) {
     await killStaleAdbServer(out);
     await syncAgentDeviceCommand(out);
-    await simlock(["--local", ...(await workerStartArgsFor(out))]).catch(() => "");
+    // A failed start is seen below as a worker that does not run; a failed service refresh says
+    // itself what is missing and how to fix it (#118).
+    await startStoppedWorker(out).catch((error: unknown) => {
+      if (error instanceof TapdanceError && error.code === "HOST_CHECK_FAILED") throw error;
+      return "";
+    });
   }
   const deadline = Date.now() + 90_000;
   while (Date.now() < deadline && !(await workerRunning())) await new Promise((r) => setTimeout(r, 1000));
   await reconcileDevices(out);
+  await warnIfServiceMissing(out);
 }
 
 export async function localWorkerStatus(): Promise<unknown> {
@@ -574,16 +677,16 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
             out.result({ stopped: true, ...r }, () => `Stopped the worker${r.stoppedDevices.length ? ` and ${r.stoppedDevices.length} device(s): ${r.stoppedDevices.join(", ")}` : ""}.`);
             return;
           }
-          let command: readonly string[] = args;
+          let text: string;
           if (name === "start") {
             await ensureSimlockHelpersExecutable(out);
             if (!(await workerRunning())) {
               await killStaleAdbServer(out);
-              command = await workerStartArgsFor(out);
-            }
-          }
-          const text = await simlock(["--local", ...command, ...(name === "status" && globals().json ? ["--json"] : [])]);
-          if (name === "start") await reconcileDevices(out);
+              text = await startStoppedWorker(out);
+            } else text = await simlock(["--local", ...args]);
+            await reconcileDevices(out);
+            await warnIfServiceMissing(out);
+          } else text = await simlock(["--local", ...args, ...(name === "status" && globals().json ? ["--json"] : [])]);
           out.result(safeJson(text) ?? { output: text }, () => text);
         } catch (error) {
           process.exitCode = out.error(error);

@@ -45,7 +45,7 @@ import { CLI_ENTRY, leaseWithNotices, open, output, type GlobalOptions } from ".
 import { GH_FIX, deployKeyState, describeDeployKeyState, ghNeededFor, removeFromAllowList } from "./host/builds.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
-import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, restartWorker, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, workerRunning, workerServiceCheck, workerServiceInstalled } from "./commands-worker.js";
+import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, restartWorker, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, warnIfServiceMissing, workerRunning, workerServiceCheck, workerServiceInstalled } from "./commands-worker.js";
 import { hostUpWorkerAction, staleServiceReason } from "./host/worker-service.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
 import { GuardPolicySchema, GuardTokens, guardDir, loadPolicy } from "./guard/policy.js";
@@ -576,7 +576,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         // Refuse before starting anything, so a refused guard does not leave the worker half up.
         assertGuardHostSafe(allowAdminAccount, "Run `tapdance host resume --allow-admin-account` to accept running the guard from this account, or use a dedicated standard account (docs/security/personal-mac.md).");
         out.progress("Starting the worker");
-        if (state.workerService !== false) await setWorkerService(true);
+        if (state.workerService !== false) await setWorkerService(true, out);
         await startWorker(out);
         out.progress("Starting the guard");
         const guard = await installGuardAsService({ allowAdminAccount, keepAwake });
@@ -1048,7 +1048,13 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         rows.push({ step: "account", ok: !gateway && process.getuid?.() !== 0, detail: `${userInfo().username}${admin ? " (administrator)" : ""}${gateway ? `; joined gateway ${gateway}` : ""}` });
         const worker = await localWorkerStatus();
         const devicesLine = worker !== undefined ? describeWorkerDevices(worker) : "";
-        rows.push({ step: "worker", ok: worker !== undefined, detail: worker !== undefined ? `the local Simlock worker answers; ${devicesLine}` : "not answering (tapdance worker start, or tapdance host resume)" });
+        // A worker left without the login service a refresh failed to install (#118).
+        const missingService = await warnIfServiceMissing({ warn: () => undefined });
+        rows.push({
+          step: "worker",
+          ok: worker !== undefined && missingService === undefined,
+          detail: `${worker !== undefined ? `the local Simlock worker answers; ${devicesLine}` : "not answering (tapdance worker start, or tapdance host resume)"}${missingService ? `; ${missingService}` : ""}`,
+        });
         const { policy } = await loadPolicy();
         const port = policy.listen.port;
         const localUrl = `http://${policy.listen.host}:${port}`;

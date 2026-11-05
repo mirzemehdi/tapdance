@@ -82,21 +82,41 @@ export function isStaleDeviceRecord(error: unknown): error is TapdanceError {
   return /No (Android|Apple|iOS) device with (serial|UDID)/i.test(error.message);
 }
 
-/** The part of the request line that says whether a spare is ready, from Simlock's status (#92). */
-export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion" | "imageTag">): string {
-  if (status === undefined) return "queues if busy; a new device can take a few minutes";
+/**
+ * The part of the request line that says what the request will wait for, from Simlock's status
+ * (#92, #117): a ready spare, a released device being restored from its snapshot (seconds), a
+ * stopped device that only needs to start, or no device of this kind at all (a first boot: minutes).
+ */
+export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion" | "imageTag" | "physical">): string {
+  if (status === undefined) return "queues if busy; starting a device usually takes under a minute, longer on a first boot";
   const same = (a: string | undefined, b: string | undefined) => a === undefined || b === undefined || a.toLowerCase() === b.toLowerCase();
   // Simlock grants a spare only of the requested image tag: an untagged request takes untagged
   // spares only, a tagged one spares of that tag only (#112).
-  const sameTag = (t: { imageTag?: string }) => (t.imageTag ?? "") === (request.imageTag ?? "");
+  const sameTag = (t: { imageTag?: string | undefined }) => (t.imageTag ?? "") === (request.imageTag ?? "");
   const targets = (status.warmPool?.targets ?? []).filter((t) => t.platform === request.platform && same(request.device, t.model) && same(request.osVersion, t.osVersion) && sameTag(t));
   // Simlock's bare warm count says nothing about the kind: trust it only when there is no per-kind
   // list to read and the request names no particular kind.
   const anyKind = status.warmPool?.targets === undefined && request.device === undefined && request.osVersion === undefined && request.imageTag === undefined;
-  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (anyKind && (status.capacity?.[request.platform]?.warm ?? 0) > 0);
+  // The host's devices of the requested kind and their states (Simlock 0.5 lists every device). A
+  // worker guard lists only the devices this client holds: that list says nothing about the rest.
+  const listed = Array.isArray(status.devices) && status.devicesScope !== "held" ? status.devices : undefined;
+  const devices = (listed ?? []).filter((d) => {
+    const spec = d.spec ?? {};
+    return (spec.platform ?? d.platform) === request.platform && Boolean(spec.physical ?? d.physical ?? false) === Boolean(request.physical) && same(request.device, spec.model) && same(request.osVersion, spec.osVersion) && sameTag(spec);
+  });
+  const inState = (state: string) => devices.some((d) => d.state === state);
+  const ready = targets.some((t) => (t.ready ?? 0) > 0) || (anyKind && (status.capacity?.[request.platform]?.warm ?? 0) > 0) || inState("ready");
   if (ready) return "a warm spare is ready";
-  if (targets.some((t) => (t.booting ?? 0) > 0)) return "a spare is booting; this can take a minute or two";
-  return "no spare is ready, so a device has to start: this can take a few minutes";
+  // A released device is reclaimed before it is granted again: an Android emulator is restored
+  // from its clean snapshot in seconds; an iOS simulator is erased and booted again.
+  if (inState("reclaiming")) {
+    return request.platform === "android" ? "a released device is being restored from its snapshot: usually ready in seconds" : "a released device is being reset: usually ready in under a minute";
+  }
+  if (targets.some((t) => (t.booting ?? 0) > 0) || inState("provisioning")) return "a spare is booting; this can take a minute or two";
+  if (inState("shutdown")) return "a stopped device of this kind will start: usually under a minute, longer on a first boot";
+  if (listed === undefined) return "no spare is ready, so a device has to start: usually under a minute, longer on a first boot";
+  if (devices.length === 0) return "no device of this kind exists yet, so one has to be created and booted: a first boot can take a few minutes";
+  return "every device of this kind is busy: the request waits for one, or a new device starts (a first boot can take a few minutes)";
 }
 
 /** One line about a waiting lease request in Simlock's status, or undefined when it is not waiting (#92). */
@@ -108,6 +128,7 @@ export function describeWaiting(waiting: NonNullable<SimlockStatus["waiting"]>[n
     return `Queued for a device${waiting.queuePosition ? ` (position ${waiting.queuePosition}${reason ? `, ${reason}` : ""})` : reason ? ` (${reason})` : ""}`;
   }
   if (waiting.stage === "starting") return "Starting a device for this lease (restoring or booting an emulator or simulator)";
+  if (waiting.stage === "reclaiming") return "Waiting for a released device of this kind to be restored (usually seconds on Android)";
   return undefined;
 }
 

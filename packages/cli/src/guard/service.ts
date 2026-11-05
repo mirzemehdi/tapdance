@@ -254,6 +254,7 @@ export async function installGuardService(spec: GuardServiceSpec, io: ServiceIo)
     if (size >= GUARD_LOG_ROTATE_BYTES) await rename(log, `${log}.1`).catch(() => undefined);
   }
   const hint = "Check that a systemd user instance runs for this account (`systemctl --user status`); on a headless server enable it with `loginctl enable-linger $USER`.";
+  useUserBus(io.uid);
   await must(["systemctl", "--user", "daemon-reload"], "systemctl --user daemon-reload failed", hint);
   await must(["systemctl", "--user", "enable", GUARD_SYSTEMD_UNIT], "systemctl --user enable failed", hint);
   await must(["systemctl", "--user", "restart", GUARD_SYSTEMD_UNIT], "systemctl --user could not start the worker guard", `See ${log}. ${hint}`);
@@ -276,6 +277,8 @@ export async function uninstallGuardService(platform: ServicePlatform, home: str
     if (!r.ok && existed) await attempt(["launchctl", "unload", "-w", file]);
     await remove(file);
   } else {
+    // Over a non-interactive ssh command (host pause, host down) systemctl --user needs the bus (#118).
+    useUserBus(io.uid);
     await attempt(["systemctl", "--user", "disable", "--now", GUARD_SYSTEMD_UNIT]);
     await remove(file);
     await attempt(["systemctl", "--user", "daemon-reload"]);
