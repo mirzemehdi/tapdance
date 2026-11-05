@@ -227,7 +227,9 @@ Estimates from Google's published `europe-west1` rates, not a billing export.
 
 | Run | VM time | Cost |
 | --- | --- | --- |
-| 2e (2026-11-05) | 12:20–teardown | see teardown |
+| 2e (2026-11-05) | 12:20:58–13:29:38Z and 13:29:46–13:33:36Z, about 1.21 h | about USD 0.27 (VM 0.25, 64 GB disk 0.01, external IP 0.01; egress not measured) |
+
+Teardown: `terraform destroy` (18 destroyed), `gcp-leftovers.sh` exit 0, budget gone, billing unlinked, project deleted (DELETE_REQUESTED). `revoke-run-credentials.sh`: gcloud logins and application-default credentials revoked, the run's Tapdance profile removed; `--check` shows nothing left.
 
 ## Results by requirement
 
