@@ -41,7 +41,7 @@ import {
   type DoctorCheck,
   type Platform,
 } from "@tapdance/sdk";
-import { CLI_ENTRY, open, output, type GlobalOptions } from "./context.js";
+import { CLI_ENTRY, leaseWithNotices, open, output, type GlobalOptions } from "./context.js";
 import { GH_FIX, deployKeyState, describeDeployKeyState, ghNeededFor, removeFromAllowList } from "./host/builds.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
@@ -97,6 +97,23 @@ import {
  * back. `tapdance connect` is the other half, on the agent's machine. Every step reuses the commands
  * that do the same job on their own (`worker install`, `worker guard install`, `worker guard pair`).
  */
+
+/**
+ * `host up`'s self-test lease: lease through the guard, take a screenshot, release. The lease's
+ * notices (a still-busy Android guest) are printed as warnings as soon as they are known, not dropped
+ * (field run 2d).
+ */
+export async function selfTestLease(t: Pick<Tapdance, "lease" | "screenshot" | "release">, platformToTest: Platform, work: string, out: Pick<Output, "progress" | "warn">): Promise<void> {
+  out.progress(`Leasing an ${platformToTest} device through the guard (the first boot can take minutes)`);
+  await leaseWithNotices(t, { platform: platformToTest, ttlMinutes: 10, waitSeconds: 300 }, out);
+  try {
+    out.progress("Taking a screenshot through the guard");
+    const shot = await t.screenshot(join(work, "self-test.png"), "host up self-test");
+    if (shot.bytes <= 0) throw new TapdanceError("DEVICE_ERROR", "The self-test screenshot is empty");
+  } finally {
+    await t.release().catch(() => undefined);
+  }
+}
 
 const STEPS = ["prerequisites", "account", "worker", "guard service", "pairing", "tailscale", "self-test", "summary"] as const;
 
@@ -448,14 +465,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             const has = (p: Platform) => inventory.catalog.some((e) => e.platform === p && (e.osVersions.length > 0 || e.defaultOsVersion));
             const platformToTest: Platform | undefined = has("android") ? "android" : has("ios") ? "ios" : undefined;
             if (!platformToTest) throw new TapdanceError("DEVICE_UNAVAILABLE", "The guard answers, but the worker offers no device to lease", { hint: "Install a system image or simulator runtime (`tapdance devices install android 35`), then run this command again." });
-            out.progress(`Leasing an ${platformToTest} device through the guard (the first boot can take minutes)`);
-            await t.lease({ platform: platformToTest, ttlMinutes: 10, waitSeconds: 300 });
-            try {
-              const shot = await t.screenshot(join(work, "self-test.png"), "host up self-test");
-              if (shot.bytes <= 0) throw new TapdanceError("DEVICE_ERROR", "The self-test screenshot is empty");
-            } finally {
-              await t.release().catch(() => undefined);
-            }
+            await selfTestLease(t, platformToTest, work, out);
             return { devices, selfTest: `PASS (${platformToTest} lease, screenshot ok)` };
           } catch (error) {
             const e = toTapdanceError(error);

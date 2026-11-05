@@ -94,6 +94,11 @@ export interface LeaseOptions {
    * the device out, 0-300 (0 = skip the CPU check). Default `session.settleSeconds` (15).
    */
   settleSeconds?: number;
+  /**
+   * Gets each of the lease's notices as soon as the provider knows it, before `lease` returns (the
+   * CLI prints them while the lease finishes). They are in the result's `notices` as well.
+   */
+  onNotice?: (notice: string) => void;
   /** Return the session's current lease instead of failing when it already holds one on this platform. */
   reuse?: boolean;
 }
@@ -427,7 +432,7 @@ export class Tapdance {
           ...(waitSeconds > 0 ? { waitTimeoutMs: waitSeconds * 1000 } : {}),
           settleMs: settleSeconds * 1000,
         },
-        { onProgress: (m) => this.progress(m) },
+        { onProgress: (m) => this.progress(m), ...(options.onNotice ? { onNotice: options.onNotice } : {}) },
       );
       const now = new Date().toISOString();
       const record = await this.store.put({

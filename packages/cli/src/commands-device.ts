@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, withInstallHintFor, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
-import { renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
+import { leaseWithNotices, renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, table, yellow } from "./output.js";
 
 function platformArg(value: string | undefined): Platform {
@@ -168,7 +168,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
         const settle = intArg("--settle", o.settle, 0, 300);
-        const { summary, ttlCappedMinutes, notices } = await t.lease({
+        // Notices are printed as soon as they are known (before the lease finishes), not at the end.
+        const { summary, ttlCappedMinutes, notices } = await leaseWithNotices(t, {
           platform: platformArg(o.platform),
           ...(o.device ? { device: o.device } : {}),
           ...(o.os ? { osVersion: o.os } : {}),
@@ -178,7 +179,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(ttl !== undefined ? { ttlMinutes: ttl } : {}),
           ...(wait !== undefined ? { waitSeconds: wait } : {}),
           ...(settle !== undefined ? { settleSeconds: settle } : {}),
-        });
+        }, out);
         const cfg = t.resolved.config.session;
         let keepalive: string;
         if (o.hold) {
@@ -191,7 +192,6 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           keepalive = "off — renew with `tapdance device renew`";
         }
         if (ttlCappedMinutes) out.warn(`The worker granted ${ttlCappedMinutes} min, less than the ${ttl ?? t.resolved.config.session.defaultTtlMinutes} min asked (its policy caps leases; the keepalive renews it).`);
-        for (const notice of notices ?? []) out.warn(notice);
         out.result({ device: summary, keepalive, ...(ttlCappedMinutes ? { ttlCappedMinutes } : {}), ...(notices ? { notices } : {}) }, () => `${renderDevice(summary, [["Keepalive", keepalive]])}\n\n${dim("Next: tapdance app install <path> · tapdance ui inspect · tapdance device release")}`);
         if (o.hold) {
           const controller = new AbortController();

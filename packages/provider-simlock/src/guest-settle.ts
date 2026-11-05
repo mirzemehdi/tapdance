@@ -8,11 +8,15 @@
  * /proc/stat (two reads give the guest's CPU load) and the focused window. The wait has two parts:
  * boot complete with no "isn't responding" or crash dialog in front (an ANR is answered with Wait),
  * bounded by READY_BUDGET_MS; then a short CPU check (`session.settleSeconds`, DEFAULT_CPU_CHECK_MS)
- * that ends early after SETTLED_SAMPLES calm intervals in a row or a clearly falling load (#101).
+ * that ends early after SETTLED_SAMPLES calm intervals in a row or a clearly falling load (#101), and,
+ * with the default length or less, as soon as the first BUSY_EXIT_SAMPLES readings are all high and
+ * not falling: such a guest stays busy far longer than the check (#101, field run 2d).
  *
  * Not measured: the guest's /proc/stat may not show work the emulator does in host threads (software
  * rendering), so a calm guest can still mean a busy qemu process.
  */
+
+import { bounded, HEARTBEAT_MS, withHeartbeat } from "./heartbeat.js";
 
 /** One read of the probe. */
 export interface GuestSample {
@@ -113,6 +117,20 @@ export const READY_BUDGET_MS = 90_000;
  * notice says the guest is still busy.
  */
 export const DEFAULT_CPU_CHECK_MS = 15_000;
+/**
+ * Early busy exit (#101, field run 2d): when the first BUSY_EXIT_SAMPLES readings of the CPU check are
+ * all at least BUSY_EXIT_CPU and not falling (the last not more than BUSY_EXIT_MAX_DROP below the
+ * first, and not lower at every reading by BUSY_EXIT_STEADY_DROP or more in all), the device goes out
+ * at once with the busy notice. On the N2 VM a guest re-leased right after a release
+ * read 94-97 % and stayed busy for another 55-60 s, so the rest of a 15 s check only added 10 s to the
+ * lease and always ended with the same notice. Applies only when the check is DEFAULT_CPU_CHECK_MS or
+ * shorter: a longer `session.settleSeconds` (or `--settle`, `settle_seconds`) asks to wait out the busy
+ * phase, and still does.
+ */
+export const BUSY_EXIT_CPU = 0.8;
+export const BUSY_EXIT_SAMPLES = 3;
+const BUSY_EXIT_MAX_DROP = 0.1;
+const BUSY_EXIT_STEADY_DROP = 0.04;
 /** The most `session.settleSeconds` may ask for. */
 export const MAX_CPU_CHECK_MS = 300_000;
 export const SETTLE_INTERVAL_MS = 1500;
@@ -141,6 +159,13 @@ export interface SettleDeps {
   cpuBudgetMs?: number;
   intervalMs?: number;
   signal?: AbortSignal;
+  /**
+   * Called once, the first time the guest reads booted with nothing in front: work that needs a ready
+   * guest (the snapshot-helper warm-up, #102) can start then, alongside the CPU check.
+   */
+  onReady?: () => void;
+  /** Awaited before a dialog is answered, so that tap does not overlap other automation calls. */
+  beforeDismiss?: () => Promise<unknown>;
 }
 
 export interface SettleResult {
@@ -152,17 +177,38 @@ export interface SettleResult {
   busy?: number;
   /**
    * Why the wait ended: `calm` (SETTLED_SAMPLES calm intervals in a row), `falling` (a clearly
-   * falling load, handed out with a notice), `ready` (booted, nothing in front, and the CPU check is
+   * falling load, handed out with a notice), `busy` (the first readings were high and not falling,
+   * handed out at once with the busy notice; default-length checks only), `ready` (booted, nothing in front, and the CPU check is
    * off), `no-counters` (booted, nothing in front, no CPU counters to judge by), `bound` (the CPU
    * check or the ready budget ran out) or `skipped` (the probe could not run).
    */
-  reason?: "calm" | "falling" | "ready" | "no-counters" | "bound" | "skipped";
+  reason?: "calm" | "falling" | "busy" | "ready" | "no-counters" | "bound" | "skipped";
   /** The probe could not run, so nothing was checked. */
   skipped?: boolean;
 }
 
 const pct = (busy: number) => `${Math.round(busy * 100)} %`;
 const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+
+/** True when the first readings of a CPU check are all high and not falling (BUSY_EXIT_CPU). */
+export function busyFromTheStart(readings: number[]): boolean {
+  if (readings.length < BUSY_EXIT_SAMPLES) return false;
+  const first = readings.slice(0, BUSY_EXIT_SAMPLES);
+  if (!first.every((r) => r >= BUSY_EXIT_CPU)) return false;
+  const drop = first[0]! - first.at(-1)!;
+  // Falling: down by more than BUSY_EXIT_MAX_DROP, or down at every reading by a few points in all.
+  const steadilyDown = first.every((r, i) => i === 0 || r < first[i - 1]!) && drop >= BUSY_EXIT_STEADY_DROP;
+  return drop <= BUSY_EXIT_MAX_DROP && !steadilyDown;
+}
+
+/** The notice for a device handed out while its guest is still busy. */
+function busyNotice(waitedS: number, last: number, recent: number[]): string {
+  return (
+    `The device is still busy with its start-up work after ${waitedS} s (guest CPU ${pct(last)} at the last reading, ${pct(mean(recent))} over the last ${recent.length}). ` +
+    `It was handed out rather than kept waiting: commands work but may be slower, 2-10 s each, for a few more minutes (after a fresh boot on a slow host, up to about 5). ` +
+    `Nothing needs to be done about it; to have leases wait longer, raise session.settleSeconds (CLI device lease --settle, MCP lease_device settle_seconds).`
+  );
+}
 
 /** The recent and older means when the readings show a clearly falling load; undefined otherwise. */
 export function fallingTrend(readings: number[]): { recent: number; older: number } | undefined {
@@ -181,7 +227,18 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
   const readyBudget = deps.readyBudgetMs ?? READY_BUDGET_MS;
   const cpuBudget = Math.min(Math.max(deps.cpuBudgetMs ?? DEFAULT_CPU_CHECK_MS, 0), MAX_CPU_CHECK_MS);
   const interval = deps.intervalMs ?? SETTLE_INTERVAL_MS;
+  const earlyBusyExit = cpuBudget <= DEFAULT_CPU_CHECK_MS;
   const started = now();
+  let readySignalled = false;
+  const signalReady = () => {
+    if (readySignalled) return;
+    readySignalled = true;
+    try {
+      deps.onReady?.();
+    } catch {
+      // The caller's hook never fails the wait.
+    }
+  };
   /** When the guest was first seen booted with nothing in front: the CPU check runs from here. */
   let readyAt: number | undefined;
   const waited = () => Math.round((now() - started) / 1000);
@@ -189,6 +246,8 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
   let busy: number | undefined;
   /** Busy shares since the last measurement restart, oldest first. */
   let readings: number[] = [];
+  /** Busy shares read while the guest was booted with nothing in front, since that last began. */
+  let quietReadings: number[] = [];
   let calm = 0;
   let dismissed = 0;
   let lastReport: number | undefined;
@@ -215,16 +274,18 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
     if (!current.cpu && !current.booted) return { settled: false, notices: [], waitedMs: now() - started, reason: "skipped", skipped: true };
     // Booted, nothing in front, but no CPU counters to judge the load by: nothing more to wait for.
     if (!current.cpu && !current.dialog) return done({ settled: true, notices: [], waitedMs: now() - started, reason: "no-counters" });
-    if (current.dialog?.kind === "not-responding" && dismissed < MAX_DISMISSALS && (await deps.dismiss(current.dialog).catch(() => false))) {
+    if (current.dialog?.kind === "not-responding" && dismissed < MAX_DISMISSALS && (await dismissAfterOthers(deps, current.dialog))) {
       dismissed++;
       deps.progress?.(`Answered a ${describeDialog(current.dialog)} dialog with Wait (the device was still starting)`);
       // The tap and the dialog going away cost CPU of their own: measure afresh.
       previous = undefined;
       busy = undefined;
       readings = [];
+      quietReadings = [];
       calm = 0;
     } else {
       const quiet = current.booted && !current.dialog;
+      if (quiet) signalReady();
       // Booted and nothing in front: with the CPU check off, that is all a lease waits for.
       if (quiet && cpuBudget === 0) return done({ settled: true, notices: [], waitedMs: now() - started, reason: "ready" });
       if (quiet && readyAt === undefined) readyAt = now();
@@ -234,8 +295,17 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
         busy = reading;
         readings.push(reading);
       }
+      if (!quiet) quietReadings = [];
+      else if (reading !== undefined) quietReadings.push(reading);
       calm = quiet && reading !== undefined && reading <= SETTLED_CPU ? calm + 1 : reading === undefined && quiet ? calm : 0;
       if (calm >= SETTLED_SAMPLES) return done({ settled: true, notices: [], waitedMs: now() - started, busy: busy!, reason: "calm" });
+      // High and not falling from the first readings on: the rest of a default-length check would only
+      // delay the same notice (#101, field run 2d).
+      if (earlyBusyExit && quietReadings.length === BUSY_EXIT_SAMPLES && busyFromTheStart(quietReadings)) {
+        const recent = quietReadings.slice(-TREND_WINDOW);
+        deps.progress?.(`Handing the device out while it is still busy (guest CPU ${pct(mean(recent))} over the first ${recent.length} readings, not falling; waited ${waited()} s)`);
+        return { settled: false, notices: [busyNotice(waited(), busy!, recent)], waitedMs: now() - started, busy: busy!, reason: "busy" };
+      }
       const trend = quiet ? fallingTrend(readings) : undefined;
       if (trend) {
         return done({
@@ -271,11 +341,59 @@ export async function settleGuest(deps: SettleDeps): Promise<SettleResult> {
     const recent = readings.slice(-TREND_WINDOW);
     // Calm at the end without a full calm run: nothing worth a warning.
     if (busy <= SETTLED_CPU && mean(recent) <= SETTLED_CPU) return done({ settled: true, notices: [], waitedMs: now() - started, busy, reason: "bound" });
-    notices.push(
-      `The device is still busy with its start-up work after ${waited()} s (guest CPU ${pct(busy)} at the last reading, ${pct(mean(recent))} over the last ${recent.length}). ` +
-        `It was handed out rather than kept waiting: commands work but may be slower, 2-10 s each, for a few more minutes (after a fresh boot on a slow host, up to about 5). ` +
-        `Nothing needs to be done about it; to have leases wait longer, raise session.settleSeconds (CLI device lease --settle, MCP lease_device settle_seconds).`,
-    );
+    notices.push(busyNotice(waited(), busy, recent));
   }
   return { settled: false, notices, waitedMs: now() - started, ...(busy !== undefined ? { busy } : {}), reason: "bound" };
+}
+
+/** Answers a dialog once other automation calls (the warm-up) are done; false when it could not. */
+async function dismissAfterOthers(deps: SettleDeps, dialog: SystemDialog): Promise<boolean> {
+  await deps.beforeDismiss?.().catch(() => undefined);
+  return deps.dismiss(dialog).catch(() => false);
+}
+
+export interface HandOutDeps {
+  /** The settle wait (settleGuest), given the hooks that start and serialise the warm-up. */
+  settle: (hooks: { onReady: () => void; beforeDismiss: () => Promise<unknown> }) => Promise<SettleResult>;
+  /** The snapshot-helper warm-up (#102). Its own errors are its business; a rejection is ignored. */
+  warmUp: () => Promise<unknown>;
+  /** The longest the lease waits for the warm-up, counted from when it started. */
+  warmUpBoundMs: number;
+  /** Gets the settle wait's notices as soon as it ends, before the warm-up is awaited. */
+  onNotice?: (notice: string) => void;
+  progress?: (message: string) => void;
+  heartbeatMs?: number;
+}
+
+/**
+ * The end of an Android emulator lease (#101, #102, field run 2d): the settle wait and the
+ * snapshot-helper warm-up run side by side, so the lease takes about the longer of the two, not their
+ * sum. The warm-up starts once the guest first reads booted with nothing in front (or when the settle
+ * wait ends without that), a dialog is answered only after it, and the settle wait's notices go to
+ * `onNotice` the moment the wait ends. The warm-up is awaited for at most `warmUpBoundMs` from its
+ * start and can never fail the lease.
+ */
+export async function settleAndWarmUp(deps: HandOutDeps): Promise<SettleResult> {
+  let warming: Promise<unknown> | undefined;
+  const startWarmUp = () => {
+    if (warming) return;
+    let started: Promise<unknown>;
+    try {
+      started = deps.warmUp();
+    } catch {
+      started = Promise.resolve();
+    }
+    warming = bounded(Promise.resolve(started), deps.warmUpBoundMs);
+  };
+  const settled = await deps.settle({ onReady: startWarmUp, beforeDismiss: () => warming ?? Promise.resolve() });
+  for (const notice of settled.notices) {
+    try {
+      deps.onNotice?.(notice);
+    } catch {
+      // A listener's failure does not touch the lease.
+    }
+  }
+  startWarmUp();
+  await withHeartbeat(warming!, deps.progress, (s) => `Still reading the screen once so the first inspect is quick (${s} s more, at most ${Math.round(deps.warmUpBoundMs / 1000)} s in all)`, deps.heartbeatMs ?? HEARTBEAT_MS);
+  return settled;
 }

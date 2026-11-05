@@ -364,7 +364,18 @@ a fresh boot, with commands taking 2-10 s instead of 2-6 s and no "isn't respond
 waits for boot and for no "isn't responding" dialog (answered with Wait), then checks the CPU for
 `session.settleSeconds` (15 s by default) and hands the device out, with a notice that says how busy it
 still is when it is. On this VM most leases right after a release or boot will carry that notice; a
-longer check (up to 300 s) would wait out more of the busy phase, at that much extra lease time. When
+longer check (up to 300 s) would wait out more of the busy phase, at that much extra lease time.
+
+**Lease timing.** Measured on the 2026-11-05 run (field run 2d, `main` at ef1f4b5, `google_apis` Pixel
+8 / API 34): a lease of the idle spare took 10.3 s, a cold one 40.7 s, and a lease right after a
+release 35-43 s: snapshot restore 3.5 s, attaching the automation session on the busy guest 8.5-15 s,
+the CPU check 15-16 s (the guest stays busy for 55-60 s after a release, so it almost never ended
+calm) and the snapshot-helper warm-up 6-9 s (its first start fails on every restore; the retry works).
+Since then, with the default `session.settleSeconds`, a guest whose first 3 readings are 80 % or more
+and not falling is handed out after about 5 s, and the warm-up runs alongside the CPU check instead of
+after it. Expected for a lease right after a release, not yet measured on the VM: about 3.5 + 8.5-15 +
+6-9 s, roughly 18-28 s. `--settle 60` (or a larger `session.settleSeconds`) still waits the busy phase
+out. When
 Simlock saves a device's clean snapshot (the one every spare restores, on the device's first boot) it
 logs the guest CPU at that moment; on the VM, `tapdance worker logs --contains "clean baseline"` shows
 "Capturing the Android clean baseline" with `busy` (0 to 1). An earlier patch waited up to 120 s for a

@@ -579,6 +579,27 @@ with fakes and not yet re-run on a host.
   for the host's default API level when the tag is installed there, the spare line counts only spares
   of the requested tag, and `host warm` shows each Android spare's tag.
 
+### Field run 2d on the N2 VM: faster lease after a release (issues #101, #102)
+
+A lease right after a release took 35-43 s on the N2 VM (restore 3.5 s, attaching automation on the
+busy guest 8.5-15 s, the CPU check 15-16 s, the snapshot-helper warm-up 6-9 s). Unit-tested with mocked
+devices, a mocked provider and a fake clock; not yet re-run on a host.
+
+- Changed (#101): early busy exit. With `session.settleSeconds` at 15 or less (the default), a guest
+  whose first 3 CPU readings are all 80 % or more and not falling is handed out at once, after about
+  5 s, with the "still busy" notice; on the VM such a guest stayed busy for another 55-60 s, so the rest
+  of the check only delayed the same notice. A larger value (`--settle`, `settle_seconds`) still waits.
+  Boot-complete and dialog checks still run first.
+- Changed (#102): the snapshot-helper warm-up runs alongside the CPU check, from the first probe that
+  reads the guest booted with nothing in front, instead of after it; the whole warm-up is bounded at
+  15 s (was 20 s per read) and a dialog is answered only after it. Its first read still fails on a
+  restored spare and the retry stays.
+- Fixed: the lease's notices are printed as soon as the settle wait ends (they came 6-9 s late, after
+  the warm-up), `host up`'s self-test prints them instead of dropping them, and attaching automation or
+  the warm-up print a "Still …" line every 5 s. SDK `lease` takes `onNotice`.
+- Expected for a lease right after a release: about 3.5 + 8.5-15 + 6-9 s, roughly 18-28 s (not yet
+  measured).
+
 ### Not yet proven
 
 A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,
