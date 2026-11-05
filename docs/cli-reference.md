@@ -198,9 +198,13 @@ place in the queue or that a device is being started, and, for an Android emulat
 for the device to settle. An emulator handed out while still starting waits up to 90 s for boot to
 complete and for no "isn't responding" or crash dialog to be in front (an "isn't responding" dialog is
 answered with Wait); then its CPU is checked for up to `--settle` seconds (default
-`session.settleSeconds`, 15), ending early on 3 calm readings in a row or a clearly falling load. A
-device still busy after that is handed out with a warning (in `--json`, `notices`): commands work but
-can take 2-10 s each for a few more minutes. When a host that just started still lists its old emulator ("No Android device with
+`session.settleSeconds`, 15), ending early on 3 calm readings in a row or a clearly falling load. With
+15 s or less, a guest whose first 3 readings are all 80 % or more and not falling is handed out after
+about 5 s instead of waiting the check out; a larger `--settle` waits for it. A device still busy is
+handed out with a warning (in `--json`, `notices`), printed as soon as the check ends: commands work but
+can take 2-10 s each for a few more minutes. Meanwhile the lease reads the screen once and discards
+it, so the first `ui inspect` is quick; that runs alongside the CPU check (at most 15 s), and a step
+that takes more than about 5 s prints a "Still …" line. When a host that just started still lists its old emulator ("No Android device with
 serial …"), the lease asks again every 10 s for up to 2 minutes while the host boots a new one.
 
 `device status` shows the device, platform and OS, provider and worker, endpoint and whether it is TLS,

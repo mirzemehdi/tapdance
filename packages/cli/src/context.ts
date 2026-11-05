@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Tapdance, sanitizeSessionId, type DeviceSummary } from "@tapdance/sdk";
+import { Tapdance, sanitizeSessionId, type DeviceSummary, type LeaseOptions } from "@tapdance/sdk";
 import { Output, bold, cyan, dim, kv } from "./output.js";
 
 export interface GlobalOptions {
@@ -24,6 +24,26 @@ export async function open(opts: GlobalOptions, out: Output, extra: { fleet?: bo
     ...(opts.session ? { session: { id: sanitizeSessionId(opts.session), source: "--session" } } : {}),
     onProgress: (m) => out.progress(m),
   });
+}
+
+/**
+ * Leases and prints the lease's notices as warnings the moment the provider knows them, not when the
+ * lease returns: on Android the settle wait's "still busy" notice came 6-9 s late otherwise (field run
+ * 2d). Notices the provider did not hand over early are printed when the lease returns. Used by
+ * `device lease` and `host up`'s self-test.
+ */
+export async function leaseWithNotices(t: Pick<Tapdance, "lease">, options: Omit<LeaseOptions, "onNotice">, out: Pick<Output, "warn">): ReturnType<Tapdance["lease"]> {
+  const printed = new Set<string>();
+  const result = await t.lease({
+    ...options,
+    onNotice: (notice) => {
+      if (printed.has(notice)) return;
+      printed.add(notice);
+      out.warn(notice);
+    },
+  });
+  for (const notice of result.notices ?? []) if (!printed.has(notice)) out.warn(notice);
+  return result;
 }
 
 /** Runs a command body with one Tapdance instance and uniform error handling / exit codes. */

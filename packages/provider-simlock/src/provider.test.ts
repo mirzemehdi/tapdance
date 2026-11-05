@@ -1167,7 +1167,27 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     expect(dialog.pressed).toEqual([expect.objectContaining({ selector: 'id="android:id/aerr_wait"' })]);
   });
 
-  it("warms agent-device's snapshot helper once the device has settled, so the agent's first inspect works (#102)", async () => {
+  it("hands a guest busy from the start out early and says so before the warm-up ends (#101, field run 2d)", async () => {
+    // A guest that stays 99 % busy, and a warm-up read that takes a while.
+    const busy = Array.from({ length: 2000 }, (_, i) => `1\ncpu  ${i * 1000} 0 0 ${i * 10} 0 0 0 0 0 0\n  mCurrentFocus=Window{1 u0 com.google.android.apps.nexuslauncher/.Launcher}\n`);
+    const events: string[] = [];
+    const { p, calls } = fakeHost({
+      allocate: async (a) => ({ ...granted, leaseId: a.leaseId }),
+      probes: [...busy],
+      snapshot: async () => {
+        await new Promise((r) => setTimeout(r, 150));
+        events.push("warm-up read done");
+        return { nodes: [] };
+      },
+    });
+    const handle = await p.lease("s", { ...request, settleMs: 15_000 }, { onNotice: (n) => events.push(`notice: ${n.slice(0, 41)}`), onProgress: () => undefined });
+    // The early busy exit: four probes (three readings), not a 15 s check.
+    expect(calls.filter((c) => c === "probe")).toHaveLength(4);
+    expect(handle.notices?.[0]).toMatch(/still busy with its start-up work/);
+    expect(events).toEqual(["notice: The device is still busy with its start-u", "warm-up read done"]);
+  });
+
+  it("warms agent-device's snapshot helper alongside the settle wait, so the agent's first inspect works (#102, field run 2d)", async () => {
     // The helper fails its first start on a restored spare, as on every warm lease of the N2 run.
     let snapshots = 0;
     const { p, calls } = fakeHost({
@@ -1178,9 +1198,11 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
       },
     });
     await p.lease("s", request);
-    // Settle probes first, then the warm-up: a failed read and one more after the back-off.
+    // The warm-up starts once the first probe reads the guest ready and runs during the CPU check:
+    // a failed read and one more after the back-off.
     expect(calls.filter((c) => c === "snapshot")).toHaveLength(2);
-    expect(calls.indexOf("snapshot")).toBeGreaterThan(calls.lastIndexOf("probe"));
+    expect(calls.indexOf("snapshot")).toBeGreaterThan(calls.indexOf("probe"));
+    expect(calls.indexOf("snapshot")).toBeLessThan(calls.lastIndexOf("probe"));
     // The agent's first inspect then reads the screen at once.
     const screen = await p.inspect(androidHandle);
     expect(snapshots).toBe(3);
@@ -1198,6 +1220,17 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     expect(other.calls.filter((c) => c === "snapshot")).toHaveLength(1);
     const hung = fakeHost({ allocate: async (a) => ({ ...granted, leaseId: a.leaseId }), snapshot: () => new Promise(() => undefined), warmUpTimeoutMs: 20 });
     await expect(hung.p.lease("s", request)).resolves.toMatchObject({ deviceId: "emulator-5554" });
+    // A helper that keeps failing slowly: the whole warm-up (both reads and the pause) stays within
+    // its bound, not one bound per read.
+    const slow = fakeHost({
+      allocate: async (a) => ({ ...granted, leaseId: a.leaseId }),
+      snapshot: () => new Promise((_, reject) => setTimeout(() => reject(new Error("INSTRUMENTATION_FAILED")), 300)),
+      warmUpTimeoutMs: 400,
+    });
+    const started = Date.now();
+    await slow.p.lease("s", request);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(slow.calls.filter((c) => c === "snapshot")).toHaveLength(1);
   });
 
   it("reports an ANR dialog from inspect, launch and a missed tap instead of a plain miss (#80)", async () => {

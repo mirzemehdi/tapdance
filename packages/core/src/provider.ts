@@ -40,6 +40,11 @@ export type ProgressListener = (message: string) => void;
 
 export interface CallOptions {
   onProgress?: ProgressListener;
+  /**
+   * A lease's notices (`LeaseHandle.notices`) as soon as they are known, before the lease returns
+   * (the CLI prints them while the rest of the lease finishes). They are in the handle as well.
+   */
+  onNotice?: (notice: string) => void;
   signal?: AbortSignal;
 }
 
