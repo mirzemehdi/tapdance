@@ -126,6 +126,8 @@ IMAGE="system-images;android-$API;$TAG;$ABI"
 
 mkdir -p "$BIN_DIR"
 export PATH="$BIN_DIR:$SHARE/node/bin:$PATH"
+# macOS: MacPorts and Homebrew, where gh and tailscale come from; a command run over ssh has neither on PATH.
+if [[ "$OS" == Darwin ]]; then for d in /opt/local/bin /opt/homebrew/bin; do if [[ -d "$d" && ":$PATH:" != *":$d:"* ]]; then PATH="$PATH:$d"; fi; done; fi
 [[ -f "$ENV_FILE" ]] && . "$ENV_FILE"
 
 # ---------------------------------------------------------------- checks
@@ -523,6 +525,8 @@ write_env_file() {
   {
     echo "# Written by Tapdance's host-setup.sh: tools it installed in your home folder."
     echo "export PATH=\"$BIN_DIR:$SHARE/node/bin:$SDK/platform-tools:$SDK/emulator:$SDK/cmdline-tools/latest/bin:\$PATH\""
+    # macOS package managers this script installs gh and tailscale with (an ssh command's PATH has neither).
+    local d; for d in /opt/local/bin /opt/homebrew/bin; do if [[ "$OS" == Darwin && -d "$d" ]]; then echo "export PATH=\"\$PATH:$d\""; fi; done
     echo "export ANDROID_HOME=\"$SDK\""
     echo "export ANDROID_SDK_ROOT=\"$SDK\""
     local home; if home="$(java_home)"; then echo "export JAVA_HOME=\"$home\""; echo "export PATH=\"$home/bin:\$PATH\""; fi
