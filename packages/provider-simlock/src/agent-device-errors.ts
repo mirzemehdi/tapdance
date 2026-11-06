@@ -177,7 +177,9 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     code = "WORKER_OFFLINE";
     retryable = true;
   } else if (/not available on this simlock|try again/i.test(message)) code = "PROVIDER_UNAVAILABLE";
-  else if (/Remote daemon is unavailable/i.test(message)) {
+  else if (/Remote daemon is unavailable|Daemon request timed out/i.test(message)) {
+    // "timed out": the first command after a cold lease starts agent-device's test runner; on an 8 GB
+    // Mac under memory pressure that took over 90 s once, and the next try answered.
     // agent-device's daemon on the host did not answer this once (busy, or restarting) (#67).
     code = "PROVIDER_UNREACHABLE";
     retryable = true;
