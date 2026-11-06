@@ -18,7 +18,8 @@
 #                Accepting the Android SDK licenses is part of this step. The newest command-line tools
 #                are Google's Android CLI, which collects usage metrics by default: the script turns that
 #                off with Google's documented setting, a `--no-metrics` line in ~/.androidrc.
-#      gh        only with --with-gh: the GitHub CLI (system package, sudo; Homebrew on macOS), which
+#      gh        only with --with-gh: the GitHub CLI (system package, sudo; Homebrew, else MacPorts with
+#                sudo, on macOS), which
 #                installs from CI (`tapdance host artifacts`) and builds with `--git-auth gh` need.
 #      Tailscale macOS: the open-source tailscaled as a system daemon (MacPorts `port install tailscale`
 #                and `port load tailscale`, or Homebrew's `tailscale` formula and `tailscaled
@@ -248,7 +249,7 @@ check_all() {
   fi
   tailscale_bin >/dev/null || { MISSING+=("tailscale"); SUDO_STEPS+=("tailscale"); }
   if ! command -v gh >/dev/null 2>&1; then
-    if (( WITH_GH )); then MISSING+=("gh"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("gh")
+    if (( WITH_GH )); then MISSING+=("gh"); { [[ "$OS" == Linux ]] || ! command -v brew >/dev/null 2>&1; } && SUDO_STEPS+=("gh")
     else NOTES+=("gh (GitHub CLI) is not installed: installs from CI (tapdance host artifacts) and builds with --git-auth gh need it. Run this script again with --with-gh, or install it yourself"); fi
   fi
   (( ${#EXTRA_SDK[@]} || IOS_ONLY )) || NOTES+=("builds on this host (tapdance host builds) also need the app's own SDK packages (for example cmake;3.31.6 for native code), or Gradle may stop on a missing one: add them with --sdk-packages \"cmake;3.31.6\"")
@@ -284,7 +285,9 @@ describe() {
     ios-runtime) echo "an iOS simulator runtime (xcodebuild -downloadPlatform iOS, about 8 GB)" ;;
     kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
     emulator-libs) echo "system libraries the Android emulator needs: $(emulator_lib_packages) and what they depend on (system packages, sudo)" ;;
-    gh) [[ "$OS" == Darwin ]] && echo "GitHub CLI gh (Homebrew)" || echo "GitHub CLI gh (system package, sudo)" ;;
+    gh) if [[ "$OS" != Darwin ]]; then echo "GitHub CLI gh (system package, sudo)"
+        elif command -v brew >/dev/null 2>&1; then echo "GitHub CLI gh (Homebrew)"
+        else echo "GitHub CLI gh (MacPorts, sudo)"; fi ;;
     sdk:*) echo "Android SDK package ${1#sdk:} (sdkmanager)" ;;
     poweroff-rule) echo "a sudoers rule that lets $(id -un) run only /usr/bin/systemctl poweroff, so the guard can stop this cloud VM when it sits idle (sudo; /etc/sudoers.d/tapdance-poweroff, checked with visudo)" ;;
   esac
@@ -441,7 +444,8 @@ emulator_libs_after_install() {
 install_gh() {
   if [[ "$OS" == Darwin ]]; then
     if command -v brew >/dev/null 2>&1; then brew install gh
-    else NOTES+=("gh: install it from https://cli.github.com (no Homebrew here)"); fi
+    elif [[ -x /opt/local/bin/port ]]; then sudo /opt/local/bin/port -N install gh
+    else NOTES+=("gh: install it from https://cli.github.com (no Homebrew or MacPorts here)"); fi
     return 0
   fi
   if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y gh
