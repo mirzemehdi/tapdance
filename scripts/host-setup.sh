@@ -60,6 +60,9 @@
 #   --ios-only           macOS: host iOS simulators only. Skips the Android SDK, emulator and system
 #                        image; installs an iOS runtime when none is there. The JDK is still installed:
 #                        Kotlin Multiplatform apps run Gradle inside their Xcode build
+#   --android-build-sdk  with --ios-only: also the Android command-line tools and platform-tools (and the
+#                        SDK licences), no emulator or image. Kotlin Multiplatform apps with Android
+#                        modules need an SDK to build even their iOS app on the host (tapdance app build)
 #
 # Settings: TAPDANCE_REPO (git URL; an SSH URL works for a private repository), TAPDANCE_REF (main),
 # TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis; --play-store sets
@@ -81,7 +84,7 @@ TAG="${ANDROID_TAG:-google_apis}"
 die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
 
-YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; IOS_ONLY=0; EXTRA_SDK=(); PASS=()
+YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; IOS_ONLY=0; BUILD_SDK=0; EXTRA_SDK=(); PASS=()
 add_sdk_packages() {
   local p; local IFS=', '
   for p in $1; do
@@ -101,6 +104,7 @@ while (( $# )); do
     --play-store) TAG=google_apis_playstore ;;
     --with-gh) WITH_GH=1 ;;
     --ios-only) IOS_ONLY=1 ;;
+    --android-build-sdk) BUILD_SDK=1 ;;
     --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
     --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
     *) PASS+=("$1") ;;
@@ -229,6 +233,10 @@ check_all() {
   fi
   if [[ "$OS" == Linux ]] && ! command -v unzip >/dev/null 2>&1; then MISSING+=("unzip"); SUDO_STEPS+=("unzip"); fi
   jdk_ok || MISSING+=("jdk")
+  if (( IOS_ONLY && BUILD_SDK )); then
+    cmdline_ok || MISSING+=("android-cmdline-tools")
+    pkg_ok platform-tools || MISSING+=("platform-tools")
+  fi
   if (( ! IOS_ONLY )); then
     cmdline_ok || MISSING+=("android-cmdline-tools")
     pkg_ok platform-tools || MISSING+=("platform-tools")
@@ -603,6 +611,9 @@ if (( ! SKIP_PREREQ )); then
         poweroff-rule) install_poweroff_rule ;;
       esac
     done
+    if (( IOS_ONLY && BUILD_SDK )); then
+      pkg_ok platform-tools || sdkmanager_install platform-tools
+    fi
     if (( ! IOS_ONLY )); then
       SDK_PKGS=()
       pkg_ok platform-tools || SDK_PKGS+=("platform-tools")

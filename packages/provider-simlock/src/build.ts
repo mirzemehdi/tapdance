@@ -446,6 +446,14 @@ export class FailureDigest {
  * (CMake, an NDK, a platform). Gradle does not fetch these itself; the host owner installs them once.
  */
 export function missingSdkHint(text: string): string | undefined {
+  // A Kotlin Multiplatform app's Gradle configures its Android modules even for the iOS framework, so an
+  // iOS-only host (host-setup.sh --ios-only) without an SDK fails here (Pianolune on a rented Mac).
+  if (/SDK location not found/.test(text)) {
+    return ownerMust(
+      "This app's Gradle build needs an Android SDK, even for iOS (Kotlin Multiplatform configures its Android modules)",
+      "scripts/host-setup.sh --ios-only --android-build-sdk",
+    );
+  }
   const sdkmanager = "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager";
   const cmake = /CMake '([0-9.]+)' was not found/.exec(text);
   if (cmake) return ownerMust(`The host's Android SDK has no CMake ${cmake[1]}`, `${sdkmanager} "cmake;${cmake[1]}"`);

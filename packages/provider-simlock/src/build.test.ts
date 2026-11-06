@@ -215,6 +215,7 @@ describe("builds on the host (#45)", () => {
     expect(missingSdkHint("> [CXX1300] CMake '3.31.6' was not found in SDK, PATH, or by cmake.dir property.")).toContain('sdkmanager "cmake;3.31.6"');
     expect(missingSdkHint("No version of NDK matched the requested version 27.0.12077973")).toContain('sdkmanager "ndk;27.0.12077973"');
     expect(missingSdkHint("Failed to find target with hash string 'android-35'")).toContain('sdkmanager "platforms;android-35"');
+    expect(missingSdkHint("> SDK location not found. Define a valid SDK location with an ANDROID_HOME environment variable")).toContain("--android-build-sdk");
     expect(missingSdkHint("e: Unresolved reference")).toBeUndefined();
   });
 
