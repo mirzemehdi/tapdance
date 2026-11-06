@@ -40,8 +40,9 @@
 #    `tapdance host up` with your other arguments.
 #
 # The tools go into ~/.tapdance/env.sh (PATH, ANDROID_HOME, ANDROID_SDK_ROOT, JAVA_HOME). On Linux it is
-# sourced at the top of ~/.bashrc, before Ubuntu's "not interactive: return" line, so commands run over
-# ssh (`gcloud compute ssh --command ...`) find java, sdkmanager, adb and tapdance too.
+# sourced at the top of ~/.bashrc, before Ubuntu's "not interactive: return" line, and for zsh (macOS's
+# default shell) from ~/.zshenv, so commands run over ssh (`ssh host 'tapdance host status'`,
+# `gcloud compute ssh --command ...`) find java, sdkmanager, adb and tapdance too.
 #
 # Its own options (everything else goes to `tapdance host up`):
 #   --yes                install without asking (also passed on to host up)
@@ -539,12 +540,16 @@ write_env_file() {
     fi
   fi
   local rcs=()
+  # zsh reads .zshenv in every shell, commands run over ssh (`ssh host 'tapdance host status'`) included;
+  # .zshrc only in interactive ones. macOS's default shell is zsh.
+  [[ "${SHELL:-}" == */zsh ]] && rcs+=("$HOME/.zshenv")
   if [[ "$OS" == Linux ]]; then
-    # zsh reads .zshenv in every shell, ssh commands included; login shells (`bash -lc`) read .profile.
-    [[ "${SHELL:-}" == */zsh ]] && rcs+=("$HOME/.zshenv")
+    # Login shells (`bash -lc`) read .profile.
     rcs+=("$HOME/.profile")
   else
     rcs+=("$([[ "${SHELL:-}" == */zsh ]] && echo "$HOME/.zshrc" || echo "$HOME/.bashrc")")
+    # macOS bash: a command over ssh reads .bashrc, a login shell .bash_profile.
+    [[ "${SHELL:-}" == */zsh ]] || rcs+=("$HOME/.bash_profile")
   fi
   local f; for f in "${rcs[@]}"; do
     if ! grep -qs "tapdance/env.sh" "$f"; then
@@ -564,6 +569,8 @@ if (( ! SKIP_PREREQ )); then
   (( ! XCODE_MISSING || CHECK )) || die "--ios-only needs Xcode first"
   if (( ${#MISSING[@]} == 0 )); then
     say "prerequisites: all present"
+    # Idempotent; also brings a host set up by an older script up to date (e.g. ~/.zshenv on macOS).
+    (( CHECK )) || write_env_file
   else
     say "missing:"
     for m in "${MISSING[@]}"; do say "  - $(describe "$m")"; done
