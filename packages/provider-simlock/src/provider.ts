@@ -278,6 +278,17 @@ export class SimlockProvider implements DeviceProvider {
           checks.push({ id: "simlock.capacity.ios", title: "iOS simulators available", status: "skip", detail: `not on this host: it runs ${status.host?.os}, and iOS simulators need a Mac` });
           continue;
         }
+        if (limit > 0 && offered && !offered.has(platform) && status.host?.tools !== undefined && !tool && [...offered].some((p) => p !== platform)) {
+          // A host set up for the other platform only (an iOS-only Mac with no Android SDK): not a fault.
+          checks.push({
+            id: `simlock.capacity.${platform}`,
+            title: `${platform === "ios" ? "iOS simulators" : "Android emulators"} available`,
+            status: "warn",
+            detail: `not on this host: it has no ${platform === "ios" ? "Xcode" : "Android SDK"} and serves ${[...offered].join(", ")} only`,
+            fix: notInstalledFix(platform),
+          });
+          continue;
+        }
         if (limit > 0 && offered && !offered.has(platform)) {
           checks.push({
             id: `simlock.capacity.${platform}`,
@@ -408,6 +419,12 @@ export class SimlockProvider implements DeviceProvider {
       if (iosNeedsMac(c.platform, status.host?.os)) notes.push(`No ios here: this host runs ${status.host?.os}, and iOS simulators need a Mac host.`);
       else if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
       else if (!entries.some((e) => e.platform === c.platform && (e.models.length > 0 || e.osVersions.length > 0))) {
+        const servesOther = entries.some((e) => e.platform !== c.platform && (e.models.length > 0 || e.osVersions.length > 0));
+        const hasTool = status.host?.tools?.some((t) => t.platform === c.platform) ?? true;
+        if (servesOther && !hasTool) {
+          notes.push(`No ${c.platform} on this host: it has no ${c.platform === "ios" ? "Xcode" : "Android SDK"}.`);
+          continue;
+        }
         notes.push(`${c.platform} is not available right now: the worker offers no ${c.platform} device, so leases are refused. ${notOfferedFix(c.platform)}`);
       }
     }
@@ -2271,6 +2288,12 @@ export function iosNeedsMac(platform: string, hostOs: string | undefined): boole
 }
 
 /** What the worker's owner can do when a platform has capacity but no device on offer. */
+function notInstalledFix(platform: Platform): string {
+  return platform === "android"
+    ? "Only if this host should run Android too: on it, run scripts/host-setup.sh without --ios-only (Android SDK, emulator, system image), then `tapdance worker restart`."
+    : "iOS needs a Mac with Xcode and a simulator runtime (`tapdance worker check` on it).";
+}
+
 function notOfferedFix(platform: Platform): string {
   return platform === "android"
     ? "On the worker machine: `tapdance worker restart` (it also stops a stray adb server on Simlock's port), then check `tapdance simlock -- --local daemon logs` for \"Skipped Android driver\"; install an image with `tapdance devices install android 34`."
