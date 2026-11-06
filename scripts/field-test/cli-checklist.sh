@@ -167,17 +167,31 @@ suite_base() {
   critical=1 step lease - "${lease_cmd[@]}"
   step status - td device status
   step key_home - td ui key home
-  step inspect - td ui inspect
+  # iOS: agent-device reads the session's app; the Home Screen is SpringBoard.
+  if ios; then step inspect - td ui inspect --app com.apple.springboard; else step inspect - td ui inspect; fi
   step screenshot - td screenshot -o "$out/launcher.png" --note "launcher, CLI field test"
   step swipe_up - td ui swipe --direction up
   step key_home2 - td ui key home
-  step tap_launcher_app LAUNCHER_TAP td ui tap --text "$(p LAUNCHER_TAP)"
+  if ios; then
+    step inspect_home2 - td ui inspect --app com.apple.springboard
+    step tap_launcher_app - td ui tap --text "${FIELD_TEST_LAUNCHER_TAP:-Settings}"
+  else
+    step tap_launcher_app LAUNCHER_TAP td ui tap --text "$(p LAUNCHER_TAP)"
+  fi
   step wait_stable - td ui wait --stable --timeout 15000
   if ios; then step key_home3 - td ui key home; else step key_back - td ui key back; fi
   step rotate_landscape - td device setting orientation landscape
   step rotate_portrait - td device setting orientation portrait
-  step notification_post - td device notifications post --title "Tapdance field test" --text "posted from the CLI"
-  step notification_list - td device notifications list
+  if ios; then
+    # The iOS simulator has no notification list: post to an app, open the Notification Center, read it.
+    step notification_post - td device notifications post --app com.apple.Preferences --title "Tapdance field test" --text "posted from the CLI"
+    step notification_open - td device notifications open
+    step notification_read - td ui inspect --app com.apple.springboard
+    step notification_close - td device notifications close
+  else
+    step notification_post - td device notifications post --title "Tapdance field test" --text "posted from the CLI"
+    step notification_list - td device notifications list
+  fi
   step record_start - td record start -o "$out/launcher.mp4"
   step swipe_left - td ui swipe --direction left
   step record_stop - td record stop
@@ -190,7 +204,7 @@ suite_base() {
     step push_downloads - td device push "$out/push.txt" --to downloads
   fi
   step logs - td logs -n 50
-  step audit - td ui audit
+  if ios; then step audit - td ui audit --app com.apple.Preferences; else step audit - td ui audit; fi
   step links - td device links
   step artifacts - td artifacts
   always=1 step release - td device release

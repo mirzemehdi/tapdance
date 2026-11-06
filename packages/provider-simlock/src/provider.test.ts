@@ -269,6 +269,11 @@ describe("error mapping", () => {
     const unknown = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: unknown model \"Pixel 99\"" }, "lease");
     expect(unknown).toMatchObject({ code: "DEVICE_UNAVAILABLE", hint: expect.stringMatching(/list_devices/) });
     expect(fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: image tags are Android only" }, "lease").code).toBe("USAGE");
+    // Simlock's INTERNAL (simctl timed out on an overloaded 8 GB Mac) is the host's fault, not the request's.
+    const internal = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: Internal error" }, "lease");
+    expect(internal.code).toBe("PROVIDER_UNAVAILABLE");
+    expect(internal.retryable).toBe(true);
+    expect(internal.hint).toContain("host warm ios=0");
   });
 
   it("keeps an app that is not installed apart from a missing element", () => {

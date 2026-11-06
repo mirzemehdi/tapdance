@@ -38,6 +38,8 @@ const LEASE_GONE_REASONS = new Set(["LEASE_ENDED_BY_HOST", "LEASE_NOT_FOUND", "L
 const SCOPE_REFUSED = /LEASE_SCOPE_MISMATCH|LEASE_SCOPE_REQUIRED|outside this tenant/i;
 const STALE_REF = /ref_generation_mismatch|ref_frame_expired|superseded snapshot generation|expired ref frame/i;
 const STALE_REF_HINT = "The screen changed since that inspect_screen; inspect again and use the new ref.";
+const HOST_INTERNAL_HINT =
+  "The host failed while starting a device (often an overloaded host: an 8 GB Mac running a simulator and a warm spare). Run it again in a minute; if it keeps failing, the host's owner can check `tapdance doctor` and memory there, and on a small Mac keep no warm spare: `tapdance host warm ios=0`.";
 const NO_CAPACITY_HINT = "No device of that platform can run on any worker right now; call list_devices to see capacity, or ask the user to start a worker.";
 const UNKNOWN_DEVICE_HINT = "Call list_devices and pass one of the listed models / OS versions.";
 /** agent-device's refusal when a device is still claimed by a session whose daemon has gone. */
@@ -194,6 +196,12 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     } else if (/unknown model|no such model|runtime|not installed/i.test(inner)) {
       code = "DEVICE_UNAVAILABLE";
       hint = UNKNOWN_DEVICE_HINT;
+    } else if (/internal error/i.test(inner)) {
+      // The host failed while preparing a device, not the request. Seen on an 8 GB Mac with a leased
+      // simulator and a warm spare: `simctl list` timed out under memory pressure.
+      code = "PROVIDER_UNAVAILABLE";
+      retryable = true;
+      hint = HOST_INTERNAL_HINT;
     } else code = "USAGE";
   } else if (OWNED_BY.test(message) && DEAD_OWNER.test(`${message} ${extractHint(e.details) ?? ""}`)) {
     code = "DEVICE_UNAVAILABLE";
