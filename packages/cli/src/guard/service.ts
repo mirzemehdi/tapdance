@@ -61,6 +61,8 @@ export function guardServiceEnvironment(env: NodeJS.ProcessEnv, node: string, an
     // Builds (`allow.builds`) run git, gh, xcodebuild and Gradle: the usual install places for them.
     ...(java ? [join(java, "bin")] : []),
     "/opt/homebrew/bin",
+    // MacPorts (preinstalled on Scaleway's Mac minis): git, gh or tailscale may live there.
+    "/opt/local/bin",
     "/usr/local/bin",
     "/usr/bin",
     "/bin",

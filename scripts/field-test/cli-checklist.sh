@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Field-test driver for the Tapdance CLI: runs a fixed checklist of `tapdance` commands against the
 # host this machine is connected to, timing each step, and writes a PASS/FAIL table, results.tsv and
-# results.json. Dev tooling for field tests (docs/testing/field-test-cloud-android.md); not shipped.
+# results.json. Dev tooling for field tests (docs/testing/field-test-cloud-android.md,
+# docs/testing/field-test-rented-mac-ios.md); not shipped.
 #
 # Usage:
 #   scripts/field-test/cli-checklist.sh <base|app|build> <out-dir> [--param KEY=VALUE ...]
@@ -16,6 +17,11 @@
 #          build is debuggable: push to and pull from its sandbox and compare).
 #   build  a build on the host: app build --git BUILD_REPO --ref BUILD_REF [--dir BUILD_DIR] --launch
 #          APP_ID, then inspect, screenshot, release. The host must allow-list the repository.
+# Platform: PLATFORM=android (default) or ios; DEVICE and OS pick the model and version to lease (e.g.
+# DEVICE="iPhone 16" OS=26.1). On iOS: base adds a system alert read, the language setting and crash
+# reports, pushes to the Files app instead of Downloads and skips Android's Back key; app installs APP (a
+# simulator .app, or a .zip holding one) and runs the app once in German (LANGUAGE, default de-DE);
+# build passes BUILD_SCHEME / BUILD_PROJECT instead of BUILD_DIR. Installs from CI are Android only.
 # Parameters come from --param KEY=VALUE or the environment as FIELD_TEST_KEY. A step whose parameter
 # is not set is SKIPPED, not failed.
 #
@@ -145,10 +151,20 @@ p() { local name="FIELD_TEST_$1"; printf '%s' "${!name:-}"; }
 
 # ------------------------------------------------------------------ suites
 
+platform="$(p PLATFORM)"
+platform="${platform:-android}"
+[[ "$platform" == android || "$platform" == ios ]] || die "PLATFORM is android or ios, got '$platform'"
+ios() { [[ "$platform" == ios ]]; }
+lease_cmd=(td device lease --platform "$platform")
+[[ -n "$(p DEVICE)" ]] && lease_cmd+=(--device "$(p DEVICE)")
+[[ -n "$(p OS)" ]] && lease_cmd+=(--os "$(p OS)")
+language="$(p LANGUAGE)"
+language="${language:-de-DE}"
+
 suite_base() {
   step doctor - td doctor
   step devices - td devices
-  critical=1 step lease - td device lease --platform android
+  critical=1 step lease - "${lease_cmd[@]}"
   step status - td device status
   step key_home - td ui key home
   step inspect - td ui inspect
@@ -157,7 +173,7 @@ suite_base() {
   step key_home2 - td ui key home
   step tap_launcher_app LAUNCHER_TAP td ui tap --text "$(p LAUNCHER_TAP)"
   step wait_stable - td ui wait --stable --timeout 15000
-  step key_back - td ui key back
+  if ios; then step key_home3 - td ui key home; else step key_back - td ui key back; fi
   step rotate_landscape - td device setting orientation landscape
   step rotate_portrait - td device setting orientation portrait
   step notification_post - td device notifications post --title "Tapdance field test" --text "posted from the CLI"
@@ -165,7 +181,14 @@ suite_base() {
   step record_start - td record start -o "$out/launcher.mp4"
   step swipe_left - td ui swipe --direction left
   step record_stop - td record stop
-  step push_downloads - td device push "$out/push.txt" --to downloads
+  if ios; then
+    step push_files - td device push "$out/push.txt" --to files
+    step alert_get - td ui alert get
+    step language_read - td device setting language
+    step crashes - td device crashes
+  else
+    step push_downloads - td device push "$out/push.txt" --to downloads
+  fi
   step logs - td logs -n 50
   step audit - td ui audit
   step links - td device links
@@ -176,16 +199,21 @@ suite_base() {
 pull_matches() { cmp -s "$out/push.txt" "$out/pulled.txt"; }
 
 suite_app() {
-  critical=1 step lease - td device lease --platform android
-  local ci=(td app install --from-ci "$(p CI_REPO)" --artifact "$(p CI_ARTIFACT)")
-  [[ -n "$(p CI_BRANCH)" ]] && ci+=(--branch "$(p CI_BRANCH)")
-  step install_from_ci CI_REPO,CI_ARTIFACT "${ci[@]}"
-  step install_apk APK td app install "$(p APK)"
+  critical=1 step lease - "${lease_cmd[@]}"
+  if ! ios; then
+    local ci=(td app install --from-ci "$(p CI_REPO)" --artifact "$(p CI_ARTIFACT)")
+    [[ -n "$(p CI_BRANCH)" ]] && ci+=(--branch "$(p CI_BRANCH)")
+    step install_from_ci CI_REPO,CI_ARTIFACT "${ci[@]}"
+    step install_apk APK td app install "$(p APK)"
+  else
+    step install_app APP td app install "$(p APP)"
+  fi
   critical=1 step launch APP_ID td app launch "$(p APP_ID)"
+  ios && step launch_console APP_ID td app launch "$(p APP_ID)" --console
   step inspect - td ui inspect
   step screenshot - td screenshot -o "$out/app.png" --note "app after launch"
   step tap_text TAP_TEXT td ui tap --text "$(p TAP_TEXT)"
-  step back TAP_TEXT td ui key back
+  ios || step back TAP_TEXT td ui key back
   step type_into_field TYPE_INTO td ui type "Tapdance Für Elise" --text "$(p TYPE_INTO)"
   step swipe_up - td ui swipe --direction up
   step sequence SEQUENCE_FILE td ui sequence "$(p SEQUENCE_FILE)"
@@ -194,11 +222,25 @@ suite_app() {
   step record_stop - td record stop
   step logs_app APP_ID td logs --app "$(p APP_ID)" -n 40
   step logs_crash - td logs --crash -n 40
-  step push_sandbox DEBUGGABLE td device push "$out/push.txt" --to app_sandbox --app "$(p APP_ID)" --name field-test.txt
-  step pull_sandbox DEBUGGABLE td device pull --app "$(p APP_ID)" --path files/field-test.txt -o "$out/pulled.txt"
-  step pull_matches_push DEBUGGABLE pull_matches
-  step push_downloads - td device push "$out/push.txt" --to downloads
+  if ios; then
+    step alert_get - td ui alert get
+    step crashes_app APP_ID td device crashes --app "$(p APP_ID)"
+    step push_documents APP_ID td device push "$out/push.txt" --to documents --app "$(p APP_ID)" --name field-test.txt
+    step push_files - td device push "$out/push.txt" --to files
+    step language_set - td device setting language "$language"
+    step launch_in_locale APP_ID td app launch "$(p APP_ID)" --locale "$language"
+    step screenshot_language - td screenshot -o "$out/app-$language.png" --note "app in $language"
+    step language_reset - td device setting language en-US
+  else
+    step push_sandbox DEBUGGABLE td device push "$out/push.txt" --to app_sandbox --app "$(p APP_ID)" --name field-test.txt
+    step pull_sandbox DEBUGGABLE td device pull --app "$(p APP_ID)" --path files/field-test.txt -o "$out/pulled.txt"
+    step pull_matches_push DEBUGGABLE pull_matches
+    step push_downloads - td device push "$out/push.txt" --to downloads
+  fi
+  step rotate_landscape - td device setting orientation landscape
+  step rotate_portrait - td device setting orientation portrait
   step audit - td ui audit
+  step links - td device links
   step app_list - td app list
   step kill APP_ID td app kill "$(p APP_ID)"
   step clear APP_ID td app clear "$(p APP_ID)"
@@ -209,18 +251,21 @@ suite_app() {
 }
 
 suite_build() {
-  critical=1 step lease - td device lease --platform android
+  critical=1 step lease - "${lease_cmd[@]}"
   local build=(td app build --git "$(p BUILD_REPO)" --ref "$(p BUILD_REF)" --launch "$(p APP_ID)")
   [[ -n "$(p BUILD_DIR)" ]] && build+=(--dir "$(p BUILD_DIR)")
+  [[ -n "$(p BUILD_PROJECT)" ]] && build+=(--project "$(p BUILD_PROJECT)")
+  [[ -n "$(p BUILD_SCHEME)" ]] && build+=(--scheme "$(p BUILD_SCHEME)")
   step build BUILD_REPO,BUILD_REF,APP_ID "${build[@]}"
   step inspect - td ui inspect
   step screenshot - td screenshot -o "$out/build.png" --note "built on the host"
+  step build_reused BUILD_REPO,BUILD_REF,APP_ID "${build[@]}"
   always=1 step release - td device release
 }
 
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 t_start="$(now_ms)"
-echo "Tapdance CLI field test, suite $suite, session $TAPDANCE_SESSION_ID, TAPDANCE_HOME $TAPDANCE_HOME"
+echo "Tapdance CLI field test, suite $suite ($platform), session $TAPDANCE_SESSION_ID, TAPDANCE_HOME $TAPDANCE_HOME"
 "suite_$suite"
 t_end="$(now_ms)"
 

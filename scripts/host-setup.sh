@@ -5,8 +5,9 @@
 #
 # 1. Checks the prerequisites: Node.js 22.13+, git, a JDK 17+, the Android SDK (command-line tools,
 #    platform-tools, emulator, the google_apis system image; --play-store for the Google Play image),
-#    Tailscale, and on Linux KVM access and the emulator's system libraries. Xcode is optional (iOS); it
-#    cannot be installed from a script.
+#    Tailscale, and on Linux KVM access and the emulator's system libraries. On macOS with Xcode: its
+#    licence, its first-launch setup and (with --ios-only) an iOS simulator runtime. Xcode itself is
+#    not installed by the script (the App Store, or `xcodes` with your Apple ID; docs/ios/).
 # 2. Lists what is missing and asks once (or --yes). Then installs from the official sources, each
 #    download checked against the checksum its publisher lists:
 #      Node.js   nodejs.org tarball (SHASUMS256)            -> ~/.local/share/tapdance/node
@@ -19,9 +20,15 @@
 #                off with Google's documented setting, a `--no-metrics` line in ~/.androidrc.
 #      gh        only with --with-gh: the GitHub CLI (system package, sudo; Homebrew on macOS), which
 #                installs from CI (`tapdance host artifacts`) and builds with `--git-auth gh` need.
-#      Tailscale macOS: `brew install --cask tailscale` when Homebrew is there (you log in in the app);
-#                Linux: tailscale.com's installer, then `sudo tailscale up --operator=$USER`, which
-#                prints a login link (asked first), so the guard can be served without root.
+#      Tailscale macOS: the open-source tailscaled as a system daemon (MacPorts `port install tailscale`
+#                and `port load tailscale`, or Homebrew's `tailscale` formula and `tailscaled
+#                install-system-daemon`; sudo), which runs at boot with nobody logged in, unlike the
+#                Tailscale app. Linux: tailscale.com's installer. Then `sudo tailscale up
+#                --operator=$USER`, which prints a login link (asked first), so the guard can be served
+#                without root.
+#      Xcode     macOS: `sudo xcodebuild -license accept` and `sudo xcodebuild -runFirstLaunch` when they
+#                are not done; with --ios-only, `xcodebuild -downloadPlatform iOS` when no iOS runtime is
+#                installed (about 8 GB).
 #    Only system packages (Linux: git, unzip and the emulator's libraries, named in the list, in one
 #    package-manager call; Tailscale), the kvm group and, on a Linux cloud VM, a sudoers rule that
 #    allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle) use sudo, and
@@ -48,6 +55,9 @@
 #   --with-gh            also install the GitHub CLI (gh) for installs from CI and builds with --git-auth gh
 #   --sdk-packages LIST  also install these SDK packages, comma-separated, e.g. "cmake;3.31.6" (host
 #                        builds need the app's own packages; quote the list, `;` is special in a shell)
+#   --ios-only           macOS: host iOS simulators only. Skips the Android SDK, emulator and system
+#                        image; installs an iOS runtime when none is there. The JDK is still installed:
+#                        Kotlin Multiplatform apps run Gradle inside their Xcode build
 #
 # Settings: TAPDANCE_REPO (git URL; an SSH URL works for a private repository), TAPDANCE_REF (main),
 # TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis; --play-store sets
@@ -69,7 +79,7 @@ TAG="${ANDROID_TAG:-google_apis}"
 die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
 
-YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; EXTRA_SDK=(); PASS=()
+YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; IOS_ONLY=0; EXTRA_SDK=(); PASS=()
 add_sdk_packages() {
   local p; local IFS=', '
   for p in $1; do
@@ -88,6 +98,7 @@ while (( $# )); do
     --no-system-image) NO_IMAGE=1 ;;
     --play-store) TAG=google_apis_playstore ;;
     --with-gh) WITH_GH=1 ;;
+    --ios-only) IOS_ONLY=1 ;;
     --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
     --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
     *) PASS+=("$1") ;;
@@ -101,6 +112,7 @@ case "$OS" in
   *) die "this script runs on macOS or Linux. On Windows run scripts/host-setup.ps1 for your options." ;;
 esac
 [[ ${EUID:-$(id -u)} -ne 0 ]] || die "run it as the user that will own the worker, not as root."
+(( ! IOS_ONLY )) || [[ "$OS" == Darwin ]] || die "--ios-only is for macOS: iOS simulators need a Mac with Xcode."
 case "$(uname -m)" in
   arm64|aarch64) ARCH=arm64 ;;
   x86_64|amd64) ARCH=x64 ;;
@@ -180,9 +192,20 @@ emulator_libs_ok() {
 }
 tailscale_bin() {
   command -v tailscale 2>/dev/null && return
-  [[ -x /Applications/Tailscale.app/Contents/MacOS/Tailscale ]] && echo /Applications/Tailscale.app/Contents/MacOS/Tailscale && return
+  local b
+  for b in /opt/local/bin/tailscale /opt/homebrew/bin/tailscale /usr/local/bin/tailscale /Applications/Tailscale.app/Contents/MacOS/Tailscale; do
+    [[ -x "$b" ]] && { echo "$b"; return; }
+  done
   return 1
 }
+# The Tailscale app (GUI, logs in in its window) rather than the open-source tailscaled daemon.
+tailscale_is_app() { [[ "$(tailscale_bin)" == /Applications/* ]]; }
+
+# macOS: Xcode is there (xcode-select points into an Xcode.app, not only the Command Line Tools).
+xcode_present() { [[ "$OS" == Darwin ]] && [[ "$(xcode-select -p 2>/dev/null)" == *.app/Contents/Developer ]]; }
+xcode_license_ok() { xcodebuild -license check >/dev/null 2>&1; }
+xcode_first_launch_ok() { xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; }
+ios_runtime_ok() { xcrun simctl list runtimes 2>/dev/null | grep -q '^iOS '; }
 
 # A Linux cloud VM, from the DMI strings (Google Cloud names itself "Google"; the rest are common clouds).
 cloud_vm() {
@@ -193,32 +216,42 @@ cloud_vm() {
 # The guard's cost guard powers an idle cloud VM off with `sudo -n /usr/bin/systemctl poweroff`.
 poweroff_rule_ok() { sudo -n -l /usr/bin/systemctl poweroff >/dev/null 2>&1; }
 
-MISSING=(); SUDO_STEPS=(); NOTES=()
+MISSING=(); SUDO_STEPS=(); NOTES=(); XCODE_MISSING=0
 check_all() {
-  MISSING=(); SUDO_STEPS=(); NOTES=()
+  MISSING=(); SUDO_STEPS=(); NOTES=(); XCODE_MISSING=0
   node_ok || MISSING+=("node")
   if ! command -v git >/dev/null 2>&1; then
     if [[ "$OS" == Darwin ]]; then NOTES+=("git: run \`xcode-select --install\` (Apple's Command Line Tools), then this script again"); else MISSING+=("git"); SUDO_STEPS+=("git"); fi
   fi
   if [[ "$OS" == Linux ]] && ! command -v unzip >/dev/null 2>&1; then MISSING+=("unzip"); SUDO_STEPS+=("unzip"); fi
   jdk_ok || MISSING+=("jdk")
-  cmdline_ok || MISSING+=("android-cmdline-tools")
-  pkg_ok platform-tools || MISSING+=("platform-tools")
-  # Without KVM no emulator can run on Linux: skip the emulator and its ~1.5 GB image.
-  local no_kvm=0
-  [[ "$OS" == Linux && ! -e /dev/kvm ]] && no_kvm=1
-  if (( ! no_kvm )); then
-    pkg_ok emulator || MISSING+=("emulator")
-    emulator_libs_ok || { MISSING+=("emulator-libs"); SUDO_STEPS+=("emulator-libs"); }
-    (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
+  if (( ! IOS_ONLY )); then
+    cmdline_ok || MISSING+=("android-cmdline-tools")
+    pkg_ok platform-tools || MISSING+=("platform-tools")
+    # Without KVM no emulator can run on Linux: skip the emulator and its ~1.5 GB image.
+    local no_kvm=0
+    [[ "$OS" == Linux && ! -e /dev/kvm ]] && no_kvm=1
+    if (( ! no_kvm )); then
+      pkg_ok emulator || MISSING+=("emulator")
+      emulator_libs_ok || { MISSING+=("emulator-libs"); SUDO_STEPS+=("emulator-libs"); }
+      (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
+    fi
+    local p; for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || MISSING+=("sdk:$p"); done
   fi
-  local p; for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || MISSING+=("sdk:$p"); done
-  tailscale_bin >/dev/null || { MISSING+=("tailscale"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("tailscale"); }
+  if xcode_present; then
+    xcode_license_ok || { MISSING+=("xcode-license"); SUDO_STEPS+=("xcode-license"); }
+    xcode_first_launch_ok || { MISSING+=("xcode-first-launch"); SUDO_STEPS+=("xcode-first-launch"); }
+    if ! ios_runtime_ok; then
+      if (( IOS_ONLY )); then MISSING+=("ios-runtime")
+      else NOTES+=("no iOS simulator runtime is installed, so this Mac cannot host iOS yet: run this script with --ios-only, or \`xcodebuild -downloadPlatform iOS\` (about 8 GB)"); fi
+    fi
+  fi
+  tailscale_bin >/dev/null || { MISSING+=("tailscale"); SUDO_STEPS+=("tailscale"); }
   if ! command -v gh >/dev/null 2>&1; then
     if (( WITH_GH )); then MISSING+=("gh"); [[ "$OS" == Linux ]] && SUDO_STEPS+=("gh")
     else NOTES+=("gh (GitHub CLI) is not installed: installs from CI (tapdance host artifacts) and builds with --git-auth gh need it. Run this script again with --with-gh, or install it yourself"); fi
   fi
-  (( ${#EXTRA_SDK[@]} )) || NOTES+=("builds on this host (tapdance host builds) also need the app's own SDK packages (for example cmake;3.31.6 for native code), or Gradle may stop on a missing one: add them with --sdk-packages \"cmake;3.31.6\"")
+  (( ${#EXTRA_SDK[@]} || IOS_ONLY )) || NOTES+=("builds on this host (tapdance host builds) also need the app's own SDK packages (for example cmake;3.31.6 for native code), or Gradle may stop on a missing one: add them with --sdk-packages \"cmake;3.31.6\"")
   if [[ "$OS" == Linux ]]; then
     if [[ ! -e /dev/kvm ]]; then
       NOTES+=("KVM: /dev/kvm is missing, so Android emulators cannot run here (a cloud VM without nested virtualization, or virtualization off in the BIOS); the emulator and system image are skipped. This machine can still be a control machine: tapdance connect <host endpoint> < pairing-<label>.token")
@@ -229,8 +262,9 @@ check_all() {
       MISSING+=("poweroff-rule"); SUDO_STEPS+=("poweroff-rule")
     fi
   fi
-  if [[ "$OS" == Darwin ]] && ! xcrun simctl help >/dev/null 2>&1; then
-    NOTES+=("Xcode (optional, for iOS simulators): install it from the App Store; Android works without it")
+  if [[ "$OS" == Darwin ]] && ! xcode_present; then
+    if (( IOS_ONLY )); then XCODE_MISSING=1
+    else NOTES+=("Xcode (optional, for iOS simulators): install it from the App Store, or with xcodes on a Mac you reach over ssh (docs/ios/scaleway-mac.md); Android works without it"); fi
   fi
 }
 
@@ -244,7 +278,10 @@ describe() {
     platform-tools) echo "Android platform-tools (sdkmanager; accepts the Android SDK licenses)" ;;
     emulator) echo "Android emulator (sdkmanager)" ;;
     system-image) echo "Android system image $IMAGE (sdkmanager, about 1.5 GB)" ;;
-    tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale (Homebrew cask; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
+    tailscale) [[ "$OS" == Darwin ]] && echo "Tailscale: the open-source tailscaled as a system daemon that runs with nobody logged in ($(mac_tailscale_source); sudo; you log in afterwards)" || echo "Tailscale (tailscale.com installer, sudo; you log in afterwards)" ;;
+    xcode-license) echo "accept the Xcode licence (sudo xcodebuild -license accept)" ;;
+    xcode-first-launch) echo "Xcode's first-launch setup (sudo xcodebuild -runFirstLaunch)" ;;
+    ios-runtime) echo "an iOS simulator runtime (xcodebuild -downloadPlatform iOS, about 8 GB)" ;;
     kvm-group) echo "add $(id -un) to the kvm group (sudo; takes effect at once)" ;;
     emulator-libs) echo "system libraries the Android emulator needs: $(emulator_lib_packages) and what they depend on (system packages, sudo)" ;;
     gh) [[ "$OS" == Darwin ]] && echo "GitHub CLI gh (Homebrew)" || echo "GitHub CLI gh (system package, sudo)" ;;
@@ -413,11 +450,26 @@ install_gh() {
   else NOTES+=("gh: install it with your package manager (https://cli.github.com)"); fi
 }
 
+# macOS: where the open-source tailscaled comes from. The Tailscale app is not used: it runs only while
+# someone is logged in at the screen and asks for VPN approval there, so a Mac reached over ssh would
+# lose its tailnet address after a reboot.
+mac_tailscale_source() {
+  if [[ -x /opt/local/bin/port ]]; then echo "MacPorts: port install tailscale, port load tailscale"
+  elif command -v brew >/dev/null 2>&1; then echo "Homebrew formula tailscale, tailscaled install-system-daemon"
+  else echo "needs MacPorts or Homebrew"; fi
+}
 install_tailscale() {
   if [[ "$OS" == Darwin ]]; then
-    if command -v brew >/dev/null 2>&1; then brew install --cask tailscale
-    else NOTES+=("Tailscale: install it from https://tailscale.com/download/mac (no Homebrew here)"); return 0; fi
-    NOTES+=("Tailscale: open the Tailscale app and log in, then run this script again to expose the guard")
+    if [[ -x /opt/local/bin/port ]]; then
+      sudo /opt/local/bin/port -N install tailscale
+      sudo /opt/local/bin/port load tailscale
+    elif command -v brew >/dev/null 2>&1; then
+      brew install tailscale
+      sudo "$(brew --prefix)/bin/tailscaled" install-system-daemon
+    else
+      NOTES+=("Tailscale: install MacPorts or Homebrew, then run this script again (it installs the open-source tailscaled as a system daemon); the Tailscale app from tailscale.com works too, but only while someone is logged in at the screen")
+      return 0
+    fi
   else
     curl -fsSL https://tailscale.com/install.sh | sh
   fi
@@ -438,11 +490,16 @@ install_poweroff_rule() {
   fi
 }
 
-# Linux: join the tailnet (tailscale up prints a login link to open in any browser) and make this user
-# the operator, since tailscaled lets only root and the operator run `tailscale serve`.
-linux_tailscale() {
-  [[ "$OS" == Linux ]] || return 0
+# Join the tailnet (tailscale up prints a login link to open in any browser) and make this user the
+# operator, since tailscaled lets only root and the operator run `tailscale serve`. Linux, and macOS with
+# the tailscaled daemon; the Tailscale app logs in in its own window.
+tailscale_login() {
+  [[ "$OS" == Linux || "$OS" == Darwin ]] || return 0
   local ts; ts="$(tailscale_bin)" || return 0
+  if tailscale_is_app; then
+    "$ts" status >/dev/null 2>&1 || NOTES+=("Tailscale: open the Tailscale app and log in, then run this script again to expose the guard")
+    return 0
+  fi
   local me; me="$(id -un)"
   if ! "$ts" status >/dev/null 2>&1; then
     if ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
@@ -499,6 +556,8 @@ write_env_file() {
 if (( ! SKIP_PREREQ )); then
   check_all
   for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
+  (( ! XCODE_MISSING )) || say "missing: Xcode. This script does not install it: use the App Store, or xcodes on a Mac you reach over ssh (docs/ios/scaleway-mac.md), then run it again"
+  (( ! XCODE_MISSING || CHECK )) || die "--ios-only needs Xcode first"
   if (( ${#MISSING[@]} == 0 )); then
     say "prerequisites: all present"
   else
@@ -516,6 +575,9 @@ if (( ! SKIP_PREREQ )); then
         android-cmdline-tools) node_ok || install_node; install_cmdline_tools; android_metrics_off ;;
         gh) install_gh ;;
         tailscale) install_tailscale ;;
+        xcode-license) sudo xcodebuild -license accept ;;
+        xcode-first-launch) sudo xcodebuild -runFirstLaunch ;;
+        ios-runtime) say "downloading an iOS simulator runtime (about 8 GB)"; xcodebuild -downloadPlatform iOS ;;
         kvm-group)
           sudo usermod -aG kvm "$(id -un)"
           # The group applies to new logins only; an ACL lets this login and its running systemd user
@@ -526,14 +588,16 @@ if (( ! SKIP_PREREQ )); then
         poweroff-rule) install_poweroff_rule ;;
       esac
     done
-    SDK_PKGS=()
-    pkg_ok platform-tools || SDK_PKGS+=("platform-tools")
-    pkg_ok emulator || SDK_PKGS+=("emulator")
-    (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
-    for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || SDK_PKGS+=("$p"); done
-    (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
-    # The emulator just installed may still miss a library the package check could not see.
-    emulator_libs_after_install
+    if (( ! IOS_ONLY )); then
+      SDK_PKGS=()
+      pkg_ok platform-tools || SDK_PKGS+=("platform-tools")
+      pkg_ok emulator || SDK_PKGS+=("emulator")
+      (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
+      for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || SDK_PKGS+=("$p"); done
+      (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
+      # The emulator just installed may still miss a library the package check could not see.
+      emulator_libs_after_install
+    fi
     write_env_file
     check_all
     for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
@@ -542,7 +606,7 @@ if (( ! SKIP_PREREQ )); then
   fi
   # --prerequisites-only stops here, so it offers the Tailscale login now. A full run offers it after
   # the Tapdance install: `sudo tailscale up` waits until someone approves the machine.
-  if (( ONLY_PREREQ && ! CHECK )); then linux_tailscale; fi
+  if (( ONLY_PREREQ && ! CHECK )); then tailscale_login; fi
 elif (( CHECK )); then
   die "--check and --skip-prerequisites together check nothing"
 fi
@@ -584,7 +648,7 @@ fi
 
 # Linux: log in to the tailnet now. It blocks until the machine is approved in a browser, so it comes
 # after the install (nothing waits on it) and before host up, the first step that needs Tailscale.
-(( SKIP_PREREQ )) || linux_tailscale
+(( SKIP_PREREQ )) || tailscale_login
 
 if [[ "$OS" == Linux && ! -e /dev/kvm ]]; then
   say "no /dev/kvm: this machine cannot run emulators, so it cannot host devices. Tapdance is installed;"
