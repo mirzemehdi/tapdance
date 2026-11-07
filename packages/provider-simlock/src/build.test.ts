@@ -322,7 +322,7 @@ describe("private repositories: per-repository deploy keys and host build files"
     const { run } = fakeRunner(root, { cloneFails: "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository." });
     const error = (await runBuild({ repo: SSH, ref: "main", platform: "ios" }, settings, root, () => undefined, run).catch((e: unknown) => e)) as Error & { hint?: string; details?: Record<string, unknown> };
     expect(error.message).toMatch(/^git clone failed/);
-    expect(error.hint).toContain("gh auth login --with-token");
+    expect(error.hint).toContain("tapdance host gh-login");
     expect(error.hint).toContain("fine-grained, read-only token");
     expect(error.hint).toContain("tapdance host builds key --repo <url>");
     expect(error.hint).toContain("tapdance app install <path>");

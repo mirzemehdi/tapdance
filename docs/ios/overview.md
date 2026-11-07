@@ -73,7 +73,7 @@ with the `ios.uiBackend` config key.
 | Where Tapdance runs | Anywhere: on the Mac, or on a VPS through a gateway | Only on the Mac that hosts the simulator |
 | Simlock device set | Simlock's own set (default) or Xcode's default set | Must be Xcode's default set: `drivers.ios.deviceSet default` |
 | How to enable | `tapdance worker install` | `tapdance worker install --ios-backend axe`, plus `brew install cameroncooke/axe/axe` |
-| Tested for real | Yes, on one Mac (see below) | No |
+| Tested for real | Yes, on one Mac (see below) | Yes, on one Mac: a custom app's sign-in flow ([evidence](../testing/evidence/2026-11-01-axe.md)) |
 
 Why AXe is limited: AXe drives the simulator through CoreSimulator on the Mac it runs on, so it cannot
 reach a simulator on another machine. It also reads only Xcode's default device set, while Simlock keeps
@@ -88,24 +88,26 @@ has Simlock simulators.
 
 ## What is verified today
 
-[STATUS.md](../../STATUS.md) is the source of truth. As of 2026-11-01:
+[STATUS.md](../../STATUS.md) is the source of truth. As of 2026-11-07:
 
 | Flow | State | Evidence |
 | --- | --- | --- |
 | Local mode on one Mac (MacBook Pro M1 Pro, macOS 26.5, Xcode 26.5, iPhone 16 / iOS 18.5 simulator): lease, launch, inspect, tap, swipe, screenshot, MP4, logs, crash logs, release, through the CLI and MCP over stdio | Verified | [2026-11-01-local-ios.md](../testing/evidence/2026-11-01-local-ios.md) |
 | Browser viewer (`tapdance view`) stream, input and human take-over, on the same Mac | Verified (scripted, and in a real browser through a gateway on the same Mac) | same, and [2026-11-01-gateway-single-host.md](../testing/evidence/2026-11-01-gateway-single-host.md) |
 | `asc` pass-through (`tapdance asc -- ...`) | Verified for read-only commands | same |
-| Installing a custom simulator `.app` (`examples/ios-demo`) in local mode | Verified locally; not yet run through a gateway | STATUS F-01 |
+| Installing a custom simulator `.app` (`examples/ios-demo`) in local mode | Verified locally, and a 47 MB `.app` zip from a Linux VPS through the worker guard; not yet run through a gateway | STATUS F-01 |
 | Gateway + joined Mac worker, both on the same Mac (CLI, MCP stdio, viewer) | Verified | [2026-11-01-gateway-single-host.md](../testing/evidence/2026-11-01-gateway-single-host.md) |
-| Agent on another Mac → rented Scaleway Mac mini, device-only mode over Tailscale (CLI and MCP, host build of a private app) | Verified once | [2026-11-06-rented-mac-ios.md](../testing/evidence/2026-11-06-rented-mac-ios.md) |
+| Agent on another Mac → rented Scaleway Mac mini, device-only mode over Tailscale (CLI and MCP, host build of a private app) | Verified | [2026-11-06-rented-mac-ios.md](../testing/evidence/2026-11-06-rented-mac-ios.md) |
 | Linux VPS agent → separate Mac worker | Device-only mode verified: a VPS drove a rented Scaleway Mac mini (CLI and MCP, host build, `.app` upload) ([2026-11-07-vps-rented-mac-ios.md](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)); gateway mode **not tested** | STATUS Q-08 |
-| AXe backend | **Not tested** (written and unit-tested only) | STATUS U-02, Q-09 |
-| Scaleway Mac mini M1-M | Verified once ([guide](scaleway-mac.md)) | STATUS G-05, G-06 |
+| AXe backend | Verified on one Mac (lease, install, launch, inspect, type, tap, `ui wait`, screenshot, MP4) | [2026-11-01-axe.md](../testing/evidence/2026-11-01-axe.md), STATUS U-02, Q-09 |
+| Scaleway Mac mini M1-M | Verified: set up once, driven from a Mac and from a Linux VPS ([guide](scaleway-mac.md)) | STATUS G-05, G-06, Q-08 |
 | MacStadium, AWS EC2 Mac | **Not tested**; these pages are written from provider docs (same steps as Scaleway) | STATUS G-05 |
 | Physical iPhone leases | **Not tested** | STATUS D-06 |
 | Streamable HTTP MCP (`tapdance mcp --http`) | Partly verified (auth, tool list, read calls); full device loop not run | STATUS S-01 |
 
-Treat every two-machine and cloud-Mac procedure in this folder as a careful plan, not a proven recipe.
+The Scaleway page and the device-only route (`host up` → `connect`) have been run. Treat the gateway
+procedures across two machines and the MacStadium and AWS EC2 Mac pages as a careful plan, not a proven
+recipe.
 If you run one, please file what happened with `tapdance report`.
 
 ## Security in one paragraph

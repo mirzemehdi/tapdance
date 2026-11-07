@@ -95,7 +95,8 @@ export function confinePath(path: string, env: NodeJS.ProcessEnv = process.env, 
   try {
     real = realpathSync(resolve(cwd, path));
   } catch {
-    return resolve(cwd, path); // missing files fail later with a clear APP_PATH_INVALID
+    // A missing file fails later with a clear APP_PATH_INVALID, but only one the roots would allow.
+    real = resolve(cwd, path);
   }
   const inside = roots.some((root) => {
     const rel = relative(root, real);

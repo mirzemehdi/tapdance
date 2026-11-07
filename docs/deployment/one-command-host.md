@@ -26,8 +26,9 @@ machine. For a cloud host, follow [Google Cloud N2](google-cloud-n2.md) (Android
 > `scripts/host-setup.sh` and `host up` ran end to end on a fresh Google Cloud N2 VM (Ubuntu 24.04),
 > including the Linux-only steps, and a Mac drove it with `connect`
 > ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). On a fresh rented Mac (Scaleway Mac mini,
-> reached only over ssh): `host-setup.sh --ios-only` and `host up`, driven from a Mac for iOS
-> ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md), [guide](../ios/scaleway-mac.md)). Not yet run:
+> reached only over ssh): `host-setup.sh --ios-only` and `host up`, driven for iOS from a Mac and from a
+> Linux VPS ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md),
+> [VPS](../testing/evidence/2026-11-07-vps-rented-mac-ios.md), [guide](../ios/scaleway-mac.md)). Not yet run:
 > `host pause`, `host resume` and `host down --all` (unit-tested only). See [STATUS.md](../../STATUS.md) (W-07) and
 > please report what you find with `tapdance report`.
 
@@ -60,6 +61,7 @@ Copy the token file to the agent's machine over a private channel (`scp`, your p
 through chat or a repository. `tapdance host token` copies it to the clipboard (`--show` prints it
 once), and `connect` prints the same fingerprint so you can compare. On Linux without a display (a
 server over ssh) `host up` does not offer the clipboard; it names the token file and `host token --show`.
+Over ssh `host token` refuses to copy (the clipboard would be the host's): `scp` the file, or use `--show`.
 
 ### Options
 
@@ -69,7 +71,7 @@ server over ssh) `host up` does not offer the clipboard; it names the token file
 | `--allow-admin-account` | Run the guard from a macOS administrator account. Not recommended; see below. |
 | `--no-tailscale` | Leave `tailscale serve` alone; the endpoint stays on loopback. |
 | `--keep-awake` | macOS: run the guard under `caffeinate -i` (see [Keep the guard running](../security/personal-mac.md#keep-the-guard-running)). |
-| `--tailscale-ssh` | Also turn on [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh) (`tailscale set --ssh`): machines in your tailnet then `ssh <user>@<host>.<tailnet>.ts.net` without copying an ssh key, which helps when the agent's machine is a fresh VPS. The tailnet policy's `ssh` section decides who may connect (the default lets a device's owner in after a browser approval about every 12 hours). Needs the open-source `tailscaled` (Linux, or a Mac set up by `host-setup.sh` without the Tailscale app); a refusal only warns and prints `sudo tailscale set --ssh`. Off again: `sudo tailscale set --ssh=false`. Not yet run on a host. |
+| `--tailscale-ssh` | Also turn on [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh) (`tailscale set --ssh`): machines in your tailnet then `ssh <user>@<host>.<tailnet>.ts.net` without copying an ssh key, which helps when the agent's machine is a fresh VPS. The tailnet policy's `ssh` section decides who may connect (the default lets a device's owner in after a browser approval about every 12 hours). A shell over Tailscale SSH is outside the worker guard: whatever runs on a machine the policy lets in, the agent's own machine included, can act as the hosting account. `host up` warns about this; limit the `ssh` rule's `src` to your own devices (not the agent's machine) and its `users` to the hosting account (no root). Needs the open-source `tailscaled` (Linux, or a Mac set up by `host-setup.sh` without the Tailscale app); a refusal only warns and prints `sudo tailscale set --ssh`. Off again: `sudo tailscale set --ssh=false`. Not yet run on a host. |
 | `--repair` | Revoke the pairing with this label and issue a new token. |
 | `--skip-self-test` | Do not lease a device at the end. |
 | `--idle-stop <minutes\|off>` | Linux cloud VMs: power the machine off after this many minutes with no lease, guard request or build. 30 by default on a detected cloud VM, off elsewhere; refused on macOS. Needs a sudoers rule for `systemctl poweroff`, which `host up` prints when it is missing. See [cost guardrails](google-cloud-n2.md#cost-guardrails). On a short-lived test VM that Terraform deletes at a time limit, pass `off`: an idle poweroff would stop the VM instead and leave its disk billing ([field test](../testing/field-test-cloud-android.md)). |
@@ -326,16 +328,19 @@ The script (`set -euo pipefail`):
      line before the question, and installed in the same apt step as git and unzip. Once the emulator
      is installed, `emulator -version` is the check; if it still fails for a library, the script names
      the packages and asks again before using `sudo`.
-   - **User manager:** when your account cannot linger (Google Cloud OS Login), it installs
-     `tapdance-user-manager.service`, a system unit that starts your systemd user manager at boot.
+   - **User manager:** it asks before `sudo loginctl enable-linger $USER`; when your account cannot
+     linger (Google Cloud OS Login), it asks before installing `tapdance-user-manager.service`, a system
+     unit that starts your systemd user manager at boot. `--yes` answers yes; with no terminal and no
+     `--yes` the step is skipped with a note, and the worker and guard stop when you log out.
 4. **Installs Tapdance from source** if the `tapdance` command is missing: clones to `~/tapdance`
-   (`TAPDANCE_SOURCE_DIR`, `TAPDANCE_REPO`, `TAPDANCE_REF`), puts Corepack's `pnpm` shim in
-   `~/.local/bin` (no sudo), builds, and links `~/.local/bin/tapdance`.
+   (`TAPDANCE_SOURCE_DIR`, `TAPDANCE_REPO`, `TAPDANCE_REF`), puts a `pnpm` in `~/.local/bin` (no sudo:
+   Corepack's shim, or on a Node.js without Corepack (25 and later) the pnpm version `package.json` pins,
+   installed with npm), builds, and links `~/.local/bin/tapdance`.
 5. **On Linux, logs in to Tailscale:** after asking, it runs `sudo tailscale up --operator=$USER`,
    which prints a login link to open in any browser and waits until you approve the machine; it comes
    after the install, so nothing else waits on it (with `--prerequisites-only`, before it stops). Being
    the operator lets your user run `tailscale serve`, which `host up` needs. If the machine is already
-   logged in, it only runs `sudo tailscale set --operator=$USER`.
+   logged in, it asks before `sudo tailscale set --operator=$USER`.
 6. **Runs `tapdance host up`** with your other arguments. On Linux `host up` then turns on linger and,
    with no display, headless emulators (see the table above).
 
@@ -378,7 +383,7 @@ the script again. Details in [troubleshooting](../troubleshooting.md#linux-and-c
 | Symptom | Cause | Handled by |
 | --- | --- | --- |
 | `host up` step 3: "Failed to connect to bus: No medium found" | No systemd user manager in a non-interactive SSH session | `host up`: linger, then waits for the user manager's bus |
-| "Could not enable linger: No such file or directory" | A Google Cloud OS Login account | `host-setup.sh`: `tapdance-user-manager.service` |
+| "Could not enable linger: No such file or directory" | A Google Cloud OS Login account | `host-setup.sh`: answer yes to `tapdance-user-manager.service` (or pass `--yes`) |
 | The emulator does not start; "system library libpulse.so.0 is missing" | Ubuntu's cloud image lacks the emulator's libraries | `host-setup.sh` installs them; host check `host.kvm.emulator-libs` |
 | Slow taps, the idle emulator at 130 % CPU or more | `-gpu auto` without a GPU | `swiftshader_indirect` on headless Linux hosts (existing hosts: see troubleshooting) |
 | `doctor` exits 10 against a Linux host | iOS was counted as missing | iOS on a Linux worker is skipped ("needs a Mac") |

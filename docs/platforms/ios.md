@@ -10,7 +10,8 @@ and what is not supported yet. For cloud Macs and longer guides, see the [iOS do
 > installed and driven locally, and the same loop ran through a gateway with the worker on the same Mac
 > ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). A Linux VPS drove a rented Mac
 > mini in device-only mode ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md), Q-08).
-> Not yet tested: a Mac worker joined to a gateway on a Linux VPS, installing a custom app through a gateway, AXe,
+> The AXe backend ran on one Mac ([evidence](../testing/evidence/2026-11-01-axe.md)).
+> Not yet tested: a Mac worker joined to a gateway on a Linux VPS, installing a custom app through a gateway,
 > physical iPhones. See
 > [STATUS.md](../../STATUS.md).
 
@@ -76,11 +77,17 @@ tapdance app launch com.example.MyApp
 
 The app id is the bundle identifier. `.app` must be the bundle directory, not a file.
 
-**From a Linux VPS:** `xcodebuild` needs macOS, and Tapdance cannot yet run build tools on a remote Mac
-worker (E-04). Build the `.app` on a Mac or in CI, copy it to the VPS as an archive that keeps the
-bundle intact (for example `ditto -c -k --keepParent MyApp.app MyApp.zip` on the Mac, then unzip on the
-VPS), and install the unpacked `.app` directory from there. The upload goes through the gateway to the
-Mac worker. Installing a custom `.app` has been run locally only, not through a gateway (F-01).
+**From a Linux VPS:** `xcodebuild` needs macOS, and the agent cannot run build tools of its own on a
+remote Mac (E-04). Two ways instead:
+
+- **Build on the Mac host:** the host's owner allow-lists the repository (`tapdance host builds enable
+  --repo …`), and the agent runs `tapdance app build --git <url>` (MCP `build_app`); the Mac clones,
+  runs `xcodebuild` for the simulator and installs the result on the lease. Ran on a rented Mac mini
+  from a Mac and from a Linux VPS ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)).
+- **Upload a `.app`:** build it on a Mac or in CI, copy it to the VPS as an archive that keeps the bundle
+  intact (for example `ditto -c -k --keepParent MyApp.app MyApp.zip` on the Mac), and `tapdance app
+  install MyApp.zip`. A 47 MB `.app` zip went from a Linux VPS through the worker guard to a rented Mac
+  and was installed (Q-08); installing a custom `.app` through a gateway has not been run (F-01).
 
 ## Driving the UI
 
@@ -98,8 +105,8 @@ tapdance worker install --ios-backend axe
 This sets `ios.uiBackend: "axe"` in your user config and Simlock's `drivers.ios.deviceSet` to
 `default`, because AXe only sees Xcode's default device set. Limits: AXe works only when Tapdance runs
 **on the same Mac** as the simulator (not through a gateway), and it takes text, id, ref or
-coordinates, not agent-device selectors. It is written and unit-tested but **has not run on a real
-Mac** (U-02, Q-09).
+coordinates, not agent-device selectors. It ran on a real Mac with a custom app's sign-in flow
+([evidence](../testing/evidence/2026-11-01-axe.md), U-02, Q-09).
 
 ## Logs
 
@@ -127,7 +134,9 @@ Tapdance with asc 5.17.1.
 - Physical iPhones: `device lease --physical` exists and Simlock can enroll USB iPhones (iOS 17+,
   Developer Mode, trusted, unlocked), and agent-device needs signing settings for its runner on the
   worker. Untested with Tapdance.
-- No reset-on-request or uninstall command; release wipes the simulator.
-- Build tools (`xcodebuild`, `asc`, AXe) run only on the machine where Tapdance runs, not on a remote
-  Mac worker.
+- No reset-on-request command; release wipes the simulator. Apps can be removed and reset with
+  `tapdance app uninstall` / `app clear` (MCP `uninstall_app` / `clear_app_data`).
+- External tools (`asc`, AXe, your own `xcodebuild`) run only on the machine where Tapdance runs, not on
+  a remote Mac worker. Host builds (`app build --git`, MCP `build_app`) are the exception: the Mac
+  builds from a repository its owner allow-listed.
 - iOS Simulator cannot run on Linux, Windows or any VPS.

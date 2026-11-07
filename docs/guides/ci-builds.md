@@ -142,7 +142,9 @@ installs it with `simctl install` and names its bundle id. An `.ipa` or a device
 
 ## iOS
 
-A later phase (a simulator `.app` built on a macOS runner).
+Installs from CI take a simulator `.app` built on a macOS runner (the iOS paragraph under
+[Let the host fetch the artifact](#let-the-host-fetch-the-artifact)). Unit-tested only: not yet run on
+a Mac host (STATUS F-05).
 
 ## The fix-and-retest loop
 

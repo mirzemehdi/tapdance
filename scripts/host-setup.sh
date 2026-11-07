@@ -9,7 +9,8 @@
 #    licence, its first-launch setup and (with --ios-only) an iOS simulator runtime. Xcode itself is
 #    not installed by the script (the App Store, or `xcodes` with your Apple ID; docs/ios/).
 # 2. Lists what is missing and asks once (or --yes). Then installs from the official sources, each
-#    download checked against the checksum its publisher lists:
+#    download checked against the checksum its publisher lists (one exception: Tailscale on Linux,
+#    below):
 #      Node.js   nodejs.org tarball (SHASUMS256)            -> ~/.local/share/tapdance/node
 #      JDK 17    Eclipse Temurin from api.adoptium.net       -> ~/Library/Java/JavaVirtualMachines (macOS)
 #                                                               or ~/.local/share/tapdance/jdk (Linux)
@@ -24,19 +25,27 @@
 #      Tailscale macOS: the open-source tailscaled as a system daemon (MacPorts `port install tailscale`
 #                and `port load tailscale`, or Homebrew's `tailscale` formula and `tailscaled
 #                install-system-daemon`; sudo), which runs at boot with nobody logged in, unlike the
-#                Tailscale app. Linux: tailscale.com's installer. Then `sudo tailscale up
-#                --operator=$USER`, which prints a login link (asked first), so the guard can be served
-#                without root.
+#                Tailscale app. Linux: tailscale.com's install.sh, piped to sh as Tailscale documents:
+#                no checksum to check it against (it adds Tailscale's signed package repository and
+#                installs from it). Then `sudo tailscale up --operator=$USER`, which prints a login link,
+#                or `sudo tailscale set --operator=$USER` when already logged in (each asked first), so
+#                the guard can be served without root.
 #      Xcode     macOS: `sudo xcodebuild -license accept` and `sudo xcodebuild -runFirstLaunch` when they
 #                are not done; with --ios-only, `xcodebuild -downloadPlatform iOS` when no iOS runtime is
 #                installed (about 8 GB).
 #    Only system packages (Linux: git, unzip and the emulator's libraries, named in the list, in one
 #    package-manager call; Tailscale), the kvm group and, on a Linux cloud VM, a sudoers rule that
 #    allows only `systemctl poweroff` (so the guard can stop the VM when it sits idle) use sudo, and
-#    only after you said yes. Everything else goes into your home folder.
-# 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, corepack pnpm,
-#    build, a link in ~/.local/bin). On Linux it then offers the Tailscale login (`sudo tailscale up`
-#    waits until someone approves the machine in a browser, so it comes after the install), and runs
+#    only after you said yes. Asked for separately, when they are needed: the Tailscale login and
+#    operator (above) and, on Linux with KVM, keeping your systemd user manager (the worker and guard)
+#    running without a login: `sudo loginctl enable-linger $USER`, or where logind cannot (Google Cloud
+#    OS Login accounts) a small system unit, /etc/systemd/system/tapdance-user-manager.service, that
+#    starts it at boot. --yes answers yes to these too; with no terminal and no --yes they are skipped
+#    with a note. Everything else goes into your home folder.
+# 3. Installs Tapdance from source if the `tapdance` command is missing (git clone, pnpm from corepack,
+#    or on Node.js 25 and later, which no longer ship corepack, the pnpm version package.json pins from
+#    npm; build, a link in ~/.local/bin). On Linux it then offers the Tailscale login (`sudo tailscale
+#    up` waits until someone approves the machine in a browser, so it comes after the install), and runs
 #    `tapdance host up` with your other arguments.
 #
 # The tools go into ~/.tapdance/env.sh (PATH, ANDROID_HOME, ANDROID_SDK_ROOT, JAVA_HOME). On Linux it is
@@ -47,7 +56,8 @@
 # Its own options (everything else goes to `tapdance host up`, e.g. --tailscale-ssh to also turn on
 # Tailscale SSH so tailnet machines can ssh in without copying a key):
 #   --yes                install without asking (also passed on to host up)
-#   --check              only report what is missing; change nothing
+#   --check              only report what is missing; change nothing. Exits 1 when something (or
+#                        Xcode with --ios-only) is missing, 0 when everything is there
 #   --skip-prerequisites do not check or install prerequisites
 #   --prerequisites-only install the prerequisites, then stop (no Tapdance install, no host up)
 #   --no-system-image    do not install the Android system image (about 1.5 GB)
@@ -120,6 +130,7 @@ case "$OS" in
 esac
 [[ ${EUID:-$(id -u)} -ne 0 ]] || die "run it as the user that will own the worker, not as root."
 (( ! IOS_ONLY )) || [[ "$OS" == Darwin ]] || die "--ios-only is for macOS: iOS simulators need a Mac with Xcode."
+(( ! IOS_ONLY || BUILD_SDK || ${#EXTRA_SDK[@]} == 0 )) || die "--sdk-packages with --ios-only needs --android-build-sdk (the Android SDK the packages go into)"
 case "$(uname -m)" in
   arm64|aarch64) ARCH=arm64 ;;
   x86_64|amd64) ARCH=x64 ;;
@@ -207,14 +218,32 @@ tailscale_bin() {
   done
   return 1
 }
+# Follows a chain of symbolic links (macOS has no `readlink -f` before macOS 12.3, and no realpath
+# before 13): the Tailscale app's "Install CLI" puts a link to the app at /usr/local/bin/tailscale.
+resolve_link() {
+  local p="$1" l n=0
+  while [[ -L "$p" ]] && (( n++ < 40 )); do
+    l="$(readlink "$p")" || break
+    case "$l" in /*) p="$l" ;; *) p="$(dirname "$p")/$l" ;; esac
+  done
+  echo "$p"
+}
 # The Tailscale app (GUI, logs in in its window) rather than the open-source tailscaled daemon.
-tailscale_is_app() { [[ "$(tailscale_bin)" == /Applications/* ]]; }
+tailscale_is_app() {
+  local b r; b="$(tailscale_bin)" || return 1; r="$(resolve_link "$b")"
+  # A relative link leaves a path like /usr/local/bin/../../../Applications/Tailscale.app/...
+  [[ "$r" == /Applications/* || "$r" == */Tailscale.app/* ]]
+}
 
 # macOS: Xcode is there (xcode-select points into an Xcode.app, not only the Command Line Tools).
 xcode_present() { [[ "$OS" == Darwin ]] && [[ "$(xcode-select -p 2>/dev/null)" == *.app/Contents/Developer ]]; }
 xcode_license_ok() { xcodebuild -license check >/dev/null 2>&1; }
 xcode_first_launch_ok() { xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1; }
-ios_runtime_ok() { xcrun simctl list runtimes 2>/dev/null | grep -q '^iOS '; }
+# Captured first: with pipefail, `grep -q` closing the pipe early could fail the check (SIGPIPE).
+ios_runtime_ok() { local out; out="$(xcrun simctl list runtimes 2>/dev/null || true)"; grep -q '^iOS ' <<<"$out"; }
+
+# Linux without /dev/kvm: no emulator can run, so the emulator and its ~1.5 GB image are skipped.
+kvm_missing() { [[ "$OS" == Linux && ! -e /dev/kvm ]]; }
 
 # A Linux cloud VM, from the DMI strings (Google Cloud names itself "Google"; the rest are common clouds).
 cloud_vm() {
@@ -225,7 +254,9 @@ cloud_vm() {
 # The guard's cost guard powers an idle cloud VM off with `sudo -n /usr/bin/systemctl poweroff`.
 poweroff_rule_ok() { sudo -n -l /usr/bin/systemctl poweroff >/dev/null 2>&1; }
 
-MISSING=(); SUDO_STEPS=(); NOTES=(); XCODE_MISSING=0
+# NOTES come from check_all, which starts them afresh; INSTALL_NOTES from the installs, which the second
+# check_all must not wipe.
+MISSING=(); SUDO_STEPS=(); NOTES=(); INSTALL_NOTES=(); XCODE_MISSING=0
 check_all() {
   MISSING=(); SUDO_STEPS=(); NOTES=(); XCODE_MISSING=0
   node_ok || MISSING+=("node")
@@ -234,22 +265,22 @@ check_all() {
   fi
   if [[ "$OS" == Linux ]] && ! command -v unzip >/dev/null 2>&1; then MISSING+=("unzip"); SUDO_STEPS+=("unzip"); fi
   jdk_ok || MISSING+=("jdk")
+  local p
   if (( IOS_ONLY && BUILD_SDK )); then
     cmdline_ok || MISSING+=("android-cmdline-tools")
     pkg_ok platform-tools || MISSING+=("platform-tools")
+    for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || MISSING+=("sdk:$p"); done
   fi
   if (( ! IOS_ONLY )); then
     cmdline_ok || MISSING+=("android-cmdline-tools")
     pkg_ok platform-tools || MISSING+=("platform-tools")
     # Without KVM no emulator can run on Linux: skip the emulator and its ~1.5 GB image.
-    local no_kvm=0
-    [[ "$OS" == Linux && ! -e /dev/kvm ]] && no_kvm=1
-    if (( ! no_kvm )); then
+    if ! kvm_missing; then
       pkg_ok emulator || MISSING+=("emulator")
       emulator_libs_ok || { MISSING+=("emulator-libs"); SUDO_STEPS+=("emulator-libs"); }
       (( NO_IMAGE )) || image_ok || MISSING+=("system-image")
     fi
-    local p; for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || MISSING+=("sdk:$p"); done
+    for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || MISSING+=("sdk:$p"); done
   fi
   if xcode_present; then
     xcode_license_ok || { MISSING+=("xcode-license"); SUDO_STEPS+=("xcode-license"); }
@@ -315,6 +346,13 @@ ask() {
   printf '%s [y/N] ' "$1" > /dev/tty
   local answer; read -r answer < /dev/tty
   [[ "$answer" =~ ^[Yy] ]]
+}
+# Like ask, for a step that can be done by hand later: with no terminal (and no --yes) it answers no
+# instead of stopping the script.
+offer() {
+  (( YES )) && return 0
+  have_tty || return 1
+  ask "$1"
 }
 
 # ---------------------------------------------------------------- installs
@@ -419,7 +457,7 @@ android_metrics_off() {
   if (( before )) && ! "$sdkm" --version >/dev/null 2>&1 < /dev/null; then
     grep -vxF -- "--no-metrics" "$rc" > "$TMP/androidrc" || true
     if (( existed )); then cat "$TMP/androidrc" > "$rc"; else rm -f "$rc"; fi
-    NOTES+=("Android CLI metrics: sdkmanager did not run with --no-metrics in $rc, so the line was taken out again; turn metrics off as Google's Android CLI documentation says")
+    INSTALL_NOTES+=("Android CLI metrics: sdkmanager did not run with --no-metrics in $rc, so the line was taken out again; turn metrics off as Google's Android CLI documentation says")
     return 0
   fi
   say "turned off the Android CLI's usage metrics (--no-metrics in $rc)"
@@ -457,13 +495,13 @@ install_gh() {
   if [[ "$OS" == Darwin ]]; then
     if command -v brew >/dev/null 2>&1; then brew install gh
     elif [[ -x /opt/local/bin/port ]]; then sudo /opt/local/bin/port -N install gh
-    else NOTES+=("gh: install it from https://cli.github.com (no Homebrew or MacPorts here)"); fi
+    else INSTALL_NOTES+=("gh: install it from https://cli.github.com (no Homebrew or MacPorts here)"); fi
     return 0
   fi
   if command -v apt-get >/dev/null 2>&1; then sudo apt-get update -qq && sudo apt-get install -y gh
   elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y gh
   elif command -v pacman >/dev/null 2>&1; then sudo pacman -S --noconfirm github-cli
-  else NOTES+=("gh: install it with your package manager (https://cli.github.com)"); fi
+  else INSTALL_NOTES+=("gh: install it with your package manager (https://cli.github.com)"); fi
 }
 
 # macOS: where the open-source tailscaled comes from. The Tailscale app is not used: it runs only while
@@ -483,7 +521,7 @@ install_tailscale() {
       brew install tailscale
       sudo "$(brew --prefix)/bin/tailscaled" install-system-daemon
     else
-      NOTES+=("Tailscale: install MacPorts or Homebrew, then run this script again (it installs the open-source tailscaled as a system daemon); the Tailscale app from tailscale.com works too, but only while someone is logged in at the screen")
+      INSTALL_NOTES+=("Tailscale: install MacPorts or Homebrew, then run this script again (it installs the open-source tailscaled as a system daemon); the Tailscale app from tailscale.com works too, but only while someone is logged in at the screen")
       return 0
     fi
   else
@@ -502,7 +540,7 @@ install_poweroff_rule() {
     sudo mv "$staged" /etc/sudoers.d/tapdance-poweroff
   else
     sudo rm -f "$staged"
-    NOTES+=("poweroff rule: not installed (visudo refused it); the guard cannot stop this VM when idle until you add: $rule")
+    INSTALL_NOTES+=("poweroff rule: not installed (visudo refused it); the guard cannot stop this VM when idle until you add: $rule")
   fi
 }
 
@@ -513,7 +551,7 @@ tailscale_login() {
   [[ "$OS" == Linux || "$OS" == Darwin ]] || return 0
   local ts; ts="$(tailscale_bin)" || return 0
   if tailscale_is_app; then
-    "$ts" status >/dev/null 2>&1 || NOTES+=("Tailscale: open the Tailscale app and log in, then run this script again to expose the guard")
+    "$ts" status >/dev/null 2>&1 || say "note: Tailscale: open the Tailscale app and log in, then run this script again to expose the guard"
     return 0
   fi
   local me; me="$(id -un)"
@@ -521,11 +559,18 @@ tailscale_login() {
     if ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
       sudo "$ts" up --operator="$me"
     else
-      NOTES+=("Tailscale: run \`sudo tailscale up --operator=$me\` and open the link, then run this script again to expose the guard")
+      say "note: Tailscale: run \`sudo tailscale up --operator=$me\` and open the link, then run this script again to expose the guard"
     fi
-  elif ! "$ts" debug prefs 2>/dev/null | grep -q "\"OperatorUser\": \"$me\""; then
-    say "letting $me run tailscale serve (sudo tailscale set --operator=$me)"
-    sudo "$ts" set --operator="$me"
+  else
+    # Captured first: with pipefail, `grep -q` closing the pipe early could fail the check (SIGPIPE).
+    local prefs; prefs="$("$ts" debug prefs 2>/dev/null || true)"
+    if ! grep -q "\"OperatorUser\": \"$me\"" <<<"$prefs"; then
+      if offer "Let $me run tailscale serve? (sudo tailscale set --operator=$me; tailscaled allows only root and the operator)"; then
+        sudo "$ts" set --operator="$me"
+      else
+        say "note: Tailscale: run \`sudo tailscale set --operator=$me\` so host up can expose the guard with tailscale serve"
+      fi
+    fi
   fi
 }
 
@@ -587,8 +632,9 @@ if (( ! SKIP_PREREQ )); then
   else
     say "missing:"
     for m in "${MISSING[@]}"; do say "  - $(describe "$m")"; done
-    (( CHECK )) && exit 0
+    (( CHECK )) && exit 1
     if (( ${#SUDO_STEPS[@]} )); then say "these steps ask for your password (sudo): ${SUDO_STEPS[*]}"; fi
+    say "asked for separately later, when needed (sudo): the Tailscale login and operator$([[ "$OS" == Linux ]] && echo ", and keeping your systemd user manager running without a login (loginctl enable-linger, or a small boot unit)")"
     ask "Install them now?" || die "nothing installed. Run again when ready, or install them yourself (docs/installation.md)."
     # System packages first (unzip is needed for the command-line tools), all in one sudo step.
     install_system_packages "${MISSING[@]}"
@@ -607,27 +653,33 @@ if (( ! SKIP_PREREQ )); then
           # The group applies to new logins only; an ACL lets this login and its running systemd user
           # manager (which starts the worker) use /dev/kvm now. A reboot drops the ACL; the group remains.
           if ! { command -v setfacl >/dev/null 2>&1 && sudo setfacl -m "u:$(id -un):rw" /dev/kvm; }; then
-            NOTES+=("log out and back in so the kvm group applies, then run this script again")
+            INSTALL_NOTES+=("log out and back in so the kvm group applies, then run this script again")
           fi ;;
         poweroff-rule) install_poweroff_rule ;;
       esac
     done
     if (( IOS_ONLY && BUILD_SDK )); then
-      pkg_ok platform-tools || sdkmanager_install platform-tools
+      SDK_PKGS=()
+      pkg_ok platform-tools || SDK_PKGS+=("platform-tools")
+      for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || SDK_PKGS+=("$p"); done
+      (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
     fi
     if (( ! IOS_ONLY )); then
       SDK_PKGS=()
       pkg_ok platform-tools || SDK_PKGS+=("platform-tools")
-      pkg_ok emulator || SDK_PKGS+=("emulator")
-      (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
+      # Linux without /dev/kvm: no emulator or image, as check_all skips them.
+      if ! kvm_missing; then
+        pkg_ok emulator || SDK_PKGS+=("emulator")
+        (( NO_IMAGE )) || image_ok || SDK_PKGS+=("$IMAGE")
+      fi
       for p in "${EXTRA_SDK[@]+"${EXTRA_SDK[@]}"}"; do pkg_ok "$p" || SDK_PKGS+=("$p"); done
       (( ${#SDK_PKGS[@]} )) && sdkmanager_install "${SDK_PKGS[@]}"
       # The emulator just installed may still miss a library the package check could not see.
-      emulator_libs_after_install
+      kvm_missing || emulator_libs_after_install
     fi
     write_env_file
     check_all
-    for n in "${NOTES[@]+"${NOTES[@]}"}"; do say "note: $n"; done
+    for n in "${NOTES[@]+"${NOTES[@]}"}" "${INSTALL_NOTES[@]+"${INSTALL_NOTES[@]}"}"; do say "note: $n"; done
     remaining=(); for m in "${MISSING[@]+"${MISSING[@]}"}"; do [[ "$m" == tailscale || "$m" == kvm-group || "$m" == poweroff-rule || "$m" == gh ]] || remaining+=("$m"); done
     (( ${#remaining[@]} == 0 )) || die "still missing after installing: ${remaining[*]}"
   fi
@@ -637,7 +689,9 @@ if (( ! SKIP_PREREQ )); then
 elif (( CHECK )); then
   die "--check and --skip-prerequisites together check nothing"
 fi
-(( CHECK || ONLY_PREREQ )) && exit 0
+# --check: exit 1 when something is missing (above) or Xcode is, 0 when all is there.
+if (( CHECK )); then (( ! XCODE_MISSING )) || exit 1; exit 0; fi
+(( ONLY_PREREQ )) && exit 0
 
 # ---------------------------------------------------------------- Tapdance itself
 
@@ -647,7 +701,6 @@ if command -v tapdance >/dev/null 2>&1 && tapdance host --help >/dev/null 2>&1; 
 else
   node_ok || die "Node.js 22.13 or later is required (https://nodejs.org)."
   command -v git >/dev/null 2>&1 || die "git is required (macOS: xcode-select --install; Linux: your package manager)."
-  command -v corepack >/dev/null 2>&1 || die "corepack is missing from this Node.js install; install Node.js from nodejs.org (it ships corepack)."
 
   if [[ -d "$SRC/.git" ]]; then
     say "using the existing checkout in $SRC (not updating it; run git pull there yourself)"
@@ -658,9 +711,21 @@ else
     git clone --branch "$REF" --depth 1 "$REPO" "$SRC"
   fi
 
-  # The build's own scripts call `pnpm`: put corepack's pnpm shim in ~/.local/bin (no sudo).
+  # The build's own scripts call `pnpm`: put a pnpm in ~/.local/bin (no sudo). Corepack's shim when this
+  # Node.js has corepack (Node 22 and 24 do). Node 25 and later no longer ship it: then npm installs the
+  # exact pnpm version the checkout's package.json pins (packageManager) into ~/.local/share/tapdance/pnpm.
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
-  corepack enable --install-directory "$BIN_DIR" pnpm
+  if command -v corepack >/dev/null 2>&1; then
+    corepack enable --install-directory "$BIN_DIR" pnpm
+  else
+    command -v npm >/dev/null 2>&1 || die "this Node.js has neither corepack nor npm; install Node.js 22 LTS from nodejs.org (it ships both), or run this script without --skip-prerequisites to install it."
+    pm="$(cd "$SRC" && node -p 'require("./package.json").packageManager || ""')"
+    pm="${pm%%+*}"
+    [[ "$pm" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$SRC/package.json does not pin a pnpm version (packageManager: \"$pm\")"
+    say "this Node.js has no corepack (Node 25 and later do not ship it): installing $pm with npm into $SHARE/pnpm"
+    npm install -g --prefix "$SHARE/pnpm" "$pm"
+    ln -sf "$SHARE/pnpm/bin/pnpm" "$BIN_DIR/pnpm"
+  fi
   hash -r
   say "installing dependencies and building (pnpm $(cd "$SRC" && pnpm --version))"
   (cd "$SRC" && pnpm install --frozen-lockfile && pnpm build)
@@ -689,17 +754,35 @@ fi
 linux_user_manager() {
   [[ "$OS" == Linux && -e /dev/kvm ]] || return 0
   local me uid; me="$(id -un)"; uid="$(id -u)"
-  lingers() { loginctl show-user "$me" --property=Linger 2>/dev/null | grep -q '=yes'; }
+  # Captured first: with pipefail, `grep -q` closing the pipe early could fail the check (SIGPIPE).
+  lingers() { local out; out="$(loginctl show-user "$me" --property=Linger 2>/dev/null || true)"; [[ "$out" == *=yes* ]]; }
   lingers && return 0
-  loginctl enable-linger "$me" 2>/dev/null || sudo loginctl enable-linger "$me" 2>/dev/null || true
+  # A unit an earlier run installed already starts the user manager at boot.
+  systemctl is-enabled --quiet tapdance-user-manager.service 2>/dev/null && return 0
+  # logind may let a user turn on its own linger without sudo; otherwise ask before using sudo.
+  loginctl enable-linger "$me" 2>/dev/null || true
+  if ! lingers; then
+    if offer "Keep $me's systemd user manager (the worker and guard) running without a login? (sudo loginctl enable-linger $me)"; then
+      sudo loginctl enable-linger "$me" 2>/dev/null || true
+    else
+      say "note: the worker and guard stop when you log out until linger is on: sudo loginctl enable-linger $me"
+      return 0
+    fi
+  fi
   lingers && { say "turned on linger for $me"; return 0; }
-  say "logind cannot keep $me lingering (an OS Login account?); starting its user manager from a system unit at boot"
+  say "logind cannot keep $me lingering (an OS Login account?); a small system unit can start its user manager at boot instead"
+  if ! offer "Install /etc/systemd/system/tapdance-user-manager.service (sudo; runs \`systemctl start user@$uid.service\` at boot)?"; then
+    say "note: the worker and guard stop when you log out, and do not start at boot, until linger is on or a unit starts user@$uid.service"
+    return 0
+  fi
   printf '[Unit]\nDescription=Tapdance: user manager for %s (runs the worker and guard without a login)\nAfter=systemd-user-sessions.service\n\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/systemctl start user@%s.service\n\n[Install]\nWantedBy=multi-user.target\n' "$me" "$uid" \
     | sudo tee /etc/systemd/system/tapdance-user-manager.service >/dev/null
   sudo systemctl daemon-reload && sudo systemctl enable --now tapdance-user-manager.service
 }
 linux_user_manager
 
+# exec replaces this shell, so the EXIT trap never runs: remove the scratch folder first.
+rm -rf "$TMP"; trap - EXIT
 # Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
 if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"

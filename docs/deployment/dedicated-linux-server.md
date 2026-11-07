@@ -5,9 +5,11 @@ virtualization to negotiate, KVM runs directly on the hardware. This guide fits 
 server (OVHcloud Bare Metal, Hetzner, and similar), a machine in your office, or a home server behind
 a router. Mode C in [PRODUCT.md](../../PRODUCT.md).
 
-> **Status: not tested.** Tapdance has not yet hosted devices on a Linux machine. The recommended
-> path below (`scripts/host-setup.sh` and `tapdance host up`) ran on the owner's Mac only; its Linux
-> steps are unit-tested only. See [STATUS.md](../../STATUS.md).
+> **Status: not tested on a dedicated server.** The recommended path below (`scripts/host-setup.sh`
+> and `tapdance host up`) ran end to end on a Linux VM with KVM, a Google Cloud N2 VM, which then served
+> Android emulators to a Mac and a Linux VPS over Tailscale
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Bare-metal servers, OVH, Hetzner and
+> home servers have not been run. See [STATUS.md](../../STATUS.md) (W-07, M-03).
 
 The recommended setup is **device-only**: the server runs the emulators behind the worker guard, and
 your agent's machine reaches it over Tailscale with `tapdance connect`. Joining the server to a gateway

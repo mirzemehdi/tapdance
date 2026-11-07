@@ -50,15 +50,17 @@ Next, as an administrator (system-wide, once):
   sudo xcode-select -s /Applications/Xcode.app
   sudo xcodebuild -license accept
   sudo xcodebuild -runFirstLaunch
+  # With the open-source tailscaled daemon (not the Tailscale app): tailscaled lets only root and its
+  # one operator account run \`tailscale serve\`, which host up uses. This makes ${ACCOUNT} the operator.
+  sudo tailscale set --operator=${ACCOUNT}
 
 Then sign in as ${ACCOUNT} (Fast User Switching keeps your own session open) and run:
   # install Node.js 22+ and Tapdance from source for this user (docs/installation.md)
-  tapdance worker install                 # local Simlock worker, loopback only
-  tapdance worker guard policy            # review the device-only policy
-  tapdance worker guard start             # the only endpoint remote agents reach
-                                          # (or: tapdance worker guard install, to run it at login)
-  tapdance worker guard pair --label <control-machine>
-  tailscale serve --bg --https=4720 http://127.0.0.1:4720   # private, TLS, no public port
+  tapdance worker guard policy                   # review the device-only policy
+  tapdance host up --label <control-machine>     # worker, guard service, pairing and
+                                                 # \`tailscale serve\` (private, TLS, no public
+                                                 # port), then a self-test; it prints the
+                                                 # block to paste on the control machine
 
 Remove everything later:
   sudo sysadminctl -deleteUser ${ACCOUNT}     # deletes the account and its home

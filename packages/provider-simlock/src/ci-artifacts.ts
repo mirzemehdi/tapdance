@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { chmod, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
@@ -16,9 +16,10 @@ import { repoDisplay, repoSlug } from "./build-files.js";
  * a GitHub credential and the APK never crosses the agent's link to the host. The worker guard runs
  * it; nothing here is reachable without `allow.artifacts`.
  *
- * Unlike a build on the host, nothing from the repository runs on this machine: the host only reads
- * the GitHub API, unpacks one .apk (or one .app folder) from the artifact's zip (without a zip tool)
- * and installs it with adb (or simctl).
+ * Unlike a build on the host, nothing from the repository runs to fetch it: the host only reads the
+ * GitHub API, unpacks one .apk (or one .app folder) from the artifact's zip (without a zip tool) and
+ * installs it with adb (or simctl). A simulator app then runs as a process of the host's account when
+ * launched, as an uploaded one would; an APK stays inside the emulator.
  */
 
 export interface CiInstallRequest {
@@ -36,7 +37,7 @@ export interface ArtifactSettings {
   repos: string[];
   /** When set, only runs whose head branch is listed. */
   branches: string[];
-  /** The largest artifact (zip) and APK, in MB. */
+  /** The largest artifact (zip), and APK or unpacked .app, in MB. */
   maxMB: number;
 }
 
@@ -344,7 +345,8 @@ async function fetchCiArtifact(
   }
 
   const repoDir = join(root, repoSlug(`https://github.com/${repo}`));
-  const dir = join(repoDir, `${runId}-${artifactId}`);
+  // An artifact can hold both an APK and a .app: each kind keeps its own copy (review).
+  const dir = join(repoDir, kind === "apk" ? `${runId}-${artifactId}` : `${runId}-${artifactId}-app`);
   const cached = await readCached(dir, kind);
   if (cached) {
     onLine(`Using the copy of ${req.artifact} from run ${runId} this host downloaded before`);
@@ -359,16 +361,18 @@ async function fetchCiArtifact(
   try {
     const zip = join(work, "artifact.zip");
     onLine(`Downloading ${req.artifact} (${Math.max(1, Math.round(chosen.artifact.size / 1024 / 1024))} MB) from run ${runId} at ${chosen.run.head_sha.slice(0, 12)}`);
-    let r: { code: number; output: string; truncated?: boolean };
+    let r: { code: number; output: string; truncated?: boolean; timedOut?: boolean };
     try {
       r = await run("gh", ["api", `repos/${repo}/actions/artifacts/${artifactId}/zip`], { env, timeoutMs: 20 * 60_000, onLine: () => undefined, stdoutPath: zip, maxStdoutBytes: maxBytes });
     } catch (error) {
       throw new TapdanceError("PROVIDER_UNAVAILABLE", `gh could not start on the host: ${(error as Error).message}`, { hint: OWNER_GH_HINT });
     }
-    if (r.truncated) throw new TapdanceError("FORBIDDEN", `Artifact ${req.artifact} is larger than this host's limit of ${settings.maxMB} MB`, { hint: "Upload only the debug APK in that artifact." });
+    if (r.timedOut) throw new TapdanceError("TIMEOUT", `Downloading ${req.artifact} took longer than 20 minutes`, { hint: "Check the host's network, or ask for a smaller artifact (only the debug app)." });
+    if (r.truncated) throw new TapdanceError("FORBIDDEN", `Artifact ${req.artifact} is larger than this host's limit of ${settings.maxMB} MB`, { hint: `Upload only the debug ${kind === "apk" ? "APK" : "simulator .app"} in that artifact.` });
     if (r.code !== 0) throw ghFailure(r.output, `downloading artifact ${req.artifact}`, repo, r.code);
     let entry: string;
     let apkSha256: string;
+    let appName: string | undefined;
     if (kind === "apk") {
       entry = await extractApk(zip, join(work, "app.apk"), maxBytes);
       apkSha256 = createHash("sha256").update(await readFile(join(work, "app.apk"))).digest("hex");
@@ -376,9 +380,10 @@ async function fetchCiArtifact(
       const app = await extractApp(zip, join(work, "app"), maxBytes, work);
       entry = app.entry;
       apkSha256 = app.digest;
+      appName = basename(app.app);
     }
     await rm(zip, { force: true });
-    const meta: CacheMeta = { ...base, kind, entry, apkSha256, fetchedAt: new Date().toISOString(), usedAt: new Date().toISOString() };
+    const meta: CacheMeta = { ...base, kind, entry, ...(appName ? { appName } : {}), apkSha256, fetchedAt: new Date().toISOString(), usedAt: new Date().toISOString() };
     await writeFile(join(work, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
     await rm(dir, { recursive: true, force: true });
     await rename(work, dir);
@@ -400,6 +405,8 @@ interface CacheMeta {
   artifact: string;
   artifactId: string;
   entry: string;
+  /** The .app folder under app/ (iOS); `entry` names where it was in the artifact, not this. */
+  appName?: string;
   apkSha256: string;
   fetchedAt: string;
   usedAt: string;
@@ -421,9 +428,10 @@ async function readCached(dir: string, kind: ArtifactKind): Promise<CacheMeta | 
 }
 
 /** Where a cached download's app is: the APK file, or the .app folder under app/. */
-function cachedPath(dir: string, meta: Pick<CacheMeta, "kind" | "entry">): string {
+function cachedPath(dir: string, meta: Pick<CacheMeta, "kind" | "entry" | "appName">): string {
   if ((meta.kind ?? "apk") === "apk") return join(dir, "app.apk");
-  const name = meta.entry.split("/").filter(Boolean).pop() ?? "App.app";
+  // A zipped .app's entry reads "Demo.app.zip › Demo.app": the folder is the last part after "›".
+  const name = meta.appName ?? meta.entry.split(/[/›]/).map((x) => x.trim()).filter(Boolean).pop() ?? "App.app";
   return join(dir, "app", /\.app$/.test(name) ? name : "App.app");
 }
 
@@ -435,7 +443,13 @@ async function touchCached(dir: string, meta: CacheMeta): Promise<void> {
 async function pruneCache(repoDir: string, keep = 3): Promise<void> {
   const kept: Array<{ name: string; usedAt: string }> = [];
   for (const name of await readdir(repoDir).catch(() => [] as string[])) {
-    if (!/^\d+-\d+$/.test(name)) continue;
+    // A download a crashed host left behind; a live one is younger (gh gives up after 20 minutes).
+    if (name.startsWith(".download-")) {
+      const info = await stat(join(repoDir, name)).catch(() => undefined);
+      if (info && Date.now() - info.mtimeMs > 60 * 60_000) await rm(join(repoDir, name), { recursive: true, force: true });
+      continue;
+    }
+    if (!/^\d+-\d+(-app)?$/.test(name)) continue;
     const meta = await readFile(join(repoDir, name, "meta.json"), "utf8").then((t) => JSON.parse(t) as Partial<CacheMeta>).catch(() => ({}) as Partial<CacheMeta>);
     kept.push({ name, usedAt: typeof meta.usedAt === "string" ? meta.usedAt : "" });
   }
@@ -679,11 +693,13 @@ export async function extractApp(zipPath: string, destRoot: string, maxBytes: nu
   let prefix: string | undefined;
   let name = "App.app";
   const found = plists[0];
-  if (found) {
+  // A root Info.plist means the artifact is the .app's own contents; a nested .app is then part of it
+  // (an App Clip, a watch app), not the app to install (review).
+  if (files.some((e) => e.name === "Info.plist")) {
+    prefix = "";
+  } else if (found) {
     prefix = `${found[1] ?? ""}${found[2] ?? ""}/`;
     name = found[2] ?? name;
-  } else if (files.some((e) => e.name === "Info.plist")) {
-    prefix = "";
   } else {
     const inner = files.filter((e) => /\.zip$/i.test(e.name));
     if (depth === 0 && inner.length === 1 && inner[0]) {
@@ -754,22 +770,30 @@ async function treeDigest(root: string): Promise<string> {
  * in CFBundleSupportedPlatforms (a device build would install and then fail to launch).
  */
 async function simulatorAppId(app: string, run: CommandRunner): Promise<string | undefined> {
-  let r: { code: number; output: string };
-  try {
-    r = await run("plutil", ["-convert", "json", "-o", "-", join(app, "Info.plist")], { env: process.env, timeoutMs: 15_000, onLine: () => undefined });
-  } catch {
-    return undefined;
+  // Two -extract reads, not -convert json: that refuses plists holding <data> or <date> values (review).
+  const plist = join(app, "Info.plist");
+  const read = async (key: string, format: "raw" | "json") => {
+    try {
+      return await run("plutil", ["-extract", key, format, "-o", "-", plist], { env: process.env, timeoutMs: 15_000, onLine: () => undefined });
+    } catch {
+      return undefined;
+    }
+  };
+  const id = await read("CFBundleIdentifier", "raw");
+  if (id === undefined) return undefined;
+  if (id.code !== 0) throw zipError("has an Info.plist this host cannot read (no CFBundleIdentifier)", APP_HINT);
+  const supported = await read("CFBundleSupportedPlatforms", "json");
+  let platforms: string[] = [];
+  if (supported?.code === 0) {
+    try {
+      const parsed: unknown = JSON.parse(supported.output.slice(supported.output.indexOf("[")));
+      if (Array.isArray(parsed)) platforms = parsed.map(String);
+    } catch {
+      throw zipError("has an Info.plist this host cannot read", APP_HINT);
+    }
   }
-  if (r.code !== 0) throw zipError("has an Info.plist this host cannot read", APP_HINT);
-  let plist: { CFBundleIdentifier?: unknown; CFBundleSupportedPlatforms?: unknown };
-  try {
-    plist = JSON.parse(r.output.slice(r.output.indexOf("{")));
-  } catch {
-    throw zipError("has an Info.plist this host cannot read", APP_HINT);
-  }
-  const platforms = Array.isArray(plist.CFBundleSupportedPlatforms) ? plist.CFBundleSupportedPlatforms.map(String) : [];
   if (platforms.length > 0 && !platforms.includes("iPhoneSimulator")) {
     throw zipError(`holds a ${platforms.join("/")} build, not a simulator build`, APP_HINT);
   }
-  return typeof plist.CFBundleIdentifier === "string" ? plist.CFBundleIdentifier : undefined;
+  return id.output.trim() || undefined;
 }

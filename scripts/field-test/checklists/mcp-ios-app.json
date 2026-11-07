@@ -1,5 +1,6 @@
 [
   { "tool": "lease_device", "args": { "platform": "ios", "device": "${DEVICE}", "os_version": "${OS}" }, "optional": ["DEVICE", "OS"], "label": "lease", "stopOnFail": true },
+  { "tool": "install_app", "args": { "from_ci": { "repo": "${CI_REPO}", "artifact": "${CI_ARTIFACT}", "branch": "${CI_BRANCH}" } }, "optional": ["CI_BRANCH"], "label": "install_from_ci", "requires": ["CI_REPO", "CI_ARTIFACT"], "timeoutSec": 1200 },
   { "tool": "install_app", "args": { "path": "${APP}" }, "label": "install_app", "requires": ["APP"], "timeoutSec": 1200 },
   { "tool": "launch_app", "args": { "app_id": "${APP_ID}" }, "label": "launch", "stopOnFail": true },
   { "tool": "launch_app", "args": { "app_id": "${APP_ID}", "console": true }, "label": "launch_console" },
@@ -28,5 +29,5 @@
   { "tool": "clear_app_data", "args": { "app_id": "${APP_ID}" }, "label": "clear_data" },
   { "tool": "launch_app", "args": { "app_id": "${APP_ID}" }, "label": "launch_after_clear" },
   { "tool": "get_test_artifacts", "label": "artifacts" },
-  { "tool": "release_device", "label": "release" }
+  { "tool": "release_device", "label": "release", "always": true }
 ]

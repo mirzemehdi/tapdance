@@ -366,7 +366,7 @@ export interface AppBuildResult {
   versionCode?: number;
 }
 
-/** An APK the user's CI built (a GitHub Actions artifact), fetched by the device's host with its own credentials. */
+/** An APK or iOS simulator .app the user's CI built (a GitHub Actions artifact), fetched by the device's host with its own credentials. */
 export interface AppCiInstallRequest {
   /** owner/repo or the repository's github.com URL; must be on the host's allow-list. */
   repo: string;

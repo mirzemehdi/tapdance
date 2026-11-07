@@ -10,8 +10,8 @@
 # Suites:
 #   base   the launcher: lease, inspect, swipe, keys, tap, wait, rotate, notifications, recording,
 #          push to Downloads, logs, audit, links, artifacts, release. Optional: LAUNCHER_TAP.
-#   app    your app: install (from CI with CI_REPO + CI_ARTIFACT [+ CI_BRANCH], and/or an APK file with
-#          APK), launch APP_ID, inspect, screenshot, recording, logs, crash logs, audit, app list, kill,
+#   app    your app: install (from CI with CI_REPO + CI_ARTIFACT [+ CI_BRANCH], and/or a file: APK on
+#          Android, APP on iOS), launch APP_ID, inspect, screenshot, recording, logs, crash logs, audit, app list, kill,
 #          clear, uninstall, release. Optional: TAP_TEXT (a button to tap, then back), TYPE_INTO (a
 #          field's label to type into), SEQUENCE_FILE (a `ui sequence` JSON file), DEBUGGABLE=1 (the
 #          build is debuggable: push to and pull from its sandbox and compare).
@@ -21,7 +21,8 @@
 # DEVICE="iPhone 16" OS=26.1). On iOS: base adds a system alert read, the language setting and crash
 # reports, pushes to the Files app instead of Downloads and skips Android's Back key; app installs APP (a
 # simulator .app, or a .zip holding one) and runs the app once in German (LANGUAGE, default de-DE);
-# build passes BUILD_SCHEME / BUILD_PROJECT instead of BUILD_DIR. Installs from CI are Android only.
+# build passes BUILD_SCHEME / BUILD_PROJECT instead of BUILD_DIR. Installs from CI work on both: an APK
+# artifact on Android, a simulator .app (or a zip of one) on iOS.
 # Parameters come from --param KEY=VALUE or the environment as FIELD_TEST_KEY. A step whose parameter
 # is not set is SKIPPED, not failed.
 #
@@ -214,13 +215,13 @@ pull_matches() { cmp -s "$out/push.txt" "$out/pulled.txt"; }
 
 suite_app() {
   critical=1 step lease - "${lease_cmd[@]}"
-  if ! ios; then
-    local ci=(td app install --from-ci "$(p CI_REPO)" --artifact "$(p CI_ARTIFACT)")
-    [[ -n "$(p CI_BRANCH)" ]] && ci+=(--branch "$(p CI_BRANCH)")
-    step install_from_ci CI_REPO,CI_ARTIFACT "${ci[@]}"
-    step install_apk APK td app install "$(p APK)"
-  else
+  local ci=(td app install --from-ci "$(p CI_REPO)" --artifact "$(p CI_ARTIFACT)")
+  [[ -n "$(p CI_BRANCH)" ]] && ci+=(--branch "$(p CI_BRANCH)")
+  step install_from_ci CI_REPO,CI_ARTIFACT "${ci[@]}"
+  if ios; then
     step install_app APP td app install "$(p APP)"
+  else
+    step install_apk APK td app install "$(p APK)"
   fi
   critical=1 step launch APP_ID td app launch "$(p APP_ID)"
   ios && step launch_console APP_ID td app launch "$(p APP_ID)" --console

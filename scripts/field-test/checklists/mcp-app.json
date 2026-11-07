@@ -27,5 +27,5 @@
   { "tool": "clear_app_data", "args": { "app_id": "${APP_ID}" }, "label": "clear_data" },
   { "tool": "launch_app", "args": { "app_id": "${APP_ID}" }, "label": "launch_after_clear" },
   { "tool": "get_test_artifacts", "label": "artifacts" },
-  { "tool": "release_device", "label": "release" }
+  { "tool": "release_device", "label": "release", "always": true }
 ]

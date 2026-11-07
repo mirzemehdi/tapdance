@@ -8,8 +8,11 @@ Status ([STATUS.md](../../STATUS.md), V-01 to V-05): on one Mac, the stream, the
 human take-over were verified with a script acting as a browser
 ([evidence](../testing/evidence/2026-11-01-local-ios.md)), and the page was then opened in a real
 browser through a gateway running on the same Mac: the picture was live and a click tapped the device
-([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). Viewing from another computer,
-and any setup across two machines, have **not** been tested yet.
+([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). Across two machines in device-only
+mode, `tapdance view` on the agent's Mac showed a simulator on a rented Mac mini live in a browser on
+that Mac and followed a scripted run ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)).
+A browser on a different computer from `tapdance view` (SSH tunnel or `view --tailscale`) was checked
+with curl only (STATUS Q-07), and the gateway across two machines has **not** been tested.
 
 ## How it works
 

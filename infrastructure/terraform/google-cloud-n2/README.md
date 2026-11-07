@@ -6,13 +6,16 @@ ordinary VPS, your laptop). After `apply` you run Tapdance's setup script on the
 installs everything and runs `tapdance host up`, and the agent's machine connects over Tailscale with
 `tapdance connect`. No inbound port is opened besides IAP SSH.
 
-> **Status: applied once (2026-11-03).** With Terraform 1.17.1, `terraform validate` passed and
-> `apply` created 13 resources in 99 s (`region = "europe-west1"`, `zone = "europe-west1-b"`,
-> `assign_external_ip = true`, `boot_disk_size_gb = 64`, `max_run_hours` at its default of 8). The VM
-> then hosted Android emulators for an agent on a Mac
-> ([evidence](../../../docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the Cloud NAT
-> default (`assign_external_ip = false`), `create_project`, `stop_schedule`, ephemeral mode
-> (`on_run_limit = "DELETE"`) and `terraform destroy`. See [STATUS.md](../../../STATUS.md) (rows G-01, G-02, G-07, Q-05).
+> **Status: applied in several field runs since 2026-11-03.** First run: with Terraform 1.17.1,
+> `terraform validate` passed and `apply` created 13 resources in 99 s (`region = "europe-west1"`,
+> `zone = "europe-west1-b"`, `assign_external_ip = true`, `boot_disk_size_gb = 64`, `max_run_hours` at
+> its default of 8). The VM then hosted Android emulators for an agent on a Mac
+> ([evidence](../../../docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Later runs applied
+> ephemeral mode (`on_run_limit = "DELETE"`, `max_run_hours = 6`, the cap not reached) with a budget
+> (18 resources), and `terraform destroy` removed them with `gcp-leftovers.sh` finding nothing
+> ([evidence](../../../docs/testing/evidence/2026-11-03-vps-n2-android.md)). Not yet run: the Cloud NAT
+> default (`assign_external_ip = false`), `create_project` and `stop_schedule`. See
+> [STATUS.md](../../../STATUS.md) (rows G-01, G-02, G-07, G-08, Q-05).
 
 The step-by-step guide (prerequisites, IAM, the setup script, connecting the agent, costs,
 troubleshooting) is [docs/deployment/google-cloud-n2.md](../../../docs/deployment/google-cloud-n2.md).
@@ -259,8 +262,8 @@ terraform destroy
 - **Stopping** ends vCPU and RAM billing. The disk keeps billing. Leases on the VM end: after a
   reboot Simlock releases a lease whose emulator is no longer running (reason `device-lost`).
 - **Starting** boots the VM; with linger on (`host up` turns it on), the worker and guard start
-  as systemd user services, and Tailscale reconnects with its `serve` setting. Not yet observed on a
-  real VM.
+  as systemd user services, and Tailscale reconnects with its `serve` setting. Seen on a real VM after
+  its idle stop (STATUS.md G-07).
 - **Pausing** without stopping the VM: `tapdance host pause` on the VM stops the guard, the worker
   and its emulators; `tapdance host resume` starts them again.
 - **Deleting** with `terraform destroy` removes the VM, disk, network, NAT and service account. It

@@ -4,5 +4,5 @@
   { "tool": "launch_app", "args": { "app_id": "${APP_ID}" }, "label": "launch" },
   { "tool": "inspect_screen", "args": { "compact": true }, "label": "inspect" },
   { "tool": "take_screenshot", "args": { "note": "built on the host" }, "label": "screenshot" },
-  { "tool": "release_device", "label": "release" }
+  { "tool": "release_device", "label": "release", "always": true }
 ]

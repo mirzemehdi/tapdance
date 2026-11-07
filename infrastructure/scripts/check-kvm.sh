@@ -16,8 +16,11 @@
 #
 # Tapdance never falls back to software emulation. If this script fails, fix the cause it reports
 # or run the emulator on another machine (your laptop, a bare-metal server, a Google Cloud N2 VM).
-# Run on a Google Cloud N2 VM (Ubuntu 24.04) before and after host-setup.sh in the 2026-11-04 field
-# test (issue #84); see STATUS.md.
+# Real runs: the earlier version on a Google Cloud N2 VM (Ubuntu 24.04) in the 2026-11-03 field test,
+# which found the problems filed as issue #84 (docs/testing/evidence/2026-11-03-vps-n2-android.md).
+# The #84 version ran once on a new N2 VM after host-setup.sh in the 2026-11-04 rerun, where it found
+# ~/Android/Sdk by itself (docs/testing/evidence/2026-11-04-vps-n2-android-rerun.md); its report on a
+# machine before host-setup.sh (no kvm group yet) is checked with `bash -n` only. See STATUS.md (G-02).
 
 set -euo pipefail
 

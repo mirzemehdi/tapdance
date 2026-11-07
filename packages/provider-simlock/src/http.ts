@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { TapdanceError, type ErrorCode } from "@tapdance/core";
+import { ERROR_CODES, TapdanceError, type ErrorCode } from "@tapdance/core";
 import type { CrashReportInfo } from "./crash-reports.js";
 import type { PlayedTap } from "./touch-sequence.js";
 import type { AppBuildResult, AppCiInstallResult, TimedTap } from "@tapdance/core";
@@ -184,10 +184,6 @@ export class SimlockHttp {
     return body.lease;
   }
 
-  /**
-   * Runs one allowlisted adb/simctl command on the lease's device (the worker fills the device in).
-   * Internal only: Tapdance never forwards caller-chosen arguments here.
-   */
   /** Worker guard only: carries a file into a leased iOS simulator (Photos, or an app's Documents). */
   async putFile(leaseId: string, query: Record<string, string>, bytes: Buffer): Promise<{ devicePath: string }> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/files?${new URLSearchParams(query)}`, {
@@ -281,7 +277,7 @@ export class SimlockHttp {
 
   /**
    * A worker guard's install-from-CI route: the host fetches a GitHub Actions artifact with its own gh
-   * and installs its APK on the lease, streaming progress to `onLine`.
+   * and installs its APK or simulator .app on the lease, streaming progress to `onLine`.
    */
   async ciInstall(leaseId: string, body: Record<string, unknown>, onLine: (line: string) => void, timeoutMs = 30 * 60_000): Promise<AppCiInstallResult> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/ci-install`, {
@@ -295,7 +291,7 @@ export class SimlockHttp {
       // Simlock itself, or a guard from before this route, does not know it.
       if (!(response.headers.get("content-type") ?? "").includes("json") || /"NOT_ALLOWED"/.test(text)) {
         throw new TapdanceError("NOT_SUPPORTED", "This endpoint cannot install apps from CI", {
-          hint: "Installs from CI run on a worker in device-only mode (tapdance worker guard) whose owner turned them on: tapdance host artifacts enable --repo <owner/repo>. Without it, download the APK yourself and run tapdance app install <path>.",
+          hint: "Installs from CI run on a worker in device-only mode (tapdance worker guard) whose owner turned them on: tapdance host artifacts enable --repo <owner/repo>. Without it, download the APK or .app yourself and run tapdance app install <path>.",
         });
       }
       throw await toError(new Response(text, { status: response.status, headers: response.headers }), "/v1/leases/{id}/ci-install");
@@ -348,6 +344,10 @@ export class SimlockHttp {
     await pipeline(Readable.fromWeb(response.body as never), createWriteStream(destination, { mode: 0o600 }));
   }
 
+  /**
+   * Runs one allowlisted adb/simctl command on the lease's device (the worker fills the device in).
+   * Internal only: Tapdance never forwards caller-chosen arguments here.
+   */
   async exec(leaseId: string, tool: "adb" | "simctl", args: string[], timeoutMs = 120_000, stdin?: string): Promise<ExecResult> {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/exec`, {
       method: "POST",
@@ -419,15 +419,21 @@ export function parseExecStream(body: string): ExecResult {
 async function toError(response: Response, path: string): Promise<TapdanceError> {
   let code = `HTTP_${response.status}`;
   let message = `${path} answered ${response.status}`;
+  let given: string | undefined;
   try {
-    const body = (await response.json()) as { error?: { code?: string; message?: string } };
+    const body = (await response.json()) as { error?: { code?: string; message?: string; hint?: string } };
     if (body.error?.code) code = body.error.code;
     if (body.error?.message) message = body.error.message;
+    if (typeof body.error?.hint === "string") given = body.error.hint;
   } catch {
     // Not JSON: keep the status line.
   }
+  // A worker guard answers with Tapdance's own codes and hints (APP_NOT_INSTALLED, USAGE, the
+  // "artifacts off" fix): keep them rather than guessing from the status (review).
+  const own = Object.hasOwn(ERROR_CODES, code) ? (code as ErrorCode) : undefined;
   const mapped: ErrorCode =
     SIMLOCK_CODE_MAP[code] ??
+    own ??
     (response.status === 401
       ? "AUTH_FAILED"
       : response.status === 403
@@ -448,7 +454,7 @@ async function toError(response: Response, path: string): Promise<TapdanceError>
             ? PASSTHROUGH_REFUSED_HINT
             : mapped === "DEVICE_UNAVAILABLE" && /RUNTIME_MISSING|UNKNOWN_MODEL/.test(code)
               ? "Install the runtime or system image on a worker: `tapdance devices install <ios|android> <version>`, then check `tapdance devices`."
-              : undefined;
+              : given;
   const retryAfter = Number(response.headers.get("retry-after"));
   return new TapdanceError(mapped, message, { ...(hint === undefined ? {} : { hint }), details: { status: response.status, backendCode: code }, ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000 } : {}) });
 }

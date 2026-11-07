@@ -151,6 +151,11 @@ TAPDANCE_SESSION_ID=field-mcp node scripts/field-test/mcp-checklist.mjs scripts/
 For the app checklists, zip the host's build (`ssh mac 'cd <kept build dir> && ditto -c -k --keepParent <App>.app ~/app.zip'`,
 the folder is under `~/.tapdance/worker/builds/*/kept/`), `scp` it over, and pass `--param APP=app.zip
 --param APP_ID=<bundle id>` to `cli-checklist.sh app` and `mcp-ios-app.json`. That also tests the upload.
+Optional: both app checklists also install from CI (step `install_from_ci`) when you pass
+`--param CI_REPO=<owner/repo> --param CI_ARTIFACT=<artifact>` (a simulator `.app` artifact; the owner runs
+`tapdance host artifacts enable --repo <owner/repo>` on the Mac first). iOS installs from CI are
+unit-tested only so far (STATUS F-05). Whatever stops a run, its release step still runs
+(`"always": true` / `always=1`), so no lease is left behind.
 
 Prove the leases come from the Mac: the lease reply's `Provider: Remote worker` and endpoint, and the
 guard's audit log on the Mac (`tail ~/.tapdance/worker/audit.log`).
@@ -180,7 +185,8 @@ machine** (it was on 11-07) there is no "own machine" to run them from; use thes
   public key and the repository's deploy-keys page; the owner adds it there, read-only, from any browser
   (a phone works), and the agent allows the ssh URL with `--git-auth deploy-key`. It covers host builds
   only (installs from CI still need `gh` with Actions read), and organizations can turn deploy keys off.
-  For a token instead: the owner runs `tapdance host gh-login` in the Terminal of the console's VNC
+  The deploy key is unit-tested only and has not yet been run on a rented Mac (STATUS H-13); the token
+  route through `host gh-login` is the one that ran (11-07). For a token instead: the owner runs `tapdance host gh-login` in the Terminal of the console's VNC
   desktop and pastes it there, so the agent never sees it. If the owner pastes the token into the
   agent's chat anyway (11-07), the agent must pipe it over ssh stdin to `tapdance host gh-login` without
   printing it, delete any temporary file, and say that the token passed through the chat; the owner
@@ -212,7 +218,7 @@ Checkpoint A, owner: ssh access to the Mac
   Wait until they confirm, then check `ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host status'`.
 
 Checkpoint B, owner: GitHub access for host builds
-- Preferred, no token anywhere: on the Mac run
+- Preferred, no token anywhere (unit-tested only; not yet run on a rented Mac): on the Mac run
     tapdance host builds key --repo git@github.com:<owner>/<repo>.git
   and give the owner the public key it prints and the deploy-keys page it names. The owner adds it there
   with "Allow write access" off and tells you when. Then allow the ssh URL:
@@ -245,7 +251,7 @@ Checklists (scripts/field-test/, --param DEVICE="iPhone 17" --param OS=<runtime>
   3. app checklists with an upload: on the Mac, zip the host's newest build
      (ditto -c -k --keepParent "$(ls -td ~/.tapdance/worker/builds/*/kept/*/<App>.app | head -1)" ~/td-run/vps-app.zip),
      scp it here, then cli-checklist.sh app and mcp-ios-app.json with --param APP=<that zip>.
-  A cold lease takes about 80-140 s on an M1; the first command after it 30-90 s; one iOS inspect can
+  A cold lease takes about 77-143 s on an M1; the first command after it 30-90 s; one iOS inspect can
   stall about 90 s on a swapping 8 GB host (#128). Always set TAPDANCE_SESSION_ID: without it the CLI
   uses your coding agent's own session id. Run each checklist with nohup and a log file, and keep this
   VPS online.

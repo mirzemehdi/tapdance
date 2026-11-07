@@ -3,10 +3,14 @@
 How to prepare a machine to serve Android emulators to Tapdance, which app files work, where logs come
 from, and what is not supported yet.
 
-> **Status: run end to end on macOS.** Android 34 emulators leased through Tapdance on a Mac: CLI and
-> MCP loops, a custom APK, a Google Play image, the browser viewer and Google's Android CLI
-> ([evidence](../testing/evidence/2026-11-01-android.md)). Not yet run on a Linux/KVM worker or through
-> a remote gateway. See [STATUS.md](../../STATUS.md) (P-01, D-01, D-02).
+> **Status: run end to end on macOS and on a Linux/KVM host.** Android 34 emulators leased through
+> Tapdance on a Mac: CLI and MCP loops, a custom APK, a Google Play image, the browser viewer and
+> Google's Android CLI ([evidence](../testing/evidence/2026-11-01-android.md)). On a Google Cloud N2 VM
+> (Linux with KVM) in device-only mode, driven over Tailscale from a Mac and from a Linux VPS: CLI and
+> MCP checklists, a 77 MB APK, installs from CI, the viewer
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md),
+> [VPS](../testing/evidence/2026-11-03-vps-n2-android.md)). Not yet run through a gateway across two
+> machines. See [STATUS.md](../../STATUS.md) (P-01, D-01, D-02).
 
 ## Where Android emulators can run
 
@@ -119,8 +123,9 @@ tapdance app stop com.example.app
 ```
 
 The app id is the package name. In a self-hosted setup the APK is uploaded from the agent's machine
-through the gateway to the worker (agent-device caps uploads at 2 GiB). Installing an Android APK has
-not been exercised yet (F-01).
+through the gateway or the worker guard to the worker (agent-device caps uploads at 2 GiB). Custom APKs
+were installed locally and through the worker guard from another machine (a 75 MB APK VPS → Mac, a
+77 MB APK Mac → N2); an install through a gateway has not been run (F-01).
 
 ## Driving the UI
 
@@ -154,7 +159,7 @@ Tapdance runs, not on a remote worker (E-04).
 
 ## Limitations
 
-- Linux/KVM workers and remote Android not yet run (see the status note at the top).
+- Android through a gateway across two machines not yet run (see the status note at the top).
 - A release wipes the emulator; within a lease use `uninstall_app` / `clear_app_data` for a fresh-install
   state. For a prepared state that survives (a signed-in Google account), use a device profile
   ([purchase testing](../guides/purchase-testing.md)).

@@ -82,8 +82,11 @@ export interface DeviceProvider {
   stopApp(handle: LeaseHandle, appId: string): Promise<ActionResult>;
   listApps(handle: LeaseHandle): Promise<string[]>;
 
-  /** `system` (Android): every window from the system's own view of the screen, e.g. a Chrome Custom Tab or a system picker. */
-  /** `appId` switches the session to that app (activated as it is, not relaunched), then reads it. */
+  /**
+   * `system` (Android): every window from the system's own view of the screen, e.g. a Chrome Custom Tab
+   * or a system picker. `appId` switches the session to that app (activated as it is, not relaunched),
+   * then reads it.
+   */
   inspect(handle: LeaseHandle, options?: { interactiveOnly?: boolean; system?: boolean; appId?: string }): Promise<ScreenInspection>;
   /** Builds an app on the machine that runs the device (a worker guard's allow-listed repositories) and installs it on the lease. */
   buildApp?(handle: LeaseHandle, request: AppBuildRequest, onLine: (line: string) => void): Promise<AppBuildResult>;

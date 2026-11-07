@@ -8,7 +8,9 @@ The iOS steps below are the path that has been run for real, on a MacBook Pro M1
 and an iPhone 16 / iOS 18.5 simulator ([evidence](testing/evidence/2026-11-01-local-ios.md)). Android
 uses the same commands and has run on the same Mac with Android 34 emulators, a custom APK
 (`examples/android-demo`) and a Google Play image ([evidence](testing/evidence/2026-11-01-android.md)).
-Not yet run: Android on a Linux/KVM worker and Android through a remote gateway (D-02, M-02).
+Android also ran on a Linux/KVM host (a Google Cloud N2 VM) reached over Tailscale in device-only mode
+([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: Android through a gateway
+across two machines (M-02, Q-06).
 
 Before you start, [install Tapdance](installation.md) and the platform tools (Xcode for iOS; the Android
 SDK with command-line tools for Android).
@@ -229,15 +231,17 @@ See [mcp.md](mcp.md) for the tools and the recommended workflow, and the setup p
 
 The MCP server has been verified with a scripted MCP client on a real iOS simulator; it has not yet
 been run from inside Claude Code, Codex or Cursor. It has run on Android 34 emulators on a Mac
-([evidence](testing/evidence/2026-11-01-android.md)), not yet on a Linux worker (see
-[STATUS.md](../STATUS.md) P-01, D-02).
+([evidence](testing/evidence/2026-11-01-android.md)) and on a Linux worker with KVM, a Google Cloud N2
+VM ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)) (see [STATUS.md](../STATUS.md) P-01,
+D-01).
 
 ## Where next
 
 - Agent on a VPS, emulator on my Mac: run `tapdance host up` on the Mac and the
   `tapdance connect …` line it prints on the VPS ([one-command host](deployment/one-command-host.md)).
-  Built and unit-tested, not yet run end to end.
-- Other remote setups (a gateway with joined workers, a KVM server): the guides in
-  [deployment/](deployment/). These setups are implemented but not yet tested across two machines.
+  Run for real with an agent on a VPS ([field runs](testing/evidence/2026-11-02-vps-field-runs.md)).
+- Other remote setups: a KVM server or a rented Mac with `host up` (run across two machines in
+  device-only mode), or a gateway with joined workers (implemented, not yet tested across two
+  machines). The guides are in [deployment/](deployment/).
 - Every command and option: [cli-reference.md](cli-reference.md).
 - Something failed: [troubleshooting.md](troubleshooting.md).

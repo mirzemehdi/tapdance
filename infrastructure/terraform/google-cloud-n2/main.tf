@@ -12,7 +12,10 @@
 # instance metadata. You run scripts/host-setup.sh (which runs `tapdance host up`) yourself over IAP
 # SSH. See README.md.
 #
-# Passes `terraform validate` (1.17); not yet applied anywhere. See STATUS.md (G-01, G-02).
+# Passes `terraform validate` (1.17.1). Applied in the field runs since 2026-11-03 (with
+# assign_external_ip = true; ephemeral mode, on_run_limit = "DELETE", too) and removed again with
+# `terraform destroy`. Not run: the Cloud NAT default, create_project, stop_schedule. See STATUS.md
+# (G-01, G-02, G-07, G-08).
 
 locals {
   project_id = var.create_project ? google_project.this[0].project_id : var.project_id
@@ -95,8 +98,9 @@ resource "google_compute_subnetwork" "this" {
   private_ip_google_access = true
 }
 
-# SSH only from IAP's TCP-forwarding range, only to this worker. No device, ADB, emulator or
-# Simlock port is ever opened: the worker dials out to the gateway.
+# SSH only from IAP's TCP-forwarding range, only to this worker. No device, ADB, emulator, Simlock
+# or guard port is ever opened: the agent's machine reaches the worker guard over Tailscale
+# (`tailscale serve`, set up by `tapdance host up`), whose connections the VM opens outbound.
 resource "google_compute_firewall" "allow_iap_ssh" {
   count = var.enable_iap_ssh ? 1 : 0
 
@@ -130,8 +134,8 @@ resource "google_compute_firewall" "deny_all_ingress" {
   }
 }
 
-# Outbound internet (apt, Google's SDK downloads, git, the gateway's wss:// address) without an
-# external IP.
+# Outbound internet (apt, Google's SDK downloads, git, Tailscale's coordination and relay servers)
+# without an external IP.
 resource "google_compute_router" "this" {
   count = var.assign_external_ip ? 0 : 1
 
@@ -253,7 +257,8 @@ resource "google_compute_instance" "worker" {
   resource_policies = var.stop_schedule != null ? [google_compute_resource_policy.stop_schedule[0].self_link] : null
 
   # No secrets here: instance metadata is readable by anything on the VM and by anyone with
-  # compute.instances.get on the project. The join token is typed over IAP SSH instead.
+  # compute.instances.get on the project. `tapdance host up` writes the pairing token to a file on
+  # the VM, and you copy it over IAP SSH instead.
   metadata = {
     enable-oslogin         = "TRUE"
     block-project-ssh-keys = "TRUE"

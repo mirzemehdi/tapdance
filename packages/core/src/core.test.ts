@@ -33,6 +33,9 @@ describe("errors and redaction", () => {
   it("redacts Simlock secrets, bearer headers and token fields", () => {
     expect(redactSecrets("token slk_d2FybS1wb29sLWFnZW50 here")).toBe("token [REDACTED] here");
     expect(redactSecrets("Authorization: Bearer abcdefghijklmnop")).toBe("Authorization: Bearer [REDACTED]");
+    // GitHub tokens, as a host with `host gh-login` holds one (fake values).
+    expect(redactSecrets("fatal: https://x:ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com")).not.toContain("ghp_aaaa");
+    expect(redactSecrets("github_pat_11AAAAAAA0aaaaaaaaaaaa_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")).toBe("[REDACTED]");
     expect(redactObject({ token: "abc", nested: { daemonAuthToken: "x", ok: "slk_aaaaaaaaaaaaaaa" } })).toEqual({
       token: "[REDACTED]",
       nested: { daemonAuthToken: "[REDACTED]", ok: "[REDACTED]" },

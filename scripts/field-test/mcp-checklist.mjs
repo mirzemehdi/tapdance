@@ -20,6 +20,8 @@
 //     inside its working directory (the output directory).
 //   - A step with "tool": "__list" saves the server's tool list to tools.json.
 //   - "expectText": the step fails unless the reply's text contains it.
+//   - "stopOnFail": true skips every later step when this one fails, except steps with "always": true
+//     (the release step, so a failed run does not leave the device leased).
 // --check validates a checklist offline against the MCP tool schemas in packages/mcp/dist (no server,
 // no device, no network): tool names exist and every step's arguments parse.
 //
@@ -27,8 +29,9 @@
 // config and credentials). TAPDANCE_SESSION_ID defaults to field-test-mcp. Both are passed to the
 // server, with the rest of the environment.
 //
-// Output: <out-dir>/results.json, server-stderr.log, images the tools returned, and a PASS/FAIL table
-// with latencies on stdout. Exit code 0 when every step that ran passed, 1 otherwise, 2 on usage errors.
+// Output: <out-dir>/results.json, server-stderr.log (written even when the server fails to start or the
+// run stops on an error), images the tools returned, and a PASS/FAIL table with latencies on stdout.
+// Exit code 0 when every step that ran passed, 1 otherwise, 2 on usage errors.
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -196,52 +199,56 @@ const stderr = [];
 transport.stderr?.on("data", (d) => stderr.push(String(d)));
 const client = new Client({ name: "tapdance-field-checklist", version: "1.0.0" });
 const started = Date.now();
-await client.connect(transport);
-
 const results = [];
 let stopped = false;
-for (const [i, step] of steps.entries()) {
-  const n = i + 1;
-  const label = step.label ?? step.tool;
-  if (step.tool === "__list") {
-    const { tools } = await client.listTools();
-    writeFileSync(join(outDir, "tools.json"), JSON.stringify(tools, null, 2));
-    console.log(`tools (${tools.length}): ${tools.map((t) => t.name).join(" ")}`);
-    continue;
+try {
+  await client.connect(transport);
+  for (const [i, step] of steps.entries()) {
+    const n = i + 1;
+    const label = step.label ?? step.tool;
+    if (step.tool === "__list") {
+      const { tools } = await client.listTools();
+      writeFileSync(join(outDir, "tools.json"), JSON.stringify(tools, null, 2));
+      console.log(`tools (${tools.length}): ${tools.map((t) => t.name).join(" ")}`);
+      continue;
+    }
+    const skip = stopped && !step.always ? "an earlier stopOnFail step failed" : skipReason(step);
+    if (skip) {
+      results.push({ n, label, tool: step.tool, status: "SKIP", reason: skip });
+      console.log(`SKIP ${String(n).padStart(2)} ${label.padEnd(24)} ${"".padStart(7)}     ${skip}`);
+      continue;
+    }
+    const args = substitute(step.args ?? {}, params, step.optional ?? []);
+    const t0 = performance.now();
+    let reply;
+    let error;
+    try {
+      reply = await client.callTool({ name: step.tool, arguments: args }, undefined, { timeout: (step.timeoutSec ?? 900) * 1000 });
+    } catch (e) {
+      error = String(e?.message ?? e);
+    }
+    const ms = Math.round(performance.now() - t0);
+    const texts = [];
+    for (const [j, c] of (reply?.content ?? []).entries()) {
+      if (c.type === "text") texts.push(c.text);
+      else if (c.type === "image") writeFileSync(join(outDir, `${String(n).padStart(2, "0")}-${label.replace(/[^A-Za-z0-9_.-]+/g, "_")}-${j}.png`), Buffer.from(c.data, "base64"));
+    }
+    const text = texts.join("\n");
+    let ok = !error && !reply?.isError;
+    if (ok && step.expectText && !text.includes(substitute(step.expectText))) {
+      ok = false;
+      error = `reply does not contain "${substitute(step.expectText)}"`;
+    }
+    results.push({ n, label, tool: step.tool, status: ok ? "PASS" : "FAIL", ms, ...(error ? { error } : {}), text: text.slice(0, 4000) });
+    console.log(`${ok ? "PASS" : "FAIL"} ${String(n).padStart(2)} ${label.padEnd(24)} ${String(ms).padStart(7)} ms  ${(error ?? text).replace(/\s+/g, " ").slice(0, 140)}`);
+    if (!ok && step.stopOnFail) stopped = true;
   }
-  const skip = stopped ? "an earlier stopOnFail step failed" : skipReason(step);
-  if (skip) {
-    results.push({ n, label, tool: step.tool, status: "SKIP", reason: skip });
-    console.log(`SKIP ${String(n).padStart(2)} ${label.padEnd(24)} ${"".padStart(7)}     ${skip}`);
-    continue;
-  }
-  const args = substitute(step.args ?? {}, params, step.optional ?? []);
-  const t0 = performance.now();
-  let reply;
-  let error;
-  try {
-    reply = await client.callTool({ name: step.tool, arguments: args }, undefined, { timeout: (step.timeoutSec ?? 900) * 1000 });
-  } catch (e) {
-    error = String(e?.message ?? e);
-  }
-  const ms = Math.round(performance.now() - t0);
-  const texts = [];
-  for (const [j, c] of (reply?.content ?? []).entries()) {
-    if (c.type === "text") texts.push(c.text);
-    else if (c.type === "image") writeFileSync(join(outDir, `${String(n).padStart(2, "0")}-${label.replace(/[^A-Za-z0-9_.-]+/g, "_")}-${j}.png`), Buffer.from(c.data, "base64"));
-  }
-  const text = texts.join("\n");
-  let ok = !error && !reply?.isError;
-  if (ok && step.expectText && !text.includes(substitute(step.expectText))) {
-    ok = false;
-    error = `reply does not contain "${substitute(step.expectText)}"`;
-  }
-  results.push({ n, label, tool: step.tool, status: ok ? "PASS" : "FAIL", ms, ...(error ? { error } : {}), text: text.slice(0, 4000) });
-  console.log(`${ok ? "PASS" : "FAIL"} ${String(n).padStart(2)} ${label.padEnd(24)} ${String(ms).padStart(7)} ms  ${(error ?? text).replace(/\s+/g, " ").slice(0, 140)}`);
-  if (!ok && step.stopOnFail) stopped = true;
+} finally {
+  await client.close().catch(() => undefined);
+  // In a finally: a failed connect or a crash mid-run still leaves the server's own account of it.
+  writeFileSync(join(outDir, "server-stderr.log"), stderr.join(""));
 }
 
-await client.close().catch(() => undefined);
 const ran = results.filter((r) => r.status !== "SKIP");
 const passed = ran.filter((r) => r.status === "PASS").length;
 const summary = {
@@ -256,7 +263,6 @@ const summary = {
   steps: results,
 };
 writeFileSync(join(outDir, "results.json"), JSON.stringify(summary, null, 2));
-writeFileSync(join(outDir, "server-stderr.log"), stderr.join(""));
 
 console.log("");
 console.log(`${"#".padStart(3)}  ${"STEP".padEnd(24)} ${"RESULT".padEnd(6)} ${"MS".padStart(7)}`);

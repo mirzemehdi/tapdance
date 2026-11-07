@@ -5,5 +5,5 @@
   { "tool": "inspect_screen", "args": { "compact": true }, "label": "inspect" },
   { "tool": "take_screenshot", "args": { "note": "built on the host" }, "label": "screenshot" },
   { "tool": "build_app", "args": { "repo": "${BUILD_REPO}", "ref": "${BUILD_REF}", "project": "${BUILD_PROJECT}", "scheme": "${BUILD_SCHEME}" }, "optional": ["BUILD_PROJECT", "BUILD_SCHEME"], "label": "build_reused", "requires": ["BUILD_REPO", "BUILD_REF"], "timeoutSec": 3600 },
-  { "tool": "release_device", "label": "release" }
+  { "tool": "release_device", "label": "release", "always": true }
 ]

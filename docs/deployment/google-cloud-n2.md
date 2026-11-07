@@ -5,16 +5,18 @@ coding agent that runs somewhere else (your laptop, an ordinary VPS). You create
 script on it, and connect the agent's machine over Tailscale. Requirements G-01 to G-03 in
 [PRODUCT.md](../../PRODUCT.md).
 
-> **Status: run end to end once (2026-11-03).** An `n2-standard-4` VM in `europe-west1-b`, created
-> with the Terraform module and set up with `scripts/host-setup.sh`, hosted Android emulators for an
-> agent on a Mac over Tailscale: the CLI and MCP checklists, the browser viewer, installs from CI, the
-> idle stop powering the VM off, and a start back to ready in 54 s
-> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: the gcloud-by-hand route, a
-> Linux VPS as the agent's machine, a successful build on the VM, a Spot VM, other machine types, the
-> uptime cap, `terraform destroy`, the snapshot commands under [Parking the VM](#parking-the-vm), and the
-> guardrails added after that run: Terraform's ephemeral mode (`on_run_limit = "DELETE"`), the leftovers
-> check `infrastructure/scripts/gcp-leftovers.sh` and the `cloud VM:` cost line of `host up`. Prices
-> are estimates from Google's published rates. See [STATUS.md](../../STATUS.md).
+> **Status: run end to end (2026-11-03, again 2026-11-04 and 11-05).** An `n2-standard-4` VM in
+> `europe-west1-b`, created with the Terraform module and set up with `scripts/host-setup.sh`, hosted
+> Android emulators for an agent on a Mac over Tailscale: the CLI and MCP checklists, the browser
+> viewer, installs from CI, an Android build on the VM from a private repository, the idle stop powering
+> the VM off, and a start back to ready in 54 s ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)).
+> Repeated with a Linux VPS as the agent's machine, with Terraform's ephemeral mode
+> (`on_run_limit = "DELETE"`, the cap not reached), the `cloud VM:` cost line of `host up`,
+> `terraform destroy` and the leftovers check `infrastructure/scripts/gcp-leftovers.sh`
+> ([evidence](../testing/evidence/2026-11-03-vps-n2-android.md)). Not yet run: the gcloud-by-hand route,
+> a Spot VM, other machine types, the uptime cap, and the snapshot commands under
+> [Parking the VM](#parking-the-vm). Prices are estimates from Google's published rates. See
+> [STATUS.md](../../STATUS.md).
 >
 > **For a test run** (an agent or you trying Tapdance for a few hours), follow
 > [field-test-cloud-android.md](../testing/field-test-cloud-android.md): ephemeral mode, a budget alert,
@@ -592,7 +594,8 @@ cost_guards` shows which are on.
   The countdown only runs while the VM runs: turn the guard's idle stop off (`--idle-stop off`), or an
   idle poweroff leaves a stopped VM with its disk. After the deletion Terraform still lists the VM, and
   `terraform plan` would create it again; run `terraform destroy`. gcloud route:
-  `--instance-termination-action=DELETE`. Not yet run on a real VM.
+  `--instance-termination-action=DELETE`. Applied with Terraform on a real VM with `max_run_hours = 6`;
+  the cap was not reached, so the deletion itself has not been seen. The gcloud route not run.
 - **`stop_schedule`** (default off) and **`schedule_time_zone`** (default `UTC`): a cron schedule at
   which Compute Engine stops the VM, for example `"0 20 * * *"` for 20:00 every day. A scheduled stop
   can begin up to 15 minutes late. It only stops; starting stays up to you. Terraform also grants the

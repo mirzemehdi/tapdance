@@ -23,5 +23,5 @@
   { "tool": "audit_screen", "label": "audit" },
   { "tool": "opened_links", "label": "opened_links" },
   { "tool": "get_test_artifacts", "label": "artifacts" },
-  { "tool": "release_device", "label": "release" }
+  { "tool": "release_device", "label": "release", "always": true }
 ]

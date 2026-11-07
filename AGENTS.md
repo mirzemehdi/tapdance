@@ -115,7 +115,7 @@ generated index is stale, or when any doc or hint names a `tapdance` command tha
 
   Optional: `TAPDANCE_IT_APP` (an `.apk` or simulator `.app`) and `TAPDANCE_IT_APP_ID`;
   `TAPDANCE_IT_ENDPOINT` and `TAPDANCE_IT_TOKEN` run the same loop through a gateway. Use
-  `TAPDANCE_IT_PLATFORM=android` for Android; that path has not been run yet.
+  `TAPDANCE_IT_PLATFORM=android` for Android (run on a Mac with Android 34 emulators, STATUS Q-02).
 
 ## Keep PRODUCT.md, STATUS.md and docs in sync
 
@@ -125,9 +125,12 @@ Change them **in the same change** as the code:
   `STATUS.md`.
 - Behaviour change: update the `STATUS.md` row and its "Last updated" date, and every doc that shows
   the affected command, flag, config key, environment variable or MCP tool.
-- Docs must never claim more than `STATUS.md`. A gateway with a joined worker has run on one Mac
-  only. Two machines over a real network, Android, Google Cloud N2, AXe, the Android CLI and cloud
-  Macs are **not** proven yet; say so wherever you describe them.
+- Docs must never claim more than `STATUS.md`. Proven for real: Android (macOS and a Google Cloud N2
+  VM), AXe, the Android CLI on a local lease, a rented Scaleway Mac, and two machines over Tailscale
+  in device-only mode (worker guard). **Not** proven yet: a gateway with a joined worker across two
+  machines (it has run on one Mac only), MacStadium and AWS EC2 Mac, the full device loop over
+  Streamable HTTP MCP, and a real agent (Claude Code, Codex, Cursor) as the MCP client; say so
+  wherever you describe them.
 - Credit upstream projects with links when you describe or follow their behaviour, and update
   `NOTICE.md` when you add a dependency or external tool.
 

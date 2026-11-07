@@ -52,7 +52,6 @@ export const DAEMON_UNAVAILABLE_REASON = "DAEMON_UNAVAILABLE";
 const STALE_CLAIM_HINT =
   "An earlier session's claim on this device outlived its worker process. Lease again: a worker guard clears such claims before each lease. On the worker machine, `tapdance worker cleanup` clears them by hand.";
 
-/** Turns an agent-device or proxy failure into a TapdanceError an agent can act on. */
 /**
  * What to do about Android install refusals people meet in practice: a build signed with another key
  * (CI runners usually make a fresh debug key per run) cannot update the installed app.
@@ -130,6 +129,7 @@ export function withRefusalAppId(error: TapdanceError, appId: string | undefined
   });
 }
 
+/** Turns an agent-device or proxy failure into a TapdanceError an agent can act on. */
 export function fromAgentDeviceError(error: unknown, action: string): TapdanceError {
   if (error instanceof TapdanceError) return error;
   const e = (error ?? {}) as AgentDeviceLikeError;
@@ -176,14 +176,20 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     // The gateway keeps a disconnected worker's lease: the device is still the caller's.
     code = "WORKER_OFFLINE";
     retryable = true;
-  } else if (/not available on this simlock|try again/i.test(message)) code = "PROVIDER_UNAVAILABLE";
+  } else if (/not available on this simlock|try again/i.test(message) && !/^refused by simlock:/i.test(message)) {
+    // Simlock's "could not check your leases; try again" says the retry is the fix (review).
+    code = "PROVIDER_UNAVAILABLE";
+    if (/try again/i.test(message)) retryable = true;
+  }
   else if (/Remote daemon is unavailable|Daemon request timed out/i.test(message)) {
     // "timed out": the first command after a cold lease starts agent-device's test runner; on an 8 GB
     // Mac under memory pressure that took over 90 s once, and the next try answered.
     // agent-device's daemon on the host did not answer this once (busy, or restarting) (#67).
     code = "PROVIDER_UNREACHABLE";
     retryable = true;
-    hint = "The host's device daemon did not answer this call; run it again. If it keeps happening, the worker on the host restarted or is overloaded: check `tapdance doctor`.";
+    // A tap, typing or an install may have happened before the answer was lost: look before repeating it.
+    const acted = /^(tap|type|swipe|install|press|key|launch|start recording|stop recording)\b/.test(action);
+    hint = `The host's device daemon did not answer this call; ${acted ? "it may still have acted, so read the screen (`ui inspect`) before running it again" : "run it again"}. If it keeps happening, the worker on the host restarted or is overloaded: check \`tapdance doctor\`.`;
     noBackendHint = true;
     daemonBusy = true;
   } else if (/ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up|ETIMEDOUT/i.test(message)) code = "PROVIDER_UNREACHABLE";

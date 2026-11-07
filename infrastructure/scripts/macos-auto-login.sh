@@ -4,7 +4,8 @@
 # as a rented Mac mini. iOS simulators themselves do not need a login session; the LaunchAgents do.
 #
 # Usage (as an administrator, in an interactive terminal; asks for the sudo password, then for the
-# account's login password, neither echoed nor stored anywhere but /etc/kcpassword):
+# account's login password, neither echoed nor stored anywhere but /etc/kcpassword; twice when it cannot
+# be checked here: another account, or sudo without a password):
 #   infrastructure/scripts/macos-auto-login.sh [account]      # default: the current user
 #   infrastructure/scripts/macos-auto-login.sh --off
 #   infrastructure/scripts/macos-auto-login.sh --status
@@ -44,33 +45,67 @@ dscl . -read "/Users/$user" UniqueID >/dev/null 2>&1 || die "no local account na
 if fdesetup isactive >/dev/null 2>&1; then die "FileVault is on: automatic login cannot work (macOS needs the password at boot)."; fi
 [[ -r /dev/tty ]] || die "run it in an interactive terminal (ssh -t)"
 
+# python3 does the XOR below. Check it runs before asking for anything, so a missing python3 (no
+# Command Line Tools) never leaves an empty or half-written /etc/kcpassword behind.
+/usr/bin/python3 -c 'import sys' < /dev/null >/dev/null 2>&1 || die "/usr/bin/python3 does not run here (install Apple's Command Line Tools: xcode-select --install), then run this again"
+
 sudo -v
-printf 'Login password of %s (not shown): ' "$user" > /dev/tty
-IFS= read -rs pw < /dev/tty
-printf '\n' > /dev/tty
-[[ -n "$pw" ]] || die "empty password"
+read_pw() { # prompt; sets pw
+  printf '%s (not shown): ' "$1" > /dev/tty
+  IFS= read -rs pw < /dev/tty
+  printf '\n' > /dev/tty
+}
+# Asked twice when it cannot be checked, so a typo shows here and not only at the next reboot.
+read_pw_twice() {
+  local first
+  read_pw "Login password of $user"; first="$pw"
+  read_pw "The same password again"
+  [[ "$pw" == "$first" ]] || { unset pw first; die "the two passwords differ; nothing written"; }
+  unset first
+}
 # Check it before writing anything, so a typo does not leave a broken automatic login behind. For the
-# current user, sudo checks it (read from stdin, never on a command line); for another account, the
-# reboot is the check.
+# current user, sudo checks it (read from stdin, never on a command line or in the environment), unless
+# sudo needs no password here (NOPASSWD): then sudo accepts anything, and like another account's
+# password it is asked twice and the reboot is the check.
 if [[ "$user" == "$(id -un)" ]]; then
-  printf '%s\n' "$pw" | sudo -k -S -p '' -v 2>/dev/null || { unset pw; die "that is not $user's login password"; }
+  sudo -k
+  if sudo -n true 2>/dev/null; then
+    echo "note: sudo needs no password on this account (NOPASSWD), so it cannot check the login password; the reboot will show whether it is right" > /dev/tty
+    read_pw_twice
+  else
+    read_pw "Login password of $user"
+    [[ -n "$pw" ]] || die "empty password"
+    printf '%s\n' "$pw" | sudo -S -p '' -v 2>/dev/null || { unset pw; die "that is not $user's login password"; }
+  fi
 else
   echo "note: cannot check another account's password here; the reboot will show whether it is right" > /dev/tty
+  read_pw_twice
 fi
+[[ -n "$pw" ]] || die "empty password"
 
 # What the Users & Groups pane writes: the password, padded with NUL bytes to a multiple of 12, XORed
 # with Apple's fixed 11-byte key. The password goes to python on stdin (printf is a shell builtin), so it
-# never appears in a process list or the environment.
-printf '%s' "$pw" | /usr/bin/python3 -c '
+# never appears in a process list or the environment. The file is created mode 600 (umask 077) under a
+# staging name and moved into place only when python succeeded, so it is never readable by others and
+# a failure leaves no empty /etc/kcpassword.
+staged=/etc/kcpassword.tapdance-new
+sudo rm -f "$staged"
+if printf '%s' "$pw" | /usr/bin/python3 -c '
 import sys
 key = [125, 137, 82, 35, 210, 188, 221, 234, 163, 185, 31]
 pw = sys.stdin.buffer.read()
 pw += b"\0" * (12 - len(pw) % 12)
 sys.stdout.buffer.write(bytes(b ^ key[i % len(key)] for i, b in enumerate(pw)))
-' | sudo tee /etc/kcpassword > /dev/null
-unset pw
-sudo chown root:wheel /etc/kcpassword
-sudo chmod 600 /etc/kcpassword
+' | sudo sh -c 'umask 077; cat > "$1"' sh "$staged"; then
+  unset pw
+  sudo chown root:wheel "$staged"
+  sudo chmod 600 "$staged"
+  sudo mv -f "$staged" /etc/kcpassword
+else
+  unset pw
+  sudo rm -f "$staged"
+  die "could not write /etc/kcpassword; nothing changed"
+fi
 sudo defaults write "$PREFS" autoLoginUser -string "$user"
 echo "automatic login: ON for $user (/etc/kcpassword)"
 echo "Reboot to check: after it, \`who\` should list $user on console."

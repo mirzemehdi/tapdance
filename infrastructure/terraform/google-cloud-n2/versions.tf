@@ -1,5 +1,5 @@
-# Not yet validated: Terraform was not available where this was written. Run
-# `terraform init && terraform validate` before the first `terraform plan`. See README.md.
+# Validated with Terraform 1.17.1 (`terraform validate`) and applied in the field runs; see README.md.
+# Run `terraform init && terraform validate` before the first `terraform plan`.
 terraform {
   required_version = ">= 1.5.0"
 

@@ -23,8 +23,10 @@
 #
 #   bash install-android-worker.sh --accept-android-licenses
 #
-# Status: syntax-checked with `bash -n` only. It has NOT been run on a real machine yet (no
-# Android, no Linux, no N2 run so far). See STATUS.md (G-01, G-02, D-02, Q-05).
+# Status: syntax-checked with `bash -n` only. This script itself has NOT been run on a real machine
+# yet. Android on Linux has run on a Google Cloud N2 VM, but set up with scripts/host-setup.sh in
+# device-only mode (a worker guard, no gateway), not with this gateway-join script. See STATUS.md
+# (D-01, G-01, G-02, D-02, Q-05).
 #
 # Upstream projects this script drives: Simlock (https://github.com/callstackincubator/simlock, MIT)
 # owns the emulators and leases; agent-device (https://github.com/callstack/agent-device, MIT)
@@ -364,8 +366,15 @@ else
     git clone --depth 1 --branch "$TAPDANCE_REF" "$TAPDANCE_REPO" "$TAPDANCE_SOURCE_DIR"
   fi
   # pnpm comes from Corepack (bundled with Node 22) at the version package.json pins; npx is the
-  # fallback when a Node build ships without Corepack.
-  if command -v corepack >/dev/null 2>&1; then PNPM=(corepack pnpm); else PNPM=(npx --yes pnpm@10.20.0); fi
+  # fallback when a Node build ships without Corepack. The root build script calls a bare `pnpm`,
+  # so Corepack's pnpm shim goes into $BIN_DIR (on PATH, no sudo), like host-setup.sh does.
+  if command -v corepack >/dev/null 2>&1; then
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack enable --install-directory "$BIN_DIR" pnpm
+    hash -r
+    PNPM=(pnpm)
+  else
+    PNPM=(npx --yes pnpm@10.20.0)
+  fi
   (
     cd "$TAPDANCE_SOURCE_DIR"
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0

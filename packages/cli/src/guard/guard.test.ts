@@ -110,7 +110,9 @@ async function fakeSimlock(options: FakeOptions = {}): Promise<Upstream> {
       return;
     }
     if (req.url?.startsWith("/v1/agent-device/upload")) {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ uploaded: body.length, uploadId: `up-${req.headers["x-agent-device-lease-id"] ?? "none"}`.slice(0, 7) }));
+      // Like Simlock 0.5.0's front: a preflight reply's ticket carries the caller's own Authorization.
+      const ticket = req.url.endsWith("/preflight") ? { upload: { url: "http://127.0.0.1:9/v1/agent-device/upload/direct/up", headers: { authorization: req.headers["authorization"] ?? "" } } } : {};
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ uploaded: body.length, uploadId: `up-${req.headers["x-agent-device-lease-id"] ?? "none"}`.slice(0, 7), ...ticket }));
       return;
     }
     if (req.url?.startsWith("/v1/agent-device/artifacts/")) {
@@ -465,8 +467,13 @@ describe("worker guard: hardening", () => {
     expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" })).status).toBe(403);
     expect((await t.call(t.mallory.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, { "x-agent-device-lease-id": A })).status).toBe(403);
     const pre = await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, { "x-agent-device-lease-id": A });
-    const uploadId = ((await pre.json()) as { uploadId: string }).uploadId;
+    const preflight = (await pre.json()) as { uploadId: string; upload?: unknown };
+    const uploadId = preflight.uploadId;
     expect(uploadId).toBe("up-aaaa");
+    // The upload ticket would carry the host's own Simlock token: the guard drops it, and the client
+    // uploads through the guard instead (review).
+    expect(preflight.upload).toBeUndefined();
+    expect(JSON.stringify(preflight)).not.toContain("slk_");
     // Mallory cannot push bytes into, finalize or install Alice's upload.
     expect((await t.call(t.mallory.secret, "PUT", `/v1/agent-device/upload/direct/${uploadId}`, "bytes", { "x-agent-device-lease-id": B })).status).toBe(403);
     expect((await t.call(t.mallory.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, { "x-agent-device-lease-id": B })).status).toBe(403);
@@ -903,7 +910,7 @@ describe("worker guard: hardening", () => {
       const app = (extra: Array<{ name: string; data: Buffer; mode?: number }> = []) =>
         zipOf([{ name: "Demo.app/Info.plist", data: Buffer.from("plist") }, { name: "Demo.app/Demo", data: Buffer.from([0xcf, 0xfa, 0xed, 0xfe]) }, ...extra]);
       const withPlutil = (gh: ReturnType<typeof fakeGh>, platforms: string[]): import("@tapdance/provider-simlock").CommandRunner => async (command, args, o) =>
-        command === "plutil" ? { code: 0, output: JSON.stringify({ CFBundleIdentifier: "com.acme.demo", CFBundleSupportedPlatforms: platforms }) } : gh.runner(command, args, o);
+        command === "plutil" ? { code: 0, output: args[1] === "CFBundleIdentifier" ? "com.acme.demo\n" : JSON.stringify(platforms) } : gh.runner(command, args, o);
       const gh = fakeGh({ zip: app() });
       const t = await setup(on(), { leasePlatform: "ios" }, { ciRunner: withPlutil(gh, ["iPhoneSimulator"]) });
       await t.allocate(t.alice.secret, A);

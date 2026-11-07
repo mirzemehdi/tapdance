@@ -56,6 +56,9 @@ export async function readSecret(prompt: string): Promise<string> {
         }
         if (ch === "\u0003") {
           stdin.setRawMode(false);
+          stdin.pause();
+          stdin.off("data", onData);
+          process.stderr.write("\n");
           reject(new TapdanceError("USAGE", "Cancelled"));
           return;
         }
