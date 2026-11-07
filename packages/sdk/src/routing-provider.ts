@@ -122,7 +122,7 @@ export class RoutingProvider implements DeviceProvider {
             (error: unknown) => ({ error: reasonOf(error) }),
           ),
         ]);
-        const usable = !checks.some((c) => c.status === "fail" && (c.id === "simlock.reachable" || c.id === "simlock.auth" || c.id === "provider"));
+        const usable = !("error" in probe) && !checks.some((c) => c.status === "fail" && (c.id === "simlock.reachable" || c.id === "simlock.auth" || c.id === "provider"));
         const served = "inventory" in probe ? servedPlatforms(probe.inventory).filter((p) => !target.platforms || target.platforms.includes(p)) : [];
         return { target, checks, usable, served, error: "error" in probe ? probe.error : undefined };
       }),
