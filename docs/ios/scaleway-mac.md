@@ -128,6 +128,10 @@ bash host-setup.sh --ios-only --with-gh --allow-admin-account --label my-agent
   password, then prints a login link: open it in your browser and approve the machine.
 - `host up` then installs the worker and guard services, asks you to approve the pairing, serves the
   guard on Tailscale (`https://` when the tailnet has HTTPS certificates) and runs a self-test lease.
+- `--tailscale-ssh` (passed on to `host up`) also turns on Tailscale SSH: a VPS in your tailnet then
+  reaches the Mac with `ssh m1@<mac>.<tailnet>.ts.net`, with no key to copy (#126). Your tailnet policy
+  decides who may (by default you, after a browser approval about every 12 hours). Not yet run on a
+  rented Mac.
 
 Copy the token file to the agent's machine with `scp` (over ssh, `host up` does not offer the
 clipboard: it would be the Mac's):
