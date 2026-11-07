@@ -122,27 +122,68 @@ hosted product, so it is proven while still self-hosted.
 - What the agent sees: one device list, platform chosen per lease, clear errors when a platform has no capacity.
 
 **Done when:**
-- From this Mac, one session leases an Android emulator on the N2 VM and an iOS simulator on the rented Mac, through the CLI and MCP, in the same run.
+- From the agent's machine (a Mac or a Linux VPS), one session leases an Android emulator on the N2 VM and an iOS simulator on the rented Mac, through the CLI and MCP, in the same run.
 - Both hosts are in one `doctor` report.
 - Losing one host leaves the other usable, with a clear error.
 - One doc ("Android and iOS from one agent") covers it. STATUS.md and evidence are updated.
+- Nothing is left that bills: both leftover checks exit 0.
+
+**What stages 2 and 3 taught, for this stage:** both hosts were torn down, so this stage rents them
+again (N2 about USD 0.19-0.21/h; a Scaleway Mac mini bills a 24-hour minimum). An 8 GB Mac mini holds
+one simulator, so a 16 GB one fits a warm spare. A VPS reaches the Mac only with an ssh key added when
+it is rented. Gateway mode has run on one Mac only (STATUS Q-06).
 
 **Prompt:**
 
 ```text
 Do stage 4 of docs/hosting-plan.md: one agent connection that reaches both the Linux Android host
-(stage 2) and the Mac iOS host (stage 3). Read that file, CLAUDE.md, AGENTS.md, PRODUCT.md,
-STATUS.md, docs/architecture-decision.md and the stage 2 and 3 evidence first.
-1. Find out what exists: Simlock's gateway pooling across workers, `tapdance connect` with one or
-   several targets, how pairing tokens and scopes work. Run nothing paid yet.
+(stage 2, Google Cloud N2) and the Mac iOS host (stage 3, Scaleway Mac mini). Read that file,
+CLAUDE.md, AGENTS.md, PRODUCT.md, STATUS.md, docs/architecture-decision.md and the stage 2 and 3
+evidence first (docs/testing/evidence/2026-11-03-gcp-n2-android.md, 2026-11-06-rented-mac-ios.md,
+2026-11-07-vps-rented-mac-ios.md).
+
+0. Say which machine you run on (the owner's Mac or a Linux VPS); that is the agent's machine for
+   this stage. If it is the owner's Mac, its own Tapdance host stays untouched: never run xcrun
+   simctl or adb -P 5038 there, never touch ~/.tapdance, never trigger macOS privacy prompts.
+1. Find out what exists, running nothing paid: Simlock's gateway pooling across workers (Simlock
+   0.5.0, patched), `tapdance connect` with one or several targets, how pairing tokens and scopes
+   work, and what `doctor` and `devices` show for several hosts. Gateway mode has run on one Mac
+   only so far (STATUS Q-06), and doctor on a gateway with an agent-only token reports no
+   capabilities (a known review finding).
 2. Propose the design (gateway pool vs several connect targets vs both), with the trade-offs for
-   a later hosted service (stage 5). Wait for my choice before building.
-3. Build it, then prove it from this Mac with a scratch TAPDANCE_HOME: one session leases Android
-   on the N2 VM and iOS on the rented Mac, through the CLI and MCP; doctor shows both; take one
-   host down and check the other still works with a clear error. Ask me before starting any paid
-   machine and give me a cost estimate.
-4. Update docs (one guide for "Android and iOS from one agent"), STATUS.md, CHANGELOG, evidence,
-   and the stage table in docs/hosting-plan.md. Commit with my identity; no AI attribution.
+   the hosted service in stage 5. Wait for my choice before building.
+3. Build it, then prove it with a scratch TAPDANCE_HOME and a distinct TAPDANCE_SESSION_ID: one
+   session leases Android on the N2 VM and iOS on the rented Mac, through the CLI and MCP (the
+   drivers in scripts/field-test/); doctor shows both hosts; take one host down and check the
+   other still works and the agent gets a clear error.
+4. Paid machines: the stage 2 and 3 hosts are gone. Before creating anything, give me a cost
+   estimate and wait for my yes.
+   - N2: about USD 0.19-0.21/h, Terraform in infrastructure/terraform/google-cloud-n2 (ephemeral
+     mode).
+   - Scaleway Mac mini: 24-hour minimum. M1-M is EUR 2.64 + VAT, but its 8 GB holds one simulator
+     only (`tapdance host warm android=0,ios=0`); propose M2-M (16 GB, EUR 4.08) if this stage needs
+     warm spares.
+   Follow docs/testing/field-test-cloud-android.md and docs/testing/field-test-rented-mac-ios.md
+   for setup, the resource log and teardown. When I rent the Mac, remind me to add every agent
+   machine's ssh public key (a VPS has no other way in). I approve the pairing and type any
+   password or token myself; you never ask for or handle them.
+5. While both hosts are up, and if time allows, prove these unit-tested-only items and record them:
+   - `tapdance host builds key --repo <ssh url>` (a deploy key for a host build, no GitHub token);
+   - `tapdance host up --tailscale-ssh`;
+   - an iOS install from CI (`tapdance app install --from-ci`).
+6. Update docs (one guide: "Android and iOS from one agent"), STATUS.md, CHANGELOG.md, an evidence
+   file under docs/testing/evidence/, and the stage table in docs/hosting-plan.md. Work on a branch
+   and open a PR; merge only when I say so. File GitHub issues only for problems outside this
+   change, and never publicly for a security hole (tell me instead). Commit with my git identity;
+   no AI attribution anywhere.
+7. End with nothing that bills: tear down, then run
+   infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID> and
+   infrastructure/scripts/scaleway-leftovers.sh until both exit 0. Give me the final state, the
+   cost, and anything left for me to remove (Tailscale machines, GitHub tokens or deploy keys,
+   ssh keys).
+
+Never print tokens (slk_, tdg_, pairing files, GitHub or cloud credentials), never ask for, print or
+store my cloud credentials, and ask before anything that costs money or starts services on a host.
 ```
 
 ---
