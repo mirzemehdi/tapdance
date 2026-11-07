@@ -72,6 +72,7 @@ phase by phase (§19).
 | M-03 | Mode C, bring your own cloud: worker on Google Cloud N2, OVH with confirmed nested virtualization, other KVM VPS, dedicated Linux servers, customer machines. The user pays the infrastructure provider. | W2 |
 | M-04 | Mode D, managed cloud (future): same CLI/MCP; only the provider changes. | W2 |
 | M-05 | The gateway can run on the existing VPS, a separate server, or later Tapdance Cloud. | D2 |
+| M-06 | One agent connection reaches several self-hosted hosts (for example a Linux host for Android and a Mac for iOS): each host is a named connect target with its own token, sent only to its origin; a lease goes to a host that serves its platform (and model or OS version), in a fixed preference order, or to one the caller names; every call about a lease goes to the host that granted it; a host that is down fails its platform's leases fast with a retryable error naming it, never falls back to another platform, and leaves the other hosts usable; `doctor` and the device list show every host. | C (stage 4) |
 
 ## 5. CLI
 

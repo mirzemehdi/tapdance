@@ -17,12 +17,14 @@ server with no device.
 | File | What it does |
 | --- | --- |
 | `mcp-checklist.mjs` | Starts `tapdance mcp` from this repository over stdio (with the repository's `@modelcontextprotocol/sdk`), runs a JSON checklist of tool calls, writes `results.json`, `server-stderr.log` and returned images, and prints a PASS/FAIL table with latencies. `--check` validates a checklist offline against the MCP tool schemas. |
-| `cli-checklist.sh` | Runs the same kind of checklist with the `tapdance` CLI, timing each command; writes `results.tsv`, `results.json` and each step's output. Suites `base`, `app`, `build`. |
+| `cli-checklist.sh` | Runs the same kind of checklist with the `tapdance` CLI, timing each command; writes `results.tsv`, `results.json` and each step's output. Suites `base`, `app`, `build`, and for two hosts (stage 4) `two-hosts` and `host-down`. |
 | `checklists/mcp-base.json` | Launcher checklist: lease, status, keys, inspect, screenshot, swipe, tap, wait, rotate, recording, push to Downloads, notifications, logs, audit, opened links, artifacts, release. |
 | `checklists/mcp-app.json` | Your app: install from CI or from an APK file, launch, inspect, screenshot, optional tap and typing, recording, app logs, crash logs, sandbox push and pull (debuggable builds), rotate, audit, list, kill, clear, relaunch, release. |
 | `checklists/mcp-build.json` | A build on the host (`build_app`), then launch, inspect, screenshot, release. |
 | `checklists/mcp-ios-base.json` | iOS home screen: lease (`DEVICE`, `OS`), keys, inspect, screenshot, swipes, alert, rotate, recording, push to the Files app, notifications, language, logs, crash reports, audit, opened links, release. |
 | `checklists/mcp-ios-app.json` | iOS app: install from CI (`CI_REPO`, `CI_ARTIFACT`: a simulator `.app` artifact) or `APP` (a simulator `.app`, or a `.zip` holding one), launch, launch with console, inspect, alert, tap and typing, recording, app logs, crash reports, push to the app's Documents, launch in de-DE, rotate, audit, kill, clear, relaunch, release. |
+| `checklists/mcp-two-hosts.json` | Stage 4, two hosts connected: list devices (one entry per host), lease Android (`ANDROID_TARGET`, `ANDROID_DEVICE`, `ANDROID_OS`), a second lease (iOS) refused with `LEASE_ALREADY_HELD`, optional `APK` + `ANDROID_APP_ID`, inspect, swipe, screenshot, logs, release; then lease iOS in the same session (`IOS_TARGET`, `IOS_DEVICE`, `IOS_OS`), optional `APP` + `IOS_APP_ID`, the same steps, release. |
+| `checklists/mcp-host-down.json` | Stage 4, one host down: list devices shows it unreachable, a lease on `DOWN_PLATFORM` fails with `PROVIDER_UNREACHABLE` naming `DOWN_TARGET`, a lease on `UP_PLATFORM` still works, screenshot, release. |
 | `checklists/mcp-ios-build.json` | iOS build on the host (`build_app` with `BUILD_PROJECT` / `BUILD_SCHEME`), launch, inspect, screenshot, the same build again (reused), release. |
 
 ## Before you run anything
@@ -106,3 +108,24 @@ A JSON array of steps:
   failed run does not leave the device leased. `timeoutSec`: default 900.
 - `expectText`: fail the step unless the reply's text contains this.
 - `{ "tool": "__list" }` saves the server's tool list to `tools.json`.
+
+## Two hosts (stage 4)
+
+Connect both hosts with the same scratch home, then run both drivers in **one session each** (Android
+then iOS), and the one-host-down check after stopping one host (`tapdance host pause`, or `tailscale
+down`, on it):
+
+```bash
+export TAPDANCE_HOME="$HOME/td-stage4-home" TAPDANCE_SESSION_ID=stage4-cli
+node packages/cli/dist/main.js connect https://<n2>.<tailnet>.ts.net --name n2 < pairing-n2.token
+node packages/cli/dist/main.js connect https://<mac>.<tailnet>.ts.net --name mac < pairing-mac.token
+scripts/field-test/cli-checklist.sh two-hosts out/cli-two-hosts --param ANDROID_TARGET=n2 --param IOS_TARGET=mac
+TAPDANCE_SESSION_ID=stage4-mcp node scripts/field-test/mcp-checklist.mjs scripts/field-test/checklists/mcp-two-hosts.json out/mcp-two-hosts
+# with the Mac stopped:
+scripts/field-test/cli-checklist.sh host-down out/cli-mac-down --param DOWN_PLATFORM=ios --param DOWN_TARGET=mac
+TAPDANCE_SESSION_ID=stage4-mcp-down node scripts/field-test/mcp-checklist.mjs scripts/field-test/checklists/mcp-host-down.json out/mcp-mac-down \
+  --param DOWN_PLATFORM=ios --param DOWN_TARGET=mac --param UP_PLATFORM=android
+```
+
+Leave out `ANDROID_TARGET` / `IOS_TARGET` to test routing by platform alone. The `host-down` suites expect
+`doctor` to exit 0 (one host usable) and the lease error to name the down target.

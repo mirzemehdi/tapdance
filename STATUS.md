@@ -12,7 +12,7 @@ What is built, what was proven on real hardware, and what is missing — one row
 | ⛔ | Blocked (reason given) |
 | ❓ | Needs a product decision |
 
-Last updated: 2026-11-07. Stage 3 ran iOS on a rented Scaleway Mac mini M1-M from a Mac ([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md)); its fixes were merged with PR #123. On 2026-11-07 a Linux VPS drove the same Mac ([evidence](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md)). Earlier: 2026-11-05. Tapdance now pins Simlock 0.5.0 with its own patch (`patches/simlock@0.5.0.patch`,
+Last updated: 2026-11-07. Stage 4 (several connect targets, M-06) is built and unit-tested; its two-host field run is TBD. Stage 3 ran iOS on a rented Scaleway Mac mini M1-M from a Mac ([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md)); its fixes were merged with PR #123. On 2026-11-07 a Linux VPS drove the same Mac ([evidence](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md)). Earlier: 2026-11-05. Tapdance now pins Simlock 0.5.0 with its own patch (`patches/simlock@0.5.0.patch`,
 #94 and #103 below); most "✅" runs used Simlock 0.4.0. 0.5.0 with the patch ran on a Google Cloud N2 VM
 driven from a Linux VPS ([evidence](docs/testing/evidence/2026-11-04-vps-n2-android-rerun.md)); the baseline
 settle and dexopt steps measured there were removed again afterwards. A second, partial run on a fresh VM
@@ -105,6 +105,7 @@ Evidence: [docs/testing/evidence/](docs/testing/evidence/).
 | M-03 | ✅ | Google Cloud N2 in device-only mode: VM from `infrastructure/terraform/google-cloud-n2`, `scripts/host-setup.sh` and `host up` on it, driven from a Mac over Tailscale ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Joining an N2 worker to a gateway, OVH and other KVM hosts not run. |
 | M-04 | ⬜ | By design (future). |
 | M-05 | 🟡 | `tapdance gateway setup` ✅ on macOS; not yet run on a Linux VPS. |
+| M-06 | 🧪 | Stage 4: `tapdance connect` adds named targets (per-origin tokens, older single endpoint migrated), `connect --list`, `disconnect`, routing by platform with `device lease --target` / `lease_device` `target`, follow-ups on the lease's host, fast `PROVIDER_UNREACHABLE` for a down host, per-host `doctor` and `devices`. Unit-tested (`packages/sdk/src/routing-provider.test.ts`, `packages/core/src/connect-targets.test.ts`, `packages/cli/src/connect-targets.test.ts`); field run with an N2 host and a rented Mac: TBD. |
 
 ### CLI
 
@@ -327,6 +328,8 @@ paths below were exercised only by unit tests.
 | A recording still running at release is stopped and kept as an artifact; a failed stop no longer blocks the next recording; parallel artifact records keep every manifest entry | F-02, Y-05 | 🧪 | `packages/sdk/src/tapdance.test.ts`, `packages/core/src/core.test.ts` |
 | Session lock: atomic acquisition with an owner token, safe stale takeover, heartbeat during long calls | C-03, W-04 | 🧪 | `packages/core/src/core.test.ts` |
 | Renewal: an ended lease reports `LEASE_LOST`; idle release never crashes the MCP server and waits while a person holds the device | C-04, W-04 | 🧪 | `packages/sdk/src/tapdance.test.ts`, `packages/mcp/src/mcp.test.ts` |
+| Several connect targets: per-origin tokens, routing by platform, `--target`, follow-ups on the lease's host, fast error naming a down host, per-host `doctor`/`devices` (stage 4; field run TBD) | M-06, C-05 | 🧪 | `packages/sdk/src/routing-provider.test.ts`, `packages/core/src/connect-targets.test.ts`, `packages/cli/src/connect-targets.test.ts` |
+| `doctor` on a gateway with an agent token reads each worker's capabilities and capacity from the gateway's `/v1/status` and adds a row per worker (a worker still starting is "unknown", not a failure) | C-05, W-06 | 🧪 | `packages/provider-simlock/src/provider.test.ts` |
 | Agent token bound to its endpoint origin (`config set-token --endpoint`); security keys (`tools.*`, `ios.axePath`, `simlock.profilePath`) ignored in project config | X-02, E-09 | 🧪 | `packages/core/src/core.test.ts`, SDK tests, `packages/cli/src/cli.test.ts` |
 | More secret shapes redacted (`tdg_`, JWTs, `*_KEY_B64=`, viewer keys) including in saved tool output; agent `asc auth`/`workflow`/`install-skills` refused without authorization | E-09, E-05 | 🧪 | `packages/core/src/core.test.ts`, `packages/sdk/src/tools.test.ts`, `packages/sdk/src/tapdance.test.ts` |
 | Worker guard: physical devices refused unless `allow.physicalDevices`; session limit holds under concurrent allocates; status filtered to the client's own queued requests and devices | H-06, H-07 | 🧪 | `packages/cli/src/guard/guard.test.ts` |

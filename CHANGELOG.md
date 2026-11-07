@@ -62,6 +62,26 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
+### Stage 4: one agent, several hosts (unit-tested; field run TBD)
+
+- `tapdance connect <endpoint>` adds the host as a named connect target (`--name`, `--platform`)
+  instead of replacing the endpoint; its token is saved per origin in `credentials.json` (`tokens`,
+  mode 600) and sent only there. An older single `endpoint` and its token keep working and become the
+  first target on the next `connect`. `tapdance connect --list` and `tapdance disconnect <name|endpoint>`.
+- New user-only config key `targets`. A project file's `targets` is ignored with a warning;
+  `TAPDANCE_ENDPOINT` or a project `endpoint` still selects one host.
+- Leases go to the first target that answers and serves the platform (and model or OS version);
+  `device lease --target <name>` and `lease_device` `target` pick one. Every later call about a lease
+  goes to the host that granted it. A host that does not answer fails its platform's leases within
+  seconds with retryable `PROVIDER_UNREACHABLE` naming it and the targets that are up; another platform
+  is never used instead. One lease per session, as before.
+- `doctor` prints one section per host and is OK while one host is usable; `devices` prints one
+  section per host and `--json` / `list_devices` add `hosts`.
+- `doctor` on a gateway with only an agent token reads each worker's capabilities and capacity from the
+  gateway's `/v1/status`, with a row per worker, instead of failing "capability not reported".
+- Field-test drivers: `cli-checklist.sh` suites `two-hosts` and `host-down`; MCP checklists
+  `mcp-two-hosts.json` and `mcp-host-down.json`, and `expectError` steps.
+
 ### Added in the field-test round (issues #1–#19)
 
 - Device-state tools through one allowlisted device-command channel that also works through the worker

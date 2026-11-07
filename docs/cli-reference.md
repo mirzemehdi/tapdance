@@ -77,8 +77,11 @@ connection through `tailscale serve` can be slow; the time is shown, a failure n
 serves HTTPS is named as such), the token's role, whether
 agent-device, streaming and input are available, capacity per platform (a platform with room but no device on offer fails: the worker skipped that
 driver, so leases would be refused), the Simlock version (warns if
-it is not 0.5.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored),
-and this session's lease.
+it is not 0.5.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored,
+or through a gateway, whose status lists its workers for an agent token too), and this session's lease.
+Through a gateway, capabilities come from its workers (from the gateway's status, so an agent token is
+enough), with one row per worker: connection, capacity per platform, capabilities and OS; a worker that
+is still starting shows as unknown, not as a failure.
 
 Host checks run by default in local mode only. `--no-host` skips them. Exit code 10 when any check
 fails, 0 otherwise (warnings do not fail). `doctor` and `workers list` load the operator token when one
