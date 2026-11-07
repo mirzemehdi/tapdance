@@ -15,7 +15,8 @@ tapdance connect https://<host>.<tailnet>.ts.net:4720 < pairing-<label>.token
 `host up` sets the machine up in **device-only mode** ([security/personal-mac.md](../security/personal-mac.md)):
 the agent reaches it only through the worker guard, never through Simlock directly, and nothing is
 opened to the public internet. This is the recommended way to host devices for an agent on another
-machine. For a cloud host, follow [Google Cloud N2](google-cloud-n2.md).
+machine. For a cloud host, follow [Google Cloud N2](google-cloud-n2.md) (Android) or
+[a rented Scaleway Mac mini](../ios/scaleway-mac.md) (iOS).
 
 > **Status: run on the owner's Mac and on a fresh Linux VM.** `host up` ran on the owner's Mac (Node.js
 > and Android Studio already installed), and an agent on a Linux VPS tested a real app through it over
@@ -24,8 +25,10 @@ machine. For a cloud host, follow [Google Cloud N2](google-cloud-n2.md).
 > [self-test through the guard](../testing/evidence/2026-11-03-selftest-through-guard.md)).
 > `scripts/host-setup.sh` and `host up` ran end to end on a fresh Google Cloud N2 VM (Ubuntu 24.04),
 > including the Linux-only steps, and a Mac drove it with `connect`
-> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: a fresh Mac, `host pause`,
-> `host resume` and `host down --all` (unit-tested only). See [STATUS.md](../../STATUS.md) (W-07) and
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). On a fresh rented Mac (Scaleway Mac mini,
+> reached only over ssh): `host-setup.sh --ios-only` and `host up`, driven from a Mac for iOS
+> ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md), [guide](../ios/scaleway-mac.md)). Not yet run:
+> `host pause`, `host resume` and `host down --all` (unit-tested only). See [STATUS.md](../../STATUS.md) (W-07) and
 > please report what you find with `tapdance report`.
 
 ## What `host up` does
@@ -336,14 +339,29 @@ The script (`set -euo pipefail`):
    with no display, headless emulators (see the table above).
 
 Its own options: `--yes`, `--check`, `--skip-prerequisites`, `--prerequisites-only`,
-`--no-system-image`, `--with-gh`, `--sdk-packages <list>`.
+`--no-system-image`, `--with-gh`, `--sdk-packages <list>`, `--ios-only` and `--android-build-sdk`.
 
-Run so far: on macOS, the check and the install of Node.js, the Android command-line tools,
+**macOS specifics** (run on a Scaleway Mac mini, [guide](../ios/scaleway-mac.md)):
+- `--ios-only` skips the Android SDK, emulator and image, and fixes what blocks iOS: the Xcode licence
+  and first launch (sudo) and a missing iOS runtime (`xcodebuild -downloadPlatform iOS`, about 8 GB). The
+  JDK stays (Kotlin Multiplatform apps run Gradle in their Xcode build). `--android-build-sdk` adds only
+  the command-line tools and platform-tools, for such apps whose Gradle needs an SDK even for iOS.
+- Tailscale is installed as the open-source `tailscaled` system daemon (MacPorts `port install tailscale`
+  and `port load tailscale`, or Homebrew's formula and `tailscaled install-system-daemon`), not the
+  Tailscale app: the daemon runs at boot with nobody logged in. Then `sudo tailscale up` prints a login link.
+- `gh` comes from Homebrew, else MacPorts. `~/.tapdance/env.sh` is sourced from `~/.zshenv` (zsh) and
+  puts MacPorts and Homebrew on `PATH`, so commands over ssh (`ssh mac 'tapdance host status'`) work.
+- Xcode itself is not installed by the script (the App Store, or `xcodes` with your Apple ID).
+- The worker and guard are LaunchAgents: on a Mac nobody logs in to, turn on automatic login
+  (`infrastructure/scripts/macos-auto-login.sh`) so they start after a reboot.
+
+Run so far: on a fresh Scaleway Mac mini (macOS 27.2) over `ssh -t`, `--ios-only --with-gh` end to end,
+about 13 min with the prompts ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)). Before that, on macOS, the check and the install of Node.js, the Android command-line tools,
 platform-tools and the emulator into a scratch home (2 min 13 s), the Temurin download, and a fresh
 clone and build with only that Node.js. On a fresh Google Cloud N2 VM (Ubuntu 24.04): everything,
 including the system image download, Tailscale login and `host up` with its self-test; the run that
 passed took 2 min 44 s once earlier attempts had downloaded the SDK
-([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run: a fresh Mac end to end.
+([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)).
 
 Piped through `curl`, the script's input is the pipe; it gives `host up` your terminal (`/dev/tty`), so
 you can approve the pairing there. If it still stops with "Pairing must be approved at this machine's

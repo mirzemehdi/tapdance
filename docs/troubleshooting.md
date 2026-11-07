@@ -79,6 +79,23 @@ For a Google Cloud VM see also [the N2 guide's table](deployment/google-cloud-n2
 | `host status` says "android not available" while an emulator runs, over `ssh … --command` | The SDK was not found from a non-interactive shell (no `ANDROID_HOME`). `host status` now also looks in `~/Android/Sdk` and says when it cannot find the SDK. | Set `ANDROID_HOME`, or run `host-setup.sh` again: it sources its environment at the top of `~/.bashrc`, which ssh commands read. |
 | `No space left on device` during an install, or `INSUFFICIENT_DISK_SPACE` | The disk is full: the SDK, system images and Simlock's emulators (`~/.simlock/devices`) need tens of GB. | `df -h ~` to check. Grow the disk (Google Cloud: `gcloud compute disks resize`, then restart the VM), or remove system images you do not use with `sdkmanager --uninstall`. |
 
+## Rented Macs (macOS hosts reached over ssh)
+
+Seen on a Scaleway Mac mini M1-M (8 GB, macOS 27.2) set up over ssh with nobody at its screen
+([evidence](testing/evidence/2026-11-06-rented-mac-ios.md), [guide](ios/scaleway-mac.md)).
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `ssh mac 'tapdance host status'`: "command not found" (also `node`, `gh`) | zsh reads `~/.zshrc` only in interactive shells; older `host-setup.sh` runs sourced their environment there only. | Run `host-setup.sh` again (it writes `~/.tapdance/env.sh` on every run and sources it from `~/.zshenv`, with MacPorts and Homebrew on `PATH`). |
+| After a reboot the agent gets no answer; on the Mac `launchctl print gui/$(id -u)` fails | The worker and guard are LaunchAgents: they start only in a logged-in session, and the Mac waits at the login window. Simulators themselves do not need one. | Automatic login for the hosting account: `infrastructure/scripts/macos-auto-login.sh <account>` (asks for the passwords), then reboot. `who` should list the account on `console`. |
+| `sudo sysadminctl -autologin set …`: `SACSetAutoLoginPassword error:22`, "Automatic login is OFF" | Seen on macOS 27.2 over ssh with the right password. | `infrastructure/scripts/macos-auto-login.sh`, which writes `/etc/kcpassword` and `autoLoginUser` itself. |
+| Leases fail with "Internal error" (the host log: "simctl list … timed out after 30000ms" or "Timed out waiting for device to boot"), commands time out, the Mac swaps gigabytes | 8 GB holds one iOS simulator; a leased one plus Simlock's warm spare does not fit (Simlock budgets 1.5 GB per simulator). Slim simulators did not help. | On the host: `tapdance host warm android=0,ios=0`. Leases then cold-boot (about 80-140 s on an M1). A 16 GB Mac keeps the spare. |
+| The first command after a cold lease: "Daemon request timed out" (`PROVIDER_UNREACHABLE`, retryable) | agent-device starts its test runner on the first command; on a busy 8 GB Mac that took over 90 s once. | Run it again. |
+| `connect` / `doctor` exit 10 on an iOS-only Mac: "Android emulators available" failed | Older builds counted a host with no Android SDK as broken. | Update Tapdance on the agent's machine: Android is a warning there now. |
+| `app build` of a Kotlin Multiplatform app on an iOS-only host: "SDK location not found … ANDROID_HOME" | The app's Gradle configures its Android modules even for the iOS framework. | On the host: `host-setup.sh --ios-only --android-build-sdk` (command-line tools and platform-tools, no emulator). |
+| The pairing token or a GitHub token appears on screen while you paste it over `ssh -t` | `gh auth login --with-token` does not hide its input. | Revoke that token. Paste with a hidden read: `read -rs T && printf '%s\n' "$T" \| gh auth login --hostname github.com --with-token; unset T` (#122). |
+| A long build ends with `LEASE_LOST` "Lease is not active", or the agent's commands hang and then fail all at once | The agent's machine slept: the lease was not renewed and its connections stalled (a 20 s `curl` came back after 17 minutes). | Keep the agent's machine awake (a laptop: lid open, or `caffeinate -is` while it works), then lease and build again: a finished build is reused in seconds. |
+
 ## Cost guard on a cloud host
 
 The idle stop powered a real N2 VM off ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); the uptime cap is unit-tested only.

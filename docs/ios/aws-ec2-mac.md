@@ -8,6 +8,12 @@ Status: **not tested.** Nothing on this page has been run on AWS by the Tapdance
 ([evidence](../testing/evidence/2026-11-01-local-ios.md)); the VPS-to-Mac path is untested (Q-08).
 Tapdance has no AWS integration; `packages/` contains no cloud SDK.
 
+> **Same steps as the Scaleway page, not run here.** Once you can ssh into the Mac, follow
+> [scaleway-mac.md](scaleway-mac.md) from step 2: Xcode first launch and an iOS runtime, automatic login,
+> `host-setup.sh --ios-only` → `host up`, then `tapdance connect` on the agent's machine. That route
+> ran end to end on a Scaleway Mac mini ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)); the
+> gateway route further down this page has not been run anywhere across two machines.
+
 ## Costs and terms (November 2026 estimates)
 
 | Item | What AWS states | Source |

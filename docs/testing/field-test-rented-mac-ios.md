@@ -1,7 +1,8 @@
 # Field test: iOS on a rented Scaleway Mac mini, end to end
 
-> **Draft, written before the first run (2026-11-06).** It is the plan the owner approves before
-> anything is rented. Sections marked _(after the run)_ are filled in from the evidence record.
+> **Run once (2026-11-06/07)** on a Scaleway Mac mini M1-M from the owner's Mac
+> ([evidence](evidence/2026-11-06-rented-mac-ios.md)). A Linux VPS as the agent's machine follows the same
+> steps (the agent's side is `tapdance connect` and the drivers in `scripts/field-test/`); not run yet.
 
 The agent's machine (a Mac or a Linux VPS) drives iOS simulators on a Mac mini rented from Scaleway,
 over Tailscale, through the worker guard (`host up` → `connect`). This runbook is the rented-Mac
@@ -100,6 +101,84 @@ It lists Apple silicon servers in every zone (any state) and Private Networks, p
 types, states and `deletable_at` only (never the VNC URL or sudo password the API also returns). Exit
 0: nothing left; 1: something is left (the delete commands are printed); 2: could not check.
 
-## Setup, checklists, measurements _(after the run)_
+## Setup on the Mac (checkpoints 2-8)
 
-Filled in from the evidence record: the exact commands, in order, that worked on a blank Mac mini.
+Everything below runs from the agent's machine over ssh; `ssh -t` where a password or a question is
+typed. Use the owner's key: `ssh -i ~/.ssh/<key> m1@<mac-ip>`.
+
+1. **Survey, read-only:** `sw_vers; xcodebuild -version; xcrun simctl runtime list; df -h /;
+   launchctl print gui/$(id -u)` (missing: nobody logged in).
+2. **Xcode and a runtime (checkpoint 3):** `ssh -t mac 'sudo xcodebuild -runFirstLaunch'`, then
+   `ssh mac 'xcodebuild -downloadPlatform iOS -architectureVariant arm64'` (8 GB, under 2 min). The
+   script in step 4 does both too.
+3. **Automatic login (checkpoint 4, the owner types the password twice):** copy
+   `infrastructure/scripts/macos-auto-login.sh` over and run `ssh -t mac 'bash macos-auto-login.sh m1'`.
+   The owner presses **Reboot** in the console (no password); afterwards `who` lists `m1` on `console`.
+4. **Host setup (checkpoints 5-6):**
+
+   ```bash
+   ssh -t mac 'curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh -o host-setup.sh && script -q setup.log bash host-setup.sh --ios-only --with-gh --allow-admin-account --label <agent>'
+   ```
+
+   `script` keeps a terminal for the prompts and logs the run for the timings. Add `--android-build-sdk`
+   when the test app is Kotlin Multiplatform. The owner answers the install question, types the sudo
+   password (MacPorts installs), opens the Tailscale login link, and approves the pairing.
+5. **8 GB Macs:** `ssh mac 'tapdance host warm android=0,ios=0'` before the checklists.
+6. **Token to the agent's machine:** `scp mac:.tapdance/worker/pairing-<agent>.token <scratch>/` (mode 600; never
+   print it).
+7. **Host builds (checkpoint 8):** the owner logs `gh` in with a hidden read
+   (`ssh -t mac 'read -rs T && printf "%s\n" "$T" | gh auth login --hostname github.com --with-token; unset T'`;
+   `gh auth login --with-token` alone echoes the token), then
+   `ssh mac 'tapdance host builds enable --repo https://github.com/<owner>/<repo> --git-auth gh --protected-ref main --allow-admin-account'`.
+
+## Connect and run the checklists
+
+On the agent's machine, with a scratch home and its own session ids; keep it awake for the whole run
+(a laptop that sleeps stops renewing the lease and stalls every connection):
+
+```bash
+export TAPDANCE_HOME=<scratch>/td-home
+node packages/cli/dist/main.js connect https://<mac>.<tailnet>.ts.net:4720 < <scratch>/pairing-<agent>.token
+P=(--param DEVICE="iPhone 17" --param OS=<runtime>)
+TAPDANCE_SESSION_ID=field-cli scripts/field-test/cli-checklist.sh base out/cli-base --param PLATFORM=ios "${P[@]}"
+TAPDANCE_SESSION_ID=field-mcp node scripts/field-test/mcp-checklist.mjs scripts/field-test/checklists/mcp-ios-base.json out/mcp-base "${P[@]}"
+B=(--param BUILD_REPO=https://github.com/<owner>/<repo> --param BUILD_REF=main --param BUILD_PROJECT=<path>.xcodeproj --param BUILD_SCHEME=<scheme> --param APP_ID=<bundle id>)
+TAPDANCE_SESSION_ID=field-cli scripts/field-test/cli-checklist.sh build out/cli-build --param PLATFORM=ios "${P[@]}" "${B[@]}"
+TAPDANCE_SESSION_ID=field-mcp node scripts/field-test/mcp-checklist.mjs scripts/field-test/checklists/mcp-ios-build.json out/mcp-build "${P[@]}" "${B[@]}"
+```
+
+For the app checklists, zip the host's build (`ssh mac 'cd <kept build dir> && ditto -c -k --keepParent <App>.app ~/app.zip'`,
+the folder is under `~/.tapdance/worker/builds/*/kept/`), `scp` it over, and pass `--param APP=app.zip
+--param APP_ID=<bundle id>` to `cli-checklist.sh app` and `mcp-ios-app.json`. That also tests the upload.
+
+Prove the leases come from the Mac: the lease reply's `Provider: Remote worker` and endpoint, and the
+guard's audit log on the Mac (`tail ~/.tapdance/worker/audit.log`).
+
+## Reboot (checkpoint 7)
+
+The owner presses **Reboot** in the console. Then, without logging in anywhere:
+`ssh mac 'who; tapdance host status'` (every row `ok`, `tailscale … serving :4720`), and from the
+agent's machine `tapdance doctor` and one lease.
+
+## Measurements to record
+
+| What | Where it comes from |
+| --- | --- |
+| macOS install, runtime download, `host-setup.sh` time | the console, `runtime.log`, `setup.log` timestamps |
+| Reboot → ssh, reboot → `host status` all ok | your clock |
+| Lease: cold, from a warm spare, right after a release | the `lease` steps |
+| First command after a lease, tap, key, inspect, screenshot | the drivers' tables |
+| Host build: first, reused | the `build` steps |
+| Memory and swap per simulator | `top -l 1 -n 0 \| grep PhysMem; sysctl vm.swapusage` on the Mac |
+| Disk | `df -h /` before and after |
+| Cost | the Scaleway billing page after deletion |
+
+## Teardown (checkpoint 10)
+
+1. On the agent's machine: `tapdance device release` for each session.
+2. Scheduled deletion removes the Mac mini at T0+24 h; to delete as soon as allowed, console **Delete**
+   or `scw apple-silicon server delete <id> zone=<zone>` after `deletable_at`.
+3. The owner runs `infrastructure/scripts/scaleway-leftovers.sh` until it exits 0.
+4. The owner removes the Tailscale machine, revokes the GitHub token, and deletes the token copies and the
+   scratch home on the agent's machine. Deletion wipes everything on the Mac itself.
+5. Write the final state and cost into the evidence record.
