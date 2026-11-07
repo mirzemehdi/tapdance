@@ -2,7 +2,7 @@ import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, loadConfig, renewIfDue, runKeepalive, type LeaseHandle } from "./index.js";
+import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, leaseCommand, loadConfig, renewIfDue, runKeepalive, type LeaseHandle } from "./index.js";
 import { FakeProvider } from "./testing.js";
 import { completeMp4 } from "./tapdance.js";
 
@@ -18,6 +18,18 @@ describe("Tapdance session scoping", () => {
     const { t } = await setup();
     await expect(t.tap({ kind: "text", text: "Sign in" })).rejects.toMatchObject({ code: "NO_ACTIVE_LEASE" });
     await expect(t.screenshot()).rejects.toMatchObject({ code: "NO_ACTIVE_LEASE" });
+  });
+
+  // FakeProvider (mocked): only the hint text is under test.
+  it("names only the platforms the configuration can lease in the no-lease hint", async () => {
+    const { t } = await setup();
+    await expect(t.status()).rejects.toMatchObject({ code: "NO_ACTIVE_LEASE", hint: expect.stringContaining("tapdance device lease --platform android|ios") });
+    const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
+    const cwd = await mkdtemp(join(tmpdir(), "td-proj-"));
+    await writeFile(join(cwd, "tapdance.config.json"), JSON.stringify({ platforms: { android: { enabled: false } } }));
+    const iosOnly = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "s1", source: "test" }, provider: new FakeProvider() });
+    await expect(iosOnly.status()).rejects.toMatchObject({ hint: expect.stringContaining("tapdance device lease --platform ios`") });
+    expect(leaseCommand({ platforms: { android: { enabled: true }, ios: { enabled: false } } })).toBe("tapdance device lease --platform android");
   });
 
   it("leases, acts on that lease only, and releases it", async () => {

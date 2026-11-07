@@ -8,8 +8,9 @@ and what is not supported yet. For cloud Macs and longer guides, see the [iOS do
 > recording, logs and release through the CLI and the MCP server
 > ([evidence](../testing/evidence/2026-11-01-local-ios.md)). A custom simulator `.app` was also
 > installed and driven locally, and the same loop ran through a gateway with the worker on the same Mac
-> ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). Not yet tested: a Mac worker
-> serving a Linux VPS over a real network (Q-08), installing a custom app through a gateway, AXe,
+> ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)). A Linux VPS drove a rented Mac
+> mini in device-only mode ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md), Q-08).
+> Not yet tested: a Mac worker joined to a gateway on a Linux VPS, installing a custom app through a gateway, AXe,
 > physical iPhones. See
 > [STATUS.md](../../STATUS.md).
 
@@ -122,7 +123,7 @@ Tapdance with asc 5.17.1.
 
 ## Limitations
 
-- A Mac worker serving a remote agent has not been tested (Q-08).
+- A Mac host serving a remote agent is verified in device-only mode only (a Mac and a Linux VPS driving a rented Mac mini, Q-08: [Mac](../testing/evidence/2026-11-06-rented-mac-ios.md), [VPS](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)); a Mac worker joined to a gateway has not been tested.
 - Physical iPhones: `device lease --physical` exists and Simlock can enroll USB iPhones (iOS 17+,
   Developer Mode, trusted, unlocked), and agent-device needs signing settings for its runner on the
   worker. Untested with Tapdance.

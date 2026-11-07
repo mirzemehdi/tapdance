@@ -1,8 +1,10 @@
 # Field test: iOS on a rented Scaleway Mac mini, end to end
 
-> **Run once (2026-11-06/07)** on a Scaleway Mac mini M1-M from the owner's Mac
-> ([evidence](evidence/2026-11-06-rented-mac-ios.md)). A Linux VPS as the agent's machine follows the same
-> steps (the agent's side is `tapdance connect` and the drivers in `scripts/field-test/`); not run yet.
+> **Run twice** on a Scaleway Mac mini M1-M: from the owner's Mac (2026-11-06/07,
+> [evidence](evidence/2026-11-06-rented-mac-ios.md)) and from a Linux VPS as the agent's machine
+> (2026-11-07, [evidence](evidence/2026-11-07-vps-rented-mac-ios.md)). The VPS run found that checkpoints
+> A and B of the VPS variant assumed the owner has a second machine; both now have a VPS-only path
+> ([#126](https://github.com/mirzemehdi/tapdance/issues/126), [#127](https://github.com/mirzemehdi/tapdance/issues/127)).
 
 The agent's machine (a Mac or a Linux VPS) drives iOS simulators on a Mac mini rented from Scaleway,
 over Tailscale, through the worker guard (`host up` → `connect`). This runbook is the rented-Mac
@@ -36,13 +38,13 @@ checkpoints and resource log, with the differences a rented Mac brings.
 | # | Checkpoint | Who | When |
 | --- | --- | --- | --- |
 | 1 | **ASK**: this plan: offer (M1-M), zone, macOS version, scheduled deletion on, the cost, the account question, and that teardown is part of the run | Owner approves | Before renting |
-| 2 | Rent the Mac mini in the console (or `scw apple-silicon server create`), turn on automatic deletion, add the SSH key | Owner | T0 |
+| 2 | Rent the Mac mini in the console (or `scw apple-silicon server create`), turn on automatic deletion, add the SSH key (when the agent runs on a VPS: **the VPS's public key too**, see the variant below) | Owner | T0 |
 | 3 | **ASK**: install an iOS runtime (`xcodebuild -downloadPlatform iOS`, about 8 GB) and, if needed, another Xcode with `xcodes` (owner types the Apple ID and the 2FA code) | Owner approves; owner types | Host setup |
 | 4 | **ASK**: create the standard worker account and set auto-login for it (owner types its password) | Owner approves; owner types | Host setup |
 | 5 | **ASK**: `host-setup.sh` / `host up` on the Mac (starts the worker and guard services) | Owner approves | Host setup |
 | 6 | Log the Mac into the tailnet (open the link it prints) and approve the pairing | Owner | Host setup |
 | 7 | **ASK**: each reboot of the Mac (`sudo shutdown -r now`) for the come-back test | Owner approves | Host setup |
-| 8 | Host builds only: log `gh` in on the Mac with a fine-grained, read-only token for the Pianolune repository | Owner pastes it | Before the build |
+| 8 | Host builds only: log `gh` in on the Mac with a fine-grained, read-only token for the Pianolune repository (no second machine: through the console's VNC terminal, see the variant below) | Owner types it | Before the build |
 | 9 | **ASK**: anything that extends the run (cancelling scheduled deletion, a second Mac, a bigger offer) | Owner approves | Any time |
 | 10 | Teardown: release, `host down --all`, sign out of the Apple ID, delete the Mac mini (or let scheduled deletion do it), leftovers check, Tailscale machine, GitHub token, pairing files | Agent runs what it can; owner the rest | Before T0+24 h, also after a failure |
 
@@ -155,10 +157,31 @@ guard's audit log on the Mac (`tail ~/.tapdance/worker/audit.log`).
 
 ## Variant: the agent runs on a Linux VPS
 
-The same Mac, driven from a Linux VPS in the same tailnet. The VPS gets ssh access to the Mac for the
-pairing and the app zip; the owner keeps two steps: authorizing the VPS's key on the Mac and the GitHub
-token (`tapdance host gh-login`, typed by the owner). Not run yet. Prompt for the agent on the VPS
-(fill in the Mac's address, its tailnet endpoint and your app):
+The same Mac, driven from a Linux VPS in the same tailnet. Run on 2026-11-07
+([evidence](evidence/2026-11-07-vps-rented-mac-ios.md)): all six checklists passed. The VPS gets ssh
+access to the Mac for the pairing and the app zip; the owner keeps two steps, authorizing the VPS's key
+on the Mac (checkpoint A) and the GitHub token (checkpoint B). **When the VPS is the owner's only
+machine** (it was on 11-07) there is no "own machine" to run them from; use these paths instead:
+
+- **Checkpoint A, ssh key.** Best: add the VPS's public key when renting (checkpoint 2, console SSH
+  keys or `scw … create`), then nothing is left to do. Otherwise the owner opens the Mac's desktop from
+  the Scaleway console (web VNC), opens Terminal and appends the key line to `~/.ssh/authorized_keys`.
+  Last resort, as on 11-07: the owner gives the agent the Mac's ssh password **once** and the agent runs
+  `ssh-copy-id -i ~/.ssh/rented-mac.pub m1@<mac-ip>` (or `cat … | ssh m1@<mac-ip> 'cat >> ~/.ssh/authorized_keys'`).
+  Without `sshpass` on the VPS, feed the password through `SSH_ASKPASS` (a throwaway script that prints
+  it, `SSH_ASKPASS_REQUIRE=force`, `DISPLAY=:0`, run with `setsid`), never on a command line; delete the
+  script afterwards. Tailscale SSH is not on by default on the host (`Host key verification failed`), so
+  the tailnet does not help here. [#126](https://github.com/mirzemehdi/tapdance/issues/126)
+- **Checkpoint B, GitHub token.** The owner runs `tapdance host gh-login` in the Terminal of the
+  console's VNC desktop and pastes the token there, so the agent never sees it. If the owner instead
+  pastes the token into the agent's chat (11-07), the agent must pipe it over ssh stdin to
+  `tapdance host gh-login` without printing it, delete any temporary file, and say that the token
+  passed through the chat; the owner should then revoke it after the run. A path without the console
+  is tracked in [#127](https://github.com/mirzemehdi/tapdance/issues/127).
+
+On the VPS `pnpm` may not be installed system-wide: `corepack enable --install-directory ~/.local/bin`
+and `export PATH=$HOME/.local/bin:$PATH COREPACK_ENABLE_DOWNLOAD_PROMPT=0`. Prompt for the agent on the
+VPS (fill in the Mac's address, its tailnet endpoint and your app):
 
 ```text
 Repeat stage 3 of docs/hosting-plan.md from this Linux VPS as the agent's machine, against the rented
@@ -172,33 +195,46 @@ Setup on this VPS
   (`tailscale status` lists the Mac); if not, ask the owner to run `sudo tailscale up` here.
 
 Checkpoint A, owner: ssh access to the Mac
-- Create a key for this run (ssh-keygen -t ed25519 -f ~/.ssh/rented-mac -N "" -C vps-stage3) and give
-  the owner this exact command to run on their own machine, with your public key filled in:
+- Create a key for this run (ssh-keygen -t ed25519 -f ~/.ssh/rented-mac -N "" -C vps-stage3), or reuse
+  the one added when the Mac was rented, and give the owner the public key. Ask whether they have
+  another machine with ssh access to the Mac. If yes, give them:
     ssh m1@<mac-ip> 'cat >> ~/.ssh/authorized_keys' <<< '<public key>'
+  If not, they add the line from the Scaleway console's VNC desktop (Terminal), or, last resort, give
+  you the Mac's ssh password once for `ssh-copy-id` (through SSH_ASKPASS when sshpass is missing;
+  never on a command line, never printed). See "Variant: the agent runs on a Linux VPS" in the runbook.
   Wait until they confirm, then check `ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host status'`.
 
 Checkpoint B, owner: GitHub access for host builds
 - The owner creates a fine-grained token (the app's repository only, Contents read-only, short expiry)
-  and runs on their own machine:
-    ssh -t m1@<mac-ip> 'tapdance host gh-login'
-  You never see, ask for or handle the token. Afterwards `host status` must show `gh ok`, and the
-  repository must be allowed: `tapdance host builds enable --repo <url> --git-auth gh --protected-ref main --allow-admin-account`.
+  and runs `tapdance host gh-login` on the Mac: from another machine with
+  `ssh -t m1@<mac-ip> 'tapdance host gh-login'`, or in the Terminal of the console's VNC desktop.
+  Do not ask for the token. If the owner pastes it to you anyway, pipe it over ssh stdin to
+  `tapdance host gh-login` without printing it, delete any temporary copy, and record the deviation.
+  Afterwards `host status` must show `gh ok`, and the repository must be allowed:
+  `tapdance host builds enable --repo <url> --git-auth gh --protected-ref main --allow-admin-account`.
 
 Pairing (yours, after the owner says "approve the pairing")
 - ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host up --label vps-agent --allow-admin-account --skip-self-test --yes'
 - scp the token file .tapdance/worker/pairing-vps-agent.token into your scratch folder (chmod 600),
   `tapdance connect https://<mac>.<tailnet>.ts.net:4720 < <that file>`. Never print the token.
   `tapdance doctor` must pass (Android is a warning on an iOS-only host).
+- `host up` keeps any pairing an earlier run left on the host; list them with
+  `tapdance worker guard tokens` and tell the owner which are still active.
+- On an 8 GB Mac: ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host warm android=0,ios=0' before the
+  checklists (no warm spare; a second simulator does not fit).
 
 Checklists (scripts/field-test/, --param DEVICE="iPhone 17" --param OS=<runtime>), one at a time: an
 8 GB Mac holds one simulator and the guard one session
   1. cli-checklist.sh base (--param PLATFORM=ios) and mcp-ios-base.json;
   2. the host build of your app (BUILD_REPO, BUILD_REF=main, BUILD_PROJECT, BUILD_SCHEME, APP_ID):
      cli-checklist.sh build and mcp-ios-build.json;
-  3. app checklists with an upload: on the Mac, zip the host's build
-     (ditto -c -k --keepParent <~/.tapdance/worker/builds/*/kept/*/<App>.app> ~/td-run/vps-app.zip),
+  3. app checklists with an upload: on the Mac, zip the host's newest build
+     (ditto -c -k --keepParent "$(ls -td ~/.tapdance/worker/builds/*/kept/*/<App>.app | head -1)" ~/td-run/vps-app.zip),
      scp it here, then cli-checklist.sh app and mcp-ios-app.json with --param APP=<that zip>.
-  A cold lease takes about 80-140 s on an M1; the first command after it 30-90 s. Keep this VPS online.
+  A cold lease takes about 80-140 s on an M1; the first command after it 30-90 s; one iOS inspect can
+  stall about 90 s on a swapping 8 GB host (#128). Always set TAPDANCE_SESSION_ID: without it the CLI
+  uses your coding agent's own session id. Run each checklist with nohup and a log file, and keep this
+  VPS online.
 - Prove every lease comes from the Mac (Provider: Remote worker, the endpoint; the guard's audit log
   ~/.tapdance/worker/audit.log on the Mac). Record lease times, first-command latency, upload time,
   build reuse, tap/key latency, and every failure with its exact output.
@@ -214,7 +250,8 @@ Finish
   agent's machine) and this runbook where a step was wrong.
 - Clean up: `tapdance device release`; on the Mac `tapdance worker guard revoke <vps-agent id>` (id from
   `tapdance worker guard tokens`), delete ~/td-run/vps-app.zip, and remove your key's line from
-  ~/.ssh/authorized_keys; here delete the token copy, the scratch home and ~/.ssh/rented-mac*.
+  ~/.ssh/authorized_keys; here delete the token copy, the scratch home and ~/.ssh/rented-mac*. If a
+  GitHub token passed through the chat, remind the owner to revoke it.
 - Report the results table, the PR or issues, and the clean-up done.
 ```
 

@@ -98,7 +98,7 @@ has Simlock simulators.
 | Installing a custom simulator `.app` (`examples/ios-demo`) in local mode | Verified locally; not yet run through a gateway | STATUS F-01 |
 | Gateway + joined Mac worker, both on the same Mac (CLI, MCP stdio, viewer) | Verified | [2026-11-01-gateway-single-host.md](../testing/evidence/2026-11-01-gateway-single-host.md) |
 | Agent on another Mac → rented Scaleway Mac mini, device-only mode over Tailscale (CLI and MCP, host build of a private app) | Verified once | [2026-11-06-rented-mac-ios.md](../testing/evidence/2026-11-06-rented-mac-ios.md) |
-| Linux VPS agent → separate Mac worker | **Not tested** (gateway mode); device-only mode from a VPS ran against the owner's Mac | STATUS Q-08 |
+| Linux VPS agent → separate Mac worker | Device-only mode verified: a VPS drove a rented Scaleway Mac mini (CLI and MCP, host build, `.app` upload) ([2026-11-07-vps-rented-mac-ios.md](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)); gateway mode **not tested** | STATUS Q-08 |
 | AXe backend | **Not tested** (written and unit-tested only) | STATUS U-02, Q-09 |
 | Scaleway Mac mini M1-M | Verified once ([guide](scaleway-mac.md)) | STATUS G-05, G-06 |
 | MacStadium, AWS EC2 Mac | **Not tested**; these pages are written from provider docs (same steps as Scaleway) | STATUS G-05 |

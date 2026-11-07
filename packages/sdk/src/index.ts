@@ -1,4 +1,4 @@
-export { Tapdance, summarize, type TapdanceOptions, type LeaseOptions, type DeviceSummary, type HumanRequest } from "./tapdance.js";
+export { Tapdance, leaseCommand, summarize, type TapdanceOptions, type LeaseOptions, type DeviceSummary, type HumanRequest } from "./tapdance.js";
 export { createProvider } from "./provider-factory.js";
 export { runKeepalive, renewIfDue, type KeepaliveOptions, type RenewOutcome } from "./keepalive.js";
 export { hostChecks, probeKvm, kvmChecks, probeAndroid, androidChecks, iosChecks, findAndroidSdk, type KvmReport, type AndroidReport } from "./host-checks.js";

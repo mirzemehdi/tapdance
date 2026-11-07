@@ -19,7 +19,7 @@ import {
   type WaitCondition,
 } from "@tapdance/core";
 import { renewIfDue } from "./keepalive.js";
-import type { Tapdance } from "./tapdance.js";
+import { leaseCommand, type Tapdance } from "./tapdance.js";
 
 /**
  * Scenario files: a saved flow of device steps that `tapdance run` (and the SDK's `runScenario`)
@@ -544,7 +544,7 @@ export async function runScenario(tapdance: Tapdance, scenario: Scenario, option
   const record = await tapdance.current();
   if (record === undefined) {
     throw new TapdanceError("NO_ACTIVE_LEASE", "This session holds no device and the scenario names none to lease", {
-      hint: "Add a device: block (platform, device) to the scenario, or lease one first with `tapdance device lease --platform android`.",
+      hint: `Add a device: block (platform, device) to the scenario, or lease one first with \`${leaseCommand(tapdance.resolved.config)}\`.`,
     });
   }
   const h = record.handle;
