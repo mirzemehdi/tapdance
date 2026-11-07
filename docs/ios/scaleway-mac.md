@@ -54,7 +54,9 @@ Scaleway's Apple silicon offers, read on 2026-11-06 (excluding VAT; [pricing](ht
 ## 1. Rent it
 
 In the console, **Bare Metal > Apple silicon > Create Mac mini**: the offer, the macOS version,
-**No commitment**, Private Networks off, your **SSH key** (add it to the project first), and
+**No commitment**, Private Networks off, your **SSH key** (add it to the project first; when the agent
+runs on a VPS and you have no other machine, add **the VPS's public key** too, or later append it to
+`~/.ssh/authorized_keys` from the console's VNC desktop, #126), and
 **automatic deletion after 24 hours**. With the CLI, `scw apple-silicon server update <id>
 schedule-deletion=true zone=<zone>` turns it on later.
 
@@ -126,6 +128,10 @@ bash host-setup.sh --ios-only --with-gh --allow-admin-account --label my-agent
   password, then prints a login link: open it in your browser and approve the machine.
 - `host up` then installs the worker and guard services, asks you to approve the pairing, serves the
   guard on Tailscale (`https://` when the tailnet has HTTPS certificates) and runs a self-test lease.
+- `--tailscale-ssh` (passed on to `host up`) also turns on Tailscale SSH: a VPS in your tailnet then
+  reaches the Mac with `ssh m1@<mac>.<tailnet>.ts.net`, with no key to copy (#126). Your tailnet policy
+  decides who may (by default you, after a browser approval about every 12 hours). Not yet run on a
+  rented Mac.
 
 Copy the token file to the agent's machine with `scp` (over ssh, `host up` does not offer the
 clipboard: it would be the Mac's):
@@ -135,6 +141,17 @@ scp m1@<mac-ip>:.tapdance/worker/pairing-my-agent.token .
 ```
 
 ### Private repositories for host builds
+
+With no machine but the agent's, a **deploy key** is simplest: no secret leaves the Mac (#127).
+
+```bash
+tapdance host builds key --repo git@github.com:<owner>/<repo>.git
+```
+
+It prints the public key and the repository's deploy-keys page; add it there read-only (a phone browser
+works), then `tapdance host builds enable --repo git@github.com:<owner>/<repo>.git --git-auth deploy-key
+--protected-ref main --allow-admin-account` and build from that ssh URL. It does not cover installs from
+CI, and organizations can turn deploy keys off; then use a token:
 
 `--git-auth gh` needs `gh` logged in on the Mac with a fine-grained, read-only token for the one
 repository (Contents: read-only, short expiry; add Actions: read-only for installs from CI).

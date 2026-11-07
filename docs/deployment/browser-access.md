@@ -141,6 +141,22 @@ agent's (`tapdance artifacts` lists them), and the page can open the session's r
 status panel shows the device, the lease and whether a recording is running. The page needs a browser
 with WebCodecs H.264 decoding (current Chrome, Edge, Safari and Firefox have it).
 
+Under the screen a line shows what the host sends: the picture size, frames per second and kbit/s
+(`Stream: 332×720 h264, 12.0 fps, 48 kbit/s from the host`). A small size means the host's encoder
+setting; a low rate while the screen moves means the host or the network. The encoder runs on the host
+(Simlock), with these defaults: the longer side at most **720 px**, **1500 kbit/s**, **30 fps**. A
+static screen sends almost nothing, which is normal. For a sharper picture of a tall iPhone screen, on
+the host:
+
+```bash
+tapdance simlock -- config set capabilities.stream.maxDimension 1280
+tapdance simlock -- config set capabilities.stream.bitrateKbps 3000
+tapdance worker restart
+```
+
+(`fps` takes 1-60, `bitrateKbps` 100-40000, `maxDimension` 96-4096.) A bigger picture costs the host CPU
+and memory: on an 8 GB Mac that is already swapping, keep the defaults.
+
 ## Troubleshooting
 
 | You see | Fix |
@@ -150,5 +166,6 @@ with WebCodecs H.264 decoding (current Chrome, Edge, Safari and Firefox have it)
 | `Open the link tapdance view printed.` (401) | Open the full link including `#k=…`; a link from an earlier run no longer works. |
 | `unexpected Host header` (403) | You opened it by a different host name than the one bound. Use the printed link. |
 | "Live streaming is off on this worker" | Turn on `capabilities.stream` on the worker and gateway (see above), then restart them. |
+| Video is blurry or blocky (#130) | Read the `Stream:` line under the screen. A size of 720 px on the longer side is the host's default; raise `capabilities.stream.maxDimension` and `bitrateKbps` (see "What else the page does"). |
 | Video plays but taps do nothing | `capabilities.input` is off on the worker or gateway. |
 | The page goes blank after a while | The lease ended or the worker disconnected. Check `tapdance device status`. |

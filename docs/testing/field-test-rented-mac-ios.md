@@ -170,14 +170,21 @@ machine** (it was on 11-07) there is no "own machine" to run them from; use thes
   `ssh-copy-id -i ~/.ssh/rented-mac.pub m1@<mac-ip>` (or `cat … | ssh m1@<mac-ip> 'cat >> ~/.ssh/authorized_keys'`).
   Without `sshpass` on the VPS, feed the password through `SSH_ASKPASS` (a throwaway script that prints
   it, `SSH_ASKPASS_REQUIRE=force`, `DISPLAY=:0`, run with `setsid`), never on a command line; delete the
-  script afterwards. Tailscale SSH is not on by default on the host (`Host key verification failed`), so
-  the tailnet does not help here. [#126](https://github.com/mirzemehdi/tapdance/issues/126)
-- **Checkpoint B, GitHub token.** The owner runs `tapdance host gh-login` in the Terminal of the
-  console's VNC desktop and pastes the token there, so the agent never sees it. If the owner instead
-  pastes the token into the agent's chat (11-07), the agent must pipe it over ssh stdin to
-  `tapdance host gh-login` without printing it, delete any temporary file, and say that the token
-  passed through the chat; the owner should then revoke it after the run. A path without the console
-  is tracked in [#127](https://github.com/mirzemehdi/tapdance/issues/127).
+  script afterwards. Tailscale SSH is not on by default on the host (`Host key verification failed`);
+  setting the host up with `host-setup.sh … --tailscale-ssh` (or `tapdance host up --tailscale-ssh`)
+  turns it on, after which the VPS reaches the Mac as `ssh m1@<mac>.<tailnet>.ts.net` with no key at all
+  (not yet run). [#126](https://github.com/mirzemehdi/tapdance/issues/126)
+- **Checkpoint B, GitHub access.** Best without a second machine: a **deploy key made on the Mac**, so
+  no secret leaves it ([#127](https://github.com/mirzemehdi/tapdance/issues/127)). The agent runs
+  `tapdance host builds key --repo git@github.com:<owner>/<repo>.git` on the Mac, which prints only the
+  public key and the repository's deploy-keys page; the owner adds it there, read-only, from any browser
+  (a phone works), and the agent allows the ssh URL with `--git-auth deploy-key`. It covers host builds
+  only (installs from CI still need `gh` with Actions read), and organizations can turn deploy keys off.
+  For a token instead: the owner runs `tapdance host gh-login` in the Terminal of the console's VNC
+  desktop and pastes it there, so the agent never sees it. If the owner pastes the token into the
+  agent's chat anyway (11-07), the agent must pipe it over ssh stdin to `tapdance host gh-login` without
+  printing it, delete any temporary file, and say that the token passed through the chat; the owner
+  should then revoke it after the run.
 
 On the VPS `pnpm` may not be installed system-wide: `corepack enable --install-directory ~/.local/bin`
 and `export PATH=$HOME/.local/bin:$PATH COREPACK_ENABLE_DOWNLOAD_PROMPT=0`. Prompt for the agent on the
@@ -205,13 +212,20 @@ Checkpoint A, owner: ssh access to the Mac
   Wait until they confirm, then check `ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host status'`.
 
 Checkpoint B, owner: GitHub access for host builds
-- The owner creates a fine-grained token (the app's repository only, Contents read-only, short expiry)
-  and runs `tapdance host gh-login` on the Mac: from another machine with
+- Preferred, no token anywhere: on the Mac run
+    tapdance host builds key --repo git@github.com:<owner>/<repo>.git
+  and give the owner the public key it prints and the deploy-keys page it names. The owner adds it there
+  with "Allow write access" off and tells you when. Then allow the ssh URL:
+  `tapdance host builds enable --repo git@github.com:<owner>/<repo>.git --git-auth deploy-key --protected-ref main --allow-admin-account`,
+  and use that ssh URL as BUILD_REPO. If adding the key fails ("Deploy keys are disabled"), or installs
+  from CI are wanted too, use a token:
+- Token: the owner creates a fine-grained token (the app's repository only, Contents read-only, short
+  expiry) and runs `tapdance host gh-login` on the Mac: from another machine with
   `ssh -t m1@<mac-ip> 'tapdance host gh-login'`, or in the Terminal of the console's VNC desktop.
   Do not ask for the token. If the owner pastes it to you anyway, pipe it over ssh stdin to
   `tapdance host gh-login` without printing it, delete any temporary copy, and record the deviation.
   Afterwards `host status` must show `gh ok`, and the repository must be allowed:
-  `tapdance host builds enable --repo <url> --git-auth gh --protected-ref main --allow-admin-account`.
+  `tapdance host builds enable --repo <https url> --git-auth gh --protected-ref main --allow-admin-account`.
 
 Pairing (yours, after the owner says "approve the pairing")
 - ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host up --label vps-agent --allow-admin-account --skip-self-test --yes'
@@ -251,7 +265,9 @@ Finish
 - Clean up: `tapdance device release`; on the Mac `tapdance worker guard revoke <vps-agent id>` (id from
   `tapdance worker guard tokens`), delete ~/td-run/vps-app.zip, and remove your key's line from
   ~/.ssh/authorized_keys; here delete the token copy, the scratch home and ~/.ssh/rented-mac*. If a
-  GitHub token passed through the chat, remind the owner to revoke it.
+  GitHub token passed through the chat, remind the owner to revoke it; with a deploy key, run
+  `tapdance host builds key --repo <ssh url> --remove` on the Mac and remind the owner to delete the key
+  on the repository's deploy-keys page.
 - Report the results table, the PR or issues, and the clean-up done.
 ```
 
