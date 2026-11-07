@@ -87,7 +87,7 @@ ignored value never takes effect. In addition, a `tools.paths.<name>` entry must
 
 | Key | Default | Values | Meaning |
 | --- | --- | --- | --- |
-| `ios.uiBackend` | `"agent-device"` | `agent-device`, `axe` | How Tapdance drives iOS simulators. `agent-device` works locally and through gateways. `axe` uses [AXe](https://github.com/cameroncooke/AXe) and works only when Tapdance runs on the Mac hosting the simulator; it is written and unit-tested but has not run on a real Mac yet (STATUS U-02). |
+| `ios.uiBackend` | `"agent-device"` | `agent-device`, `axe` | How Tapdance drives iOS simulators. `agent-device` works locally and through gateways. `axe` uses [AXe](https://github.com/cameroncooke/AXe) and works only when Tapdance runs on the Mac hosting the simulator; it ran on a real Mac with a custom app's sign-in flow ([evidence](testing/evidence/2026-11-01-axe.md), STATUS U-02). |
 | `ios.axePath` | none | path | The `axe` executable, when it is not on `PATH`. User config only ([why](#security-settings-are-user-only)). |
 
 ### Artifacts

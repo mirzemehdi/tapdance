@@ -2,8 +2,8 @@
 
 > **Personal Mac?** Read [../security/personal-mac.md](../security/personal-mac.md) first: joining a gateway gives it command execution on the Mac; device-only mode (`tapdance worker guard`) does not.
 > For device-only mode there is a one-command setup, `tapdance host up` on the Mac and
-> `tapdance connect` on the VPS: see [one-command-host.md](one-command-host.md) (not run end to end
-> yet). This page describes the other way, joining the laptop to a gateway.
+> `tapdance connect` on the VPS: see [one-command-host.md](one-command-host.md) (run end to end with an
+> agent on a VPS). This page describes the other way, joining the laptop to a gateway.
 
 Your coding agent runs on an ordinary VPS. Your laptop or Mac, which can already run an Android
 emulator or the iOS Simulator, becomes a **worker**: it dials out to a gateway on the VPS and serves

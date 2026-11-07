@@ -15,7 +15,7 @@ on iOS 18.5, created by Simlock.
 | Component | Version | Status with Tapdance 0.1.0 | Notes |
 | --- | --- | --- | --- |
 | Node.js | 22.22.0 | Tested | Minimum 22.13 (Tapdance's and Simlock's `engines`). `doctor` fails below it. |
-| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Bundled; the runs above used 0.4.0 (local worker; gateway + joined worker on one Mac) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when the clean baseline is captured, #103). 0.5.0 not yet run on a device. Gateway and worker on two machines not tested. |
+| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Bundled; the runs above used 0.4.0 (local worker; gateway + joined worker on one Mac) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when the clean baseline is captured, #103). 0.5.0 with the patch ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-04-vps-n2-android-rerun.md)) and on a rented Scaleway Mac ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md)). Gateway and worker on two machines not tested. |
 | [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | Tested | Bundled, exact pin. Simlock runs it through `capabilities.agent-device.command`. |
 | Xcode | 26.5 (17F42) | Tested | iOS 18.5 runtime used; iOS 26.5 runtime installed but not leased in the recorded run. |
 | [asc](https://github.com/rorkai/App-Store-Connect-CLI) | 5.17.1 (Homebrew) | Tested | `--version` and `apps list` through the CLI and `execute_tool`. |
@@ -24,17 +24,18 @@ on iOS 18.5, created by Simlock.
 | [AXe](https://github.com/cameroncooke/AXe) | 1.8.0 | Tested | Release tarball, Xcode 26.5, iOS 26.5 simulator: install, launch, inspect, type, tap, wait, screenshot, MP4 ([evidence](testing/evidence/2026-11-01-axe.md)). |
 | [Google's Android CLI](https://developer.android.com/tools/agents/android-cli) | 1.1.16717390 | Tested | `--version`, `layout --flat` on a leased emulator via `--device` ([evidence](testing/evidence/2026-11-01-android.md)). |
 | Android SDK, emulator, system images | emulator 37.2.13, API 34 images (`google_apis`, `google_apis_playstore`) | Tested | On the test Mac (arm64, [evidence](testing/evidence/2026-11-01-android.md)) and on a Google Cloud N2 VM (x86_64, installed by `scripts/host-setup.sh`, [evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
-| Linux host with KVM: Google Cloud N2 | `n2-standard-4`, Ubuntu 24.04, nested virtualization | Tested | Terraform module, `scripts/host-setup.sh`, `host up` and `connect` from a Mac; CLI and MCP checklists with a real app ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). Other KVM hosts (bare metal, OVH) untested. |
+| Linux host with KVM: Google Cloud N2 | `n2-standard-4`, Ubuntu 24.04, nested virtualization | Tested | Terraform module, `scripts/host-setup.sh`, `host up` and `connect` from a Mac and from a Linux VPS; CLI and MCP checklists with a real app ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). Other KVM hosts (bare metal, OVH) untested. |
 | [Maestro](https://github.com/mobile-dev-inc/maestro) | any | **Untested** | Registered for pass-through. |
 | [fastlane](https://github.com/fastlane/fastlane) | any | **Untested** | Registered for pass-through. |
-| Cloud Macs (Scaleway, MacStadium, AWS EC2 Mac) | | **Untested** | Documentation only. |
+| Cloud Mac: Scaleway Mac mini M1-M | 8 GB, macOS 27.2, Xcode 27.0, iOS 27.0 | Tested | `host-setup.sh --ios-only`, `host up`, `connect` from a Mac and from a Linux VPS; CLI and MCP checklists, host builds ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md), [VPS](testing/evidence/2026-11-07-vps-rented-mac-ios.md)). One simulator at a time on 8 GB. |
+| Cloud Macs: MacStadium, AWS EC2 Mac | | **Untested** | Documentation only. |
 
 Platform support:
 
 | Host | Control machine (CLI, MCP) | Worker | Gateway |
 | --- | --- | --- | --- |
-| macOS | Yes (tested) | iOS simulators (tested), Android emulators (untested) | Yes (tested with the worker on the same Mac) |
-| Linux | Expected (untested) | Android emulators with KVM (untested) | Yes (untested) |
+| macOS | Yes (tested) | iOS simulators (tested), Android emulators (tested) | Yes (tested with the worker on the same Mac) |
+| Linux | Yes (tested: a Linux VPS as the agent's machine) | Android emulators with KVM (tested on a Google Cloud N2 VM) | Untested |
 | Windows | Expected (untested) | **No**: Simlock supports macOS and Linux only | No |
 
 ## Simlock versions must match

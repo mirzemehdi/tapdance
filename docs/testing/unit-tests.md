@@ -95,7 +95,7 @@ device. Tests below the provider contract use small, explicit fakes:
 | `FakeProvider` | `packages/sdk/src/testing.ts`, exported as `@tapdance/sdk/testing` | The `DeviceProvider` contract. It keeps leases in memory, records every call in `calls`, refuses handles it did not issue, writes a real 1×1 PNG for screenshots and a 2 KiB placeholder file for recordings, and can be told to fail its next call of a given method (`failNext`). Its doc comment says: "It is not a device." | That the SDK, MCP server and CLI layers above the provider behave correctly. Nothing about Simlock or a real device. |
 | Fake `fetch` | `provider.test.ts`, "Simlock HTTP client" | Simlock's HTTP API responses for a handful of routes. | That Tapdance maps Simlock's error codes and network failures correctly. |
 | Fake `asc` executable | `mcp.test.ts`, in the block named **"execute_tool (MOCKED executable: proves pass-through, not asc itself)"** | A shell script on a temporary `PATH` that echoes its arguments and environment, prints a fake private key and exits 3. | That arguments reach the tool unchanged (including a never-seen subcommand and shell metacharacters), that `ASC_READ_ONLY=1` is set unless the user allowed mutation in config, that parent environment secrets are not forwarded, that private keys are redacted, and that disabled tools and remote targets are refused. It proves nothing about `asc` itself. |
-| A nonexistent AXe path | `provider.test.ts`, "AXe backend" | A missing AXe install. | The error message for a missing AXe. AXe itself has not been run (STATUS.md, U-02). |
+| A nonexistent AXe path | `provider.test.ts`, "AXe backend" | A missing AXe install. | The error message for a missing AXe. AXe itself ran on a real Mac separately ([evidence](evidence/2026-11-01-axe.md), STATUS.md U-02). |
 
 Rules for new tests:
 
@@ -142,8 +142,9 @@ Things to know before you run it:
 - Because the working directory is a temporary folder, `install_app` refuses an app outside it unless
   you also set `TAPDANCE_ALLOWED_ROOTS` to the folder that holds the app, for example
   `TAPDANCE_ALLOWED_ROOTS="$(dirname "$TAPDANCE_IT_APP")"`.
-- It has been run for real on iOS only (twice, on 2026-11-01). The Android path has not been run. See
-  [evidence/2026-11-01-local-ios.md](evidence/2026-11-01-local-ios.md).
+- It has been run for real on iOS (twice, on 2026-11-01) and on Android with the demo APK (on the same
+  Mac, 2026-11-01). See [evidence/2026-11-01-local-ios.md](evidence/2026-11-01-local-ios.md) and
+  [evidence/2026-11-01-android.md](evidence/2026-11-01-android.md).
 
 Example:
 

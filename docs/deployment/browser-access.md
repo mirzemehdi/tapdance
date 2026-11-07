@@ -6,7 +6,7 @@ take control away from the agent and hand it back.
 
 ## Status
 
-From [STATUS.md](../../STATUS.md) (V-01 to V-05), as of 2026-11-01:
+From [STATUS.md](../../STATUS.md) (V-01 to V-05, Q-07), as of 2026-11-07:
 
 | What | Verified? |
 | --- | --- |
@@ -17,6 +17,8 @@ From [STATUS.md](../../STATUS.md) (V-01 to V-05), as of 2026-11-01:
 | The page in a real browser (live picture, a click tapped the device, status panel updated) | Yes, on one Mac, through a gateway running on that Mac ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)) |
 | Viewing from another computer (SSH tunnel or Tailscale) | Reported by the field test: the tailnet IP worked but a plain-`http` page could not decode video and the MagicDNS name was refused; both fixed (screenshot mode, tailnet names allowed; unit-tested). Live video from another computer needs `ssh -L` or HTTPS. |
 | Android emulator stream | Yes, on one Mac: live stream, Home, tap, Screenshot and recording buttons ([evidence](../testing/evidence/2026-11-01-android.md)) |
+| A device on another machine (device-only mode, over Tailscale) | Yes: a browser on a Mac streamed an emulator on a Google Cloud N2 VM live, and the owner's take-over gave `HUMAN_HELD` ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)); a simulator on a rented Mac mini followed a scripted run ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)) |
+| `view --tailscale` from a VPS agent | Checked with curl only: frame, stream, take-over gave `HUMAN_HELD` ([evidence](../testing/evidence/2026-11-03-vps-n2-android.md)); not yet in a browser |
 
 ## How it works
 

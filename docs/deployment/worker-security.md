@@ -29,8 +29,8 @@ gateway; Tapdance adds guard rails on top but does not change Simlock's trust mo
 reach the guard over a private network, rather than joining a gateway with
 `tapdance worker login --accept-gateway-exec`, which gives the gateway command execution on the Mac.
 The guard enforces a local policy, its own revocable tokens approved at the Mac, an allowlisted device
-API, limits and an audit log. It was verified on one Mac with a real simulator; the dedicated-account
-script and Tailscale exposure are untested. See [personal-mac.md](../security/personal-mac.md).
+API, limits and an audit log. It was verified on one Mac with a real simulator and used over Tailscale
+in every field run (STATUS.md H-02, W-07); the dedicated-account script is untested. See [personal-mac.md](../security/personal-mac.md).
 
 ## Tokens and where they live
 

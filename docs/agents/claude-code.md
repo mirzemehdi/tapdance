@@ -4,9 +4,11 @@ Give [Claude Code](https://docs.anthropic.com/en/docs/claude-code) Tapdance's de
 MCP server, the CLI, or both. Install Tapdance and start a worker first ([installation](../installation.md),
 [quick start](../quick-start.md)).
 
-Status: the MCP server over stdio (driven by a test MCP client) and the CLI were verified on a local
-iOS worker. Registering the server with `claude mcp add` and using it from a Claude Code conversation is
-not part of the recorded evidence, and remote setups are untested ([STATUS.md](../../STATUS.md)).
+Status: the MCP server over stdio (driven by a scripted MCP client) and the CLI were verified on local
+iOS and Android workers, and against remote hosts in device-only mode (a Google Cloud N2 VM and a
+rented Mac mini, reached over Tailscale). Registering the server with `claude mcp add` and using it from
+a Claude Code conversation is not part of the recorded evidence, and gateway mode across two machines is
+untested ([STATUS.md](../../STATUS.md)).
 
 ## Add the MCP server
 
@@ -155,7 +157,8 @@ Working while I watch (requirement V-01, browser viewer):
 > `retryAfterMs` and retry, and do not release or re-lease. If you get `LEASE_LOST`, lease a new device
 > and reinstall. Release the device when you are done.
 
-Android has not been run end to end with Tapdance yet; the second prompt shows the intended flow.
+Android has run end to end with Tapdance through a scripted MCP client (STATUS D-01), not yet from a
+Claude Code conversation; the second prompt shows the intended flow.
 
 ## Related
 

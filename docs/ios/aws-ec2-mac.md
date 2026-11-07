@@ -5,7 +5,9 @@ a whole Mac allocated to your account. This page sets one up by hand as a Tapdan
 
 Status: **not tested.** Nothing on this page has been run on AWS by the Tapdance maintainers
 ([STATUS.md](../../STATUS.md), G-05 and G-06). The Tapdance steps are the ones verified on a local Mac
-([evidence](../testing/evidence/2026-11-01-local-ios.md)); the VPS-to-Mac path is untested (Q-08).
+([evidence](../testing/evidence/2026-11-01-local-ios.md)); a Linux VPS driving a separate Mac ran in
+device-only mode on a Scaleway Mac mini ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md),
+Q-08), and the gateway route from a VPS is untested.
 Tapdance has no AWS integration; `packages/` contains no cloud SDK.
 
 > **Same steps as the Scaleway page, not run here.** Once you can ssh into the Mac, follow
@@ -146,7 +148,7 @@ tapdance worker login --accept-gateway-exec --gateway wss://gateway.example.com 
 ```
 
 Paste the token at the prompt. Then on the VPS: `tapdance workers list` and
-`tapdance devices --platform ios`, and lease as in [scaleway-mac.md](scaleway-mac.md#7-lease-from-the-vps).
+`tapdance devices --platform ios`, and lease as in [scaleway-mac.md](scaleway-mac.md#5-connect-the-agents-machine).
 
 The worker runs as a launchd login service, so it starts when `ec2-user` is logged in. Whether simulator
 boot and screen capture work without a logged-in desktop session has not been tested.

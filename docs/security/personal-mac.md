@@ -34,26 +34,25 @@ recommended setup for a personal Mac is **device-only mode**.
 ## Device-only mode
 
 ```bash
-# once, as an administrator: a standard account with nothing personal in it
+# once, as an administrator: a standard account with nothing personal in it (untested)
 infrastructure/scripts/macos-create-worker-account.sh
+sudo tailscale set --operator=tapdance-worker   # tailscaled lets only root and its operator run tailscale serve
 
 # as the tapdance-worker account
-tapdance worker install                       # Simlock on loopback; do NOT join a gateway
-tapdance worker guard policy                  # review ~/.tapdance/worker/policy.json
-tapdance worker guard start                   # serves 127.0.0.1:4720
-tapdance worker guard pair --label my-vps     # approve the control machine; prints a token once
-tailscale serve --bg --https=4720 http://127.0.0.1:4720
+tapdance worker guard policy                    # review ~/.tapdance/worker/policy.json
+tapdance host up --label my-vps                 # worker, guard service, pairing, tailscale serve, self-test
 
-# on the VPS
-tapdance init --mode self-hosted --endpoint https://<mac>.<tailnet>.ts.net:4720 --yes
-tapdance config set-token                     # paste the guard token; it is bound to the guard URL
-tapdance doctor
+# on the VPS, with the pairing token file host up wrote (copy it with scp)
+tapdance connect https://<mac>.<tailnet>.ts.net:4720 < pairing-my-vps.token
 ```
 
-`tapdance host up` runs the Mac side of this in one command (worker, guard service, pairing,
-`tailscale serve`, a self-test) and writes the token to a mode-600 file instead of printing it;
-`tapdance connect` does the VPS side. See [one-command host](../deployment/one-command-host.md). Neither
-has been run end to end yet.
+`tapdance host up` writes the token to a mode-600 file instead of printing it; `tapdance connect` checks
+the guard and saves the endpoint and token. Both have run end to end with an agent on a VPS (STATUS
+W-07); see [one-command host](../deployment/one-command-host.md). By hand, `host up` amounts to
+`tapdance worker install` (Simlock on loopback; do not join a gateway), `tapdance worker guard install`
+(serves 127.0.0.1:4720), `tapdance worker guard pair --label my-vps` and
+`tailscale serve --bg --https=4720 http://127.0.0.1:4720`; on the VPS, `tapdance init --mode
+self-hosted --endpoint …` and `tapdance config set-token` do what `connect` does.
 
 ### Keep the guard running
 
@@ -191,7 +190,7 @@ Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–
 
 `tapdance worker guard pair --label ci --scope interaction,inspection,screenshots` (or `host up --scope …`)
 issues a token limited to those policy areas: the host policy and the token's scopes must both allow a
-request. A token without `install` cannot put apps on the devices, which matters most for iOS, where an
+request. A token without `install` cannot put apps on the devices, by upload or by a host build, which matters most for iOS, where an
 installed simulator app runs as this Mac account ([threat model](threat-model.md)). Scope names are the
 `allow` switches of the policy file. `worker guard tokens` lists each token's scopes; `host status` shows
 the pairing's age and expiry. `host up` keeps a valid pairing as it is: pass `--repair` with `--scope` to
@@ -231,8 +230,13 @@ reissue it with scopes.
 - The full MCP agent loop ran through the guard against a real simulator (custom app upload and
   install, interaction, recording, screenshot, logs, release) with nothing denied but a diagnostics
   fetch ([evidence](../testing/evidence/2026-11-01-worker-guard.md)).
-- The dedicated-account script, Tailscale exposure, the guard's LaunchAgent / systemd unit
-  (`worker guard install`) and `tapdance host up` are **untested**.
+- Over Tailscale, agents on another machine drove hosts through the guard in every field run: the
+  owner's Mac from a VPS ([evidence](../testing/evidence/2026-11-02-vps-field-runs.md)), a Google Cloud
+  N2 VM and a rented Mac mini from a Mac and from a VPS. `tapdance host up` installed the guard's
+  systemd unit (N2) and LaunchAgent (rented Mac), and the guard came back after a restart of each
+  ([N2](../testing/evidence/2026-11-03-gcp-n2-android.md),
+  [rented Mac](../testing/evidence/2026-11-06-rented-mac-ios.md)).
+- The dedicated-account script (`macos-create-worker-account.sh`) is **untested**.
 
 ## Profiles
 

@@ -224,7 +224,7 @@ that is not renewed before its TTL runs out expires.
   gateway you join, the `capabilities.*` switches, draining the worker, revoking its token, and
   stopping the daemon.
 - For your options on a personal Mac, including device-only mode (`tapdance worker guard`, verified
-  on one Mac; Tailscale exposure untested), see [personal-mac.md](../security/personal-mac.md).
+  on one Mac and used over Tailscale in the field runs), see [personal-mac.md](../security/personal-mac.md).
 - Never commit tokens. Tapdance keeps them in `~/.tapdance/credentials.json` (mode 600) or reads
   `TAPDANCE_TOKEN`; Simlock stores the join token in `~/.simlock/config.json`, readable only by your
   user.

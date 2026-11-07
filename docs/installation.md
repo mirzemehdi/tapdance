@@ -38,7 +38,8 @@ on Windows, and `tapdance doctor` says so. Windows works as a control machine.
 
 Tested so far: local iOS and Android workers on an Apple-silicon Mac with Node 22.22.0
 ([iOS](testing/evidence/2026-11-01-local-ios.md), [Android](testing/evidence/2026-11-01-android.md)).
-A Linux worker has not been run. See [compatibility.md](compatibility.md) and
+A Linux worker ran Android on a Google Cloud N2 VM (Ubuntu 24.04, KVM) as a remote host
+([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). See [compatibility.md](compatibility.md) and
 [STATUS.md](../STATUS.md) for what is and is not proven.
 
 ## Install the CLI
@@ -117,9 +118,10 @@ simulator; Tapdance refuses it with `APP_PATH_INVALID`.
 
 ### Android (macOS, or Linux with KVM)
 
-Run end to end on Android 34 emulators on a Mac ([evidence](testing/evidence/2026-11-01-android.md));
-**not yet run on a Linux machine** (see [STATUS.md](../STATUS.md), D-01, D-02). The Linux requirements
-below come from Simlock's documentation and Tapdance's own checks.
+Run end to end on Android 34 emulators on a Mac ([evidence](testing/evidence/2026-11-01-android.md))
+and on a Google Cloud N2 VM with KVM (Ubuntu 24.04, set up with `scripts/host-setup.sh`,
+[evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); see [STATUS.md](../STATUS.md), D-01, D-02.
+The Linux requirements below come from Simlock's documentation, Tapdance's own checks and that run.
 
 Simlock needs the **SDK command-line tools** (`sdkmanager` and `avdmanager`) to create emulators. Android
 Studio alone does not always install them. Without them, `tapdance doctor` fails on "command-line tools
@@ -167,9 +169,9 @@ and runs `tapdance host up`, which sets up the worker, the worker guard, a pairi
 on the agent's machine, `tapdance connect` uses it.
 
 - **A Mac or a Linux machine with KVM:** [one-command host](deployment/one-command-host.md). Run on the
-  owner's Mac; Linux not yet run.
+  owner's Mac, a fresh Linux VM and a fresh rented Mac mini (STATUS W-07).
 - **A cloud VM in your own Google Cloud project:** [Google Cloud N2](deployment/google-cloud-n2.md).
-  Written, not yet run end to end.
+  Followed end to end (STATUS G-03).
 
 The agent's machine needs only Node.js and Tapdance (this page) and must be in the same tailnet.
 To get a private app onto the host, see [build in CI, test with Tapdance](guides/ci-builds.md) and

@@ -28,8 +28,8 @@ of Mac paths, port forwarding, profiles written to Mac paths, macOS privacy perm
    an administrator account unless you pass `--allow-admin-account`, and prints this warning at the end.
 2. **A token with fewer areas.** `tapdance host up --scope interaction,inspection,screenshots,streaming,input`
    (or `worker guard pair --scope …`) issues a token that can drive and watch devices but not install
-   apps, copy files or open a device shell. A scope never adds what the host policy turns off; both must
-   allow a request. `worker guard tokens` and `host status` show each token's scopes, age and expiry.
+   apps, copy files or open a device shell. A host build installs its app on the lease, so it needs the
+   `install` scope too. A scope never adds what the host policy turns off; both must allow a request. `worker guard tokens` and `host status` show each token's scopes, age and expiry.
 3. **Short-lived, revocable tokens.** Tokens expire (7 days by default, `limits.tokenDays`), and
    `tapdance worker guard revoke <id|all>` or `tapdance host down --revoke` stops them on the next request.
 4. **The network.** The guard listens on loopback and is reached through Tailscale. A Tailscale ACL that
@@ -38,6 +38,10 @@ of Mac paths, port forwarding, profiles written to Mac paths, macOS privacy perm
    ```json
    { "action": "accept", "src": ["<agent machine's 100.x address or tag>"], "dst": ["<this Mac's 100.x address or tag>:4720"] }
    ```
+
+   With `host up --tailscale-ssh`, a shell over Tailscale SSH bypasses the guard altogether: limit the
+   tailnet policy's `ssh` rule to your own devices in `src` (not the agent's machine) and to the hosting
+   account in `users` (no root).
 
 5. **The host policy** (`~/.tapdance/worker/policy.json`) turns whole areas off for every token, for
    example `allow.install: false` or `allow.deviceShell: false`.

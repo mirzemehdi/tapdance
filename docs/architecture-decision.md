@@ -229,8 +229,9 @@ Simlock has them, so Tapdance builds the missing piece:
 - Network: the control machine reaches it over a private network (Tailscale). That trades the gateway's
   fleet features (one queue across workers) for a boundary the Mac enforces; for dedicated hardware the
   gateway path remains, behind an explicit `--accept-gateway-exec`.
-- Proven by malicious-client unit tests (`guard.test.ts`) and a real MCP loop through it; untested: the dedicated account,
-  Tailscale exposure, Android through it.
+- Proven by malicious-client unit tests (`guard.test.ts`), a real MCP loop through it, and field runs
+  over Tailscale with Android and iOS (a Mac, a Google Cloud N2 VM and a rented Mac mini as hosts, see
+  STATUS.md); untested: the dedicated account.
 
 ### Landscape: mobile-mcp and others
 

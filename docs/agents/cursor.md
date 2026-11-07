@@ -124,8 +124,8 @@ Working while I watch (requirement V-01):
 > `tapdance --session <id> view`. If a call returns `HUMAN_HELD`, wait `retryAfterMs` and retry; do not
 > release. On `LEASE_LOST`, lease again and reinstall. Release the device when done.
 
-Android has not been run end to end with Tapdance yet (STATUS D-01); on a Mac, the iOS path is the
-tested one.
+Android has run end to end with Tapdance through a scripted MCP client (STATUS D-01); neither platform
+has been driven from Cursor itself yet.
 
 ## Related
 

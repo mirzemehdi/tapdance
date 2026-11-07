@@ -5,12 +5,14 @@ A runbook an agent (or a person) can follow from nothing to a written evidence r
 it up as an Android device host, drives it from the agent's machine with the CLI and MCP checklists in
 [`scripts/field-test/`](../../scripts/field-test/README.md), and tears everything down.
 
-> **Status: this runbook has not been run as a whole yet.** It is built from the 2026-11-03 run
-> ([evidence](evidence/2026-11-03-gcp-n2-android.md)), which used the same Terraform module, setup
-> script and checks by hand. New since then and not yet run on a cloud: Terraform's ephemeral mode
-> (`on_run_limit = "DELETE"`), `infrastructure/scripts/gcp-leftovers.sh`, the cloud cost line in
-> `tapdance host up` and `tapdance host status`, and the checklist drivers in this form. See
-> [STATUS.md](../../STATUS.md).
+> **Status: its Linux VPS variant has been run end to end** (2026-11-03,
+> [evidence](evidence/2026-11-03-vps-n2-android.md)): the CLI and MCP checklist drivers, the `cloud VM:`
+> line in `tapdance host up` and `tapdance host status`, Terraform's ephemeral mode
+> (`on_run_limit = "DELETE"`, the run-hours cap applied but not reached), and
+> `infrastructure/scripts/gcp-leftovers.sh` after `terraform destroy`. It is built from the first
+> 2026-11-03 run ([evidence](evidence/2026-11-03-gcp-n2-android.md)), which used the same Terraform
+> module, setup script and checks by hand; runbook errors found in the VPS run were fixed afterwards
+> (#83, #84). See [STATUS.md](../../STATUS.md) (Q-12, G-08).
 
 Background: [google-cloud-n2.md](../deployment/google-cloud-n2.md) (the guide for owners) and
 [field-testing.md](field-testing.md) (the general rules for field-testing agents). This page adds the
@@ -261,7 +263,10 @@ with the owner at a browser: `tapdance view`, and the owner taking over (the age
 `HUMAN_HELD`).
 
 A failed step: retry once, then capture its output (each driver keeps every step's output in its
-folder), and decide with the owner whether to go on. Do not edit `packages/` to make a step pass.
+folder), and decide with the owner whether to go on. Do not edit `packages/` to make a step pass. When a
+critical step stops a run, the later steps are skipped except the release, which every checklist marks
+to run anyway (`"always": true` in the MCP checklists, `always=1` in `cli-checklist.sh`), so a stopped
+run does not leave a lease behind.
 
 ## 7. Measurements to record
 

@@ -3,22 +3,23 @@
 These are the step-by-step procedures for proving Tapdance works on real machines, real emulators and
 real simulators. Each one names the requirement IDs from [PRODUCT.md](../../PRODUCT.md) it proves.
 
-**Only procedure 1 has been run** (on 2026-11-01, one Mac). Every other procedure below is written
-from the code and the upstream documentation and has **not** been run yet. Where a step is likely to
-need adjusting, it says so. If you run one, write an evidence record (see
+**Procedures 1, 2 and 7 have been run** (on 2026-11-01, one Mac). Procedures 5 and 6 have been run
+only in their device-only variant (the worker guard over Tailscale, set up with `host up`, instead of a
+gateway); as written, with a gateway, they have not. Procedures 3, 4 and 8 have **not** been run as
+written. Where a step is likely to need adjusting, it says so. If you run one, write an evidence record (see
 [evidence/README.md](evidence/README.md)) and update [STATUS.md](../../STATUS.md). If a step is
 wrong, file an issue (see [field-testing.md](field-testing.md)).
 
-| # | Procedure | Machines | Proves | State on 2026-11-01 |
+| # | Procedure | Machines | Proves | State on 2026-11-07 |
 | --- | --- | --- | --- | --- |
 | 1 | [iOS simulator on macOS](#1-ios-simulator-on-macos) | 1 Mac | Q-03, M-01, D-03, V-01, V-03 | Run. [Evidence](evidence/2026-11-01-local-ios.md) |
-| 2 | [Android emulator on macOS](#2-android-emulator-on-macos) | 1 Mac | Q-03, D-01 | Not run: test Mac lacks Android cmdline-tools |
-| 3 | [Android emulator on Linux with KVM](#3-android-emulator-on-linux-with-kvm) | 1 Linux box | Q-03, D-01, D-02 | Not run |
+| 2 | [Android emulator on macOS](#2-android-emulator-on-macos) | 1 Mac | Q-03, D-01 | Run. [Evidence](evidence/2026-11-01-android.md) |
+| 3 | [Android emulator on Linux with KVM](#3-android-emulator-on-linux-with-kvm) | 1 Linux box | Q-03, D-01, D-02 | Not run as written; Android on a Linux/KVM VM ran in device-only mode from another machine (see 5) |
 | 4 | [Two-machine laptop worker](#4-two-machine-laptop-worker-q-06) | VPS + laptop | Q-06, M-02, P-07, W-01, W-03, F-01 | Not run |
-| 5 | [Google Cloud N2 worker](#5-google-cloud-n2-worker-q-05-q-07) | VPS + N2 VM (+ laptop browser) | Q-05, Q-07, G-01, M-03 | Not run |
-| 6 | [Mac worker from a Linux VPS](#6-mac-worker-from-a-linux-vps-q-08) | VPS + Mac | Q-08, D-04 | Not run |
-| 7 | [AXe on a real Mac](#7-axe-on-a-real-mac-q-09) | 1 Mac (+ VPS for artifacts) | Q-09, U-02 | Not run: AXe not installed |
-| 8 | [Android CLI on an N2 worker](#8-android-cli-on-an-n2-worker-q-10) | N2 VM (+ VPS) | Q-10, U-04, U-05 | Not run; the "routed from a VPS" part is blocked (E-04) |
+| 5 | [Google Cloud N2 worker](#5-google-cloud-n2-worker-q-05-q-07) | VPS + N2 VM (+ laptop browser) | Q-05, Q-07, G-01, M-03 | Device-only variant run (guard over Tailscale, from a Mac and from a VPS). [Evidence](evidence/2026-11-03-gcp-n2-android.md), [VPS](evidence/2026-11-03-vps-n2-android.md). The gateway route not run |
+| 6 | [Mac worker from a Linux VPS](#6-mac-worker-from-a-linux-vps-q-08) | VPS + Mac | Q-08, D-04 | Device-only variant run (a VPS and a rented Mac mini, guard over Tailscale). [Evidence](evidence/2026-11-07-vps-rented-mac-ios.md). The gateway route not run |
+| 7 | [AXe on a real Mac](#7-axe-on-a-real-mac-q-09) | 1 Mac (+ VPS for artifacts) | Q-09, U-02 | Run (local part; the VPS part is copying artifacts by hand). [Evidence](evidence/2026-11-01-axe.md) |
+| 8 | [Android CLI on an N2 worker](#8-android-cli-on-an-n2-worker-q-10) | N2 VM (+ VPS) | Q-10, U-04, U-05 | Not run on an N2 worker; the Android CLI part ran on a local lease ([evidence](evidence/2026-11-01-android.md)); the "routed from a VPS" part is blocked (E-04) |
 
 ## Before any procedure
 
@@ -218,9 +219,8 @@ especially Xcode, iOS runtime and Simlock versions.
 
 ## 2. Android emulator on macOS
 
-**State:** not run. On the test Mac, Simlock could not create emulators because the Android SDK
-command-line tools (`sdkmanager`, `avdmanager`) are not installed (STATUS.md D-01). Proves Q-03
-(Android on macOS) and D-01.
+**State:** run on 2026-11-01 after installing the Android SDK command-line tools on the test Mac
+([evidence](evidence/2026-11-01-android.md)). Proves Q-03 (Android on macOS) and D-01.
 
 ### Topology
 
@@ -330,8 +330,10 @@ block, screenshot, MP4 size, logcat excerpt (no personal data), integration test
 
 ## 3. Android emulator on Linux with KVM
 
-**State:** not run. The KVM checks are unit-tested only (STATUS.md D-02). Proves Q-03 (Android on
-Linux), D-01, D-02.
+**State:** not run as written (an agent on the Linux machine itself). A Google Cloud N2 VM with KVM ran
+Android as a remote host in device-only mode, and its KVM checks ran there (STATUS.md D-01, D-02;
+[evidence](evidence/2026-11-03-gcp-n2-android.md)); the missing-KVM path is unit-tested only. Proves
+Q-03 (Android on Linux), D-01, D-02.
 
 ### Topology
 
@@ -573,8 +575,12 @@ S-07 and F-01 (only if a custom APK was installed).
 
 ## 5. Google Cloud N2 worker (Q-05, Q-07)
 
-**State:** not run. Nothing has been provisioned (STATUS.md G-01, Q-05: needs a GCP project with
-billing and nested virtualization allowed). Proves Q-05; with the browser part, Q-07.
+**State:** not run as written (through a gateway). The device-only variant ran: an N2 VM made with the
+Terraform module and set up with `scripts/host-setup.sh` and `host up`, driven over Tailscale from a
+Mac and from a Linux VPS ([evidence](evidence/2026-11-03-gcp-n2-android.md),
+[VPS](evidence/2026-11-03-vps-n2-android.md); runbook:
+[field-test-cloud-android.md](field-test-cloud-android.md)). Proves Q-05; with the browser part, Q-07
+(needs a GCP project with billing and nested virtualization allowed).
 
 ### Topology
 
@@ -673,7 +679,11 @@ Q-05, Q-07, G-01, G-02, M-03.
 
 ## 6. Mac worker from a Linux VPS (Q-08)
 
-**State:** not run. Proves Q-08, and checks D-04 (simulator `.app` vs device `.ipa`).
+**State:** not run as written (through a gateway). The device-only variant ran: a Linux VPS drove a
+rented Scaleway Mac mini through the worker guard over Tailscale, CLI and MCP, a host build and a
+47 MB `.app` upload ([evidence](evidence/2026-11-07-vps-rented-mac-ios.md); runbook:
+[field-test-rented-mac-ios.md](field-test-rented-mac-ios.md)). Proves Q-08, and checks D-04 (simulator
+`.app` vs device `.ipa`).
 
 ### Topology
 
@@ -874,7 +884,8 @@ a manual copy).
 
 ## 8. Android CLI on an N2 worker (Q-10)
 
-**State:** not run, and **partly blocked**. Proves (part of) Q-10, U-04, U-05.
+**State:** not run on an N2 worker, and **partly blocked**. The Android CLI itself ran on a local lease
+on a Mac ([evidence](evidence/2026-11-01-android.md)). Proves (part of) Q-10, U-04, U-05.
 
 Google's [Android CLI](https://developer.android.com/tools/agents/android-cli) (`android`) is an
 agent-oriented CLI with commands such as `android layout`, `android input tap|text|swipe|key|scroll`,

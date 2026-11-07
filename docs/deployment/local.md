@@ -7,8 +7,8 @@ This is mode A in the [architecture decision](../architecture-decision.md) and r
 | What | Status (see [STATUS.md](../../STATUS.md)) |
 | --- | --- |
 | iOS simulator on macOS | Tested on a real Mac (MacBook Pro M1 Pro, macOS 26.5, Xcode 26.5, iPhone 16 / iOS 18.5). [Evidence](../testing/evidence/2026-11-01-local-ios.md). |
-| Android emulator on macOS | Implemented, **not run yet**: the test Mac lacks the Android command-line tools. |
-| Android emulator on Linux with KVM | Implemented, **not run yet**. |
+| Android emulator on macOS | Tested on the same Mac with Android 34 emulators, a custom APK and a Google Play image. [Evidence](../testing/evidence/2026-11-01-android.md). |
+| Android emulator on Linux with KVM | Tested as a remote host (a Google Cloud N2 VM driven over Tailscale in device-only mode, [evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)); an agent on the same Linux machine (local mode) not run. |
 | Windows | Not supported as a device host. Windows can run the CLI and MCP server against a remote gateway only. |
 
 ## How it works
@@ -77,8 +77,8 @@ Useful options:
 - `--service` also installs the worker as a login service (launchd on macOS, a systemd user unit on
   Linux), so it starts again after you log in.
 - `--ios-backend axe` switches iOS automation to [AXe](https://github.com/cameroncooke/AXe) (MIT)
-  and keeps simulators in Xcode's default device set, which AXe needs. AXe support is written and
-  unit-tested but **has not run on a real Mac yet** (see STATUS.md, U-02).
+  and keeps simulators in Xcode's default device set, which AXe needs. AXe ran on a real Mac with a
+  custom app's sign-in flow ([evidence](../testing/evidence/2026-11-01-axe.md), STATUS.md U-02).
 
 `tapdance doctor` on a Mac without Android command-line tools reports a failure for them. That does
 not block iOS.

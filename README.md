@@ -23,10 +23,14 @@ AGPL asks you to share your changes under the same licence.
 > **Status: 0.1.0, unreleased.** The full loop works on one Mac with iOS simulators and Android
 > emulators, locally and through a gateway on the same Mac. An agent on a Linux VPS has tested a real
 > app on a Mac through the worker guard over Tailscale, Android and iOS
-> ([field runs](docs/testing/evidence/2026-11-02-vps-field-runs.md)), and Android ran on a Google Cloud N2
-> VM driven from a Mac ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). A gateway across
-> two machines and cloud Macs are implemented or documented but **not yet proven**. Many recent
-> features are unit-tested only. Read [STATUS.md](STATUS.md) before you rely on anything.
+> ([field runs](docs/testing/evidence/2026-11-02-vps-field-runs.md)). Android ran on a Google Cloud N2
+> VM driven from a Mac and from a Linux VPS ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md),
+> [VPS](docs/testing/evidence/2026-11-03-vps-n2-android.md)), and iOS on a rented Scaleway Mac mini driven
+> from a Mac and from a Linux VPS ([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md),
+> [VPS](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md)), all in device-only mode. A gateway
+> across two machines, MacStadium and AWS EC2 Mac, and a real agent (Claude Code, Codex, Cursor) as the
+> MCP client are **not yet proven**. Many recent features are unit-tested only. Read
+> [STATUS.md](STATUS.md) before you rely on anything.
 
 ## Quick start (local, macOS, iOS simulator)
 
@@ -96,8 +100,9 @@ test images (`google_atd`) for the lightest app-only runs ([image tiers](docs/pl
 
 The MCP server has been verified with a scripted MCP client on a real iOS simulator; it has not yet
 been run from inside Claude Code, Codex or Cursor. Android has run on Android 34 emulators on a Mac
-([evidence](docs/testing/evidence/2026-11-01-android.md)), not yet on a Linux worker (see
-[STATUS.md](STATUS.md) P-01, D-02). Testing in-app purchases: [purchase testing](docs/guides/purchase-testing.md).
+([evidence](docs/testing/evidence/2026-11-01-android.md)) and on a Linux worker with KVM, a Google Cloud
+N2 VM ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)) (see [STATUS.md](STATUS.md) P-01,
+D-01). Testing in-app purchases: [purchase testing](docs/guides/purchase-testing.md).
 
 ### Agent on a VPS, devices on your Mac
 
@@ -145,8 +150,10 @@ and [Pause, resume, or stop for good](docs/deployment/one-command-host.md#pause-
 
 `host up` has run on the owner's Mac (with Node and Android Studio already installed) and an agent on a
 VPS has tested through it for a day ([field runs](docs/testing/evidence/2026-11-02-vps-field-runs.md)).
-Not yet run: a fresh Mac, an iOS build on the host from a real repository; `pause`, `resume` and
-`down --all` are unit-tested only. See [one-command host](docs/deployment/one-command-host.md). For
+With `host-setup.sh` it also ran on a fresh Google Cloud N2 VM and on a fresh rented Scaleway Mac mini,
+where iOS host builds of a private repository worked
+([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md)). `pause`, `resume` and `down --all` are
+unit-tested only. See [one-command host](docs/deployment/one-command-host.md). For
 devices on a VM in your own Google Cloud project, see [Google Cloud N2](docs/deployment/google-cloud-n2.md)
 (run end to end from a Mac: [evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)).
 
@@ -154,11 +161,11 @@ devices on a VM in your own Google Cloud project, see [Google Cloud N2](docs/dep
 
 | Mode | Agent runs on | Devices run on | Config | Tested today (see [STATUS.md](STATUS.md)) |
 | --- | --- | --- | --- | --- |
-| Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). **Android emulator on macOS: yes** ([evidence](docs/testing/evidence/2026-11-01-android.md)); Linux not run. |
+| Local | Your Mac or Linux machine | The same machine | `provider: "local"` | **iOS simulator on macOS: yes**, on one Mac ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)). **Android emulator on macOS: yes** ([evidence](docs/testing/evidence/2026-11-01-android.md)); a local Linux worker not run (Linux ran as a remote host, next rows). |
 | Laptop as remote worker | An ordinary VPS (no KVM needed) that also runs the gateway | Your laptop or Mac, which dials out to the gateway | `provider: "self-hosted"` | Gateway + joined worker + CLI, MCP and viewer worked with **both on one Mac** ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)). **Not yet tested across two machines over a real network.** |
-| Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM, set up with `tapdance host up` (device-only) | `provider: "self-hosted"`, endpoint = guard URL | **Android on a Google Cloud N2 VM: yes**, set up with Terraform, `host-setup.sh` and `host up`, driven from a Mac agent with `connect` over Tailscale, CLI and MCP ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Joining a gateway (`worker login`) not run; OVH and dedicated servers not run. |
+| Self-hosted KVM worker (Google Cloud N2 first; OVH, dedicated Linux) | A VPS | A Linux machine with KVM, set up with `tapdance host up` (device-only) | `provider: "self-hosted"`, endpoint = guard URL | **Android on a Google Cloud N2 VM: yes**, set up with Terraform, `host-setup.sh` and `host up`, driven with `connect` over Tailscale, CLI and MCP, from a Mac agent ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)) and from a Linux VPS agent ([evidence](docs/testing/evidence/2026-11-03-vps-n2-android.md)). Joining a gateway (`worker login`) not run; OVH and dedicated servers not run. |
 | Personal Mac, device-only | A VPS | Your Mac, reached over Tailscale through `tapdance worker guard` (one command: `tapdance host up`) | `provider: "self-hosted"`, endpoint = guard URL | Full MCP loop through the guard on one Mac ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)). **An agent on a VPS tested a real app through it over Tailscale**, Android and iOS, with the CLI ([field runs](docs/testing/evidence/2026-11-02-vps-field-runs.md)). |
-| Cloud Mac worker (Scaleway, MacStadium, AWS EC2 Mac) | A VPS | A rented Mac | `provider: "self-hosted"` | Documentation only. **Not exercised.** |
+| Cloud Mac worker (Scaleway, MacStadium, AWS EC2 Mac) | A VPS | A rented Mac | `provider: "self-hosted"`, endpoint = guard URL | **Scaleway Mac mini M1-M: yes**, set up with `host-setup.sh --ios-only` and `host up`, driven in device-only mode from a Mac ([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md)) and from a Linux VPS ([evidence](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md)), CLI and MCP, host builds. MacStadium and AWS EC2 Mac: documentation only, **not exercised**. |
 | Managed cloud | Anywhere | Hosted by Tapdance | `provider: "cloud"` | **Not built.** The value is reserved and fails with `NOT_SUPPORTED`. |
 
 Windows can run the CLI and MCP server as a control machine, but it cannot be a worker: Simlock
@@ -279,17 +286,27 @@ Also proven on that Mac, through a real Simlock gateway with the worker joined o
 uplink (both daemons on the same machine): the CLI loop, the MCP integration test, and the viewer in
 a real browser ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)).
 
+Proven on rented and cloud machines, in device-only mode over Tailscale: Android on a Google Cloud N2
+VM ([from a Mac](docs/testing/evidence/2026-11-03-gcp-n2-android.md),
+[from a VPS](docs/testing/evidence/2026-11-03-vps-n2-android.md)) and iOS on a Scaleway Mac mini
+([from a Mac](docs/testing/evidence/2026-11-06-rented-mac-ios.md),
+[from a VPS](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md)), each set up with `host-setup.sh`
+and `host up`, with host builds of a private app. Those runs also covered `view --tailscale` (checked
+with curl, not a browser) and, on the rented Mac, the iOS Files app, Notification Center and locale
+steps. Scoped guard tokens passed a self-test through the guard on the owner's Mac
+([evidence](docs/testing/evidence/2026-11-03-selftest-through-guard.md)). Google's Android CLI ran on a local lease ([evidence](docs/testing/evidence/2026-11-01-android.md)).
+
 Built but **not yet proven** on real infrastructure:
 
 - a gateway on a VPS with a joined laptop, N2 or Mac worker across a real network;
-- Google's Android CLI;
+- Google's Android CLI on a remote lease (external tools run on the control machine only);
+- MacStadium and AWS EC2 Mac;
 - a full device loop over the Streamable HTTP MCP transport (its bearer-token check and basic calls
   have run; a whole lease-to-release loop has not);
 - the MCP server from inside a real agent (Claude Code, Codex or Cursor): only a scripted MCP client
   has driven it;
-- the dedicated macOS worker account, and `host up` on a fresh Mac;
-- iOS builds on the host from a real repository (Android ran on an N2 VM), scoped tokens, `view --tailscale`, and the newest iOS
-  features (Files app, clipboard, locale, Notification Center): unit-tested only;
+- the dedicated macOS worker account;
+- the iOS clipboard and installs from CI for iOS: unit-tested only;
 - installing a custom app through a gateway.
 
 Not built: running external tools on remote workers, Windows workers, cloud-Mac provisioning, and the

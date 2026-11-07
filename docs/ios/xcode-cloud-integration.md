@@ -135,8 +135,11 @@ stores, logs or returns those credentials, passes only `ASC_*` variables (plus a
 ## Building on the Mac worker itself
 
 You can also build on the worker Mac over SSH (`xcodebuild ... -sdk iphonesimulator`) and copy the
-`.app` to the VPS. An agent on the VPS cannot run `xcodebuild` on the worker through Tapdance today:
-external tools run only on the control machine (STATUS E-04).
+`.app` to the VPS. An agent on the VPS cannot run its own `xcodebuild` on the worker: external tools
+run only on the control machine (STATUS E-04). What it can do is a host build: once the Mac's owner
+allow-lists the repository (`tapdance host builds enable --repo …`), `tapdance app build --git <url>`
+(MCP `build_app`) clones and builds it on the Mac and installs it on the lease (STATUS H-08; run on a
+rented Mac mini from a Linux VPS, [evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)).
 
 ## Apple licensing note
 

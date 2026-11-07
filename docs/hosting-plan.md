@@ -12,7 +12,7 @@ the next stage's prompt is below.
 | Stage | Where devices run | Agent runs on | State |
 | --- | --- | --- | --- |
 | 1 | Your own Mac (Android + iOS) | A Linux VPS | ✅ ([run evidence](testing/evidence/2026-11-02-vps-field-runs.md), [self-test](testing/evidence/2026-11-03-selftest-through-guard.md)) |
-| 2 | Google Cloud N2 VM (Android) | This Mac, acting as the agent's machine | ✅ ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); to repeat it from a Linux VPS: [field-test runbook](testing/field-test-cloud-android.md) |
+| 2 | Google Cloud N2 VM (Android) | This Mac, acting as the agent's machine; repeated from a Linux VPS | ✅ ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); from a Linux VPS ✅ ([evidence](testing/evidence/2026-11-03-vps-n2-android.md), [rerun](testing/evidence/2026-11-04-vps-n2-android-rerun.md)); to repeat it: [field-test runbook](testing/field-test-cloud-android.md) |
 | 3 | A rented Mac (iOS) | This Mac, acting as the agent's machine; repeated from a Linux VPS | ✅ ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md), Scaleway M1-M); from a Linux VPS ✅ ([evidence](testing/evidence/2026-11-07-vps-rented-mac-ios.md)); to repeat it: [field-test runbook](testing/field-test-rented-mac-ios.md) |
 | 4 | Both at once: Linux host for Android, Mac host for iOS | One agent, one connection | ⬜ |
 | 5 | Tapdance Cloud: our fleet, user signs up and connects | The user's agent | ⬜ |

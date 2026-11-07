@@ -33,13 +33,14 @@ TAPDANCE_SESSION_ID = "my-app-codex"
 Notes:
 
 - **Timeouts.** Codex's default tool timeout is 60 s. A first lease can take longer (about 40 s for a new
-iOS simulator on the test Mac, and up to 330 s of queue wait), so raise `tool_timeout_sec`. - **Working
-directory.** The server looks for `tapdance.config.json` from its working directory and accepts
-`install_app` paths only inside it or `TAPDANCE_ALLOWED_ROOTS`. Set `cwd`, or pass `args = ["--config",
-"/path/to/tapdance.config.json", "mcp"]`. - **Not on PATH?** Use `command = "node"` and `args =
-["/absolute/path/to/tapdance/packages/cli/dist/main.js", "mcp"]`. - **Tokens.** Do not put tokens in
-`config.toml`. For a self-hosted gateway, store the agent token with `tapdance config set-token`, or
-forward it from your shell with `env_vars = ["TAPDANCE_TOKEN"]`.
+  iOS simulator on the test Mac, and up to 330 s of queue wait), so raise `tool_timeout_sec`.
+- **Working directory.** The server looks for `tapdance.config.json` from its working directory and
+  accepts `install_app` paths only inside it or `TAPDANCE_ALLOWED_ROOTS`. Set `cwd`, or pass
+  `args = ["--config", "/path/to/tapdance.config.json", "mcp"]`.
+- **Not on PATH?** Use `command = "node"` and
+  `args = ["/absolute/path/to/tapdance/packages/cli/dist/main.js", "mcp"]`.
+- **Tokens.** Do not put tokens in `config.toml`. For a self-hosted gateway, store the agent token with
+  `tapdance config set-token`, or forward it from your shell with `env_vars = ["TAPDANCE_TOKEN"]`.
 
 ### Remote server (Streamable HTTP)
 
@@ -141,7 +142,8 @@ Working while I watch (requirement V-01):
 
 Google's [Android CLI](https://developer.android.com/tools/agents/android-cli) installs its own agent
 skill with `android init` and links to a wider set of Android skills. Tapdance does not install the CLI
-or its skills for you yet (STATUS E-07), and Tapdance has not been tested with the Android CLI; see
+or its skills for you yet (STATUS E-07). Tapdance ran the Android CLI against a leased emulator on a
+Mac (`tapdance android -- layout --flat`, STATUS U-04, U-05), not from inside Codex; see
 [tools.md](../tools.md).
 
 ## Related

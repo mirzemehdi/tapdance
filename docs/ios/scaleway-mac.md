@@ -5,13 +5,15 @@ agent (on your laptop, a Linux VPS, anywhere in your tailnet) leases iOS simulat
 worker guard: `host-setup.sh` → `host up` → `connect`, the same path as
 [one-command-host.md](../deployment/one-command-host.md).
 
-> **Status: run end to end once (2026-11-06/07).** A Mac mini **M1-M** (8 GB) with macOS 27.2 and
-> Xcode 27.0 in `fr-par-3`, set up over ssh with nobody at the screen, served iOS 27 simulators to an
-> agent on a Mac over Tailscale: the CLI and MCP checklists, a reboot with the worker, guard and
-> Tailscale coming back, and builds of a private Kotlin Multiplatform app on the Mac
-> ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)). Not run: other offers (M2, M4), other
-> macOS versions, a Linux VPS as the agent's machine, the standard-account setup. Prices are
-> Scaleway's published rates. See [STATUS.md](../../STATUS.md) (G-05, Q-08).
+> **Status: set up end to end once (2026-11-06/07) and driven from two kinds of agent's machine.** A
+> Mac mini **M1-M** (8 GB) with macOS 27.2 and Xcode 27.0 in `fr-par-3`, set up over ssh with nobody
+> at the screen, served iOS 27 simulators to an agent on a Mac over Tailscale: the CLI and MCP
+> checklists, a reboot with the worker, guard and Tailscale coming back, and builds of a private
+> Kotlin Multiplatform app on the Mac ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)).
+> The next day an agent on a Linux VPS ran the same checklists against the same Mac in device-only
+> mode ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)). Not run: other offers (M2,
+> M4), other macOS versions, the standard-account setup, gateway mode. Prices are Scaleway's published
+> rates. See [STATUS.md](../../STATUS.md) (G-05, Q-08).
 
 > **For a test run** (an agent or you trying this for a day), follow
 > [field-test-rented-mac-ios.md](../testing/field-test-rented-mac-ios.md): the checkpoints, the
@@ -130,8 +132,10 @@ bash host-setup.sh --ios-only --with-gh --allow-admin-account --label my-agent
   guard on Tailscale (`https://` when the tailnet has HTTPS certificates) and runs a self-test lease.
 - `--tailscale-ssh` (passed on to `host up`) also turns on Tailscale SSH: a VPS in your tailnet then
   reaches the Mac with `ssh m1@<mac>.<tailnet>.ts.net`, with no key to copy (#126). Your tailnet policy
-  decides who may (by default you, after a browser approval about every 12 hours). Not yet run on a
-  rented Mac.
+  decides who may (by default you, after a browser approval about every 12 hours). A shell over
+  Tailscale SSH is outside the worker guard, so an agent on that VPS could act as `m1`: let it in only
+  for setup, limit the rule's `src` and `users` (no root), and turn it off afterwards with
+  `sudo tailscale set --ssh=false`. Not yet run on a rented Mac.
 
 Copy the token file to the agent's machine with `scp` (over ssh, `host up` does not offer the
 clipboard: it would be the Mac's):
@@ -142,7 +146,9 @@ scp m1@<mac-ip>:.tapdance/worker/pairing-my-agent.token .
 
 ### Private repositories for host builds
 
-With no machine but the agent's, a **deploy key** is simplest: no secret leaves the Mac (#127).
+With no machine but the agent's, a **deploy key** is simplest: no secret leaves the Mac (#127). It is
+unit-tested only, not yet run on a rented Mac (STATUS H-13); the `gh` token route below is the one the
+field runs used.
 
 ```bash
 tapdance host builds key --repo git@github.com:<owner>/<repo>.git
@@ -172,7 +178,8 @@ tapdance connect https://<mac>.<tailnet>.ts.net:4720 < pairing-my-agent.token
 `doctor` then shows iOS available and Android as a warning ("not on this host"). From there it is the
 usual flow: `tapdance device lease --platform ios`, `app build --git …`, `app install <app.zip>` or
 `app install --from-ci <owner/repo> --artifact <name>` (a simulator `.app` your CI built; the host needs
-`host artifacts enable --repo <owner/repo>`),
+`host artifacts enable --repo <owner/repo>`; for iOS this is unit-tested only, not yet run on a Mac
+host, STATUS F-05),
 `ui inspect`, … or the same through `tapdance mcp`. On iOS, the Home Screen is read with
 `ui inspect --app com.apple.springboard`.
 
@@ -189,7 +196,7 @@ simulators did not help (the slim boot timed out). With **no warm spare** everyt
 ssh mac 'tapdance host warm android=0,ios=0'
 ```
 
-The cost: every lease is a cold boot (77-109 s measured) and the first command after it can take 30 s
+The cost: every lease is a cold boot (about 77-143 s measured) and the first command after it can take 30 s
 or more while agent-device starts its runner. On a 16 GB offer, keep the default spare.
 
 ## Reboot

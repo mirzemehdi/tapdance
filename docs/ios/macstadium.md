@@ -8,7 +8,9 @@ There is no MacStadium integration in Tapdance, and none is planned before the m
 
 Status: **not tested.** Nothing on this page has been run against a MacStadium machine
 ([STATUS.md](../../STATUS.md), G-05 and G-06). The Tapdance steps are the ones verified on a local Mac
-([evidence](../testing/evidence/2026-11-01-local-ios.md)); the VPS-to-Mac path is untested (Q-08).
+([evidence](../testing/evidence/2026-11-01-local-ios.md)); a Linux VPS driving a separate Mac ran in
+device-only mode on a Scaleway Mac mini ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md),
+Q-08), and the gateway route from a VPS is untested.
 
 > **Same steps as the Scaleway page, not run here.** Once you can ssh into the Mac, follow
 > [scaleway-mac.md](scaleway-mac.md) from step 2: Xcode first launch and an iOS runtime, automatic login,

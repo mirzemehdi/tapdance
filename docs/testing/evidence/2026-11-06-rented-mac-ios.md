@@ -146,6 +146,6 @@ _(Final figure: from the Scaleway billing page after deletion; the owner reads i
 ## Not covered
 
 Other Scaleway offers (16 GB and up), macOS 26 / Xcode 26 on a rented Mac, `xcodes`, the standard-account
-setup (`macos-create-worker-account.sh`), a Linux VPS as the agent's machine, the browser viewer against
-this host, `host pause` / `resume` / `down --all` on it, installs from CI for iOS, AWS EC2 Mac and
+setup (`macos-create-worker-account.sh`), a Linux VPS as the agent's machine, take-over in the browser
+viewer (the live view itself ran, above), `host pause` / `resume` / `down --all` on it, installs from CI for iOS, AWS EC2 Mac and
 MacStadium.
