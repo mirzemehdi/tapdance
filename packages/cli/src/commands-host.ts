@@ -1265,12 +1265,15 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const token = await readSecret(`Token for ${origin} (from the host's pairing file; input hidden):`);
         if (!token) throw new TapdanceError("USAGE", "No token given", { hint: `Pipe the token file in: tapdance connect ${endpoint} < pairing-<label>.token` });
         const before = await readUserConfig();
-        const { config, target, added, migrated } = upsertTarget(before, { endpoint, ...(o.name ? { name: o.name } : {}), ...(platforms ? { platforms } : {}) });
+        const { config, target, added, replaced, migrated } = upsertTarget(before, { endpoint, ...(o.name ? { name: o.name } : {}), ...(platforms ? { platforms } : {}) });
         // An older single-target token moves to the per-origin map first, so it keeps serving its host.
         const moved = await migrateLegacyToken(migrated ? urlOrigin(migrated) : undefined);
         await writeConfigFile(userConfigPath(), config);
-        const saved = await saveCredentials({ tokens: { [origin]: token } });
+        // A target moved to a new address: its old origin's token goes, so it is never sent there again.
+        const replacedOrigin = replaced ? (urlOrigin(replaced) ?? replaced) : undefined;
+        const saved = await saveCredentials({ tokens: { [origin]: token, ...(replacedOrigin ? { [replacedOrigin]: "" } : {}) } });
         if (migrated) out.progress(`Kept your earlier endpoint as target ${config.targets![0]!.name} (${migrated})${moved ? "; its token now serves only it" : ""}`);
+        if (replaced) out.progress(`Target ${target.name} moved from ${replaced} to ${endpoint}; the token saved for ${replacedOrigin} was removed`);
         out.progress(`${added ? "Added" : "Updated"} target ${target.name} (${endpoint}${target.platforms ? `, only ${target.platforms.join(", ")}` : ""}) in ${userConfigPath()}; token saved to ${saved} (mode 600) for ${origin} only; fingerprint ${tokenFingerprint(token)} (it should match what host up showed)`);
         const t = await open(g, out, { fleet: false });
         let checks: DoctorCheck[];

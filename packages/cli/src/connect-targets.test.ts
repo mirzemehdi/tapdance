@@ -24,9 +24,26 @@ describe("connect targets in the user config", () => {
     expect(upsertTarget(start, { endpoint: N2, name: "android-host" }).config.targets![0]!.name).toBe("android-host");
   });
 
-  it("refuses a name another target has, or an invalid one", () => {
-    const start = { provider: "self-hosted" as const, targets: [{ name: "n2", endpoint: N2 }] };
-    expect(() => upsertTarget(start, { endpoint: MAC, name: "n2" })).toThrow(/already called "n2"/);
+  it("an existing --name with a new endpoint moves that target there, keeping its place and platforms", () => {
+    const TUNNEL = "http://127.0.0.1:14720";
+    const start = { provider: "self-hosted" as const, targets: [{ name: "n2", endpoint: N2 }, { name: "mac", endpoint: TUNNEL, platforms: ["ios" as const] }] };
+    const { config, target, added, replaced } = upsertTarget(start, { endpoint: MAC, name: "mac" });
+    expect(added).toBe(false);
+    expect(replaced).toBe(TUNNEL);
+    expect(target).toEqual({ name: "mac", endpoint: MAC, platforms: ["ios"] });
+    expect(config.targets).toEqual([{ name: "n2", endpoint: N2 }, { name: "mac", endpoint: MAC, platforms: ["ios"] }]);
+    // Same origin again: a plain update, nothing replaced.
+    expect(upsertTarget(config, { endpoint: MAC, name: "mac" }).replaced).toBeUndefined();
+  });
+
+  it("refuses a name another target has when the endpoint is a third target, or an invalid name", () => {
+    const start = { provider: "self-hosted" as const, targets: [{ name: "n2", endpoint: N2 }, { name: "mac", endpoint: MAC }] };
+    expect(() => upsertTarget(start, { endpoint: MAC, name: "n2" })).toThrow(/already target mac, and another target is called "n2"/);
+    try {
+      upsertTarget(start, { endpoint: MAC, name: "n2" });
+    } catch (error) {
+      expect((error as { hint?: string }).hint).toMatch(/tapdance disconnect n2/);
+    }
     expect(() => upsertTarget(start, { endpoint: MAC, name: "Mac Mini" })).toThrow(/not a valid target name/);
   });
 

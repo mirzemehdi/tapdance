@@ -13,25 +13,32 @@ export function currentTargets(config: UserConfig): { targets: TargetConfig[]; m
 }
 
 /**
- * Adds `endpoint` as a connect target, or updates the target with the same origin (its address, and
- * its name and platforms when given). Returns the new user config (with `targets`, without the old
- * single `endpoint`) and the target.
+ * Adds `endpoint` as a connect target, or updates an existing one: the target with the same origin
+ * (its address, and its name and platforms when given), or else the target called `name`, which then
+ * moves to the new address (`replaced` is its old endpoint, whose token the caller drops). Returns the
+ * new user config (with `targets`, without the old single `endpoint`) and the target.
  */
 export function upsertTarget(
   config: UserConfig,
   add: { endpoint: string; name?: string; platforms?: Platform[] },
-): { config: UserConfig; target: TargetConfig; added: boolean; migrated?: string } {
+): { config: UserConfig; target: TargetConfig; added: boolean; replaced?: string; migrated?: string } {
   if (add.name !== undefined && !TARGET_NAME.test(add.name)) {
     throw new TapdanceError("USAGE", `"${add.name}" is not a valid target name`, { hint: "Use lower-case letters, digits and dashes (at most 32), e.g. --name mac-mini." });
   }
   const { targets, migrated } = currentTargets(config);
   const origin = urlOrigin(add.endpoint);
-  const index = targets.findIndex((t) => urlOrigin(t.endpoint) === origin);
-  const others = targets.filter((_, i) => i !== index).map((t) => t.name);
-  if (add.name !== undefined && others.includes(add.name)) {
-    throw new TapdanceError("USAGE", `Another target is already called "${add.name}"`, { hint: "Pick another --name, or remove that one first with `tapdance disconnect <name>`." });
+  const byOrigin = targets.findIndex((t) => urlOrigin(t.endpoint) === origin);
+  const byName = add.name === undefined ? -1 : targets.findIndex((t) => t.name === add.name);
+  if (byOrigin >= 0 && byName >= 0 && byOrigin !== byName) {
+    throw new TapdanceError("USAGE", `${add.endpoint} is already target ${targets[byOrigin]!.name}, and another target is called "${add.name}"`, {
+      hint: `Pick another --name, or remove one first with \`tapdance disconnect ${add.name}\` or \`tapdance disconnect ${targets[byOrigin]!.name}\`.`,
+    });
   }
+  // Same origin: update that target. Otherwise an existing name moves that target to the new address.
+  const index = byOrigin >= 0 ? byOrigin : byName;
+  const others = targets.filter((_, i) => i !== index).map((t) => t.name);
   const before = index >= 0 ? targets[index]! : undefined;
+  const replaced = before && urlOrigin(before.endpoint) !== origin ? before.endpoint : undefined;
   const target: TargetConfig = {
     name: add.name ?? before?.name ?? targetNameFor(add.endpoint, others),
     endpoint: add.endpoint,
@@ -40,7 +47,7 @@ export function upsertTarget(
   if (index >= 0) targets[index] = target;
   else targets.push(target);
   const { endpoint: _endpoint, ...rest } = config;
-  return { config: { ...rest, provider: "self-hosted", targets }, target, added: index < 0, ...(migrated ? { migrated } : {}) };
+  return { config: { ...rest, provider: "self-hosted", targets }, target, added: index < 0, ...(replaced ? { replaced } : {}), ...(migrated ? { migrated } : {}) };
 }
 
 /** Removes a target by name or endpoint; returns the new user config and the removed target. */

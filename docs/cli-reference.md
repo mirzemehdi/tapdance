@@ -91,7 +91,9 @@ KVM state of *remote* workers is not reported: Simlock does not expose it (STATU
 
 With several [connect targets](#connect), `doctor` checks each host and prints one section per target
 (endpoint, reachable, the token's role and label, capabilities, capacity per platform, Simlock version),
-after a `Connect targets` line that says which host each platform's leases go to. The run is OK when at
+after a `Connect targets` line that says which host each platform's leases go to. Each host gets the same
+quick check as a lease first: one that does not answer within 5 s is reported down at once, without its
+own longer checks. The run is OK when at
 least one target is usable: a host that is down only warns (its checks are shown as warnings), and fails
 only when no target is usable.
 
