@@ -107,7 +107,7 @@ export function renderDevice(d: DeviceSummary, extra: Array<[string, string | un
     ["Platform", `${d.platform === "ios" ? "iOS" : "Android"} ${d.osVersion}`],
     ["Provider", describeLocation(d)],
     ["Worker", d.location.workerLabel ?? d.location.workerId ?? (d.location.kind === "local" ? "this machine" : undefined)],
-    ["Endpoint", `${d.location.endpoint} ${dim(`(${secure})`)}`],
+    ["Endpoint", `${d.location.endpoint}${d.location.target ? ` (target ${d.location.target})` : ""} ${dim(`(${secure})`)}`],
     ["Status", d.state === "active" ? cyan("Ready") : d.state],
     ["Lease", `${d.leaseId} ${dim(`expires in ~${mins} min`)}`],
     ["Recording", d.recording],

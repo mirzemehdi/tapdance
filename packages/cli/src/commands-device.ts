@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Command } from "commander";
-import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, withInstallHintFor, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
+import { DEVICE_SETTINGS, LocalArtifactStore, MAX_LOG_LINES, createProfile, deleteProfile, editProfile, findAndroidSdk, listProfiles, TapdanceError, parseTarget, runKeepalive, withInstallHintFor, type DeviceInventory, type DeviceKey, type DeviceSettingName, type Platform } from "@tapdance/sdk";
 import { leaseWithNotices, renderDevice, run, spawnKeepalive, type GlobalOptions } from "./context.js";
 import { bold, dim, green, red, table, yellow } from "./output.js";
 
@@ -76,6 +76,13 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       run(globals(), async (t, out) => {
         const inv = await t.devices(o.platform ? platformArg(o.platform) : undefined);
         out.result(inv, () => {
+          if (inv.hosts) return inv.hosts.map((h) => [bold(`${h.target} — ${h.endpoint}`), h.inventory ? renderInventory(h.inventory) : red(`down: ${h.error ?? "no answer"}`)].join("\n")).join("\n\n");
+          return renderInventory(inv);
+        });
+      }),
+    );
+  /** One host's (or the only endpoint's) models, capacity and devices. */
+  const renderInventory = (inv: Omit<DeviceInventory, "hosts">): string => {
           const lines: string[] = [];
           for (const c of inv.capacity) lines.push(`${bold(c.platform)}: ${c.running}/${c.limit} running, ${c.leased} leased${c.warm ? `, ${c.warm} warm spare${c.warm > 1 ? "s" : ""} (booted, not in use; kept for a fast next lease)` : ""}`);
           for (const c of inv.catalog) {
@@ -89,9 +96,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           if (inv.queueDepth) lines.push("", `${inv.queueDepth} request(s) waiting`);
           lines.push("", ...inv.notes.map((n) => dim(n)));
           return lines.join("\n");
-        });
-      }),
-    );
+  };
   listDevices(devices);
   devices
     .command("install <platform> <version>")
@@ -158,12 +163,13 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .option("--image-tag <tag>", "Android system image tag; leave it out for normal testing (google_apis, lighter). google_apis_playstore only when the test needs the Play Store (billing, Play sign-in)")
     .option("--physical", "lease an enrolled physical device instead")
     .option("--profile <name>", "boot a device profile from this machine (read-only: the lease's changes are discarded)")
+    .option("--target <name>", "with several hosts connected: lease from this connect target (`tapdance connect --list`) instead of the first that serves the platform")
     .option("--ttl <minutes>", "lease time to live in minutes")
     .option("--wait <seconds>", "how long to wait in the queue")
     .option("--settle <seconds>", "Android emulator: how long to check the guest's CPU after boot before handing it out, 0-300 (0 skips the check)")
     .option("--no-keepalive", "do not renew in the background (the lease expires after its TTL)")
     .option("--hold", "stay in the foreground, renew, and release on Ctrl-C")
-    .action(async (o: { platform: string; device?: string; os?: string; imageTag?: string; physical?: boolean; profile?: string; ttl?: string; wait?: string; settle?: string; keepalive: boolean; hold?: boolean }) =>
+    .action(async (o: { platform: string; device?: string; os?: string; imageTag?: string; physical?: boolean; profile?: string; target?: string; ttl?: string; wait?: string; settle?: string; keepalive: boolean; hold?: boolean }) =>
       run(globals(), async (t, out) => {
         const ttl = intArg("--ttl", o.ttl, 1, 240);
         const wait = intArg("--wait", o.wait, 0, 3600);
@@ -179,6 +185,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(ttl !== undefined ? { ttlMinutes: ttl } : {}),
           ...(wait !== undefined ? { waitSeconds: wait } : {}),
           ...(settle !== undefined ? { settleSeconds: settle } : {}),
+          ...(o.target ? { target: o.target } : {}),
         }, out);
         const cfg = t.resolved.config.session;
         let keepalive: string;

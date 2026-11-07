@@ -193,6 +193,7 @@ export const TOOLS: ToolDefinition[] = [
         image_tag: z.string().min(1).max(60).optional().describe("Android system image tag. Leave unset for normal app testing: you get the lighter google_apis image (Google Play services, no Play Store). Ask for \"google_apis_playstore\" only when the test needs the Play Store itself (Play Billing purchases, a Play sign-in); it uses more memory and CPU on the host. \"google_atd\" (when list_devices shows it) is the lightest: for app-logic tests only, with no Play Store, no status bar or notification shade and no home screen."),
         profile: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/).optional().describe("A device profile on the machine running this server (list_devices shows profile:<name>): an emulator the owner set up once, e.g. signed in to a Play license-tester account. Booted read-only: nothing this lease changes is kept."),
         ttl_minutes: z.number().int().min(1).max(240).optional().describe("Lease time to live; the server renews it while connected."),
+        target: z.string().regex(/^[a-z0-9][a-z0-9-]{0,31}$/).optional().describe("Only when the user connected several hosts (list_devices shows one entry per host in hosts): the host's target name to lease from. Omit to use the first host that serves the platform."),
         settle_seconds: z.number().int().min(0).max(300).optional().describe("Android emulators: how long to check the device's CPU after it has booted before handing it out, ending early once it is calm. Default from the server's config (15); with 15 or less, a device whose first readings are high and not falling is handed out after about 5 s with a notice. Leave unset normally: a still-busy device works, only a little slower for a few minutes. 0 skips the check; a larger value waits longer for a calm device (timing-sensitive tests)."),
       })
       .strict(),
@@ -207,6 +208,7 @@ export const TOOLS: ToolDefinition[] = [
         ...(a["profile"] ? { profile: a["profile"] as string } : {}),
         ...(a["ttl_minutes"] ? { ttlMinutes: a["ttl_minutes"] as number } : {}),
         ...(a["settle_seconds"] !== undefined ? { settleSeconds: a["settle_seconds"] as number } : {}),
+        ...(a["target"] ? { target: a["target"] as string } : {}),
       });
       return json({ device: summary, reused, ...(notices ? { notices } : {}), ...(ttlCappedMinutes ? { ttlCappedMinutes, note: `The worker granted ${ttlCappedMinutes} min (its policy caps leases); the server renews it while connected.` } : {}), next: reused ? "this session already held this device; keep using it" : "install_app, then launch_app, then inspect_screen" });
     },
