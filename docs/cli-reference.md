@@ -686,7 +686,11 @@ release …) goes to the host that granted it, with that host's token only. See
 | `--list` | Print the targets in routing order with their platforms and whether a token is saved (its fingerprint, never the token). Changes nothing. |
 
 Connecting an endpoint that is already a target (same origin) updates it: its address, its token, and
-its name or platforms when given. An older configuration with a single `endpoint` keeps working as it
+its name or platforms when given. `--name` with the name of an existing target and a new endpoint moves
+that target to the new address (for example from an SSH tunnel to its tailnet name): it keeps its place in
+the routing order and its platforms, gets the new token, and the token saved for its old address is
+removed. When the endpoint is already a different target, `connect` refuses and names
+`tapdance disconnect` for the one to remove. An older configuration with a single `endpoint` keeps working as it
 is; the next `connect` turns it into the first target and moves its token to the per-origin map.
 
 `tapdance disconnect <name|endpoint>` removes a target and its saved token. A lease still held on that

@@ -152,6 +152,27 @@ describe("RoutingProvider (mocked hosts)", () => {
     expect(down[0]).toMatchObject({ id: "targets", status: "fail" });
   });
 
+  it("doctor: a host that does not answer is down after the quick probe, without waiting for its full doctor", async () => {
+    const n2 = target("n2", N2, ["android"]);
+    const mac = target("mac", MAC, ["ios"], { down: true });
+    // A hung host: its own doctor would wait for two 15 s tries; it must not be awaited.
+    let called = false;
+    mac.fake.doctor = () => {
+      called = true;
+      return new Promise<never>(() => undefined);
+    };
+    const checks = await new RoutingProvider([n2, mac]).doctor();
+    expect(called).toBe(false);
+    expect(checks.find((c) => c.id === "target.mac.simlock.reachable")).toMatchObject({ status: "warn", detail: expect.stringContaining("no answer within 5 s") });
+    expect(checks[0]).toMatchObject({ id: "targets", status: "warn" });
+    // A host that answered with an error status still gets its full doctor, which explains it.
+    const bad = target("mac", MAC, ["ios"]);
+    bad.probe = async () => Promise.reject(new TapdanceError("PROVIDER_UNREACHABLE", `${MAC}/v1/healthz answered HTTP 502`, { details: { status: 502 } }));
+    bad.fake.doctor = async () => [{ id: "simlock.reachable", title: "Simlock gateway/worker reachable", status: "fail", detail: "HTTP 502 from tailscale serve" }];
+    const answered = await new RoutingProvider([n2, bad]).doctor();
+    expect(answered.find((c) => c.id === "target.mac.simlock.reachable")).toMatchObject({ detail: "HTTP 502 from tailscale serve" });
+  });
+
   it("inventory: merged lists plus one entry per host, a down host with its reason", async () => {
     const inv = await new RoutingProvider([target("n2", N2, ["android"]), target("mac", MAC, ["ios"], { down: true })]).inventory();
     expect(inv.hosts).toEqual([

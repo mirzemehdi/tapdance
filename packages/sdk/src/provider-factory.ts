@@ -74,7 +74,7 @@ function simlockTarget(resolved: ResolvedConfig, target: ResolvedTarget, session
     provider,
     probe: async (timeoutMs) => {
       const h = await provider.http.healthz(timeoutMs);
-      if (!h.ok) throw new TapdanceError("PROVIDER_UNREACHABLE", `${target.endpoint}/v1/healthz answered HTTP ${h.status}`);
+      if (!h.ok) throw new TapdanceError("PROVIDER_UNREACHABLE", `${target.endpoint}/v1/healthz answered HTTP ${h.status}`, { details: { status: h.status } });
       return provider.inventory();
     },
   };

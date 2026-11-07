@@ -47,6 +47,15 @@ function mismatch(entry: CatalogEntry, request: LeaseRequest): string | undefine
   return undefined;
 }
 
+/**
+ * True when a probe got no HTTP answer at all (refused, reset, timed out). A host that answered with
+ * an error status, or a target that is unusable for a local reason (no token), is left to the full
+ * doctor, which explains it.
+ */
+function noAnswer(error: unknown): boolean {
+  return error instanceof TapdanceError && error.code === "PROVIDER_UNREACHABLE" && typeof (error.details as { status?: unknown } | undefined)?.status !== "number";
+}
+
 function reasonOf(error: unknown): string {
   // The deepest cause says most ("connect ECONNREFUSED 100.64.0.7:443" rather than "fetch failed").
   let e: unknown = error;
@@ -115,13 +124,24 @@ export class RoutingProvider implements DeviceProvider {
   async doctor(options?: CallOptions): Promise<DoctorCheck[]> {
     const sections = await Promise.all(
       this.targets.map(async (target) => {
-        const [checks, probe] = await Promise.all([
-          target.provider.doctor(options).catch((error: unknown): DoctorCheck[] => [{ id: "provider", title: "Device provider", status: "fail", detail: reasonOf(error) }]),
-          target.probe(TARGET_PROBE_MS).then(
-            (inventory) => ({ inventory }),
-            (error: unknown) => ({ error: reasonOf(error) }),
-          ),
-        ]);
+        // The quick probe first, with the lease's timeout: a host that does not answer is reported as
+        // down in seconds, instead of waiting for the full doctor's own retries (two tries of 15 s).
+        const probe = await target.probe(TARGET_PROBE_MS).then(
+          (inventory) => ({ inventory }),
+          (error: unknown) => ({ error: reasonOf(error), silent: noAnswer(error) }),
+        );
+        const checks: DoctorCheck[] =
+          "silent" in probe && probe.silent
+            ? [
+                {
+                  id: "simlock.reachable",
+                  title: "Simlock gateway/worker reachable",
+                  status: "fail",
+                  detail: `${probe.error} (no answer within ${TARGET_PROBE_MS / 1000} s)`,
+                  fix: "Check the endpoint, TLS proxy and network path to the host (`tapdance host status` on that host, `tailscale status` here).",
+                },
+              ]
+            : await target.provider.doctor(options).catch((error: unknown): DoctorCheck[] => [{ id: "provider", title: "Device provider", status: "fail", detail: reasonOf(error) }]);
         const usable = !("error" in probe) && !checks.some((c) => c.status === "fail" && (c.id === "simlock.reachable" || c.id === "simlock.auth" || c.id === "provider"));
         const served = "inventory" in probe ? servedPlatforms(probe.inventory).filter((p) => !target.platforms || target.platforms.includes(p)) : [];
         return { target, checks, usable, served, error: "error" in probe ? probe.error : undefined };
