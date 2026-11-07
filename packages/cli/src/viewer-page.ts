@@ -51,7 +51,7 @@ export const VIEWER_PAGE = String.raw`<!doctype html>
       <button id="rec">Start recording</button>
     </div>
     <p id="stats" class="muted" aria-live="off"></p>
-    <p class="muted">Click to tap, drag to swipe, scroll to scroll. Type while the screen has focus. Your input pauses the agent for a few seconds; Take over pauses it until you hand back.</p>
+    <p class="muted">Click to tap, drag to swipe, scroll to scroll. Type while the screen has focus. Your input pauses the agent for a few seconds; Take over pauses it until you hand back, for at most 10 minutes (press it again for more).</p>
   </section>
   <aside>
     <h1>Session</h1>
@@ -214,7 +214,7 @@ async function refresh() {
   // In screenshot mode the banner keeps explaining why, unless the agent asks for a person or you took over.
   if (b.humanRequest) setBanner("The agent asks you: " + b.humanRequest.reason + " — press Take over, do it, then Hand back.", "human");
   else if (framesMode && !b.takeover) { /* keep the screenshot-mode notice */ }
-  else if (!banner.classList.contains("human") || b.takeover) setBanner(b.takeover ? "You have control. The agent is paused until you hand back." : "Live. The agent is driving; touch the screen to take control briefly.", b.takeover ? "human" : "");
+  else if (!banner.classList.contains("human") || b.takeover) setBanner(b.takeover ? "You have control. The agent is paused until you hand back (at most 10 minutes from Take over)." : "Live. The agent is driving; touch the screen to take control briefly.", b.takeover ? "human" : "");
   document.getElementById("artifacts").innerHTML = (b.artifacts || []).slice().reverse().map((a) => '<li><a target="_blank" href="/api/artifact?id=' + encodeURIComponent(a.id) + '">' + esc(a.kind) + "</a> " + esc(new Date(a.createdAt).toLocaleTimeString()) + "</li>").join("");
 }
 async function start() {

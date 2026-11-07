@@ -713,10 +713,13 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       run(globals(), async (t, out) => {
         // `ui inspect` prints refs like @e3~s152203, so agents pass one as the argument (#131).
         if (positional !== undefined) {
+          if (/^@?u\d+$/.test(positional)) {
+            throw new TapdanceError("USAGE", `${positional} is a system-view ref (\`ui inspect --system\`), which cannot be tapped by ref`, { hint: "Tap it by its coordinates (--x --y), or by --text with --inject." });
+          }
           if (!/^@?e\d+(~\S+)?$/.test(positional)) {
             throw new TapdanceError("USAGE", `"${positional}" is not a ref from \`ui inspect\``, { hint: `Use --text "${positional}" for visible text, --id for an identifier, or a ref like \`ui tap @e3\`.` });
           }
-          if (o.ref !== undefined && o.ref !== positional) throw new TapdanceError("USAGE", "Give the ref once: as the argument or with --ref");
+          if (o.ref !== undefined && o.ref.replace(/^@/, "") !== positional.replace(/^@/, "")) throw new TapdanceError("USAGE", "Give the ref once: as the argument or with --ref");
           o.ref = positional;
         }
         const target = parseTarget({

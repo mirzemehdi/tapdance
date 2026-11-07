@@ -266,6 +266,27 @@ describe("install from CI: iOS simulator .app", () => {
     }
   });
 
+  // Review: an artifact that is the .app's contents installs that app, not an App Clip inside it.
+  it("prefers the artifact's own Info.plist over a nested .app", async () => {
+    const { d, r } = await unpack(makeZip([...appFiles(""), { name: "AppClips/Clip.app/Info.plist", data: Buffer.from("clip") }]));
+    expect(r.app).toBe(join(d, "out", "App.app"));
+    expect(await readdir(join(r.app, "AppClips"))).toEqual(["Clip.app"]);
+  });
+
+  // Review: a zipped .app was unpacked to app/Demo.app but looked for under "Demo.app.zip › Demo.app".
+  it("installs and reuses a zipped .app from CI", async () => {
+    const zip = makeZip([{ name: "Demo.app.zip", data: makeZip(appFiles("Demo.app/")) }]);
+    const gh = fakeGh({ runs: [okRun(9)], artifacts: { "9": [{ id: 99, name: "ios-sim", size: zip.length, expired: false }] }, zip });
+    const run: CommandRunner = async (command, args, o) =>
+      command === "plutil" ? { code: 0, output: args[1] === "CFBundleIdentifier" ? "com.acme.demo\n" : JSON.stringify(["iPhoneSimulator"]) } : gh.run(command, args, o);
+    const root = await mkdtemp(join(tmpdir(), "td-ci-app-root-"));
+    const first = await fetchCiApp({ repo: "acme/app", artifact: "ios-sim" }, settings, root, () => undefined, run);
+    expect(first.app.endsWith(`${"/"}app/Demo.app`)).toBe(true);
+    expect((await stat(join(first.app, "Info.plist"))).isFile()).toBe(true);
+    expect((await fetchCiApp({ repo: "acme/app", artifact: "ios-sim" }, settings, root, () => undefined, run)).cached).toBe(true);
+    expect(gh.downloads()).toBe(1);
+  });
+
   it("refuses an .ipa, an artifact with no app, links and paths that leave the folder", async () => {
     await expect(unpack(makeZip([{ name: "Demo.ipa", data: Buffer.from("x") }]))).rejects.toThrow(/\.ipa \(a device build\)/);
     await expect(unpack(makeZip([{ name: "readme.txt", data: Buffer.from("x") }]))).rejects.toThrow(/no simulator \.app/);
@@ -278,7 +299,7 @@ describe("install from CI: iOS simulator .app", () => {
     const gh = fakeGh({ runs: [okRun(9)], artifacts: { "9": [{ id: 99, name: "ios-sim", size: zip.length, expired: false }] }, zip });
     let platforms = ["iPhoneSimulator"];
     const run: CommandRunner = async (command, args, o) => {
-      if (command === "plutil") return { code: 0, output: JSON.stringify({ CFBundleIdentifier: "com.acme.demo", CFBundleSupportedPlatforms: platforms }) };
+      if (command === "plutil") return { code: 0, output: args[1] === "CFBundleIdentifier" ? "com.acme.demo\n" : JSON.stringify(platforms) };
       return gh.run(command, args, o);
     };
     const root = await mkdtemp(join(tmpdir(), "td-ci-app-root-"));

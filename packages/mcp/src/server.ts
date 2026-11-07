@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -10,18 +11,19 @@ import { SERVER_INSTRUCTIONS, TOOLS, errorResult, type ToolExtra } from "./tools
 export const SERVER_NAME = "tapdance";
 
 /**
- * Routes Tapdance's progress messages to the MCP call that is running. Create it before the Tapdance
- * (pass `emit` as its onProgress) and give it to createMcpServer, which points `sink` at the current
- * call while that call runs.
+ * Routes Tapdance's progress messages to the MCP call they come from. Create it before the Tapdance
+ * (pass `emit` as its onProgress) and give it to createMcpServer, which runs each call inside `run`.
+ * The sink is bound to the call's async context, so calls that overlap, or a call without a progress
+ * token, never send their messages to another call's token.
  */
 export interface ProgressRouter {
-  sink: ((message: string) => void) | undefined;
+  run: <T>(sink: ((message: string) => void) | undefined, fn: () => Promise<T>) => Promise<T>;
   emit: (message: string) => void;
 }
 
 export function createProgressRouter(): ProgressRouter {
-  const router: ProgressRouter = { sink: undefined, emit: (message) => router.sink?.(message) };
-  return router;
+  const current = new AsyncLocalStorage<((message: string) => void) | undefined>();
+  return { run: (sink, fn) => current.run(sink, fn), emit: (message) => current.getStore()?.(message) };
 }
 
 /** A sink that sends `notifications/progress` for one call, or undefined when the client asked for none. */
@@ -43,16 +45,14 @@ export function createMcpServer(tapdance: Tapdance, version = "0.1.0", progress?
       tool.name,
       { title: tool.title, description: tool.description, inputSchema: tool.input, annotations: tool.annotations },
       (async (args: Record<string, unknown>, extra: ToolExtra) => {
-        const previous = progress?.sink;
-        const sink = progressSink(extra);
-        if (progress && sink) progress.sink = sink;
-        try {
-          return await tool.run(tapdance, args ?? {}, extra);
-        } catch (error) {
-          return errorResult(error);
-        } finally {
-          if (progress && sink) progress.sink = previous;
-        }
+        const call = async () => {
+          try {
+            return await tool.run(tapdance, args ?? {}, extra);
+          } catch (error) {
+            return errorResult(error);
+          }
+        };
+        return progress ? progress.run(progressSink(extra), call) : call();
       }) as never,
     );
   }

@@ -141,16 +141,6 @@ export function summarize(record: SessionRecord, status?: LeaseStatus, holdUntil
 }
 
 /**
- * The programmatic Tapdance API. Every device method acts on the active lease of this instance's
- * session and nothing else: there is no way to pass a device or lease id in.
- */
-/** The screen's content without positions (see SimlockProvider's stable wait). */
-/**
- * Android's status bar (clock, signal, battery, notification icons) sits in every full inspect. It is
- * not the app's screen: a clock tick must not count as "screen changed", nor head its summary.
- */
-
-/**
  * A video that finished downloading: it has stopped growing and is a whole MP4, whose top-level boxes
  * run exactly to the end of the file and include the `moov` index (a cut download does not).
  */
@@ -181,10 +171,15 @@ export function completeMp4(bytes: Buffer): boolean {
   return moov && at === bytes.length;
 }
 
+/**
+ * Android's status bar (clock, signal, battery, notification icons) sits in every full inspect. It is
+ * not the app's screen: a clock tick must not count as "screen changed", nor head its summary.
+ */
 export function isStatusBar(e: { label?: string; identifier?: string; depth?: number }): boolean {
   return (e.identifier ?? "").startsWith("com.android.systemui:") || ((e.depth ?? 0) === 0 && / notification: /.test(e.label ?? ""));
 }
 
+/** The screen's content without positions (see SimlockProvider's stable wait). */
 function fingerprintOf(elements: Array<{ role: string; label?: string; value?: string; identifier?: string; states?: string[]; depth?: number }>): string {
   return elements
     .filter((e) => !isStatusBar(e))
@@ -206,6 +201,10 @@ export function leaseCommand(config: Pick<ResolvedConfig["config"], "platforms">
   return `tapdance device lease --platform ${enabled.length === 1 ? enabled[0] : "android|ios"}`;
 }
 
+/**
+ * The programmatic Tapdance API. Every device method acts on the active lease of this instance's
+ * session and nothing else: there is no way to pass a device or lease id in.
+ */
 export class Tapdance {
   readonly store: SessionStore;
   readonly artifacts: LocalArtifactStore;
@@ -579,10 +578,6 @@ export class Tapdance {
   }
 
   /**
-   * Device-level operations: reset, settings, files, notifications, intents, perf, audio. A pulled
-   * file becomes a session artifact. Mutations wait for a person holding the device to hand it back.
-   */
-  /**
    * Taps at set times, run inside the emulator (Android) so the network adds no delay between taps:
    * rhythm and timing games. With `startOnText`, waits for that text first (up to `waitMs`), then starts
    * `offsetMs` later; the wait itself costs one round trip.
@@ -604,6 +599,10 @@ export class Tapdance {
     return { ...result, ...(startedAfterMs !== undefined ? { startedAfterMs } : {}) };
   }
 
+  /**
+   * Device-level operations: reset, settings, files, notifications, intents, perf, links. A pulled
+   * file becomes a session artifact. Mutations wait for a person holding the device to hand it back.
+   */
   async device(operation: DeviceOperation): Promise<DeviceOperationResult & { artifact?: ArtifactRef }> {
     const readOnly =
       (operation.kind === "notifications" && operation.action === "list") ||
@@ -611,6 +610,7 @@ export class Tapdance {
       operation.kind === "pull-file" ||
       operation.kind === "crash-list" ||
       operation.kind === "crash-pull" ||
+      operation.kind === "links" ||
       (operation.kind === "clipboard" && operation.action === "get") ||
       (operation.kind === "setting" && operation.change.value === undefined && operation.change.name !== "reset-keychain");
     if (!readOnly) await this.guardHuman();
@@ -633,9 +633,9 @@ export class Tapdance {
   }
 
   /**
-   * Has the machine that runs the leased Android device fetch an APK the user's CI built (a GitHub
-   * Actions artifact) with its own read-only GitHub credentials, and install it there. The agent never
-   * holds a GitHub credential and the APK never crosses the agent's link. iOS leases are refused.
+   * Has the machine that runs the leased device fetch an APK, or an iOS simulator .app, the user's CI
+   * built (a GitHub Actions artifact) with its own read-only GitHub credentials, and install it there.
+   * The agent never holds a GitHub credential and the app never crosses the agent's link.
    */
   async installFromCi(request: AppCiInstallRequest): Promise<AppCiInstallResult> {
     await this.guardHuman();

@@ -226,6 +226,8 @@ export class SimlockProvider implements DeviceProvider {
 
     try {
       const status = await this.http.status();
+      // A gateway's host facts describe the gateway machine, not the workers that run the devices (review).
+      const host = status.daemon?.mode === "gateway" ? undefined : status.host;
       let caps = new Map((status.capabilities ?? []).map((c) => [c.name, c]));
       // A gateway reports capabilities per worker; take the best state among connected workers.
       if (caps.size === 0 && status.daemon?.mode === "gateway" && this.connection.operatorToken) {
@@ -273,12 +275,12 @@ export class SimlockProvider implements DeviceProvider {
       for (const platform of ["android", "ios"] as const) {
         const cap = status.capacity?.[platform];
         const limit = cap?.limit ?? 0;
-        const tool = status.host?.tools?.find((t) => t.platform === platform);
-        if (iosNeedsMac(platform, status.host?.os)) {
-          checks.push({ id: "simlock.capacity.ios", title: "iOS simulators available", status: "skip", detail: `not on this host: it runs ${status.host?.os}, and iOS simulators need a Mac` });
+        const tool = host?.tools?.find((t) => t.platform === platform);
+        if (iosNeedsMac(platform, host?.os)) {
+          checks.push({ id: "simlock.capacity.ios", title: "iOS simulators available", status: "skip", detail: `not on this host: it runs ${host?.os}, and iOS simulators need a Mac` });
           continue;
         }
-        if (limit > 0 && offered && !offered.has(platform) && status.host?.tools !== undefined && !tool && [...offered].some((p) => p !== platform)) {
+        if (limit > 0 && offered && !offered.has(platform) && host?.tools !== undefined && !tool && [...offered].some((p) => p !== platform)) {
           // A host set up for the other platform only (an iOS-only Mac with no Android SDK): not a fault.
           checks.push({
             id: `simlock.capacity.${platform}`,
@@ -363,6 +365,7 @@ export class SimlockProvider implements DeviceProvider {
 
   async inventory(filter: { platform?: Platform } = {}): Promise<DeviceInventory> {
     const [status, catalog] = await Promise.all([this.http.status(), this.http.catalog(filter.platform)]);
+    const host = status.daemon?.mode === "gateway" ? undefined : status.host;
     const leased = new Set(status.leases.map((l) => l.deviceId));
     const entries = catalog.platforms
       .filter((p): p is typeof p & { platform: Platform } => p.platform === "android" || p.platform === "ios")
@@ -416,11 +419,11 @@ export class SimlockProvider implements DeviceProvider {
       .filter((d) => filter.platform === undefined || d.platform === filter.platform);
     const notes: string[] = [];
     for (const c of capacity) {
-      if (iosNeedsMac(c.platform, status.host?.os)) notes.push(`No ios here: this host runs ${status.host?.os}, and iOS simulators need a Mac host.`);
+      if (iosNeedsMac(c.platform, host?.os)) notes.push(`No ios here: this host runs ${host?.os}, and iOS simulators need a Mac host.`);
       else if (c.limit === 0) notes.push(`No ${c.platform} capacity on this ${this.connection.kind === "local" ? "machine" : "endpoint"}.`);
       else if (!entries.some((e) => e.platform === c.platform && (e.models.length > 0 || e.osVersions.length > 0))) {
         const servesOther = entries.some((e) => e.platform !== c.platform && (e.models.length > 0 || e.osVersions.length > 0));
-        const hasTool = status.host?.tools?.some((t) => t.platform === c.platform) ?? true;
+        const hasTool = host?.tools?.some((t) => t.platform === c.platform) ?? true;
         if (servesOther && !hasTool) {
           notes.push(`No ${c.platform} on this host: it has no ${c.platform === "ios" ? "Xcode" : "Android SDK"}.`);
           continue;
@@ -494,7 +497,6 @@ export class SimlockProvider implements DeviceProvider {
     return data as SimlockLeaseData;
   }
 
-  /** Lease-scoped request fields every agent-device call carries. */
   /** The agent-device client for this lease. A subclass may drive devices without Simlock's proxy. */
   protected agentClient(handle: LeaseHandle): AgentDeviceClient {
     return this.client(this.data(handle));
@@ -531,6 +533,7 @@ export class SimlockProvider implements DeviceProvider {
     return this.connection.kind === "local";
   }
 
+  /** Lease-scoped request fields every agent-device call carries. */
   protected scope(handle: LeaseHandle): Record<string, unknown> {
     const d = this.data(handle);
     return { leaseId: handle.leaseId, deviceKey: d.deviceKey, tenant: d.tenant, runId: d.runId, clientId: d.clientId };
@@ -646,6 +649,8 @@ export class SimlockProvider implements DeviceProvider {
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
+      // No lease, so no release will drop this attempt's cached client (review).
+      this.clients.delete(agentDeviceSession);
       if (waitSignal?.aborted) {
         // The host may still grant the request after this side gave up (seen on a rented Mac: granted
         // after 59 s while the client had lost the link). Ask it to drop the lease id we chose, so a
@@ -1133,7 +1138,9 @@ export class SimlockProvider implements DeviceProvider {
       if (target.kind !== "point" && /occlud/i.test(mapped.message) && /keyboard/i.test(mapped.message)) {
         const point = await this.centerOf(handle, target).catch(() => undefined);
         if (point) {
-          const result = await this.agentClient(handle).interactions.press({ x: point.x, y: point.y, ...this.scope(handle) } as never);
+          const result = await this.agentClient(handle).interactions.press({ x: point.x, y: point.y, ...this.scope(handle) } as never).catch((e: unknown) => {
+            throw fromAgentDeviceError(e, `tap ${describe(target)}`);
+          });
           return { ...actionResult(result, `Tapped ${describe(target)} at (${point.x}, ${point.y})`), warning: "The keyboard covered the target's usual tap path; it was tapped at its centre instead" };
         }
       }
@@ -1146,7 +1153,9 @@ export class SimlockProvider implements DeviceProvider {
       if (target.kind === "text" && (mapped.code === "ELEMENT_NOT_FOUND" || /covered|occlud|toolbar|off-?screen/i.test(mapped.message))) {
         const found = await this.scrollIntoView(handle, target.text).catch(() => undefined);
         if (found?.point) {
-          const result = await this.agentClient(handle).interactions.press({ x: found.point.x, y: found.point.y, ...(options.settle === false ? {} : { settle: true }), ...this.scope(handle) } as never);
+          const result = await this.agentClient(handle).interactions.press({ x: found.point.x, y: found.point.y, ...(options.settle === false ? {} : { settle: true }), ...this.scope(handle) } as never).catch((e: unknown) => {
+            throw fromAgentDeviceError(e, `tap ${describe(target)}`);
+          });
           return { ...actionResult(result as never, `Tapped ${describe(target)} at (${found.point.x}, ${found.point.y})`), warning: /after 0 swipe/.test(found.message) ? `No element had exactly that text; tapped the one whose label contains it (${found.message.replace(/ after 0 swipe\(s\) \w+$/, "")})` : `It was not on screen; ${found.message.toLowerCase()} first` };
         }
       }
@@ -1177,7 +1186,9 @@ export class SimlockProvider implements DeviceProvider {
     if (handle.platform === "ios" && unchanged && out.point && target.kind !== "point") {
       const toggle = await this.switchKnob(handle, out.point).catch(() => undefined);
       if (toggle) {
-        const result = await this.agentClient(handle).interactions.press({ x: toggle.x, y: toggle.y, settle: true, ...this.scope(handle) } as never);
+        const result = await this.agentClient(handle).interactions.press({ x: toggle.x, y: toggle.y, settle: true, ...this.scope(handle) } as never).catch((e: unknown) => {
+          throw fromAgentDeviceError(e, `tap ${describe(target)}`);
+        });
         return { ...actionResult(result as never, `Tapped ${describe(target)} at its toggle (${toggle.x}, ${toggle.y})`), warning: "The switch's centre is its label; it was tapped at the toggle instead" };
       }
     }

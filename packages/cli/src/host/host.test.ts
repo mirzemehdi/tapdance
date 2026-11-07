@@ -162,6 +162,7 @@ describe("linux hosts", () => {
     expect(tailscaleSshFix("linux", "/usr/bin/tailscale", "Access denied")).toContain("--operator=$USER");
     expect(tailscaleSshFix("linux", "/usr/bin/tailscale", "something else")).toContain("kb/1193");
     expect(tailscaleSshNext("mac.tail1.ts.net", "m1")).toContain("ssh m1@mac.tail1.ts.net");
+    expect(tailscaleSshNext("mac.tail1.ts.net", "m1", "/opt/local/bin/tailscale")).toMatch(/outside the worker guard.*sudo \/opt\/local\/bin\/tailscale set --ssh=false/);
     expect(hostUpCommand({ tailscaleSsh: true, label: "vps" })).toContain("--tailscale-ssh");
   });
 });
@@ -356,7 +357,7 @@ describe("rendering", () => {
     expect(block.split("\n")).toEqual([
       "TAPDANCE HOST READY",
       "endpoint:  https://my-mac.tail1234.ts.net:4720",
-      "token:     saved to /Users/w/.tapdance/worker/pairing-vps.token (mode 600), fingerprint a1b2c3. Copy it: tapdance host token --label vps",
+      "token:     saved to /Users/w/.tapdance/worker/pairing-vps.token (mode 600), fingerprint a1b2c3. Copy it: tapdance host token --label vps (over ssh: scp the file)",
       "devices:   android 34 (google_apis_playstore), ios 26.5",
       "self-test: PASS (screenshot ok)",
       "on the agent machine:  tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-vps.token",

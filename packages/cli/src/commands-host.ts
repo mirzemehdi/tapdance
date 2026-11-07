@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
@@ -87,6 +87,7 @@ import {
   tailscaleAclHint,
   tailscaleSshFix,
   tailscaleSshNext,
+  findTailscale,
   parseWarm,
   serveNeedsOperator,
   resolveHostStop,
@@ -189,15 +190,21 @@ async function prerequisiteChecks(platform: "darwin" | "linux"): Promise<DoctorC
   return checks;
 }
 
-function findTailscale(): string | undefined {
-  // macOS: the app, or the open-source tailscaled's CLI from MacPorts or Homebrew (headless hosts), which
-  // a non-interactive ssh session's PATH does not include.
-  const mac = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"];
-  return findOnPath("tailscale", process.env["PATH"] ?? "", existsSync) ?? (osPlatform() === "darwin" ? mac.find((p) => existsSync(p)) : undefined);
+
+/** Where a link such as the Tailscale app's /usr/local/bin/tailscale points; the path itself otherwise. */
+function realBin(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
-/** The pairing files `host up` wrote, with what the guard thinks of each token. */
-/** Puts text on the clipboard through the platform's tool (stdin, never argv). */
+/** gh on PATH, else where MacPorts or Homebrew put it (an ssh command's PATH may have neither). */
+function findGh(): string {
+  return findOnPath("gh", process.env["PATH"] ?? "", existsSync) ?? ["/opt/local/bin/gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"].find((p) => existsSync(p)) ?? "gh";
+}
+
 /** sudo lets this account run the cost guard's stop command without a password. */
 async function hostStopAllowed(): Promise<boolean> {
   return (await runCommand("sudo", [...HOST_STOP_SUDO_CHECK])).ok;
@@ -236,6 +243,7 @@ async function applyHostStop(out: Output, choice: ReturnType<typeof resolveHostS
   return settings;
 }
 
+/** Puts text on the clipboard through the platform's tool (stdin, never argv). */
 async function copyToClipboard(text: string): Promise<boolean> {
   const cmd = clipboardCommand(osPlatform(), (bin) => findOnPath(bin, process.env["PATH"] ?? "", existsSync) !== undefined);
   if (!cmd) return false;
@@ -257,6 +265,7 @@ interface PausedState {
   workerService: boolean;
 }
 
+/** The pairing files `host up` wrote, with what the guard thinks of each token. */
 async function pairings(): Promise<Array<{ label: string; path: string; state: "active" | "expired or revoked"; createdAt?: string; expiresAt?: string; scopes?: string[] }>> {
   const dir = guardDir();
   const names = await readdir(dir).catch(() => [] as string[]);
@@ -432,13 +441,13 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           }
           const bin = findTailscale();
           if (!bin) {
-            out.warn("Tailscale is not installed, so the guard stays on loopback. Install it from https://tailscale.com/download, log in, and run this command again.");
+            out.warn(`Tailscale is not installed, so the guard stays on loopback${o.tailscaleSsh ? " and Tailscale SSH is not on" : ""}. Install it from https://tailscale.com/download, log in, and run this command again.`);
             return hostEndpoint(undefined, port);
           }
           const status = await runCommand(bin, ["status", "--json"]);
           const state = parseTailscaleStatus(status.out);
           if (!state.loggedIn || !state.dnsName) {
-            out.warn(`Tailscale is ${state.loggedIn ? "connected but has no MagicDNS name" : `not logged in (${state.backendState})`}; the guard stays on loopback. Run \`tailscale up\` (and turn on MagicDNS), then this command again.`);
+            out.warn(`Tailscale is ${state.loggedIn ? "connected but has no MagicDNS name" : `not logged in (${state.backendState})`}; the guard stays on loopback${o.tailscaleSsh ? " and Tailscale SSH is not on" : ""}. Run \`tailscale up\` (and turn on MagicDNS), then this command again.`);
             return hostEndpoint(undefined, port);
           }
           // Without tailnet HTTPS certificates, serve plain HTTP inside the tailnet: WireGuard encrypts it.
@@ -459,8 +468,9 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           // Optional, so a refusal warns instead of stopping the setup: the guard is already served.
           if (o.tailscaleSsh) {
             const ssh = await runCommand(bin, ["set", "--ssh"]);
-            if (ssh.ok) out.progress(tailscaleSshNext(state.dnsName, userInfo().username));
-            else out.warn(`Tailscale SSH is not on: ${ssh.out.split("\n")[0] ?? ""}. ${tailscaleSshFix(platform, bin, ssh.out)}`);
+            if (ssh.ok) out.warn(tailscaleSshNext(state.dnsName, userInfo().username, bin));
+            // The app's "Install CLI" puts a link at /usr/local/bin/tailscale: name the app by where it points.
+            else out.warn(`Tailscale SSH is not on: ${ssh.out.split("\n")[0] ?? ""}. ${tailscaleSshFix(platform, realBin(bin), ssh.out)}`);
           }
           return hostEndpoint(state.dnsName, port, mode);
         });
@@ -493,7 +503,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
 
         await step(out, "summary", async () => undefined);
         const ghFor = ghNeededFor(policy);
-        if (ghFor && !(await runCommand("gh", ["auth", "status"])).ok) out.warn(`${ghFor} need gh logged in on this machine, and \`gh auth status\` fails: ${GH_FIX}.`);
+        if (ghFor && !(await runCommand(findGh(), ["auth", "status"])).ok) out.warn(`${ghFor} need gh logged in on this machine, and \`gh auth status\` fails: ${GH_FIX}.`);
         const costGuard = describeHostStop(hostStop, platform);
         const cloudCost = cloudCostNote(cloudVm);
         const block = { endpoint, tokenPath, devices, selfTest, fingerprint: tokenFingerprint(secret), label, costGuard, ...(cloudCost ? { cloudCost } : {}) };
@@ -846,8 +856,8 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .action(async () => {
       const out = output(globals());
       try {
-        const gh = findOnPath("gh", process.env["PATH"] ?? "", existsSync) ?? ["/opt/local/bin/gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"].find((p) => existsSync(p));
-        if (!gh) throw new TapdanceError("PROVIDER_UNAVAILABLE", "gh (GitHub's CLI) is not installed on this machine", { hint: "scripts/host-setup.sh --with-gh, or https://cli.github.com" });
+        const gh = findGh();
+        if (gh === "gh") throw new TapdanceError("PROVIDER_UNAVAILABLE", "gh (GitHub's CLI) is not installed on this machine", { hint: "scripts/host-setup.sh --with-gh, or https://cli.github.com" });
         if (process.stdin.isTTY) {
           out.progress("Use a fine-grained token: only the repositories this host builds or installs from, Contents: read (builds) and Actions: read (installs from CI), a short expiry.");
         }
@@ -943,13 +953,13 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     });
 
   // ------------------------------------------------------------------ installs from CI
-  const artifacts = host.command("artifacts").description("Let the agent install Android APKs your CI built (GitHub Actions artifacts), downloaded by this machine with its own gh (off by default)");
+  const artifacts = host.command("artifacts").description("Let the agent install the APKs and iOS simulator apps your CI built (GitHub Actions artifacts), downloaded by this machine with its own gh (off by default)");
   artifacts
     .command("enable")
-    .description("Allow installs from these repositories' GitHub Actions artifacts: this machine downloads them with its `gh auth` and installs the APK on the agent's Android lease")
+    .description("Allow installs from these repositories' GitHub Actions artifacts: this machine downloads them with its `gh auth` and installs the APK or simulator .app on the agent's lease")
     .requiredOption("--repo <owner/repo>", "GitHub repository (owner/repo or its https://github.com URL), repeatable", (v: string, prev: string[] = []) => [...prev, v])
     .option("--branch <name>", "only artifacts of runs on this branch, e.g. main (repeatable; replaces the list)", (v: string, prev: string[] = []) => [...prev, v])
-    .option("--max-mb <n>", "largest artifact and APK, in MB (default 512)")
+    .option("--max-mb <n>", "largest artifact, and APK or unpacked .app, in MB (default 512)")
     .option("--no-check", "skip checking that this machine's gh can read each --repo and its Actions artifacts")
     .action(async (o: { repo: string[]; branch?: string[]; maxMb?: string; check: boolean }) => {
       const out = output(globals());
@@ -982,7 +992,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             `Installs from CI allowed from: ${policy.artifacts.repos.join(", ")}${policy.artifacts.branches.length ? ` (only runs on ${policy.artifacts.branches.join(", ")})` : " (any branch of the repository itself, not forks)"}; up to ${policy.artifacts.maxMB} MB`,
             ...notes.map((n) => yellow(n)),
             ...access.map(describeCiAccess),
-            "This machine downloads the artifact with its own gh and installs the APK on the agent's Android lease; nothing from the repository runs here. Use a fine-grained, read-only token (Actions: read, Contents: read) for these repositories only.",
+            "This machine downloads the artifact with its own gh and installs it on the agent's lease: an APK stays in the emulator, but an iOS simulator app runs as a process of this account when launched. Use a fine-grained, read-only token (Actions: read, Contents: read) for these repositories only.",
             restarted ? "The guard restarted with the new policy." : "Restart the guard to apply it when no test is running: run this command again then.",
           ].join("\n"),
         );
@@ -1074,6 +1084,10 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           out.secretResult({ label, token, fingerprint }, () => token);
           return;
         }
+        // Over ssh the clipboard is this machine's, not the person's (review).
+        if (process.env["SSH_CONNECTION"] || process.env["SSH_TTY"]) {
+          throw new TapdanceError("USAGE", "Over ssh the clipboard is this machine's, not yours", { hint: `Copy the file instead (\`scp <this host>:${file.path.replace(homedir(), "~")} .\`), or print it once with \`tapdance host token --show${o.label ? ` --label ${o.label}` : ""}\`.` });
+        }
         if (!(await copyToClipboard(token))) throw new TapdanceError("NOT_SUPPORTED", "No clipboard tool found", { hint: "Install wl-copy or xclip, or use `tapdance host token --show`." });
         out.result({ label, copied: true, fingerprint }, () => `Token for "${label}" copied (fingerprint ${fingerprint}). Paste it to your agent privately; \`tapdance connect\` prints the same fingerprint.`);
       } catch (error) {
@@ -1159,7 +1173,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         } else rows.push({ step: "tailscale", ok: false, detail: "not installed" });
         const ghFor = ghNeededFor(policy);
         if (ghFor) {
-          const gh = await runCommand("gh", ["auth", "status"]);
+          const gh = await runCommand(findGh(), ["auth", "status"]);
           rows.push({ step: "gh", ok: gh.ok, detail: gh.ok ? `logged in (needed for ${ghFor})` : `needed for ${ghFor}, but \`gh auth status\` fails: ${GH_FIX}` });
         }
         out.result({ ready: rows.every((r) => r.ok), endpoint, steps: rows }, () =>
@@ -1331,7 +1345,7 @@ async function repoDeployKey(out: Output, buildsDir: string, repo: string): Prom
 
 /** Organizations can turn deploy keys off; say so where the owner adds one (#86). */
 const DEPLOY_KEYS_OFF =
-  'Organizations can turn deploy keys off (GitHub: organization Settings › Member privileges › Deploy keys); adding one then fails with "Deploy keys are disabled". Use gh instead: `gh auth login --with-token` with a fine-grained, read-only token for this repository, then `tapdance host builds enable --repo <https url> --git-auth gh`.';
+  'Organizations can turn deploy keys off (GitHub: organization Settings › Member privileges › Deploy keys); adding one then fails with "Deploy keys are disabled". Use gh instead: `tapdance host gh-login` with a fine-grained, read-only token for this repository, then `tapdance host builds enable --repo <https url> --git-auth gh`.';
 
 /**
  * `host builds key --remove`: deletes a repository's own key (with `repo`) or the shared deploy_key,
@@ -1419,7 +1433,7 @@ async function buildPrerequisites(gitAuth: string, repos: string[] = []): Promis
   if (osPlatform() === "darwin" && !(await runCommand("xcodebuild", ["-version"])).ok) notes.push("xcodebuild is not available: iOS builds need Xcode.");
   const javaHome = process.env["JAVA_HOME"];
   if (!(await runCommand(javaHome ? join(javaHome, "bin", "java") : "java", ["-version"])).ok) notes.push("No java on PATH: Android and Kotlin Multiplatform builds need a JDK (17) on the guard's PATH or JAVA_HOME.");
-  if (gitAuth === "gh" && !(await runCommand("gh", ["auth", "status"])).ok) notes.push("`gh auth status` fails: run `gh auth login` on this machine.");
+  if (gitAuth === "gh" && !(await runCommand(findGh(), ["auth", "status"])).ok) notes.push("`gh auth status` fails: run `tapdance host gh-login` on this machine.");
   if (gitAuth === "deploy-key" && !existsSync(join(guardDir(), "builds", "deploy_key"))) {
     const keyless = repos.filter((r) => !existsSync(repoKeyPath(join(guardDir(), "builds"), r)));
     if (keyless.length > 0) notes.push(`No deploy key yet for ${keyless.join(", ")}: run \`tapdance host builds key --repo <url>\` for each and add it to that repository.`);
@@ -1429,13 +1443,13 @@ async function buildPrerequisites(gitAuth: string, repos: string[] = []): Promis
 
 /** Whether this machine's gh is installed and signed in (installs from CI download with it). */
 async function ghStatus(): Promise<{ ok: true } | { ok: false; note: string }> {
-  const r = await runCommand("gh", ["auth", "status"]).catch(() => ({ ok: false, out: "" }));
+  const r = await runCommand(findGh(), ["auth", "status"]).catch(() => ({ ok: false, out: "" }));
   if (r.ok) return { ok: true };
   return {
     ok: false,
     note: /ENOENT|not found|could not start/i.test(r.out) || r.out === ""
-      ? "gh is not installed or does not run here: install GitHub's CLI (https://cli.github.com), then `gh auth login --with-token` with a fine-grained, read-only token (Actions: read, Contents: read)."
-      : "`gh auth status` fails: run `gh auth login --with-token` on this machine with a fine-grained, read-only token (Actions: read, Contents: read) for the allowed repositories.",
+      ? "gh is not installed or does not run here: install GitHub's CLI (https://cli.github.com), then `tapdance host gh-login` with a fine-grained, read-only token (Actions: read, Contents: read)."
+      : "`gh auth status` fails: run `tapdance host gh-login` on this machine with a fine-grained, read-only token (Actions: read, Contents: read) for the allowed repositories.",
   };
 }
 

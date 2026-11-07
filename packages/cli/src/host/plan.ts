@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { TapdanceError, redactSecrets, type CatalogEntry, type DoctorCheck } from "@tapdance/sdk";
 
@@ -173,12 +174,17 @@ export function tailscaleSshFix(platform: string, bin: string, output: string): 
   return `Check \`${bin} set --ssh\` by hand; see https://tailscale.com/kb/1193/tailscale-ssh.`;
 }
 
-/** What `--tailscale-ssh` leaves to the tailnet's owner: the policy decides who may connect (#126). */
-export function tailscaleSshNext(dnsName: string | undefined, user: string): string {
+/**
+ * What `--tailscale-ssh` leaves to the tailnet's owner: the policy decides who may connect (#126). A
+ * shell over Tailscale SSH bypasses the worker guard, so the agent's own machine should not be let in.
+ */
+export function tailscaleSshNext(dnsName: string | undefined, user: string, bin = "tailscale"): string {
   const target = `${user}@${dnsName ?? "<this machine's tailnet name>"}`;
   return [
     `Tailscale SSH is on: from a machine in this tailnet, \`ssh ${target}\` (or \`tailscale ssh ${target}\`), no key to copy.`,
-    "Who may connect is the tailnet policy's \"ssh\" section (https://login.tailscale.com/admin/acls): the default lets a device's owner in, in check mode (a browser approval about every 12 hours). Turn it off with `sudo tailscale set --ssh=false`.",
+    "Who may connect is the tailnet policy's \"ssh\" section (https://login.tailscale.com/admin/acls): the default lets a device's owner in, in check mode (a browser approval about every 12 hours).",
+    "A shell here is outside the worker guard: anything running on a machine the policy lets in, the agent's own machine too, can act as this account. Limit the rule's src to your own devices and its users to this account (no root).",
+    `Turn it off with \`sudo ${bin} set --ssh=false\`.`,
   ].join(" ");
 }
 
@@ -599,7 +605,7 @@ export function renderReadyBlock(r: ReadyBlock & { fingerprint?: string; label?:
   return [
     "TAPDANCE HOST READY",
     `endpoint:  ${r.endpoint}`,
-    `token:     saved to ${r.tokenPath} (mode 600)${r.fingerprint ? `, fingerprint ${r.fingerprint}` : ""}. Copy it: tapdance host token${r.label ? ` --label ${r.label}` : ""}`,
+    `token:     saved to ${r.tokenPath} (mode 600)${r.fingerprint ? `, fingerprint ${r.fingerprint}` : ""}. Copy it: tapdance host token${r.label ? ` --label ${r.label}` : ""} (over ssh: scp the file)`,
     `devices:   ${r.devices}`,
     `self-test: ${r.selfTest}`,
     ...(r.costGuard ? [`cost guard: ${r.costGuard}`] : []),
@@ -651,6 +657,12 @@ export function mcpSnippets(command: string[]): string {
 }
 
 /** Finds an executable on a PATH string without running anything. */
+/** The tailscale CLI: on PATH, else (macOS) the app's or the open-source tailscaled's from MacPorts or Homebrew, which a non-interactive ssh session's PATH does not include. */
+export function findTailscale(pathEnv = process.env["PATH"] ?? "", exists: (p: string) => boolean = existsSync, platform: NodeJS.Platform = process.platform): string | undefined {
+  const mac = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"];
+  return findOnPath("tailscale", pathEnv, exists, platform) ?? (platform === "darwin" ? mac.find((p) => exists(p)) : undefined);
+}
+
 export function findOnPath(name: string, pathEnv: string, exists: (p: string) => boolean, platform: NodeJS.Platform = process.platform): string | undefined {
   const sep = platform === "win32" ? ";" : ":";
   const names = platform === "win32" ? [name, `${name}.cmd`, `${name}.exe`] : [name];

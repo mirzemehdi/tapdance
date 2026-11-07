@@ -403,6 +403,24 @@ describe("MCP server lifecycle", () => {
     expect(seen[0]).toMatchObject({ progress: 1, message: "Waiting for a device" });
   });
 
+  // Overlapping calls each keep their own sink; a call without a token sends to none (review).
+  it("routes progress to the call it comes from", async () => {
+    const router = createProgressRouter();
+    const a: string[] = [];
+    const b: string[] = [];
+    let releaseA!: () => void;
+    const first = router.run((m) => a.push(m), async () => {
+      await new Promise<void>((r) => (releaseA = r));
+      router.emit("from A");
+    });
+    await router.run((m) => b.push(m), async () => router.emit("from B"));
+    await router.run(undefined, async () => router.emit("from a call without a token"));
+    releaseA();
+    await first;
+    router.emit("outside any call");
+    expect({ a, b }).toEqual({ a: ["from A"], b: ["from B"] });
+  });
+
   it("a failing renewal check is logged, never an unhandled rejection (MOCKED current)", async () => {
     const tapdance = await Tapdance.create({
       cwd: await mkdtemp(join(tmpdir(), "td-mcp-")),

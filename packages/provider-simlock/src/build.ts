@@ -76,7 +76,7 @@ export type CommandRunner = (
     /** With `stdoutPath`: stops the command once stdout passes this many bytes (`truncated` in the reply). */
     maxStdoutBytes?: number;
   },
-) => Promise<{ code: number; output: string; truncated?: boolean }>;
+) => Promise<{ code: number; output: string; truncated?: boolean; timedOut?: boolean }>;
 
 const REF = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 const PROJECT = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}\.(xcodeproj|xcworkspace)$/;
@@ -184,6 +184,7 @@ export async function runBuild(req: BuildRequest, settings: BuildSettings, root:
     onLine(`$ ${command} ${args.join(" ")}`);
     const digest = new FailureDigest();
     const r = await run(command, args, { ...(cwd ? { cwd } : {}), env: { ...env, ...extraEnv }, timeoutMs: left(), onLine: (l) => (digest.add(l), onLine(l)) });
+    if (r.timedOut) throw new TapdanceError("TIMEOUT", `The build took longer than ${settings.timeoutMinutes} min (stopped during ${what})`, { hint: "The host owner can raise builds.timeoutMinutes in ~/.tapdance/worker/policy.json." });
     if (r.code !== 0) {
       // The cause is often hundreds of lines above the end (#53): name it in the message itself.
       const cause = digest.lines();
@@ -654,7 +655,7 @@ export function githubOverHttps(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 const SIGN_IN_FAILED = /Permission denied \(publickey|Repository not found|could not read (Username|Password)|Authentication failed|terminal prompts disabled|returned error: 40[13]|Invalid username or (password|token)|Could not read from remote repository|Write access to repository not granted|no such identity|Deploy keys are disabled|Host key verification failed/i;
 
 const OWNER_ONLY = "Only the host's owner can fix this (an agent cannot)";
-const GH_WAY = "use gh: on the host `gh auth login --with-token` with a fine-grained, read-only token (Contents: read, this repository only), then `tapdance host builds enable --repo <https url> --git-auth gh`";
+const GH_WAY = "use gh: on the host `tapdance host gh-login` with a fine-grained, read-only token (Contents: read, this repository only), then `tapdance host builds enable --repo <https url> --git-auth gh`";
 const ELSEWHERE = "Or build the app elsewhere and install it with `tapdance app install <path>` (MCP install_app).";
 
 function shownRepo(repo: string): string {
@@ -684,7 +685,7 @@ export function gitAuthHint(text: string, repo: string, ctx?: GitAuthContext): s
     ].join(" ");
   }
   if (ctx && !ctx.ssh && ctx.mode === "gh") {
-    return `The host's gh could not read ${shown}. ${OWNER_ONLY}: the token gh uses on the host must reach this repository (a fine-grained token with Contents: read and this repository selected); check on the host with \`gh auth status\` and \`git ls-remote <https url>\`, or sign in again with \`gh auth login --with-token\`. ${ELSEWHERE}`;
+    return `The host's gh could not read ${shown}. ${OWNER_ONLY}: the token gh uses on the host must reach this repository (a fine-grained token with Contents: read and this repository selected); check on the host with \`gh auth status\` and \`git ls-remote <https url>\`, or sign in again with \`tapdance host gh-login\`. ${ELSEWHERE}`;
   }
   if (ctx?.keyUnusedOverHttps) {
     return `This build used the https URL of ${shown}, but a deploy key works only over ssh. Build with the ssh URL (git@host:owner/repo.git; the host's owner allows it with \`tapdance host builds enable --repo <ssh url>\`), or the owner can ${GH_WAY}. ${ELSEWHERE}`;
@@ -698,7 +699,7 @@ export function gitAuthHint(text: string, repo: string, ctx?: GitAuthContext): s
   }
   return [
     `This host could not sign in to ${shown} (a private repository, or its git credentials do not reach it). ${OWNER_ONLY}, in one of three ways:`,
-    "(1) gh with a fine-grained, read-only token (Contents: read, this repository only): on the host `gh auth login --with-token`, then `tapdance host builds enable --repo <https url> --git-auth gh`;",
+    "(1) gh with a fine-grained, read-only token (Contents: read, this repository only): on the host `tapdance host gh-login`, then `tapdance host builds enable --repo <https url> --git-auth gh`;",
     "(2) a deploy key for this repository: on the host `tapdance host builds key --repo <url>`, add the printed public key as a read-only deploy key (GitHub: the repository's Settings › Deploy keys; organizations can turn deploy keys off), and build with the ssh URL (git@github.com:owner/repo.git);",
     "(3) no build on the host: build the app elsewhere and install it with `tapdance app install <path>` (MCP install_app).",
   ].join(" ");
@@ -775,7 +776,15 @@ export const spawnRunner: CommandRunner = (command, args, options) =>
       });
     } else child.stdout.on("data", take);
     child.stderr.on("data", take);
-    const timer = setTimeout(() => child.kill("SIGTERM"), options.timeoutMs);
+    // Past the time limit: SIGTERM, then SIGKILL for a child that ignores it, and the reply says so.
+    let timedOut = false;
+    let kill: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      kill = setTimeout(() => child.kill("SIGKILL"), 10_000);
+      kill.unref();
+    }, options.timeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
       file?.destroy();
@@ -783,8 +792,9 @@ export const spawnRunner: CommandRunner = (command, args, options) =>
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      clearTimeout(kill);
       if (partial) options.onLine(partial);
-      const done = () => resolvePromise({ code: code ?? 1, output: tail, ...(truncated ? { truncated: true } : {}) });
+      const done = () => resolvePromise({ code: code ?? 1, output: tail, ...(truncated ? { truncated: true } : {}), ...(timedOut ? { timedOut: true } : {}) });
       if (file) file.end(done);
       else done();
     });

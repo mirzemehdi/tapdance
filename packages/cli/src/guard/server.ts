@@ -691,6 +691,11 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               await decide("deny", { reason: "builds off", leaseId: r.leaseId, command: "build" });
               return send(res, 403, "FORBIDDEN", policyOff("builds", "Builds"));
             }
+            // A build ends by installing on the lease, so it needs the install scope as well (review).
+            if (!policy.allow.install) {
+              await decide("deny", { reason: "install disabled", leaseId: r.leaseId, command: "build" });
+              return send(res, 403, "FORBIDDEN", "A build installs its app on the lease, and installs are disabled for this token or host");
+            }
             if (building) return send(res, 429, "NO_CAPACITY", "Another build is running on this host; try again when it finishes");
             const raw = await readBody(req, 64 * 1024);
             // The platform is the lease's, not whatever the client says.
@@ -1050,7 +1055,16 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           });
           req.on("end", () => counted.push(null));
           await decide("allow", { command: "upload", leaseId: uploadLease });
-          await forward(req, res, counted, undefined, (t) => learnIds(t, "uploadId", uploads, owner_));
+          // Simlock answers a preflight with a direct-upload ticket whose headers carry this guard's own
+          // upstream credentials (its slk_ token) and a loopback URL. Neither may reach the client: without
+          // the ticket, agent-device uploads through this route instead.
+          const dropTicket = r.path.endsWith("/upload/preflight")
+            ? (data: unknown) => {
+                if (data && typeof data === "object" && !Array.isArray(data)) delete (data as Record<string, unknown>)["upload"];
+                return data;
+              }
+            : undefined;
+          await forward(req, res, counted, dropTicket, (t) => learnIds(t, "uploadId", uploads, owner_));
           return;
         }
         case "artifact": {
@@ -1106,7 +1120,12 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       up.on("message", (d, binary) => client.readyState === WebSocket.OPEN && client.send(d, { binary }));
       up.on("close", (code, reason) => client.close(code >= 4000 || code === 1000 ? code : 1011, reason.toString().slice(0, 120)));
       up.on("error", () => client.close(1011, "input unavailable"));
-      client.on("message", (d: Buffer) => (up.readyState === WebSocket.OPEN ? up.send(d) : pending.push(d)));
+      // Input sent before the upstream socket opens is kept, up to a bound (review).
+      client.on("message", (d: Buffer) => {
+        if (up.readyState === WebSocket.OPEN) up.send(d);
+        else if (pending.length < 256) pending.push(d);
+        else client.close(1013, "input is not ready yet");
+      });
       client.on("close", () => up.close());
     });
   });

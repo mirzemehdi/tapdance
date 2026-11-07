@@ -710,6 +710,46 @@ A Linux VPS drove the rented Mac mini through the CLI and MCP: all six checklist
 - Not built: a GitHub device-code login (`gh auth login --web`). It would give the host read and write
   access to every repository of the account; the deploy key (one repository, read-only) stays the way.
 
+### Review after stage 3
+
+A review of the code, scripts and docs after stage 3. Unit-tested unless it says otherwise; nothing
+here was run on a host.
+
+- Security: the worker guard no longer relays Simlock's direct-upload ticket in upload preflight
+  replies. The ticket carried the guard's own upstream credentials (the host's `slk_` token) and a
+  loopback URL to any client allowed to install; without it agent-device uploads through the guard, the
+  path the field runs already used.
+- Security: GitHub tokens (`ghp_`, `gho_`, `ghs_`, `ghu_`, `ghr_`, `github_pat_`) are redacted like
+  Simlock and guard tokens. Builds through the guard need the `install` scope too (a build installs).
+  The guard's input relay holds at most 256 messages while its upstream socket opens. MCP's path check
+  also applies to files that do not exist yet.
+- `host up --tailscale-ssh` warns that a shell over Tailscale SSH is outside the worker guard and that
+  the tailnet policy should not let the agent's own machine in; it names the Tailscale app by where
+  its CLI link points, and says when Tailscale SSH could not be turned on.
+- `host artifacts` help and consent text name iOS simulator apps, and that they run as host processes
+  when launched (an APK stays in the emulator).
+- Installs from CI: a zipped `.app` (`Demo.app.zip`) was unpacked but then looked for under the wrong
+  name, so it failed and was downloaded again each time; an artifact that is the app's own contents now
+  wins over an app nested in it (an App Clip); APK and `.app` copies of one artifact keep separate
+  caches; downloads a crashed host left behind are cleaned up; the platform check reads two keys with
+  `plutil -extract` (plists with dates or data no longer fail).
+- MCP progress messages are bound to the call they come from: overlapping calls, or a call without a
+  progress token, no longer send them to another call.
+- The viewer stops showing "you have control" once a take-over's 10 minutes lapse, and says it lasts at
+  most 10 minutes.
+- Errors from a worker guard keep its own code and hint (`APP_NOT_INSTALLED`, `USAGE`, the "turn on
+  artifacts" fix) instead of a guess from the HTTP status. A build or CI download past its time limit is
+  `TIMEOUT` (and a child that ignores SIGTERM gets SIGKILL). "try again" refusals are retryable; a timed-
+  out tap, type or install says to read the screen before repeating it. Fallback taps map their errors.
+- `doctor` and `devices` no longer read a gateway machine's own facts as a worker's (a Linux gateway
+  with a Mac worker skipped iOS). Gateway mode is still not run across machines.
+- `gh` is found in MacPorts or Homebrew wherever `host` checks it, not only in `host gh-login`; hints say
+  `tapdance host gh-login` instead of `gh auth login --with-token`. `tapdance view --tailscale` finds
+  the macOS Tailscale CLI as `host up` does. `host token` refuses to copy to the host's clipboard over
+  ssh. `opened_links` is not blocked while a person holds the device. `ui tap` explains system-view
+  refs. Ctrl-C at a hidden token prompt exits at once.
+- Stale and misplaced comments fixed.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, Google's Android CLI on a remote host, a full

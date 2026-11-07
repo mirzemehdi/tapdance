@@ -89,11 +89,13 @@ export function toTapdanceError(error: unknown): TapdanceError {
   return new TapdanceError("INTERNAL", message, { cause: error });
 }
 
-// Simlock secrets start with `slk_` and worker-guard tokens with `tdg_`; bearer headers, JWTs, the
+// Simlock secrets start with `slk_`, worker-guard tokens with `tdg_`, GitHub's with `gh?_`/`github_pat_`; bearer headers, JWTs, the
 // viewer's `#k=` key, private keys and token-ish `key=value` pairs are covered too.
 const SECRET_PATTERNS: RegExp[] = [
   /slk_[A-Za-z0-9_-]{8,}/g,
   /tdg_[A-Za-z0-9_-]{16,}/g,
+  // GitHub tokens (`host gh-login` puts one on the host): classic, OAuth, app and fine-grained.
+  /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
   /(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
   /(#k=)[A-Za-z0-9_-]{16,}/g,

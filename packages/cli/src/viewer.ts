@@ -9,7 +9,7 @@ import { TapdanceError, isPrivateHost, type Tapdance } from "@tapdance/sdk";
 import { run, type GlobalOptions } from "./context.js";
 import { VIEWER_PAGE } from "./viewer-page.js";
 import { bold, dim } from "./output.js";
-import { TAILSCALE_DNS_ADMIN, parseTailscaleStatus, tailscaleServeArgs, tailscaleServeOffArgs } from "./host/plan.js";
+import { TAILSCALE_DNS_ADMIN, findTailscale, parseTailscaleStatus, tailscaleServeArgs, tailscaleServeOffArgs } from "./host/plan.js";
 
 /**
  * `tapdance view`: a loopback web page that shows the session's device live and lets a person
@@ -90,7 +90,7 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
 async function serveOverTailscale(port: number, out: { progress: (m: string) => void }): Promise<{ dnsName: string; stop: () => Promise<void> }> {
   const tailscale = (args: string[], timeout = 30_000) =>
     new Promise<{ ok: boolean; text: string }>((resolve) => {
-      execFile("tailscale", args, { timeout }, (error, stdout, stderr) => resolve({ ok: !error, text: `${stdout}${stderr}`.trim() || (error?.message ?? "") }));
+      execFile(findTailscale() ?? "tailscale", args, { timeout }, (error, stdout, stderr) => resolve({ ok: !error, text: `${stdout}${stderr}`.trim() || (error?.message ?? "") }));
     });
   const status = await tailscale(["status", "--json"], 5000);
   if (!status.ok) throw new TapdanceError("USAGE", "--tailscale needs the tailscale CLI on this machine", { hint: "Install Tailscale and run `tailscale up`, or use --host <this machine's 100.x address> (screenshot mode)." });
@@ -105,7 +105,7 @@ async function serveOverTailscale(port: number, out: { progress: (m: string) => 
   // passwordless `sudo tailscale` without making the user the operator: try that before giving up.
   const sudo = (args: string[], timeout = 30_000) =>
     new Promise<{ ok: boolean; text: string }>((resolve) => {
-      execFile("sudo", ["-n", "tailscale", ...args], { timeout }, (error, stdout, stderr) => resolve({ ok: !error, text: `${stdout}${stderr}`.trim() || (error?.message ?? "") }));
+      execFile("sudo", ["-n", findTailscale() ?? "tailscale", ...args], { timeout }, (error, stdout, stderr) => resolve({ ok: !error, text: `${stdout}${stderr}`.trim() || (error?.message ?? "") }));
     });
   const args = tailscaleServeArgs(port, "https");
   let run = tailscale;
@@ -216,6 +216,8 @@ export async function startViewer(
         const record = await t.current();
         if (!record) return send(res, 410, { error: "No device is leased in this session any more." });
         const status = await t.status().catch((e: TapdanceError) => ({ error: e.message }));
+        // A take-over is a 10-minute hold: once it lapses the agent drives again, so stop claiming control.
+        if (takeover && !("error" in status) && !status.humanHoldUntil) takeover = false;
         return send(res, 200, { device: status, takeover, recording: record.recording ?? null, artifacts: (await t.listArtifacts()).slice(-10), humanRequest: (await t.pendingHumanRequest()) ?? null });
       }
       if (url.pathname === "/api/frame") {
@@ -335,7 +337,7 @@ export async function startViewer(
 /** This machine's tailnet names and addresses from `tailscale status --json`; empty without Tailscale. */
 export async function tailnetNames(): Promise<{ names: string[]; dnsName?: string }> {
   const raw = await new Promise<string>((resolve) => {
-    execFile("tailscale", ["status", "--json"], { timeout: 5000 }, (error, stdout) => resolve(error ? "" : stdout));
+    execFile(findTailscale() ?? "tailscale", ["status", "--json"], { timeout: 5000 }, (error, stdout) => resolve(error ? "" : stdout));
   });
   return parseTailnetNames(raw);
 }

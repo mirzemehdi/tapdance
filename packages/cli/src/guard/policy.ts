@@ -47,10 +47,11 @@ export const GuardPolicySchema = z
          */
         builds: z.boolean().default(false),
         /**
-         * Download an APK the user's CI built (a GitHub Actions artifact of an allow-listed repository)
-         * with this machine's `gh auth` and install it on an Android lease. Nothing from the repository
-         * runs here. Off by default; `tapdance host artifacts enable`. Not a token scope: a token also
-         * needs `install`.
+         * Download an APK or an iOS simulator .app the user's CI built (a GitHub Actions artifact of an
+         * allow-listed repository) with this machine's `gh auth` and install it on the lease. Nothing runs
+         * on this machine to fetch it, but an installed simulator app runs as a process of this account
+         * (an APK stays in the emulator). Off by default; `tapdance host artifacts enable`. Not a token
+         * scope: a token also needs `install`.
          */
         artifacts: z.boolean().default(false),
       })
