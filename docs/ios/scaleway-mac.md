@@ -174,7 +174,16 @@ or more while agent-device starts its runner. On a 16 GB offer, keep the default
 
 ## Reboot
 
-<!-- filled in from the reboot test -->
+With automatic login, everything comes back by itself. Measured after a console **Reboot** with nobody
+logging in: ssh after 26 s, the guard reachable over Tailscale after 28 s, `host status` all `ok`, and a
+lease from the agent's machine working. Check with:
+
+```bash
+ssh m1@<mac-ip> 'who; tapdance host status'
+```
+
+Without automatic login the Mac waits at the login window: `tailscaled` is up (it is a system daemon),
+but the worker and guard are not, and the agent's calls fail.
 
 ## Stop paying: delete it
 

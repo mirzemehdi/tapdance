@@ -73,7 +73,11 @@ the ones to use for warm spares.
   `tapdance worker restart` (rc 0, 6 s, a new worker pid; the ssh session's launchd context is
   `Background`, the LaunchAgents live in the auto-login session `gui/501`) all worked over plain ssh.
 - `host up` itself ran in an interactive `ssh -t` session.
-- Reboot with every service installed: _(pending)_.
+- **Reboot with every service installed (console Reboot, nobody logging in by hand), 2026-11-07:**
+  new boot 09:47:15Z; ssh answered **26 s** later; the guard answered over Tailscale (`tailscaled`
+  started at boot, `tailscale serve` kept) **28 s** after boot; `m1` on `console` (auto-login);
+  `host status` all `ok` (worker, guard service, pairing, Tailscale serving :4720 over https, `gh`);
+  from the agent's machine `doctor` passed, a cold iOS lease took 92 s, screenshot and release worked.
 
 ## Host build of a private app
 
@@ -85,7 +89,26 @@ scheme `iosApp`, bundle id `com.measify.pianolune`), allowed with `host builds e
 | --- | --- |
 | 1 | clone, checkout of `b7853bd` (main), `xcodebuild` started; Gradle failed configuring `:audioengine`: "SDK location not found" (the app's Android module needs an SDK even for the iOS build). 3 min 24 s. Fix: `--android-build-sdk` (command-line tools and platform-tools, 210 MB, 14 s) and a build hint |
 | 2, 3 | did not reach the host: the agent's machine was asleep (one `curl --max-time 20` returned after 1055 s) |
-| 4 | _(pending)_ |
+| 4 | **built**: `xcodebuild` with the Kotlin framework step, Gradle `BUILD SUCCESSFUL in 9m 3s`, `Pianolune.app`; the launch after it failed because the agent's machine had gone offline and the lease had expired meanwhile |
+| CLI build suite | **6/6**: lease 143 s, `app build` reused the kept build of `b7853bd` in 2 s and installed and launched it (step 42 s), inspect (the Pianolune screen), screenshot, the same build again reused in 1 s, release |
+| MCP build checklist | **7/7**: `build_app` reused (10 s, then 2 s), launch, inspect, screenshot, release |
+
+### The app checklists (the host's build, zipped and uploaded from the agent's machine)
+
+The host's `Pianolune.app` was zipped (47 MB) and copied to the agent's machine, so the app checklists
+also test the upload path.
+
+| Run | Result |
+| --- | --- |
+| MCP app (`mcp-ios-app.json`) | **27/27**, 3 skipped (no tap/type target given): lease 90 s, upload and install 105 s, launch, launch with console, inspect, screenshot, alert, swipe, recording, app logs, crash logs, crash reports, push to Documents, launch in de-DE, rotate, audit, opened links, app list, kill, clear data, relaunch, artifacts, release |
+| CLI app (`cli-checklist.sh app`) | **31/31**, 3 skipped (tap, type, sequence): lease 81 s, install 109 s, the same steps plus push to Files, `device setting language de-DE` and back, uninstall |
+
+### Live viewer
+
+`tapdance view` on the agent's machine (loopback, port 7788) showed the session's simulator from the
+rented Mac and followed a scripted run (tap "Let me try", swipe, rotate, relaunch in German, Home);
+the session panel named the rented Mac's tailnet address as the worker. Take-over was offered but not
+exercised.
 
 Installing the app from a CI artifact was not run: `app install --from-ci` takes Android APKs only, and
 Pianolune's CI builds no iOS simulator app ([#121](https://github.com/mirzemehdi/tapdance/issues/121)).
@@ -114,7 +137,7 @@ leased" while the host had granted the lease, which then ran until its TTL.
 
 M1-M at EUR 0.11/hour: the 24-hour minimum is EUR 2.64 excluding VAT (EUR 3.17 with 20 % VAT); deleted by
 Scaleway's automatic deletion at 24 h. No Private Network, no extra disk, no traffic charges listed.
-_(Final: from the Scaleway billing page after deletion.)_
+_(Final figure: from the Scaleway billing page after deletion; the owner reads it.)_
 
 ## How to re-run
 
