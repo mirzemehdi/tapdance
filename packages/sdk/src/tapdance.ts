@@ -192,6 +192,11 @@ function fingerprintOf(elements: Array<{ role: string; label?: string; value?: s
     .join("\n");
 }
 
+/** A screen read still running after this long sends a progress message, and again at each interval. */
+const SLOW_READ_NOTICE_MS = 15_000;
+/** A screen read that took this long says so in its warnings. */
+const SLOW_READ_WARN_MS = 30_000;
+
 /**
  * The lease command for hints, naming only the platforms this configuration can lease: an iOS-only
  * setup must not be told to lease Android. Both (or neither) enabled → `--platform android|ios`.
@@ -390,8 +395,12 @@ export class Tapdance {
     const until = hold ? Date.parse(hold.until) : 0;
     const now = Date.now();
     if (hold && until > now) {
-      throw new TapdanceError("HUMAN_HELD", `A person is controlling the device in the viewer (${hold.by})`, {
-        hint: `Wait and retry in ${Math.ceil((until - now) / 1000)} s; their control lapses when they stop touching the screen or press "Hand back".`,
+      const seconds = Math.ceil((until - now) / 1000);
+      throw new TapdanceError("HUMAN_HELD", `A person is controlling the device in the viewer (${hold.by}${hold.kind === "takeover" ? ", took over" : ""})`, {
+        hint:
+          hold.kind === "takeover"
+            ? `The person pressed "Take over": retry after they press "Hand back", at the latest in ${seconds} s (a take-over lasts 10 minutes). Do not release.`
+            : `Wait and retry in ${seconds} s; their control lapses when they stop touching the screen or press "Hand back".`,
         details: { retryAfterMs: until - now },
         retryAfterMs: until - now,
       });
@@ -694,9 +703,26 @@ export class Tapdance {
   // ------------------------------------------------------------ UI
 
   async inspect(options: { interactiveOnly?: boolean; compact?: boolean; system?: boolean; appId?: string } = {}): Promise<ScreenInspection> {
-    const screen = await this.onDevice((handle, provider) =>
-      provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}), ...(options.system ? { system: true } : {}), ...(options.appId ? { appId: options.appId } : {}) }),
-    );
+    // A screen read normally takes seconds. On a busy host (an 8 GB Mac swapping, the first read after a
+    // launch) one read waited out agent-device's 90 s request timeout with no sign of life (#128): say
+    // while it lasts that it is still running, and afterwards how long it took.
+    const started = Date.now();
+    const ticker = setInterval(() => this.progress(`Still reading the screen (${Math.round((Date.now() - started) / 1000)} s): the host is slow to answer`), SLOW_READ_NOTICE_MS);
+    let screen: ScreenInspection;
+    try {
+      screen = await this.onDevice((handle, provider) =>
+        provider.inspect(handle, { ...(options.interactiveOnly !== undefined ? { interactiveOnly: options.interactiveOnly } : {}), ...(options.system ? { system: true } : {}), ...(options.appId ? { appId: options.appId } : {}) }),
+      );
+    } finally {
+      clearInterval(ticker);
+    }
+    const tookMs = Date.now() - started;
+    if (tookMs >= SLOW_READ_WARN_MS) {
+      screen = {
+        ...screen,
+        warnings: [...screen.warnings, `This screen read took ${Math.round(tookMs / 1000)} s; the host was slow (memory pressure, or the first read after a launch). The next read is usually fast.`],
+      };
+    }
     return options.compact ? { ...screen, elements: compactElements(screen.elements) } : screen;
   }
 
@@ -1091,9 +1117,9 @@ export class Tapdance {
     }
   }
 
-  /** Called by the viewer while a person touches the screen; 0 clears it. */
-  async setHumanHold(holdMs: number, by: string): Promise<void> {
-    await this.store.setHold(this.session.id, holdMs > 0 ? { until: new Date(Date.now() + holdMs).toISOString(), by } : undefined);
+  /** Called by the viewer while a person touches the screen, or on Take over; 0 clears it. */
+  async setHumanHold(holdMs: number, by: string, kind: "touch" | "takeover" = "touch"): Promise<void> {
+    await this.store.setHold(this.session.id, holdMs > 0 ? { until: new Date(Date.now() + holdMs).toISOString(), by, kind } : undefined);
     if (holdMs <= 0) return;
     // A person driving the device is use. Stamp at most every 30 s (the viewer calls this on every
     // touch), and never wait on the session lock: a lease call may hold it for minutes.

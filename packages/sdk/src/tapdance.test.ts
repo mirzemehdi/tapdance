@@ -87,6 +87,39 @@ describe("Tapdance session scoping", () => {
     await expect(t.tap({ kind: "ref", ref: "e1" })).resolves.toMatchObject({ ok: true });
   });
 
+  // #128: FakeProvider (mocked) whose read "takes" 31 s on fake clocks; only the notices are under test.
+  it("says while a slow screen read runs, and afterwards how long it took", async () => {
+    const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
+    const cwd = await mkdtemp(join(tmpdir(), "td-proj-"));
+    class SlowProvider extends FakeProvider {
+      override async inspect(handle: LeaseHandle) {
+        vi.advanceTimersByTime(31_000);
+        return super.inspect(handle);
+      }
+    }
+    const progress: string[] = [];
+    const t = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "s1", source: "test" }, provider: new SlowProvider(), onProgress: (m) => progress.push(m) });
+    await t.lease({ platform: "ios" });
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    try {
+      const screen = await t.inspect();
+      expect(progress.filter((m) => m.startsWith("Still reading the screen"))).toHaveLength(2);
+      expect(screen.warnings).toContainEqual(expect.stringContaining("This screen read took 31 s"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // #131: a take-over does not lapse when the person stops touching; the hint must say so.
+  it("says which kind of hold refused the agent", async () => {
+    const { t } = await setup();
+    await t.lease({ platform: "android" });
+    await t.setHumanHold(5_000, "browser viewer");
+    await expect(t.tap({ kind: "ref", ref: "e1" })).rejects.toMatchObject({ hint: expect.stringContaining("stop touching") });
+    await t.setHumanHold(600_000, "browser viewer", "takeover");
+    await expect(t.tap({ kind: "ref", ref: "e1" })).rejects.toMatchObject({ code: "HUMAN_HELD", message: expect.stringContaining("took over"), hint: expect.stringContaining('press "Hand back"') });
+  });
+
   it("doctor warns about security settings a project file tried to set", async () => {
     const { cwd, home } = await setup();
     await writeFile(join(cwd, "tapdance.config.json"), JSON.stringify({ tools: { paths: { asc: "/bin/sh" } } }));

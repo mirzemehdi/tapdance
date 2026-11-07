@@ -421,7 +421,7 @@ the apps the automation backend sees.
 ```text
 tapdance ui inspect [--all] [--compact] [--bounds] [--system] [--app <id>]
 tapdance ui audit [--app <id>]
-tapdance ui tap  (--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>] [--inject]
+tapdance ui tap  (<ref> | --text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>) [--no-settle] [--settle-ms <ms>] [--inject]
 tapdance ui type <text> [--text <t> | --id <id> | --ref <ref> | --selector <s> | --x <x> --y <y>] [--delay-ms <ms>]
 tapdance ui swipe (--direction <up|down|left|right> [--amount <0.1-0.8>] [--until <text>] | --from <x,y> --to <x,y>)
 tapdance ui wait  (--text <text> | --absent <text> | --stable) [--timeout <ms>]
@@ -439,7 +439,7 @@ tapdance ui key   <back|home|enter|dismiss_keyboard|app_switcher>
 | Command | Notes |
 | --- | --- |
 | `ui inspect` | `--app <id>` switches to that app as it is (no relaunch) and reads it: on iOS every read brings the session's app to the front, so after a link-out use `--app com.apple.mobilesafari`, and for the Home Screen `--app com.apple.springboard`; later reads stay on it until you launch your app. Elements with ref, role, label, value, identifier and state (`[checked]`, `[unchecked]`, `[selected]`, `[focused]`, `[expanded]`), in the default view and with `--all`. `--all` includes non-interactive elements; `--compact` leaves out unlabelled containers (the bulk of a Compose or SwiftUI tree); `--bounds` prints each element's `(x,y w×h)` in pixels, for coordinate taps on canvases (`--json` always includes them as `rect`). `--system` (Android) reads every window with `uiautomator dump` (it stops agent-device's snapshot helper first, which holds the one UiAutomation connection; the next normal inspect starts it again) instead: what the normal view misses, such as a Chrome Custom Tab (a `browser: <url>` note shows its address bar) or a system picker. Its refs are `@u<n>` and cannot be tapped; tap `--x`/`--y` at the centre of the bounds, or `--text … --inject`. On Android the header names the app whose elements are on screen: when none belong to the session's app (the launcher after Back), it names that app instead and a note says the session's app is not in front. On Android, when the automation helper cannot read the screen, Tapdance retries (0.5, 1, 2 s) and then reads a uiautomator dump, with a warning that its refs cannot be tapped. |
-| `ui tap` | Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). A `--text` target that is not on screen, or not tappable where it is (under a toolbar), is scrolled into view first (down the list, then up) and tapped where it then is; text that is only part of a label matches too, and the reply says so. On iOS, a settled tap that changed nothing and opened a link in another app (Safari) puts that app back in front (the settle read had brought your app back) and says so. A target that is not found fails naming the labels on screen (`On screen: …`); `ui type` with a target does the same. |
+| `ui tap` | A ref from `ui inspect` may be the argument (`ui tap @e3`, the same as `--ref @e3`); other text there is refused with a pointer to `--text`. Waits for the UI to settle and lists what changed. `--no-settle` skips that. `--settle-ms <ms>` also waits up to that long for the UI to come to rest (a tap that auto-advances to the next screen after an animation) and prints `screen changed: <its first labels>` or `same screen`. On Android system screens that ignore the automation helper's touches (the file picker `DocumentsUI`, the share sheet), a settled tap that changed nothing is repeated once as a raw `input tap` and says so. `--inject` (Android) taps with a raw input event at the element's centre from the start. On iOS, a tap on a switch row that changed nothing is repeated at the row's toggle (the row's centre is its label). A `--text` target that is not on screen, or not tappable where it is (under a toolbar), is scrolled into view first (down the list, then up) and tapped where it then is; text that is only part of a label matches too, and the reply says so. On iOS, a settled tap that changed nothing and opened a link in another app (Safari) puts that app back in front (the settle read had brought your app back) and says so. A target that is not found fails naming the labels on screen (`On screen: …`); `ui type` with a target does the same. |
 | `ui audit` | Accessibility check of the screen, from the accessibility tree: controls with nothing to announce (error, exit 1), touch targets under 44 pt (iOS) or 48 dp (Android), several controls announced alike, unlabelled images (info: fine if decorative). The iOS simulator has no VoiceOver, so this is how an agent checks "every control is announced"; it cannot judge colour contrast or clipped text. Controls cut off by a screen or list edge or under a tab/navigation bar are not judged; the summary line names them so you can scroll them into view. |
 | `ui type <text>` | With a target, focuses the field and replaces its content; without one, appends to the focused field. On Android, typing without a target fails (`ELEMENT_NOT_FOUND`) when the screen shows a text field but no focused element and the keyboard is down, instead of reporting characters that went nowhere; pass `--text`, `--ref` or `--id`. `--delay-ms` pauses between keystrokes, for fields that drop fast input (Compose Multiplatform on iOS). After a fill, Tapdance reads the field back: if it does not hold exactly the typed text, it fills again at 80 ms and then 150 ms between keystrokes, and fails with what the field shows if it still differs (secure fields are not read back). |
 | `ui swipe` | `--direction` is the finger's direction: `up` scrolls content down. `--until <text>` scrolls one swipe at a time (at most 10) until an element whose label or value contains the text (any case) is on screen; a list row whose label merges several texts still matches. It stops with `ELEMENT_NOT_FOUND` at the end of the list. `--from`/`--to` take points like `120,640`. |
@@ -535,7 +535,8 @@ tapdance view --tailscale [--port <port>]
 Serves a live view of this session's device on `127.0.0.1:4710` (from `viewer.host` and `viewer.port`)
 and prints a link with a one-time key. The page shows the live screen and accepts tap, swipe, scroll,
 keys, Home/Back, screenshots and recordings. A touch takes control from the agent for
-`viewer.humanHoldMs` (agent calls get `HUMAN_HELD`); "Hand back" returns it.
+`viewer.humanHoldMs` (agent calls get `HUMAN_HELD`); **Take over** holds it for 10 minutes whether or
+not the person touches the screen (the error then says "took over"); "Hand back" returns it.
 
 Public addresses are refused. `--host 0.0.0.0` is allowed with a warning: anyone who can reach the
 port and has the link can control the device. Prefer loopback plus `ssh -L` or a private network. Stops
@@ -1567,7 +1568,8 @@ Commands:
                              alike, unlabelled images (what VoiceOver or
                              TalkBack would trip over)
   inspect [options]          List on-screen elements with refs, roles and labels
-  tap [options]              Tap one element
+  tap [options] [ref]        Tap one element (a ref from `ui inspect` may be
+                             given as the argument: `ui tap @e7`)
   swipe [options]            Swipe by finger direction (up scrolls content down)
                              or between two points
   type [options] <text>      Type text; with a target, replace that field's
@@ -1625,9 +1627,10 @@ Options:
 ### `tapdance ui tap`
 
 ```text
-Usage: tapdance ui tap [options]
+Usage: tapdance ui tap [options] [ref]
 
-Tap one element
+Tap one element (a ref from `ui inspect` may be given as the argument: `ui tap
+@e7`)
 
 Options:
   --text <text>          visible text or accessibility label

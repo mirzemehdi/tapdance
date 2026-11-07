@@ -683,6 +683,23 @@ A Linux VPS drove the rented Mac mini through the CLI and MCP: all six checklist
   `SSH_ASKPASS`; #126, #127), `host warm android=0,ios=0` before the checklists, and the newest kept
   build for the app zip.
 
+### After the VPS run (#126, #127, #128, #130, #131)
+
+- `ui tap @e3` takes a ref from `ui inspect` as its argument (it said "too many arguments"); other text
+  there is refused with a pointer to `--text` (#131). Unit-tested.
+- `HUMAN_HELD` says when the person pressed **Take over**: that hold lasts 10 minutes and does not lapse
+  when they stop touching, so the hint now says to retry after "Hand back" (#131). Unit-tested.
+- A screen read that runs past 15 s sends progress ("Still reading the screen (15 s): the host is slow
+  to answer"), and one that took 30 s or more says so in its warnings (#128). Unit-tested; the read
+  itself is not shortened (agent-device's own 90 s request timeout still applies).
+- The viewer shows what the host sends under the screen (size, fps, kbit/s), and the docs name the
+  host's encoder settings (`capabilities.stream.maxDimension`, default 720 px; `bitrateKbps`, default
+  1500; `fps`) (#130). Not checked in a browser against a host.
+- Docs: with no second machine, host builds use a deploy key made on the Mac
+  (`host builds key --repo`, public key only; the owner adds it from any browser), so no GitHub token
+  passes through the agent (#127; the deploy-key path itself is not yet run on a rented Mac); the VPS's
+  ssh key goes in when renting (#126).
+
 ### Not yet proven
 
 A gateway across two machines over a real network, Google's Android CLI on a remote host, a full
