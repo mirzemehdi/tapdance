@@ -93,7 +93,10 @@ account, tokens, caches) goes with it. The rows above are what lives **outside**
 
 ## Leftovers check
 
-Read-only; the owner runs it with their own `scw` login:
+Read-only; the owner runs it with their own `scw` login. An agent's machine without the `scw` CLI and
+the owner's Scaleway credentials (a Linux VPS, as in stage 4) exits 2 ("could not check"): there it is an
+owner step, run on a machine where `scw init` was done, and the agent records "to be run by the owner".
+Never ask the owner to hand over Scaleway keys for it.
 
 ```bash
 infrastructure/scripts/scaleway-leftovers.sh

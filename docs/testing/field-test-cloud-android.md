@@ -176,6 +176,9 @@ Run `check-kvm.sh` after the setup script, not before: on a fresh VM it reports 
 emulator check (no SDK yet). Before setup, only its `vmx`, kvm module and `/dev/kvm` lines tell you
 anything. It finds the SDK in `~/Android/Sdk`, where the setup script installs it.
 
+- On a VM that has just booted, Ubuntu's own boot-time `apt-get` can still hold the apt lock, and the
+  script then fails at the install step (stage 4, 2026-11-07). Wait until `pgrep -a apt` prints nothing
+  (or `sudo cloud-init status --wait`), then run the script again; nothing needs undoing.
 - The script installs the `google_apis` image. A checklist with Play Billing or a Play sign-in needs
   `--play-store` (the `google_apis_playstore` image) and leases with `--image-tag google_apis_playstore`.
 - The list before "Install them now?" names the emulator libraries (`libpulse0 libxkbfile1 libxi6

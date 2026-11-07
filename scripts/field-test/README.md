@@ -112,8 +112,13 @@ A JSON array of steps:
 ## Two hosts (stage 4)
 
 Connect both hosts with the same scratch home, then run both drivers in **one session each** (Android
-then iOS), and the one-host-down check after stopping one host (`tapdance host pause`, or `tailscale
-down`, on it):
+then iOS), and the one-host-down check after stopping only the guard on one host. On a Mac:
+`launchctl bootout gui/$(id -u)/dev.tapdance.guard`, back with `launchctl bootstrap gui/$(id -u)
+~/Library/LaunchAgents/dev.tapdance.guard.plist`; on Linux: `systemctl --user stop tapdance-guard`, back
+with `start`. Do not use `tapdance host pause` or `tailscale down` for this: they also remove `tailscale
+serve` or the tailnet login, and a rented Mac may then need the owner to log it into Tailscale again
+(stage 4, 2026-11-07). With `tailscale serve` still up, the lease error says the host's healthz
+"answered HTTP 502"; with the host gone, ECONNREFUSED/ECONNRESET or a timeout.
 
 ```bash
 export TAPDANCE_HOME="$HOME/td-stage4-home" TAPDANCE_SESSION_ID=stage4-cli
@@ -126,6 +131,9 @@ scripts/field-test/cli-checklist.sh host-down out/cli-mac-down --param DOWN_PLAT
 TAPDANCE_SESSION_ID=stage4-mcp-down node scripts/field-test/mcp-checklist.mjs scripts/field-test/checklists/mcp-host-down.json out/mcp-mac-down \
   --param DOWN_PLATFORM=ios --param DOWN_TARGET=mac --param UP_PLATFORM=android
 ```
+
+To move a target to another address (for example from an SSH tunnel to its tailnet name), connect the
+new endpoint with the same `--name`; the target keeps its place and the old address's token is removed.
 
 Leave out `ANDROID_TARGET` / `IOS_TARGET` to test routing by platform alone. The `host-down` suites expect
 `doctor` to exit 0 (one host usable) and the lease error to name the down target.

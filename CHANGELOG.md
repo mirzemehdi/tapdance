@@ -62,7 +62,11 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
-### Stage 4: one agent, several hosts (unit-tested; field run TBD)
+### Stage 4: one agent, several hosts
+
+Proven on 2026-11-07 from a Linux VPS with a Google Cloud N2 host (Android) and a rented Mac mini (iOS)
+([evidence](docs/testing/evidence/2026-11-07-two-hosts-android-ios.md), [guide](docs/guides/android-and-ios.md)).
+
 
 - `tapdance connect <endpoint>` adds the host as a named connect target (`--name`, `--platform`)
   instead of replacing the endpoint; its token is saved per origin in `credentials.json` (`tokens`,
@@ -81,6 +85,10 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
   gateway's `/v1/status`, with a row per worker, instead of failing "capability not reported".
 - Field-test drivers: `cli-checklist.sh` suites `two-hosts` and `host-down`; MCP checklists
   `mcp-two-hosts.json` and `mcp-host-down.json`, and `expectError` steps.
+- From the field run: `connect <endpoint> --name <existing>` moves that target to the new endpoint (keeps
+  its place and platforms, drops the old address's token) instead of refusing; `doctor` reports a target
+  that does not answer within the 5 s lease probe as down at once, instead of after its own two 15 s tries
+  (about 30 s with a hung host).
 
 ### Added in the field-test round (issues #1–#19)
 
