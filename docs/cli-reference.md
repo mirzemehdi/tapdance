@@ -363,12 +363,13 @@ this machine. An `.aab` is first turned into a universal APK with
 `APP_PATH_INVALID` and an install hint. An `.ipa` on a simulator is refused. `--app-id` gives the
 package or bundle id when the backend needs it.
 
-`install --from-ci` (Android leases only) installs an APK that your CI built instead of a local file:
-the device's host downloads the GitHub Actions artifact `--artifact` with its own `gh` login and
-installs its newest `.apk`. `--run` names the workflow run; otherwise the host takes the newest
+`install --from-ci` installs an app that your CI built instead of a local file: the device's host
+downloads the GitHub Actions artifact `--artifact` with its own `gh` login and installs its newest
+`.apk` (Android) or its simulator `.app` (iOS, #121: the `.app` folder, an artifact that is the `.app`'s
+own contents, or one zipped `.app` inside it; a device build or an `.ipa` is refused; unit-tested only). `--run` names the workflow run; otherwise the host takes the newest
 successful run on `--branch` (default: the repository's default branch) that has the artifact. Give a
 path or `--from-ci`, not both. It needs a worker guard whose owner allowed the repository with
-`tapdance host artifacts enable`; iOS leases are refused with `NOT_SUPPORTED`. Ran on a Google Cloud N2
+`tapdance host artifacts enable`. The Android path ran on a Google Cloud N2
 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). For example:
 
 ```bash
@@ -633,7 +634,8 @@ over ssh `host up` does not offer the clipboard: copy the token file with `scp`)
 | `host warm` | Show the warm-spare setting (Simlock's default, set by `host warm`, or off) and the spares the worker keeps now, with how many are ready. |
 | `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--gradle-idle-minutes <n>] [--no-check] [--allow-admin-account]` / `host builds disable [--repo <url>]…` / `host builds status [--check]` / `host builds key [--repo <url>] [--remove]` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it, then checks that this machine can read each `--repo` with that auth (`git ls-remote <url> HEAD` with the same key or `gh`) and prints a warning with the fix when it cannot; `--no-check` skips that, for offline setup. `--gradle-idle-minutes` sets how long an idle Gradle and Kotlin daemon of an Android build stays alive (default 10; 0 builds with `--no-daemon`). `disable` turns builds off and keeps the list; `disable --repo <url>` removes that URL from the list and leaves builds on (the ssh and https URLs of a repository are separate entries). `key` creates a read-only deploy key and prints its public half and fingerprint; with `--repo` the key is for that repository only and its ssh builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `key --remove` deletes the key (with `--repo`, that repository's; without, the shared one) and prints its fingerprint so you delete it on GitHub too. `status` lists each repository with its deploy key (`not used (https)` next to an https URL) and number of build files; `--check` adds whether this machine can read it. Output keeps the repository's case as you typed it. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
 | `host builds files add --repo <url> <path-in-repo> [--from <file>]` / `host builds files list [--repo <url>]` / `host builds files remove --repo <url> <path-in-repo>` | Build files: config a repository keeps out of git (`google-services.json`, `local.properties`, `.env`), copied into the checkout before each build of that repository and removed after it. `add` reads `--from` or stdin (at most 1 MB, 50 files per repository) and refuses absolute paths, `..`, `.git` and `.gitmodules`; `list` shows path, size and the start of the sha256, never the content. Owner-only: no guard route or MCP tool reads or writes them. |
-| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>] [--no-check]` / `host artifacts disable [--repo <owner/repo>]…` / `host artifacts status [--check]` | Let the agent install Android APKs your CI built (`app install --from-ci`): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `enable` then checks that `gh` can read each `--repo` and list its Actions artifacts and warns with the fix when it cannot (`--no-check` skips it). `disable --repo` removes repositories from the list and leaves installs from CI on. `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in; `--check` also tries each repository. `enable` and `disable` restart the guard when no lease is running. Ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>] [--no-check]` / `host artifacts disable [--repo <owner/repo>]…` / `host artifacts status [--check]` | Let the agent install apps your CI built (`app install --from-ci`: Android APKs, iOS simulator `.app`s): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's Android lease. Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `enable` then checks that `gh` can read each `--repo` and list its Actions artifacts and warns with the fix when it cannot (`--no-check` skips it). `disable --repo` removes repositories from the list and leaves installs from CI on. `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in; `--check` also tries each repository. `enable` and `disable` restart the guard when no lease is running. Ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)). |
+| `host gh-login` | Logs this machine's `gh` in to github.com with a token it reads with echo off at the terminal (or from stdin: `tapdance host gh-login < token-file`), for builds with `--git-auth gh` and installs from CI. The token goes to `gh auth login --with-token` on stdin and is never printed; `gh auth login --with-token` alone echoes a pasted token over `ssh -t` (#122). Then it runs `gh auth status`. Unit-tested with a stand-in `gh`. |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default; `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
 
@@ -1385,8 +1387,9 @@ Commands:
                             machine); iOS simulator .app bundle, or a .zip or
                             .tar holding one (.ipa on a physical iPhone only).
                             With --from-ci instead of a path: the device's host
-                            downloads an Android APK from a GitHub Actions
-                            artifact with its own credentials and installs it
+                            downloads the app from a GitHub Actions artifact
+                            with its own credentials and installs it (an Android
+                            APK, or an iOS simulator .app)
   launch [options] <appId>  Launch an installed app
   uninstall <appId>         Remove an installed app
   clear <appId>             Clear an app's data (first-launch state); iOS also:
@@ -1412,14 +1415,15 @@ Usage: tapdance app install [options] [path]
 Upload and install an app: Android .apk or .aab (an .aab becomes a universal APK
 with bundletool on this machine); iOS simulator .app bundle, or a .zip or .tar
 holding one (.ipa on a physical iPhone only). With --from-ci instead of a path:
-the device's host downloads an Android APK from a GitHub Actions artifact with
-its own credentials and installs it
+the device's host downloads the app from a GitHub Actions artifact with its own
+credentials and installs it (an Android APK, or an iOS simulator .app)
 
 Options:
   --app-id <id>      package / bundle id, when the backend needs it
-  --from-ci <repo>   Android: install from the user's CI instead of a path: a
-                     GitHub repository (owner/repo or URL) on the host's
-                     allow-list (`tapdance host artifacts enable`)
+  --from-ci <repo>   install from the user's CI instead of a path (an APK, or an
+                     iOS simulator .app): a GitHub repository (owner/repo or
+                     URL) on the host's allow-list (`tapdance host artifacts
+                     enable`)
   --artifact <name>  with --from-ci: the artifact's name
                      (actions/upload-artifact name)
   --run <id>         with --from-ci: the workflow run id (default: the newest
@@ -2234,6 +2238,10 @@ Commands:
                            setting and spares
   builds                   Let the agent build apps on this machine from
                            allow-listed git repositories (off by default)
+  gh-login                 Log this machine's gh in with a GitHub token read
+                           with echo off (or from stdin), for builds with
+                           --git-auth gh and installs from CI; never prints the
+                           token
   artifacts                Let the agent install Android APKs your CI built
                            (GitHub Actions artifacts), downloaded by this
                            machine with its own gh (off by default)
@@ -2459,6 +2467,18 @@ Commands:
   remove [options] <path-in-repo>  Remove a build file; the next build runs
                                    without it
   help [command]                   display help for command
+```
+
+### `tapdance host gh-login`
+
+```text
+Usage: tapdance host gh-login [options]
+
+Log this machine's gh in with a GitHub token read with echo off (or from stdin),
+for builds with --git-auth gh and installs from CI; never prints the token
+
+Options:
+  -h, --help  display help for command
 ```
 
 ### `tapdance host artifacts`

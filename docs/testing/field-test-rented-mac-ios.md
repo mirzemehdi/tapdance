@@ -127,8 +127,7 @@ typed. Use the owner's key: `ssh -i ~/.ssh/<key> m1@<mac-ip>`.
 6. **Token to the agent's machine:** `scp mac:.tapdance/worker/pairing-<agent>.token <scratch>/` (mode 600; never
    print it).
 7. **Host builds (checkpoint 8):** the owner logs `gh` in with a hidden read
-   (`ssh -t mac 'read -rs T && printf "%s\n" "$T" | gh auth login --hostname github.com --with-token; unset T'`;
-   `gh auth login --with-token` alone echoes the token), then
+   (`ssh -t mac 'tapdance host gh-login'`; `gh auth login --with-token` alone echoes the token), then
    `ssh mac 'tapdance host builds enable --repo https://github.com/<owner>/<repo> --git-auth gh --protected-ref main --allow-admin-account'`.
 
 ## Connect and run the checklists

@@ -48,7 +48,7 @@ On the host, as the account that runs the guard. Install the [GitHub CLI](https:
 it is missing (Ubuntu: `sudo apt-get install -y gh`; macOS: `brew install gh`), then:
 
 ```bash
-read -rsp "GitHub token: " t && echo && printf '%s' "$t" | gh auth login --with-token; unset t
+tapdance host gh-login     # reads the token with echo off and passes it to gh auth login
 gh auth status
 
 tapdance host builds enable --repo https://github.com/acme/app --git-auth gh --protected-ref main

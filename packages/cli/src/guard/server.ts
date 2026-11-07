@@ -7,7 +7,7 @@ import { dirname, join, sep } from "node:path";
 import { Readable } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
 import type { SimlockConnection } from "@tapdance/sdk";
-import { checkCiRequest, fetchCiApk, installRefusal, installRefusalHint, readApkManifest, type ApkManifest, type CiInstallRequest } from "@tapdance/provider-simlock";
+import { checkCiRequest, fetchCiApk, fetchCiApp, installRefusal, installRefusalHint, readApkManifest, type ApkManifest, type CiInstallRequest } from "@tapdance/provider-simlock";
 import { checkBuildRequest, checkTimedTaps, clearConsole, consolePaths, crashReportsDir, listCrashReports, playTouches, toFramebuffer, viewportFromConfig, type Orientation, parseExecStream, readConsole, readCrashReport, runBuild, type BuildRequest, type BuildSettings, type CommandRunner } from "@tapdance/provider-simlock";
 import { GuardTokens, audit, guardDir, scopedPolicy, type GuardPolicy, type GuardToken } from "./policy.js";
 import { execOf, filesOf, policyOff, routeOf, rpcOf, type FileRequest } from "./rules.js";
@@ -482,15 +482,25 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   };
 
   /**
-   * Fetches an APK from the user's CI with this host's gh and installs it on the lease, streaming
-   * progress as NDJSON lines like the build route. The agent names a repository and an artifact; the
-   * host picks the run, the URL and every path.
+   * Fetches an APK (Android) or a simulator .app (iOS, #121) from the user's CI with this host's gh and
+   * installs it on the lease, streaming progress as NDJSON lines like the build route. The agent names
+   * a repository and an artifact; the host picks the run, the URL and every path.
    */
-  const runCiInstallRoute = async (res: ServerResponse, leaseId: string, request: CiInstallRequest, decide: (d: "allow" | "deny", e?: { reason?: string; command?: string; leaseId?: string }) => Promise<void>) => {
+  const runCiInstallRoute = async (res: ServerResponse, leaseId: string, request: CiInstallRequest, decide: (d: "allow" | "deny", e?: { reason?: string; command?: string; leaseId?: string }) => Promise<void>, platform: "android" | "ios" = "android") => {
     fetching = true;
     res.writeHead(200, { "content-type": "application/x-ndjson", "cache-control": "no-store" });
     const line = (value: unknown) => res.write(`${JSON.stringify(value)}\n`);
     try {
+      if (platform === "ios") {
+        const app = await fetchCiApp(request, hostPolicy.artifacts, join(guardDir(env), "artifacts"), (l) => line({ log: redactSecrets(l) }), options.ciRunner);
+        const what = `${app.repo} run ${app.runId} sha ${app.sha} branch ${app.branch} artifact ${app.artifact}${app.cached ? " (cached)" : ""}`;
+        line({ log: `Installing ${app.artifact}${app.appId ? ` (${app.appId})` : ""} on the lease` });
+        const install = await execUpstream(leaseId, "simctl", ["install", app.app]);
+        if (install.exitCode !== 0) throw installFailed("Installing the app failed", (install.stderr || install.stdout).trim(), false, undefined);
+        await decide("allow", { command: `ci-install installed ${what}${app.appId ? ` app ${app.appId}` : ""}`, leaseId });
+        line({ result: { repo: app.repo, runId: app.runId, sha: app.sha, branch: app.branch, artifact: app.artifact, cached: app.cached, installed: true, ...(app.appId ? { appId: app.appId } : {}) } });
+        return;
+      }
       const apk = await fetchCiApk(request, hostPolicy.artifacts, join(guardDir(env), "artifacts"), (l) => line({ log: redactSecrets(l) }), options.ciRunner);
       const what = `${apk.repo} run ${apk.runId} sha ${apk.sha} branch ${apk.branch} artifact ${apk.artifact} apk sha256 ${apk.apkSha256.slice(0, 12)}${apk.cached ? " (cached)" : ""}`;
       const manifest = await readApkManifest(apk.apk);
@@ -714,9 +724,9 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             // The platform is the lease's, not whatever the client says.
             const detail = await doFetch(`${upstream.baseUrl}/v1/leases/${r.leaseId}`, { headers: upstreamHeaders });
             const platform = detail.ok ? ((await detail.json()) as { lease?: { platform?: string } }).lease?.platform : undefined;
-            if (platform !== "android") {
-              await decide("deny", { reason: "ci-install is for Android leases", leaseId: r.leaseId, command: "ci-install" });
-              return send(res, 400, "NOT_SUPPORTED", "Installing from CI works for Android leases only", "For an iOS simulator, upload a simulator .app with `tapdance app install <path>`, or build it on the host with `tapdance app build`.");
+            if (platform !== "android" && platform !== "ios") {
+              await decide("deny", { reason: "ci-install needs an Android or iOS simulator lease", leaseId: r.leaseId, command: "ci-install" });
+              return send(res, 400, "NOT_SUPPORTED", "Installing from CI works for Android emulators and iOS simulators");
             }
             let request: CiInstallRequest;
             try {
@@ -727,7 +737,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
               return send(res, e.code === "FORBIDDEN" ? 403 : 400, e.code, e.message, e.hint);
             }
             await decide("allow", { command: `ci-install ${request.repo} artifact ${request.artifact}${request.run ? ` run ${request.run}` : ""}${request.branch ? ` branch ${request.branch}` : ""}`, leaseId: r.leaseId });
-            await runCiInstallRoute(res, r.leaseId, request, decide);
+            await runCiInstallRoute(res, r.leaseId, request, decide, platform);
             return;
           }
           if (r.action === "touches") {

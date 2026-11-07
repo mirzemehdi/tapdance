@@ -810,7 +810,7 @@ describe("worker guard: hardening", () => {
       expect(installs(t)).toHaveLength(0);
     });
 
-    it("refuses another client's lease, an iOS lease, repositories off the list and injection in every field, before gh runs", async () => {
+    it("refuses another client's lease, repositories off the list and injection in every field (also on an iOS lease, #121), before gh runs", async () => {
       const gh = fakeGh();
       const t = await setup(on({ branches: ["main"] }), { leasePlatform: "android" }, { ciRunner: gh.runner });
       await t.allocate(t.alice.secret, A);
@@ -834,10 +834,12 @@ describe("worker guard: hardening", () => {
       }
       const ios = await setup(on(), { leasePlatform: "ios" }, { ciRunner: gh.runner });
       await ios.allocate(ios.alice.secret, A);
-      const refused = await ciInstall(ios, ios.alice.secret, body);
-      expect(refused.status).toBe(400);
-      expect(await refused.json()).toMatchObject({ error: { code: "NOT_SUPPORTED", hint: expect.stringContaining("tapdance app install <path>") } });
+      for (const b of [{ repo: "evil/app", artifact: "app" }, { repo: "acme/app", artifact: "../../etc/passwd" }, { repo: "acme/app", artifact: "app", path: "/Users/owner/.ssh/id_ed25519" }]) {
+        const refused = await ciInstall(ios, ios.alice.secret, b);
+        expect([400, 403], JSON.stringify(b)).toContain(refused.status);
+      }
       expect(gh.calls).toHaveLength(0);
+      expect(installs(ios)).toHaveLength(0);
       expect(installs(t)).toHaveLength(0);
     });
 
@@ -893,6 +895,36 @@ describe("worker guard: hardening", () => {
       expect(gh.downloads()).toBe(1);
       const log = await readFile(join(t.home, "worker", "audit.log"), "utf8");
       expect(log).toContain(`ci-install installed acme/app run 42 sha ${SHA} branch main artifact app-debug`);
+    });
+
+    // #121, mocked gh and plutil: an iOS lease installs a simulator .app with simctl; a device build and
+    // a link inside the app are refused before anything is installed.
+    it("installs a simulator .app on an iOS lease and refuses a device build or a link (#121)", async () => {
+      const app = (extra: Array<{ name: string; data: Buffer; mode?: number }> = []) =>
+        zipOf([{ name: "Demo.app/Info.plist", data: Buffer.from("plist") }, { name: "Demo.app/Demo", data: Buffer.from([0xcf, 0xfa, 0xed, 0xfe]) }, ...extra]);
+      const withPlutil = (gh: ReturnType<typeof fakeGh>, platforms: string[]): import("@tapdance/provider-simlock").CommandRunner => async (command, args, o) =>
+        command === "plutil" ? { code: 0, output: JSON.stringify({ CFBundleIdentifier: "com.acme.demo", CFBundleSupportedPlatforms: platforms }) } : gh.runner(command, args, o);
+      const gh = fakeGh({ zip: app() });
+      const t = await setup(on(), { leasePlatform: "ios" }, { ciRunner: withPlutil(gh, ["iPhoneSimulator"]) });
+      await t.allocate(t.alice.secret, A);
+      const out = await lines(await ciInstall(t, t.alice.secret, body));
+      expect(out.at(-1)!.result).toMatchObject({ runId: "42", installed: true, appId: "com.acme.demo" });
+      const install = JSON.parse(installs(t)[0]!.body) as { tool: string; args: string[] };
+      expect(install.tool).toBe("simctl");
+      expect(install.args[0]).toBe("install");
+      expect(install.args[1]!.startsWith(join(t.home, "worker", "artifacts"))).toBe(true);
+      expect(install.args[1]!.endsWith("Demo.app")).toBe(true);
+      for (const [zip, platforms, reason] of [
+        [app(), ["iPhoneOS"], /not a simulator build/],
+        [app([{ name: "Demo.app/evil", data: Buffer.from("/Users/owner/.ssh"), mode: 0o120777 }]), ["iPhoneSimulator"], /symbolic link/],
+      ] as const) {
+        const bad = fakeGh({ zip });
+        const u = await setup(on(), { leasePlatform: "ios" }, { ciRunner: withPlutil(bad, [...platforms]) });
+        await u.allocate(u.alice.secret, A);
+        const refused = await lines(await ciInstall(u, u.alice.secret, body));
+        expect(refused.at(-1)!.error?.message).toMatch(reason);
+        expect(installs(u)).toHaveLength(0);
+      }
     });
 
     it("names the installed package, and the real package in a downgrade hint (#89)", async () => {

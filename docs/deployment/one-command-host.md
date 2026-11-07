@@ -255,7 +255,7 @@ compromised host would give away, in [private repositories](../guides/private-re
 
 | Way | Commands on the host | Covers |
 | --- | --- | --- |
-| A fine-grained, read-only GitHub token (recommended on a cloud VM) | `gh auth login --with-token`, then `tapdance host builds enable --repo https://github.com/acme/app --git-auth gh` | The repositories you select, and GitHub submodules among them |
+| A fine-grained, read-only GitHub token (recommended on a cloud VM) | `tapdance host gh-login` (reads it with echo off), then `tapdance host builds enable --repo https://github.com/acme/app --git-auth gh` | The repositories you select, and GitHub submodules among them |
 | A deploy key per repository | `tapdance host builds key --repo git@github.com:acme/app.git`, add the public key read-only, then `host builds enable --repo git@github.com:acme/app.git` | That one repository. Organizations can turn deploy keys off; then use the token |
 | No repository access | None: build in CI or on the agent's machine, then `tapdance app install` ([build in CI](../guides/ci-builds.md)) | Nothing on the host |
 

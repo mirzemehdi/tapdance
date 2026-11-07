@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { chmod, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createInflateRaw, crc32 } from "node:zlib";
@@ -10,13 +10,15 @@ import { hostNetworkHint, spawnRunner, type CommandRunner } from "./build.js";
 import { repoDisplay, repoSlug } from "./build-files.js";
 
 /**
- * Installs an Android APK that the user's own CI built (a GitHub Actions artifact) on a lease. The
+ * Installs an app that the user's own CI built (a GitHub Actions artifact) on a lease: an Android APK,
+ * or an iOS simulator .app (#121). The
  * host downloads it with its own `gh auth` (a fine-grained, read-only token), so the agent never holds
  * a GitHub credential and the APK never crosses the agent's link to the host. The worker guard runs
  * it; nothing here is reachable without `allow.artifacts`.
  *
  * Unlike a build on the host, nothing from the repository runs on this machine: the host only reads
- * the GitHub API, unpacks one .apk from the artifact's zip (without a zip tool) and installs it with adb.
+ * the GitHub API, unpacks one .apk (or one .app folder) from the artifact's zip (without a zip tool)
+ * and installs it with adb (or simctl).
  */
 
 export interface CiInstallRequest {
@@ -51,6 +53,13 @@ export interface CiApk {
   apkSha256: string;
   /** The same run's artifact was downloaded before: that copy was used. */
   cached: boolean;
+}
+
+export interface CiApp extends Omit<CiApk, "apk" | "apkSha256"> {
+  /** The simulator .app folder on this machine. */
+  app: string;
+  /** CFBundleIdentifier from its Info.plist. */
+  appId?: string;
 }
 
 export const ARTIFACT_NAME = /^(?![-.])[A-Za-z0-9._-]{1,100}$/;
@@ -128,7 +137,7 @@ function branchAllowed(branch: string, settings: ArtifactSettings, repo: string)
 
 /** What the host owner does when the host's gh cannot read the repository. */
 export const OWNER_GH_HINT =
-  "Only the host's owner can fix this (an agent cannot): on the host, run `gh auth login --with-token` with a fine-grained, read-only GitHub token for this repository (permissions Actions: read and Contents: read). `tapdance host artifacts status` on the host shows whether gh works.";
+  "Only the host's owner can fix this (an agent cannot): on the host, run `tapdance host gh-login` (or `gh auth login --with-token`) with a fine-grained, read-only GitHub token for this repository (permissions Actions: read and Contents: read). `tapdance host artifacts status` on the host shows whether gh works.";
 
 /** gh's environment: never prompts, never pages, no colour codes in its output. */
 export function ghEnv(): NodeJS.ProcessEnv {
@@ -236,6 +245,37 @@ export async function fetchCiApk(
   onLine: (line: string) => void,
   run: CommandRunner = spawnRunner,
 ): Promise<CiApk> {
+  const r = await fetchCiArtifact(req, settings, root, onLine, run, "apk");
+  return { ...r.base, apk: r.path, apkSha256: r.digest, cached: r.cached };
+}
+
+/**
+ * Like fetchCiApk for an iOS simulator app (#121): unpacks the artifact's .app folder (or a zipped .app
+ * inside it, or an artifact that is the .app's own contents), refuses a device build, and returns where
+ * it is and its bundle id.
+ */
+export async function fetchCiApp(
+  req: CiInstallRequest,
+  settings: ArtifactSettings,
+  root: string,
+  onLine: (line: string) => void,
+  run: CommandRunner = spawnRunner,
+): Promise<CiApp> {
+  const r = await fetchCiArtifact(req, settings, root, onLine, run, "app");
+  const appId = await simulatorAppId(r.path, run);
+  return { ...r.base, app: r.path, ...(appId ? { appId } : {}), cached: r.cached };
+}
+
+type ArtifactKind = "apk" | "app";
+
+async function fetchCiArtifact(
+  req: CiInstallRequest,
+  settings: ArtifactSettings,
+  root: string,
+  onLine: (line: string) => void,
+  run: CommandRunner,
+  kind: ArtifactKind,
+): Promise<{ base: Omit<CiApk, "apk" | "apkSha256" | "cached">; path: string; digest: string; cached: boolean }> {
   const repo = req.repo;
   const env = ghEnv();
   const maxBytes = settings.maxMB * 1024 * 1024;
@@ -299,17 +339,17 @@ export async function fetchCiApk(
   const base = { repo, runId, sha: chosen.run.head_sha, branch: chosen.run.head_branch ?? "", artifact: req.artifact, artifactId };
   if (!(chosen.artifact.size <= maxBytes)) {
     throw new TapdanceError("FORBIDDEN", `Artifact ${req.artifact} is ${Math.ceil(chosen.artifact.size / 1024 / 1024)} MB; this host installs artifacts up to ${settings.maxMB} MB`, {
-      hint: "Upload only the debug APK in that artifact, or ask the host owner to raise the limit: tapdance host artifacts enable --repo <owner/repo> --max-mb <n>",
+      hint: "Upload only the debug app in that artifact, or ask the host owner to raise the limit: tapdance host artifacts enable --repo <owner/repo> --max-mb <n>",
     });
   }
 
   const repoDir = join(root, repoSlug(`https://github.com/${repo}`));
   const dir = join(repoDir, `${runId}-${artifactId}`);
-  const cached = await readCached(dir);
+  const cached = await readCached(dir, kind);
   if (cached) {
     onLine(`Using the copy of ${req.artifact} from run ${runId} this host downloaded before`);
     await touchCached(dir, cached);
-    return { ...base, apk: join(dir, "app.apk"), apkSha256: cached.apkSha256, cached: true };
+    return { base, path: cachedPath(dir, cached), digest: cached.apkSha256, cached: true };
   }
 
   await ownerDir(root);
@@ -327,22 +367,32 @@ export async function fetchCiApk(
     }
     if (r.truncated) throw new TapdanceError("FORBIDDEN", `Artifact ${req.artifact} is larger than this host's limit of ${settings.maxMB} MB`, { hint: "Upload only the debug APK in that artifact." });
     if (r.code !== 0) throw ghFailure(r.output, `downloading artifact ${req.artifact}`, repo, r.code);
-    const entry = await extractApk(zip, join(work, "app.apk"), maxBytes);
+    let entry: string;
+    let apkSha256: string;
+    if (kind === "apk") {
+      entry = await extractApk(zip, join(work, "app.apk"), maxBytes);
+      apkSha256 = createHash("sha256").update(await readFile(join(work, "app.apk"))).digest("hex");
+    } else {
+      const app = await extractApp(zip, join(work, "app"), maxBytes, work);
+      entry = app.entry;
+      apkSha256 = app.digest;
+    }
     await rm(zip, { force: true });
-    const apkSha256 = createHash("sha256").update(await readFile(join(work, "app.apk"))).digest("hex");
-    const meta: CacheMeta = { ...base, entry, apkSha256, fetchedAt: new Date().toISOString(), usedAt: new Date().toISOString() };
+    const meta: CacheMeta = { ...base, kind, entry, apkSha256, fetchedAt: new Date().toISOString(), usedAt: new Date().toISOString() };
     await writeFile(join(work, "meta.json"), `${JSON.stringify(meta, null, 2)}\n`, { mode: 0o600 });
     await rm(dir, { recursive: true, force: true });
     await rename(work, dir);
-    onLine(`Unpacked ${entry} (sha256 ${apkSha256.slice(0, 12)})`);
+    onLine(`Unpacked ${entry} (${kind === "apk" ? "sha256" : "digest"} ${apkSha256.slice(0, 12)})`);
     await pruneCache(repoDir);
-    return { ...base, apk: join(dir, "app.apk"), apkSha256, cached: false };
+    return { base, path: cachedPath(dir, meta), digest: apkSha256, cached: false };
   } finally {
     await rm(work, { recursive: true, force: true });
   }
 }
 
 interface CacheMeta {
+  /** Absent in caches written before iOS artifacts (#121): those hold an APK. */
+  kind?: ArtifactKind;
   repo: string;
   runId: string;
   sha: string;
@@ -355,14 +405,26 @@ interface CacheMeta {
   usedAt: string;
 }
 
-async function readCached(dir: string): Promise<CacheMeta | undefined> {
+async function readCached(dir: string, kind: ArtifactKind): Promise<CacheMeta | undefined> {
   try {
     const meta = JSON.parse(await readFile(join(dir, "meta.json"), "utf8")) as CacheMeta;
+    if ((meta.kind ?? "apk") !== kind) return undefined;
+    if (kind === "app") {
+      const app = cachedPath(dir, meta);
+      return existsSync(join(app, "Info.plist")) && (await treeDigest(app)) === meta.apkSha256 ? meta : undefined;
+    }
     const apk = await readFile(join(dir, "app.apk"));
     return createHash("sha256").update(apk).digest("hex") === meta.apkSha256 ? meta : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** Where a cached download's app is: the APK file, or the .app folder under app/. */
+function cachedPath(dir: string, meta: Pick<CacheMeta, "kind" | "entry">): string {
+  if ((meta.kind ?? "apk") === "apk") return join(dir, "app.apk");
+  const name = meta.entry.split("/").filter(Boolean).pop() ?? "App.app";
+  return join(dir, "app", /\.app$/.test(name) ? name : "App.app");
 }
 
 async function touchCached(dir: string, meta: CacheMeta): Promise<void> {
@@ -542,46 +604,172 @@ export async function extractApk(zipPath: string, dest: string, maxBytes: number
     const names = entries.filter((e) => !e.directory).slice(0, 10).map((e) => e.name);
     throw zipError(`holds no .apk${names.length ? ` (it has ${names.join(", ")})` : ""}`, "Have the workflow upload the APK, e.g. app/build/outputs/apk/debug/*.apk.");
   }
-  if (apk.method !== 0 && apk.method !== 8) throw zipError(`stores ${apk.name} with an unsupported compression method (${apk.method})`);
   if (apk.size === 0) throw zipError(`holds an empty ${apk.name}`);
   if (apk.size > maxBytes) throw new TapdanceError("FORBIDDEN", `${apk.name} is ${Math.ceil(apk.size / 1024 / 1024)} MB unpacked, more than this host's limit of ${Math.round(maxBytes / 1024 / 1024)} MB`);
+  await unpackEntry(zipPath, apk, dest);
+  await chmod(dest, 0o600);
+  return apk.name;
+}
+
+/** Unpacks one zip entry to `dest` (created, never overwritten), checking its size and CRC. */
+async function unpackEntry(zipPath: string, entry: ZipEntry, dest: string, mode = 0o600): Promise<void> {
+  if (entry.method !== 0 && entry.method !== 8) throw zipError(`stores ${entry.name} with an unsupported compression method (${entry.method})`);
   const fh = await open(zipPath, "r");
   let dataStart: number;
   let fileSize: number;
   try {
     fileSize = (await fh.stat()).size;
     const local = Buffer.alloc(30);
-    await fh.read(local, 0, 30, apk.localOffset);
+    await fh.read(local, 0, 30, entry.localOffset);
     if (local.readUInt32LE(0) !== 0x04034b50) throw zipError("has a damaged entry");
-    dataStart = apk.localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+    dataStart = entry.localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
   } finally {
     await fh.close();
   }
-  if (apk.compressedSize === 0 || dataStart + apk.compressedSize > fileSize) throw zipError("has a damaged entry");
+  if (entry.size === 0) {
+    await writeFile(dest, "", { mode, flag: "wx" });
+    return;
+  }
+  if (entry.compressedSize === 0 || dataStart + entry.compressedSize > fileSize) throw zipError("has a damaged entry");
   let written = 0;
   let crc = 0;
   const check = new Transform({
     transform(chunk: Buffer, _enc, done) {
       written += chunk.length;
-      if (written > apk.size) return done(zipError(`unpacks ${apk.name} to more bytes than its directory says; it was not installed`));
+      if (written > entry.size) return done(zipError(`unpacks ${entry.name} to more bytes than its directory says; it was not installed`));
       crc = crc32(chunk, crc);
       done(null, chunk);
     },
   });
-  const source = createReadStream(zipPath, { start: dataStart, end: dataStart + apk.compressedSize - 1 });
-  const sink = createWriteStream(dest, { mode: 0o600, flags: "wx" });
+  const source = createReadStream(zipPath, { start: dataStart, end: dataStart + entry.compressedSize - 1 });
+  const sink = createWriteStream(dest, { mode, flags: "wx" });
   try {
-    if (apk.method === 8) await pipeline(source, createInflateRaw(), check, sink);
+    if (entry.method === 8) await pipeline(source, createInflateRaw(), check, sink);
     else await pipeline(source, check, sink);
   } catch (error) {
     await rm(dest, { force: true });
     if (error instanceof TapdanceError) throw error;
     throw zipError(`could not be unpacked: ${(error as Error).message}`);
   }
-  if (written !== apk.size || crc >>> 0 !== apk.crc >>> 0) {
+  if (written !== entry.size || crc >>> 0 !== entry.crc >>> 0) {
     await rm(dest, { force: true });
-    throw zipError(`unpacks ${apk.name} to different content than its directory says (size or checksum); it was not installed`);
+    throw zipError(`unpacks ${entry.name} to different content than its directory says (size or checksum); it was not installed`);
   }
-  await chmod(dest, 0o600);
-  return apk.name;
+}
+
+const APP_HINT =
+  "Have the workflow upload the simulator build: `xcodebuild -sdk iphonesimulator -derivedDataPath build …`, then actions/upload-artifact with path build/Build/Products/Debug-iphonesimulator/<App>.app (or a zip of it).";
+
+/**
+ * Unpacks the iOS app of an artifact zip into `destRoot/<Name>.app` (#121). The artifact may hold the
+ * .app folder (`<Name>.app/Info.plist`), be the .app's own contents (actions/upload-artifact of the
+ * .app path keeps only what is inside it: Info.plist at the root), or hold one zipped .app
+ * (`<Name>.app.zip`, which keeps file modes). Refuses .ipa files (device builds). Mach-O files get their
+ * execute bit back (actions/upload-artifact drops file modes). Returns the entry used and a digest of
+ * the unpacked tree for the cache.
+ */
+export async function extractApp(zipPath: string, destRoot: string, maxBytes: number, scratch = dirname(destRoot), depth = 0): Promise<{ entry: string; app: string; digest: string }> {
+  const entries = await readZipEntries(zipPath);
+  checkZipEntries(entries);
+  const files = entries.filter((e) => !e.directory);
+  const plists = files
+    .map((e) => /^((?:[^/]+\/)*?)([^/]+\.app)\/Info\.plist$/.exec(e.name))
+    .filter((m): m is RegExpExecArray => m !== null)
+    .sort((a, b) => a[0].split("/").length - b[0].split("/").length);
+  let prefix: string | undefined;
+  let name = "App.app";
+  const found = plists[0];
+  if (found) {
+    prefix = `${found[1] ?? ""}${found[2] ?? ""}/`;
+    name = found[2] ?? name;
+  } else if (files.some((e) => e.name === "Info.plist")) {
+    prefix = "";
+  } else {
+    const inner = files.filter((e) => /\.zip$/i.test(e.name));
+    if (depth === 0 && inner.length === 1 && inner[0]) {
+      if (inner[0].size > maxBytes) throw new TapdanceError("FORBIDDEN", `${inner[0].name} is larger than this host's limit of ${Math.round(maxBytes / 1024 / 1024)} MB`);
+      const nested = join(scratch, `nested-${randomBytes(4).toString("hex")}.zip`);
+      await unpackEntry(zipPath, inner[0], nested);
+      try {
+        const r = await extractApp(nested, destRoot, maxBytes, scratch, 1);
+        return { ...r, entry: `${inner[0].name} › ${r.entry}` };
+      } finally {
+        await rm(nested, { force: true });
+      }
+    }
+    if (files.some((e) => /\.ipa$/i.test(e.name))) throw zipError("holds an .ipa (a device build), which cannot run on a simulator", APP_HINT);
+    const names = files.slice(0, 10).map((e) => e.name);
+    throw zipError(`holds no simulator .app${names.length ? ` (it has ${names.join(", ")})` : ""}`, APP_HINT);
+  }
+  const mine = files.filter((e) => e.name.startsWith(prefix ?? ""));
+  const total = mine.reduce((sum, e) => sum + e.size, 0);
+  if (total > maxBytes) throw new TapdanceError("FORBIDDEN", `${name} is ${Math.ceil(total / 1024 / 1024)} MB unpacked, more than this host's limit of ${Math.round(maxBytes / 1024 / 1024)} MB`);
+  const app = join(destRoot, name);
+  await mkdir(app, { recursive: true, mode: 0o700 });
+  for (const e of mine) {
+    const rel = e.name.slice((prefix ?? "").length);
+    if (rel === "") continue;
+    const dest = join(app, rel);
+    await mkdir(dirname(dest), { recursive: true, mode: 0o700 });
+    await unpackEntry(zipPath, e, dest, 0o644);
+    if (await isMachO(dest)) await chmod(dest, 0o755);
+  }
+  return { entry: prefix ? prefix.replace(/\/$/, "") : "(the artifact's own files)", app, digest: await treeDigest(app) };
+}
+
+/** Whether a file starts like a Mach-O binary (thin or fat), which needs its execute bit. */
+async function isMachO(path: string): Promise<boolean> {
+  const fh = await open(path, "r");
+  try {
+    const b = Buffer.alloc(4);
+    const { bytesRead } = await fh.read(b, 0, 4, 0);
+    if (bytesRead < 4) return false;
+    const m = b.readUInt32BE(0);
+    return m === 0xfeedfacf || m === 0xcffaedfe || m === 0xfeedface || m === 0xcefaedfe || m === 0xcafebabe;
+  } finally {
+    await fh.close();
+  }
+}
+
+/** sha256 over every file's path and content in a folder, in sorted order. */
+async function treeDigest(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  const walk = async (dir: string, rel: string): Promise<void> => {
+    for (const name of (await readdir(dir)).sort()) {
+      const full = join(dir, name);
+      const st = await stat(full);
+      if (st.isDirectory()) await walk(full, `${rel}${name}/`);
+      else {
+        hash.update(`${rel}${name}\0`);
+        hash.update(await readFile(full));
+      }
+    }
+  };
+  await walk(root, "");
+  return hash.digest("hex");
+}
+
+/**
+ * The bundle id of a simulator app, after checking it is one: its Info.plist must list iPhoneSimulator
+ * in CFBundleSupportedPlatforms (a device build would install and then fail to launch).
+ */
+async function simulatorAppId(app: string, run: CommandRunner): Promise<string | undefined> {
+  let r: { code: number; output: string };
+  try {
+    r = await run("plutil", ["-convert", "json", "-o", "-", join(app, "Info.plist")], { env: process.env, timeoutMs: 15_000, onLine: () => undefined });
+  } catch {
+    return undefined;
+  }
+  if (r.code !== 0) throw zipError("has an Info.plist this host cannot read", APP_HINT);
+  let plist: { CFBundleIdentifier?: unknown; CFBundleSupportedPlatforms?: unknown };
+  try {
+    plist = JSON.parse(r.output.slice(r.output.indexOf("{")));
+  } catch {
+    throw zipError("has an Info.plist this host cannot read", APP_HINT);
+  }
+  const platforms = Array.isArray(plist.CFBundleSupportedPlatforms) ? plist.CFBundleSupportedPlatforms.map(String) : [];
+  if (platforms.length > 0 && !platforms.includes("iPhoneSimulator")) {
+    throw zipError(`holds a ${platforms.join("/")} build, not a simulator build`, APP_HINT);
+  }
+  return typeof plist.CFBundleIdentifier === "string" ? plist.CFBundleIdentifier : undefined;
 }
