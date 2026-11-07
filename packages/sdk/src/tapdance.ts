@@ -192,6 +192,15 @@ function fingerprintOf(elements: Array<{ role: string; label?: string; value?: s
     .join("\n");
 }
 
+/**
+ * The lease command for hints, naming only the platforms this configuration can lease: an iOS-only
+ * setup must not be told to lease Android. Both (or neither) enabled → `--platform android|ios`.
+ */
+export function leaseCommand(config: Pick<ResolvedConfig["config"], "platforms">): string {
+  const enabled = (["android", "ios"] as const).filter((p) => config.platforms[p].enabled);
+  return `tapdance device lease --platform ${enabled.length === 1 ? enabled[0] : "android|ios"}`;
+}
+
 export class Tapdance {
   readonly store: SessionStore;
   readonly artifacts: LocalArtifactStore;
@@ -319,7 +328,7 @@ export class Tapdance {
         });
       }
       throw new TapdanceError("NO_ACTIVE_LEASE", "This session holds no device", {
-        hint: "Lease one first: `tapdance device lease --platform android` (MCP: lease_device).",
+        hint: `Lease one first: \`${leaseCommand(this.resolved.config)}\` (MCP: lease_device).`,
         details: { sessionId: this.session.id },
       });
     }

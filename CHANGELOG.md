@@ -670,6 +670,19 @@ Unit-tested with a stand-in `gh` and `plutil`; not yet run on a host.
   client chose) and says "the request was withdrawn" instead of "nothing was leased"; on the rented Mac
   a request granted after the client gave up held the device until its TTL.
 
+### Stage 3 from a Linux VPS (2026-11-07)
+
+A Linux VPS drove the rented Mac mini through the CLI and MCP: all six checklists passed
+([evidence](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md)).
+
+- Fixed: the "no lease" hint (`device status`, device commands, `tapdance run`) named
+  `--platform android` even on an iOS-only setup; it now names the platforms the configuration enables
+  (`--platform ios` when only iOS is on, otherwise `--platform android|ios`). Unit-tested.
+- Docs: the VPS variant of the rented-Mac runbook has a path for owners without a second machine (ssh
+  key at rent time, the console's VNC terminal, a one-time password `ssh-copy-id` through
+  `SSH_ASKPASS`; #126, #127), `host warm android=0,ios=0` before the checklists, and the newest kept
+  build for the app zip.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, Google's Android CLI on a remote host, a full
