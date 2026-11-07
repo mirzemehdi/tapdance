@@ -615,7 +615,9 @@ Runs the Simlock 0.5.0 CLI bundled with Tapdance (with Tapdance's patch), for op
 
 One command per side for device-only mode: `host up` on the Mac or Linux machine that runs the
 devices, `connect` on the machine where the agent runs. Run end to end on the owner's Mac and on a
-Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); `pause`,
+Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)), and on a
+rented Scaleway Mac mini set up over ssh for iOS ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md);
+over ssh `host up` does not offer the clipboard: copy the token file with `scp`); `pause`,
 `resume` and `down --all` are unit-tested only ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-host.md](deployment/one-command-host.md).
 
 ### `host`
@@ -754,8 +756,11 @@ Pass-through commands (`tool`, `asc`, `android`, `simlock`, `devices install`) e
 program's exit code.
 
 These codes are **retryable by default** (the same call may succeed later without changes):
-`PROVIDER_UNREACHABLE`, `WORKER_OFFLINE`, `NO_CAPACITY`, `HUMAN_HELD`, `TIMEOUT`. Fixes for each are in
-[troubleshooting.md](troubleshooting.md).
+`PROVIDER_UNREACHABLE`, `WORKER_OFFLINE`, `NO_CAPACITY`, `HUMAN_HELD`, `TIMEOUT`. A lease the host
+refuses with an internal error (Simlock's `INTERNAL`, for example `simctl` timing out on an overloaded
+8 GB Mac) is `PROVIDER_UNAVAILABLE` and retryable too, and agent-device's "Daemon request timed out" (the
+first iOS command after a cold lease on a small Mac) is a retryable `PROVIDER_UNREACHABLE`. Fixes for
+each are in [troubleshooting.md](troubleshooting.md).
 
 ## Session identity
 

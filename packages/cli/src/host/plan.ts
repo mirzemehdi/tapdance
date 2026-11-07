@@ -523,6 +523,8 @@ export function clipboardCommand(platform: NodeJS.Platform, has: (bin: string) =
  */
 export function offerClipboard(platform: NodeJS.Platform, env: Record<string, string | undefined>, has: (bin: string) => boolean): boolean {
   if (platform === "linux" && !env["DISPLAY"] && !env["WAYLAND_DISPLAY"]) return false;
+  // Over ssh the clipboard is the host's, not the person's (a rented Mac mini reached with `ssh -t`).
+  if (env["SSH_CONNECTION"] || env["SSH_TTY"]) return false;
   return clipboardCommand(platform, has) !== undefined;
 }
 

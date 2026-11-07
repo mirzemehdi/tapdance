@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Field-test driver for the MCP server: starts `tapdance mcp` from this repository over stdio, runs a
 // JSON checklist of tool calls, and records each reply and its latency. Dev tooling for field tests
-// (docs/testing/field-test-cloud-android.md); not shipped in any package.
+// (docs/testing/field-test-cloud-android.md, docs/testing/field-test-rented-mac-ios.md); not shipped in any package.
 //
 // Usage:
 //   node scripts/field-test/mcp-checklist.mjs <checklist.json> <out-dir> [--param KEY=VALUE ...]
@@ -15,8 +15,9 @@
 //   - A step whose "requires" names a parameter that is not set is SKIPPED, not failed.
 //   - "optional": ["KEY"]: an argument whose whole value is "${KEY}" is left out when KEY is unset
 //     (for example a CI branch).
-//   - When the APK parameter is set, its folder is added to TAPDANCE_ALLOWED_ROOTS for the server, which
-//     otherwise only uploads files inside its working directory (the output directory).
+//   - When the APK or APP parameter (an Android .apk, an iOS simulator .app or a .zip holding one) is set,
+//     its folder is added to TAPDANCE_ALLOWED_ROOTS for the server, which otherwise only uploads files
+//     inside its working directory (the output directory).
 //   - A step with "tool": "__list" saves the server's tool list to tools.json.
 //   - "expectText": the step fails unless the reply's text contains it.
 // --check validates a checklist offline against the MCP tool schemas in packages/mcp/dist (no server,
@@ -185,9 +186,10 @@ const { Client } = await import(pathToFileURL(join(SDK, "client/index.js")).href
 const { StdioClientTransport } = await import(pathToFileURL(join(SDK, "client/stdio.js")).href);
 
 const env = { ...process.env, TAPDANCE_SESSION_ID: process.env.TAPDANCE_SESSION_ID ?? "field-test-mcp" };
-if (params["APK"]) {
-  params["APK"] = resolve(params["APK"]);
-  env.TAPDANCE_ALLOWED_ROOTS = [env.TAPDANCE_ALLOWED_ROOTS, dirname(params["APK"])].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+for (const key of ["APK", "APP"]) {
+  if (!params[key]) continue;
+  params[key] = resolve(params[key]);
+  env.TAPDANCE_ALLOWED_ROOTS = [env.TAPDANCE_ALLOWED_ROOTS, dirname(params[key])].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
 }
 const transport = new StdioClientTransport({ command: process.execPath, args: [CLI, "mcp"], env, cwd: outDir, stderr: "pipe" });
 const stderr = [];

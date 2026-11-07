@@ -186,8 +186,10 @@ async function prerequisiteChecks(platform: "darwin" | "linux"): Promise<DoctorC
 }
 
 function findTailscale(): string | undefined {
-  const app = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
-  return findOnPath("tailscale", process.env["PATH"] ?? "", existsSync) ?? (osPlatform() === "darwin" && existsSync(app) ? app : undefined);
+  // macOS: the app, or the open-source tailscaled's CLI from MacPorts or Homebrew (headless hosts), which
+  // a non-interactive ssh session's PATH does not include.
+  const mac = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"];
+  return findOnPath("tailscale", process.env["PATH"] ?? "", existsSync) ?? (osPlatform() === "darwin" ? mac.find((p) => existsSync(p)) : undefined);
 }
 
 /** The pairing files `host up` wrote, with what the guard thinks of each token. */

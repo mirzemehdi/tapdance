@@ -10,6 +10,12 @@ Status: **not tested.** Nothing on this page has been run against a MacStadium m
 ([STATUS.md](../../STATUS.md), G-05 and G-06). The Tapdance steps are the ones verified on a local Mac
 ([evidence](../testing/evidence/2026-11-01-local-ios.md)); the VPS-to-Mac path is untested (Q-08).
 
+> **Same steps as the Scaleway page, not run here.** Once you can ssh into the Mac, follow
+> [scaleway-mac.md](scaleway-mac.md) from step 2: Xcode first launch and an iOS runtime, automatic login,
+> `host-setup.sh --ios-only` → `host up`, then `tapdance connect` on the agent's machine. That route
+> ran end to end on a Scaleway Mac mini ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)); the
+> gateway route further down this page has not been run anywhere across two machines.
+
 ## When to choose it
 
 - You want a Mac that stays yours month after month, with no hourly billing.

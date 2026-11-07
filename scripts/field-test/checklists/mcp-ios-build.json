@@ -1,0 +1,9 @@
+[
+  { "tool": "lease_device", "args": { "platform": "ios", "device": "${DEVICE}", "os_version": "${OS}" }, "optional": ["DEVICE", "OS"], "label": "lease", "stopOnFail": true },
+  { "tool": "build_app", "args": { "repo": "${BUILD_REPO}", "ref": "${BUILD_REF}", "project": "${BUILD_PROJECT}", "scheme": "${BUILD_SCHEME}" }, "optional": ["BUILD_PROJECT", "BUILD_SCHEME"], "label": "build_app", "requires": ["BUILD_REPO", "BUILD_REF"], "timeoutSec": 3600 },
+  { "tool": "launch_app", "args": { "app_id": "${APP_ID}" }, "label": "launch", "requires": ["APP_ID"] },
+  { "tool": "inspect_screen", "args": { "compact": true }, "label": "inspect" },
+  { "tool": "take_screenshot", "args": { "note": "built on the host" }, "label": "screenshot" },
+  { "tool": "build_app", "args": { "repo": "${BUILD_REPO}", "ref": "${BUILD_REF}", "project": "${BUILD_PROJECT}", "scheme": "${BUILD_SCHEME}" }, "optional": ["BUILD_PROJECT", "BUILD_SCHEME"], "label": "build_reused", "requires": ["BUILD_REPO", "BUILD_REF"], "timeoutSec": 3600 },
+  { "tool": "release_device", "label": "release" }
+]

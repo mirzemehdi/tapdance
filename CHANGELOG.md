@@ -625,11 +625,40 @@ Unit-tested with a fake Simlock status, a fake runner and fake files; not yet re
   `HOST_CHECK_FAILED`); later `worker start`, `worker restart` and `host status` warn until a service
   is installed again.
 
+### Stage 3: iOS on a rented Scaleway Mac mini (issues #121, #122)
+
+Run on a Scaleway Mac mini M1-M (8 GB, macOS 27.2, Xcode 27.0) set up over ssh, driven from a Mac
+over Tailscale ([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md)).
+
+- Added: `host-setup.sh --ios-only` (no Android SDK, emulator or image; checks and fixes the Xcode
+  licence, first launch and an iOS runtime) and `--android-build-sdk` (command-line tools and
+  platform-tools only, for Kotlin Multiplatform builds of the iOS app).
+- Added: `infrastructure/scripts/macos-auto-login.sh`, automatic login over ssh (writes `/etc/kcpassword`
+  and `autoLoginUser`; `sysadminctl -autologin` failed on macOS 27.2 with error 22), so the worker and
+  guard LaunchAgents start after a reboot with nobody at the screen.
+- Added: `infrastructure/scripts/scaleway-leftovers.sh`, a read-only check for Mac minis and Private
+  Networks left in a Scaleway account; `docs/testing/field-test-rented-mac-ios.md`; iOS field-test
+  checklists (`PLATFORM=ios` in `cli-checklist.sh`, `mcp-ios-base/app/build.json`).
+- Changed: on macOS `host-setup.sh` installs Tailscale as the open-source `tailscaled` system daemon
+  (MacPorts, else Homebrew) instead of the Tailscale app, which needs someone logged in; `gh` from
+  MacPorts when there is no Homebrew; `~/.tapdance/env.sh` is sourced from `~/.zshenv` and puts
+  MacPorts and Homebrew on `PATH`, so `ssh mac 'tapdance …'` works, and it is rewritten on every run.
+- Fixed: `connect` and `doctor` exited 10 against an iOS-only Mac (Android without an SDK is a warning
+  there; a host with an SDK that offers no Android still fails, #39). `devices` says the same.
+- Fixed: a lease refused with Simlock's internal error ("simctl list … timed out" on an overloaded 8 GB
+  Mac) was `USAGE`; it is `PROVIDER_UNAVAILABLE`, retryable, with a hint for small Macs. agent-device's
+  "Daemon request timed out" is `PROVIDER_UNREACHABLE`, retryable.
+- Fixed: `host up` over ssh no longer offers to copy the token to the clipboard (the host's).
+- Added: a build that fails with Gradle's "SDK location not found" names `--android-build-sdk`.
+- Docs: `docs/ios/scaleway-mac.md` rewritten around `host-setup.sh` → `host up` → `connect` (offers,
+  the 24-hour minimum, automatic deletion, auto-login, 8 GB: no warm spare); troubleshooting for
+  rented Macs.
+
 ### Not yet proven
 
-A gateway across two machines over a real network, cloud Macs, Google's Android CLI on a remote host,
-a full device loop over Streamable HTTP MCP, installing a custom app through a gateway, `host up` on a
-fresh Mac, a successful iOS build on the host, and a coding agent as the MCP client.
+A gateway across two machines over a real network, Google's Android CLI on a remote host, a full
+device loop over Streamable HTTP MCP, installing a custom app through a gateway, MacStadium and AWS EC2
+Mac, a 16 GB rented Mac, and a coding agent as the MCP client.
 See [STATUS.md](STATUS.md).
 
 [0.1.0]: https://github.com/mirzemehdi/tapdance

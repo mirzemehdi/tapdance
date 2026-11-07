@@ -307,6 +307,9 @@ describe("host up and host status wording on Linux (#78, #81)", () => {
     expect(offerClipboard("linux", { DISPLAY: ":0" }, () => false)).toBe(false);
     expect(offerClipboard("linux", { WAYLAND_DISPLAY: "wayland-0" }, (b) => b === "wl-copy")).toBe(true);
     expect(offerClipboard("darwin", {}, () => false)).toBe(true);
+    // Over ssh pbcopy would fill the host's pasteboard, not the person's (rented Mac, 2026-11-06).
+    expect(offerClipboard("darwin", { SSH_CONNECTION: "1.2.3.4 5 6.7.8.9 22" }, () => true)).toBe(false);
+    expect(offerClipboard("linux", { DISPLAY: ":0", SSH_TTY: "/dev/ttys001" }, () => true)).toBe(false);
   });
   it("mentions iOS simulators and 'this Mac' only on macOS", () => {
     expect(hostSecurityNote("linux", "w")).not.toMatch(/iOS|Mac/);

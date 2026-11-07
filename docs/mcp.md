@@ -279,6 +279,7 @@ A failed call returns `isError: true` and JSON text:
 | `LEASE_LOST` | The device is gone (expired, released, ended by Simlock, worker restarted). Anything installed was wiped. Call `lease_device` again, then reinstall and relaunch the app. |
 | `NO_ACTIVE_LEASE` | Call `lease_device` first. |
 | `LEASE_ALREADY_HELD` | This session holds a device on the other platform. Use it, or `release_device` first. |
+| `PROVIDER_UNAVAILABLE` | The host failed while starting a device (a lease refused with Simlock's internal error, for example an 8 GB Mac running out of memory): retryable; retry in a minute. If it keeps failing, ask the host's owner (`request_human`): on a small Mac they keep no warm spare (`tapdance host warm ios=0`). |
 | `NO_CAPACITY` | Retryable. No device of that platform can run on any worker right now, including when Simlock refuses the request for lack of capacity. Call `list_devices` to see capacity, retry later, or ask the user to start a worker. |
 | `TIMEOUT` | Retryable. No device was granted in time, or an earlier call in this process is still working on the session (for example a lease being granted); call again in about 30 s. |
 | `DEVICE_UNAVAILABLE` | The model or OS version is unknown, or its runtime/image is not installed. Call `list_devices` and pass a listed model and version. When the backend reports the device in use (`DEVICE_IN_USE`), it is retryable. |
@@ -292,7 +293,11 @@ backend sends its own hint, it is appended to Tapdance's. For an ambiguous targe
 lists up to 5 matching labels.
 
 `retryable: true` is set by default for `PROVIDER_UNREACHABLE`, `WORKER_OFFLINE`, `NO_CAPACITY`,
-`HUMAN_HELD` and `TIMEOUT`, and on `DEVICE_UNAVAILABLE` when the device is in use. A retryable error
+`HUMAN_HELD` and `TIMEOUT`, on `DEVICE_UNAVAILABLE` when the device is in use, and on
+`PROVIDER_UNAVAILABLE` for a host-side lease failure. On iOS the first call after a cold lease can take
+over a minute on a small Mac while agent-device starts its runner; a "Daemon request timed out" then is
+`PROVIDER_UNREACHABLE` and the next call usually answers. On iOS, read the Home Screen with
+`inspect_screen` `app_id: "com.apple.springboard"` (there is no app in front after a lease). A retryable error
 may be retried unchanged. All codes are listed in [cli-reference.md](cli-reference.md#exit-codes);
 fixes are in [troubleshooting.md](troubleshooting.md).
 

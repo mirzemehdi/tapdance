@@ -1,10 +1,13 @@
 # Field-test kit
 
-Drivers and checklists for running the Android end-to-end test against a real device host (for
-example a Google Cloud N2 VM) from the agent's machine. Dev tooling only: nothing here ships in a
+Drivers and checklists for running the Android or iOS end-to-end test against a real device host (a
+Google Cloud N2 VM, a rented Mac) from the agent's machine. Dev tooling only: nothing here ships in a
 package, and nothing here creates, starts or deletes cloud resources. The full procedure, with the
 cloud steps and the mandatory teardown, is
-[docs/testing/field-test-cloud-android.md](../../docs/testing/field-test-cloud-android.md).
+[docs/testing/field-test-cloud-android.md](../../docs/testing/field-test-cloud-android.md) for Android
+and [docs/testing/field-test-rented-mac-ios.md](../../docs/testing/field-test-rented-mac-ios.md) for iOS.
+The iOS checklists and `PLATFORM=ios` in the CLI driver are checked offline only (`--check`, and the
+CLI driver against a fake CLI) until the first rented-Mac run.
 
 Generalised from the drivers used for the 2026-11-03 run
 ([evidence](../../docs/testing/evidence/2026-11-03-gcp-n2-android.md)). Not yet run against a host in
@@ -18,6 +21,9 @@ server with no device.
 | `checklists/mcp-base.json` | Launcher checklist: lease, status, keys, inspect, screenshot, swipe, tap, wait, rotate, recording, push to Downloads, notifications, logs, audit, opened links, artifacts, release. |
 | `checklists/mcp-app.json` | Your app: install from CI or from an APK file, launch, inspect, screenshot, optional tap and typing, recording, app logs, crash logs, sandbox push and pull (debuggable builds), rotate, audit, list, kill, clear, relaunch, release. |
 | `checklists/mcp-build.json` | A build on the host (`build_app`), then launch, inspect, screenshot, release. |
+| `checklists/mcp-ios-base.json` | iOS home screen: lease (`DEVICE`, `OS`), keys, inspect, screenshot, swipes, alert, rotate, recording, push to the Files app, notifications, language, logs, crash reports, audit, opened links, release. |
+| `checklists/mcp-ios-app.json` | iOS app: install `APP` (a simulator `.app`, or a `.zip` holding one), launch, launch with console, inspect, alert, tap and typing, recording, app logs, crash reports, push to the app's Documents, launch in de-DE, rotate, audit, kill, clear, relaunch, release. |
+| `checklists/mcp-ios-build.json` | iOS build on the host (`build_app` with `BUILD_PROJECT` / `BUILD_SCHEME`), launch, inspect, screenshot, the same build again (reused), release. |
 
 ## Before you run anything
 
@@ -44,6 +50,10 @@ your own.
 
 | Parameter | Used by | Meaning |
 | --- | --- | --- |
+| `PLATFORM`, `DEVICE`, `OS` | CLI driver (MCP: `DEVICE`, `OS` in the iOS checklists) | `android` (default) or `ios`; the model and OS version to lease, e.g. `iPhone 16` and `26.1`. |
+| `APP` | app (iOS) | Install this simulator `.app` or `.zip` (uploaded from the agent's machine). The MCP driver adds its folder to `TAPDANCE_ALLOWED_ROOTS`. |
+| `LANGUAGE` | app (CLI, iOS) | The language for the language steps (default `de-DE`). |
+| `BUILD_PROJECT`, `BUILD_SCHEME` | build (iOS) | The `.xcodeproj`/`.xcworkspace` and scheme, when the repository has more than one. |
 | `LAUNCHER_TAP` | base | An app label on the launcher to tap, e.g. `Chrome`. |
 | `APP_ID` | app, build | The app's package, e.g. `com.example.app`. |
 | `CI_REPO`, `CI_ARTIFACT`, `CI_BRANCH` | app | Install from a GitHub Actions artifact on the host: `owner/repo`, the artifact name, and (optional) the branch. The host's owner must allow-list the repository first (`tapdance host artifacts enable --repo owner/repo` on the host). |

@@ -54,7 +54,8 @@ The iOS Simulator ships with Xcode, and Xcode runs only on macOS on Apple hardwa
   download screenshots and MP4 recordings back to the VPS.
 
 You can also run everything on one Mac (local mode): the agent, Tapdance and the worker on the same
-machine, with no gateway. That is the only setup tested so far.
+machine, with no gateway. The recommended setup for a remote agent is device-only mode instead (`host up`
+on the Mac, `connect` on the agent's machine): see [one-command-host.md](../deployment/one-command-host.md).
 
 Why Tapdance is built this way, and what it adds on top of Simlock and agent-device, is in the
 [architecture decision record](../architecture-decision.md).
@@ -96,9 +97,11 @@ has Simlock simulators.
 | `asc` pass-through (`tapdance asc -- ...`) | Verified for read-only commands | same |
 | Installing a custom simulator `.app` (`examples/ios-demo`) in local mode | Verified locally; not yet run through a gateway | STATUS F-01 |
 | Gateway + joined Mac worker, both on the same Mac (CLI, MCP stdio, viewer) | Verified | [2026-11-01-gateway-single-host.md](../testing/evidence/2026-11-01-gateway-single-host.md) |
-| Linux VPS agent + gateway → separate Mac worker | **Not tested** | STATUS Q-08 |
+| Agent on another Mac → rented Scaleway Mac mini, device-only mode over Tailscale (CLI and MCP, host build of a private app) | Verified once | [2026-11-06-rented-mac-ios.md](../testing/evidence/2026-11-06-rented-mac-ios.md) |
+| Linux VPS agent → separate Mac worker | **Not tested** (gateway mode); device-only mode from a VPS ran against the owner's Mac | STATUS Q-08 |
 | AXe backend | **Not tested** (written and unit-tested only) | STATUS U-02, Q-09 |
-| Scaleway, MacStadium, AWS EC2 Mac | **Not tested**; these pages are written from provider docs | STATUS G-05, G-06 |
+| Scaleway Mac mini M1-M | Verified once ([guide](scaleway-mac.md)) | STATUS G-05, G-06 |
+| MacStadium, AWS EC2 Mac | **Not tested**; these pages are written from provider docs (same steps as Scaleway) | STATUS G-05 |
 | Physical iPhone leases | **Not tested** | STATUS D-06 |
 | Streamable HTTP MCP (`tapdance mcp --http`) | Partly verified (auth, tool list, read calls); full device loop not run | STATUS S-01 |
 

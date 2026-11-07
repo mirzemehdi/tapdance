@@ -269,6 +269,15 @@ describe("error mapping", () => {
     const unknown = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: unknown model \"Pixel 99\"" }, "lease");
     expect(unknown).toMatchObject({ code: "DEVICE_UNAVAILABLE", hint: expect.stringMatching(/list_devices/) });
     expect(fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: image tags are Android only" }, "lease").code).toBe("USAGE");
+    // agent-device's daemon timing out (a cold lease's first command on an 8 GB Mac) can be retried.
+    const slow = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Daemon request timed out" }, "press home");
+    expect(slow.code).toBe("PROVIDER_UNREACHABLE");
+    expect(slow.retryable).toBe(true);
+    // Simlock's INTERNAL (simctl timed out on an overloaded 8 GB Mac) is the host's fault, not the request's.
+    const internal = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: Internal error" }, "lease");
+    expect(internal.code).toBe("PROVIDER_UNAVAILABLE");
+    expect(internal.retryable).toBe(true);
+    expect(internal.hint).toContain("host warm ios=0");
   });
 
   it("keeps an app that is not installed apart from a missing element", () => {
@@ -544,6 +553,33 @@ describe("platform on offer (#39)", () => {
     expect(checks.find((c) => c.id === "simlock.capacity.ios")?.status).toBe("pass");
     const inventory = await provider.inventory();
     expect(inventory.notes.some((n) => n.startsWith("android is not available"))).toBe(true);
+  });
+
+  // Mocked transport: an iOS-only Mac (no Android SDK reported in host.tools) is not a fault.
+  it("only warns about Android on a host with no Android SDK that serves iOS (an iOS-only Mac)", async () => {
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      const body =
+        path === "/v1/healthz"
+          ? { ok: true }
+          : path === "/v1/identity"
+            ? { principal: "p", role: "agent" }
+            : path === "/v1/status"
+              ? { leases: [], devices: [], capacity: { android: { limit: 1, running: 0 }, ios: { limit: 4, running: 0 } }, host: { os: "darwin", tools: [{ platform: "ios", name: "xcode", version: "27.0" }] } }
+              : path === "/v1/catalog"
+                ? { platforms: [{ platform: "ios", models: ["iPhone 17"], runtimes: ["27.0"] }] }
+                : {};
+      return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const provider = new SimlockProvider({ kind: "remote", baseUrl: "https://mac.tail.ts.net:4720", token: "t", tenant: "x", runId: "r", clientId: "c" } as never, {}, fetchImpl);
+    const checks = await provider.doctor();
+    const android = checks.find((c) => c.id === "simlock.capacity.android");
+    expect(android?.status).toBe("warn");
+    expect(android?.detail).toContain("no Android SDK");
+    expect(android?.fix).toContain("--ios-only");
+    const inventory = await provider.inventory();
+    expect(inventory.notes).toContain("No android on this host: it has no Android SDK.");
+    expect(inventory.notes.some((n) => n.startsWith("android is not available"))).toBe(false);
   });
 });
 
