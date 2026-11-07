@@ -42,6 +42,8 @@ export interface SessionRecord {
 export interface HumanHold {
   until: string;
   by: string;
+  /** "takeover": the person pressed Take over (a fixed hold until Hand back); otherwise touches. */
+  kind?: "touch" | "takeover";
 }
 
 export interface SessionStoreOptions {

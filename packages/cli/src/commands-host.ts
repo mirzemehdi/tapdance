@@ -85,6 +85,8 @@ import {
   offerClipboard,
   pairingApprovalRefusal,
   tailscaleAclHint,
+  tailscaleSshFix,
+  tailscaleSshNext,
   parseWarm,
   serveNeedsOperator,
   resolveHostStop,
@@ -284,6 +286,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .option("--allow-admin-account", "run the guard from an administrator account (not recommended)")
     .option("--no-tailscale", "do not expose the guard with `tailscale serve`; the endpoint stays on loopback")
     .option("--keep-awake", "macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline")
+    .option("--tailscale-ssh", "also turn on Tailscale SSH (`tailscale set --ssh`), so machines in the tailnet can ssh in without copying keys; the tailnet policy decides who may")
     .option("--repair", "revoke the existing pairing with this label and issue a new token")
     .option("--skip-self-test", "do not lease a device through the guard at the end")
     .option("--scope <areas>", "limit the pairing token to these policy areas, e.g. interaction,inspection,screenshots,streaming,input (no install: it cannot put apps on the devices)")
@@ -296,6 +299,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
       const out = output(g);
       try {
         const platform = assertHostPlatform(osPlatform());
+        if (o.tailscaleSsh && o.tailscale === false) throw new TapdanceError("USAGE", "--tailscale-ssh needs Tailscale; leave out --no-tailscale");
         // Decided before anything changes, so a bad or refused value stops here.
         const activeLabels = (await pairings()).filter((p) => p.state === "active").map((p) => p.label);
         const chosen = choosePairingLabel({ ...(o.label !== undefined ? { flag: o.label } : {}), hostnameLabel: defaultLabel(hostname()), active: activeLabels });
@@ -451,6 +455,12 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
               throw commandFailed([bin, ...args], serve.out, "tailscale serve refused this user", `On Linux only root and the tailnet's operator may change \`tailscale serve\`. Run \`sudo tailscale set --operator=$USER\` once, then \`${hostUpCommand(o)}\` again.`);
             }
             throw commandFailed([bin, ...args], serve.out, "tailscale serve could not expose the guard", "Check `tailscale serve status`; on a tailnet with HTTPS certificates see https://tailscale.com/kb/1153/enabling-https. Or pass --no-tailscale.");
+          }
+          // Optional, so a refusal warns instead of stopping the setup: the guard is already served.
+          if (o.tailscaleSsh) {
+            const ssh = await runCommand(bin, ["set", "--ssh"]);
+            if (ssh.ok) out.progress(tailscaleSshNext(state.dnsName, userInfo().username));
+            else out.warn(`Tailscale SSH is not on: ${ssh.out.split("\n")[0] ?? ""}. ${tailscaleSshFix(platform, bin, ssh.out)}`);
           }
           return hostEndpoint(state.dnsName, port, mode);
         });

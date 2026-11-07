@@ -705,12 +705,20 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
       .option("--x <x>", "x coordinate (fallback)")
       .option("--y <y>", "y coordinate (fallback)");
 
-  targetOptions(ui.command("tap").description("Tap one element"))
+  targetOptions(ui.command("tap [ref]").description("Tap one element (a ref from `ui inspect` may be given as the argument: `ui tap @e7`)"))
     .option("--no-settle", "do not wait for the UI to settle")
     .option("--settle-ms <ms>", "also wait up to this long for the UI to come to rest and report whether the screen changed (a tap that auto-advances)", Number)
     .option("--inject", "Android: tap with a raw input event (`input tap`) at the element's centre, for system screens that ignore normal taps")
-    .action(async (o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: number; inject?: boolean }) =>
+    .action(async (positional: string | undefined, o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: number; inject?: boolean }) =>
       run(globals(), async (t, out) => {
+        // `ui inspect` prints refs like @e3~s152203, so agents pass one as the argument (#131).
+        if (positional !== undefined) {
+          if (!/^@?e\d+(~\S+)?$/.test(positional)) {
+            throw new TapdanceError("USAGE", `"${positional}" is not a ref from \`ui inspect\``, { hint: `Use --text "${positional}" for visible text, --id for an identifier, or a ref like \`ui tap @e3\`.` });
+          }
+          if (o.ref !== undefined && o.ref !== positional) throw new TapdanceError("USAGE", "Give the ref once: as the argument or with --ref");
+          o.ref = positional;
+        }
         const target = parseTarget({
           ...(o.text !== undefined ? { text: o.text } : {}),
           ...(o.id !== undefined ? { id: o.id } : {}),

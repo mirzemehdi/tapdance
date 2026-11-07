@@ -30,6 +30,8 @@ import {
   linuxEmulatorSettings,
   parseLinger,
   serveNeedsOperator,
+  tailscaleSshFix,
+  tailscaleSshNext,
   parseIdleStop,
   parseMaxUptime,
   resolveHostStop,
@@ -151,6 +153,16 @@ describe("linux hosts", () => {
     expect(serveNeedsOperator("linux", "Access denied: serve config denied\nUse 'sudo tailscale serve' or 'tailscale set --operator=$USER'")).toBe(true);
     expect(serveNeedsOperator("darwin", "Access denied")).toBe(false);
     expect(serveNeedsOperator("linux", "serve: HTTPS is not enabled for this tailnet")).toBe(false);
+  });
+
+  // #126: Tailscale SSH needs the open-source tailscaled, and may need root to switch on.
+  it("explains a refused --tailscale-ssh and what to do next", () => {
+    expect(tailscaleSshFix("darwin", "/Applications/Tailscale.app/Contents/MacOS/Tailscale", "")).toContain("open-source tailscaled");
+    expect(tailscaleSshFix("darwin", "/opt/local/bin/tailscale", "Access denied: prefs write access denied")).toContain("sudo /opt/local/bin/tailscale set --ssh");
+    expect(tailscaleSshFix("linux", "/usr/bin/tailscale", "Access denied")).toContain("--operator=$USER");
+    expect(tailscaleSshFix("linux", "/usr/bin/tailscale", "something else")).toContain("kb/1193");
+    expect(tailscaleSshNext("mac.tail1.ts.net", "m1")).toContain("ssh m1@mac.tail1.ts.net");
+    expect(hostUpCommand({ tailscaleSsh: true, label: "vps" })).toContain("--tailscale-ssh");
   });
 });
 

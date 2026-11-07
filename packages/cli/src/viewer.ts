@@ -175,7 +175,7 @@ export async function startViewer(
     }
   };
   let takeover = false;
-  const hold = (ms: number) => t.setHumanHold(ms, "browser viewer").catch(() => undefined);
+  const hold = (ms: number, kind: "touch" | "takeover" = "touch") => t.setHumanHold(ms, "browser viewer", kind).catch(() => undefined);
 
   const send = (res: ServerResponse, status: number, body: unknown) => {
     res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(body));
@@ -240,7 +240,7 @@ export async function startViewer(
       }
       if (req.method === "POST" && url.pathname === "/api/takeover") {
         takeover = true;
-        await hold(10 * 60_000);
+        await hold(10 * 60_000, "takeover");
         return send(res, 200, { takeover });
       }
       if (req.method === "POST" && url.pathname === "/api/handback") {

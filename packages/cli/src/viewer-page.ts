@@ -50,6 +50,7 @@ export const VIEWER_PAGE = String.raw`<!doctype html>
       <button id="shot">Screenshot</button>
       <button id="rec">Start recording</button>
     </div>
+    <p id="stats" class="muted" aria-live="off"></p>
     <p class="muted">Click to tap, drag to swipe, scroll to scroll. Type while the screen has focus. Your input pauses the agent for a few seconds; Take over pauses it until you hand back.</p>
   </section>
   <aside>
@@ -92,7 +93,17 @@ async function jpeg(bytes) {
   const bmp = await createImageBitmap(new Blob([bytes], { type: "image/jpeg" }));
   paint(bmp, bmp.width, bmp.height); bmp.close();
 }
+// What the host sends, so "network vs encoder" can be told apart at a glance (#130): the picture size
+// is the host's encoder setting (capabilities.stream.maxDimension), the rate what arrived here.
+const stats = { bytes: 0, frames: 0, since: performance.now() };
+setInterval(() => {
+  const secs = (performance.now() - stats.since) / 1000;
+  if (!meta || secs <= 0) return;
+  document.getElementById("stats").textContent = "Stream: " + meta.width + "×" + meta.height + " " + meta.codec + ", " + (stats.frames / secs).toFixed(1) + " fps, " + Math.round((stats.bytes * 8) / 1000 / secs) + " kbit/s from the host";
+  stats.bytes = 0; stats.frames = 0; stats.since = performance.now();
+}, 2000);
 function onFrame(tag, payload) {
+  if (tag === TAG.keyframe || tag === TAG.delta || tag === TAG.seed) stats.frames += 1;
   if (tag === TAG.meta) { meta = JSON.parse(new TextDecoder().decode(payload)); canvas.width = meta.width; canvas.height = meta.height; return; }
   if (tag === TAG.description) { configure(payload.slice()); return; }
   if (tag === TAG.seed || (tag === TAG.delta && meta && meta.codec === "mjpeg")) { jpeg(payload.slice()); return; }
@@ -112,6 +123,7 @@ async function stream() {
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
+    stats.bytes += value.length;
     const merged = new Uint8Array(buf.length + value.length); merged.set(buf); merged.set(value, buf.length); buf = merged;
     let off = 0; const view = new DataView(buf.buffer);
     while (buf.length - off >= 5) {

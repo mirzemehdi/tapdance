@@ -76,6 +76,15 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["nonsense-command"]).code).toBe(2);
   });
 
+  // #131: `ui inspect` prints refs like @e3~s1, and agents pass one as the argument.
+  it("ui tap takes a ref as its argument and points other text at --text", () => {
+    const env = { TAPDANCE_PROVIDER: "self-hosted", TAPDANCE_ENDPOINT: "https://gw.example.com", TAPDANCE_TOKEN: "slk_testtesttest" };
+    expect(JSON.parse(tapdance(["--json", "ui", "tap", "@e3~s152203"], env).stdout).error).toMatchObject({ code: "NO_ACTIVE_LEASE" });
+    const wrong = tapdance(["--json", "ui", "tap", "Sign in"], env);
+    expect(wrong.code).toBe(2);
+    expect(JSON.parse(wrong.stdout).error).toMatchObject({ code: "USAGE", hint: expect.stringContaining('--text "Sign in"') });
+  });
+
   it("run: refuses a bad scenario with exit 2 and needs a device (exit 3) before any step", () => {
     const dir = mkdtempSync(join(tmpdir(), "td-scn-"));
     const bad = join(dir, "bad.yaml");
