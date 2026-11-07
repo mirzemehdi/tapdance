@@ -153,6 +153,71 @@ the folder is under `~/.tapdance/worker/builds/*/kept/`), `scp` it over, and pas
 Prove the leases come from the Mac: the lease reply's `Provider: Remote worker` and endpoint, and the
 guard's audit log on the Mac (`tail ~/.tapdance/worker/audit.log`).
 
+## Variant: the agent runs on a Linux VPS
+
+The same Mac, driven from a Linux VPS in the same tailnet. The VPS gets ssh access to the Mac for the
+pairing and the app zip; the owner keeps two steps: authorizing the VPS's key on the Mac and the GitHub
+token (`tapdance host gh-login`, typed by the owner). Not run yet. Prompt for the agent on the VPS
+(fill in the Mac's address, its tailnet endpoint and your app):
+
+```text
+Repeat stage 3 of docs/hosting-plan.md from this Linux VPS as the agent's machine, against the rented
+Mac mini that is already set up as an iOS host (m1@<mac-ip>). Mind its deletion time; finish an hour
+before it. Read CLAUDE.md, AGENTS.md, STATUS.md, docs/testing/field-test-rented-mac-ios.md and the
+latest docs/testing/evidence/*-rented-mac-ios.md first.
+
+Setup on this VPS
+- Clone mirzemehdi/tapdance (main), pnpm install && pnpm build. Use a scratch TAPDANCE_HOME (never
+  ~/.tapdance) and TAPDANCE_SESSION_ID=vps-cli / vps-mcp. Check this VPS is in the owner's tailnet
+  (`tailscale status` lists the Mac); if not, ask the owner to run `sudo tailscale up` here.
+
+Checkpoint A, owner: ssh access to the Mac
+- Create a key for this run (ssh-keygen -t ed25519 -f ~/.ssh/rented-mac -N "" -C vps-stage3) and give
+  the owner this exact command to run on their own machine, with your public key filled in:
+    ssh m1@<mac-ip> 'cat >> ~/.ssh/authorized_keys' <<< '<public key>'
+  Wait until they confirm, then check `ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host status'`.
+
+Checkpoint B, owner: GitHub access for host builds
+- The owner creates a fine-grained token (the app's repository only, Contents read-only, short expiry)
+  and runs on their own machine:
+    ssh -t m1@<mac-ip> 'tapdance host gh-login'
+  You never see, ask for or handle the token. Afterwards `host status` must show `gh ok`, and the
+  repository must be allowed: `tapdance host builds enable --repo <url> --git-auth gh --protected-ref main --allow-admin-account`.
+
+Pairing (yours, after the owner says "approve the pairing")
+- ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host up --label vps-agent --allow-admin-account --skip-self-test --yes'
+- scp the token file .tapdance/worker/pairing-vps-agent.token into your scratch folder (chmod 600),
+  `tapdance connect https://<mac>.<tailnet>.ts.net:4720 < <that file>`. Never print the token.
+  `tapdance doctor` must pass (Android is a warning on an iOS-only host).
+
+Checklists (scripts/field-test/, --param DEVICE="iPhone 17" --param OS=<runtime>), one at a time: an
+8 GB Mac holds one simulator and the guard one session
+  1. cli-checklist.sh base (--param PLATFORM=ios) and mcp-ios-base.json;
+  2. the host build of your app (BUILD_REPO, BUILD_REF=main, BUILD_PROJECT, BUILD_SCHEME, APP_ID):
+     cli-checklist.sh build and mcp-ios-build.json;
+  3. app checklists with an upload: on the Mac, zip the host's build
+     (ditto -c -k --keepParent <~/.tapdance/worker/builds/*/kept/*/<App>.app> ~/td-run/vps-app.zip),
+     scp it here, then cli-checklist.sh app and mcp-ios-app.json with --param APP=<that zip>.
+  A cold lease takes about 80-140 s on an M1; the first command after it 30-90 s. Keep this VPS online.
+- Prove every lease comes from the Mac (Provider: Remote worker, the endpoint; the guard's audit log
+  ~/.tapdance/worker/audit.log on the Mac). Record lease times, first-command latency, upload time,
+  build reuse, tap/key latency, and every failure with its exact output.
+
+Rules
+- Tool bugs only; the app's own quirks are not ours. Fix what you can in a branch and open a PR; file
+  issues on mirzemehdi/tapdance for the rest. Merge nothing. Commit with the owner's git identity, no
+  AI attribution. Never print tokens (tdg_, slk_, github_pat_, pairing files).
+- Ask the owner before anything that costs money, reboots the Mac or changes it beyond the pairing.
+
+Finish
+- Write docs/testing/evidence/<date>-vps-rented-mac-ios.md; update STATUS.md Q-08 (Linux VPS as the
+  agent's machine) and this runbook where a step was wrong.
+- Clean up: `tapdance device release`; on the Mac `tapdance worker guard revoke <vps-agent id>` (id from
+  `tapdance worker guard tokens`), delete ~/td-run/vps-app.zip, and remove your key's line from
+  ~/.ssh/authorized_keys; here delete the token copy, the scratch home and ~/.ssh/rented-mac*.
+- Report the results table, the PR or issues, and the clean-up done.
+```
+
 ## Reboot (checkpoint 7)
 
 The owner presses **Reboot** in the console. Then, without logging in anywhere:
