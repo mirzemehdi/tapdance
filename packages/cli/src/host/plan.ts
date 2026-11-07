@@ -159,6 +159,29 @@ export function serveNeedsOperator(platform: string, output: string): boolean {
 
 // ------------------------------------------------------------------ Tailscale
 
+/**
+ * Why `tailscale set --ssh` failed and what the owner runs instead (#126). Tailscale SSH needs the
+ * open-source tailscaled (the macOS app cannot serve SSH), and changing prefs may need root.
+ */
+export function tailscaleSshFix(platform: string, bin: string, output: string): string {
+  if (platform === "darwin" && bin.includes("Tailscale.app")) {
+    return "The Tailscale app cannot serve SSH; Tailscale SSH needs the open-source tailscaled (scripts/host-setup.sh installs it from MacPorts or Homebrew on a Mac without the app).";
+  }
+  if (/access denied|permission denied|--operator|must be root|sudo/i.test(output)) {
+    return `Turn it on once as root: \`sudo ${bin} set --ssh\`${platform === "linux" ? " (or make this user the operator: `sudo tailscale set --operator=$USER`, then run host up again)" : ""}.`;
+  }
+  return `Check \`${bin} set --ssh\` by hand; see https://tailscale.com/kb/1193/tailscale-ssh.`;
+}
+
+/** What `--tailscale-ssh` leaves to the tailnet's owner: the policy decides who may connect (#126). */
+export function tailscaleSshNext(dnsName: string | undefined, user: string): string {
+  const target = `${user}@${dnsName ?? "<this machine's tailnet name>"}`;
+  return [
+    `Tailscale SSH is on: from a machine in this tailnet, \`ssh ${target}\` (or \`tailscale ssh ${target}\`), no key to copy.`,
+    "Who may connect is the tailnet policy's \"ssh\" section (https://login.tailscale.com/admin/acls): the default lets a device's owner in, in check mode (a browser approval about every 12 hours). Turn it off with `sudo tailscale set --ssh=false`.",
+  ].join(" ");
+}
+
 /** Where a tailnet admin turns on MagicDNS and HTTPS Certificates. */
 export const TAILSCALE_DNS_ADMIN = "https://login.tailscale.com/admin/dns";
 
@@ -373,6 +396,8 @@ export interface HostUpOptions {
   idleStop?: string;
   /** `--max-uptime 12` or `off`: stop taking leases after this many hours up, then power off. */
   maxUptime?: string;
+  /** `--tailscale-ssh`: turn on Tailscale SSH, so tailnet machines reach this one without ssh keys (#126). */
+  tailscaleSsh?: boolean;
 }
 
 const shellWord = (s: string) => (/^[A-Za-z0-9_./:=@%+-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
@@ -386,6 +411,7 @@ export function hostUpCommand(o: HostUpOptions, add: Partial<HostUpOptions> = {}
     ...(m.allowAdminAccount ? ["--allow-admin-account"] : []),
     ...(m.tailscale === false ? ["--no-tailscale"] : []),
     ...(m.keepAwake ? ["--keep-awake"] : []),
+    ...(m.tailscaleSsh ? ["--tailscale-ssh"] : []),
     ...(m.repair ? ["--repair"] : []),
     ...(m.skipSelfTest ? ["--skip-self-test"] : []),
     ...(m.warm ? [`--warm ${shellWord(m.warm)}`] : []),

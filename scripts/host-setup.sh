@@ -44,7 +44,8 @@
 # default shell) from ~/.zshenv, so commands run over ssh (`ssh host 'tapdance host status'`,
 # `gcloud compute ssh --command ...`) find java, sdkmanager, adb and tapdance too.
 #
-# Its own options (everything else goes to `tapdance host up`):
+# Its own options (everything else goes to `tapdance host up`, e.g. --tailscale-ssh to also turn on
+# Tailscale SSH so tailnet machines can ssh in without copying a key):
 #   --yes                install without asking (also passed on to host up)
 #   --check              only report what is missing; change nothing
 #   --skip-prerequisites do not check or install prerequisites

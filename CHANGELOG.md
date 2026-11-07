@@ -700,6 +700,16 @@ A Linux VPS drove the rented Mac mini through the CLI and MCP: all six checklist
   passes through the agent (#127; the deploy-key path itself is not yet run on a rented Mac); the VPS's
   ssh key goes in when renting (#126).
 
+### Tailscale SSH from host up (#126)
+
+- `tapdance host up --tailscale-ssh` (and `host-setup.sh --tailscale-ssh`, which passes it on) also
+  runs `tailscale set --ssh`, so a VPS in the tailnet reaches the host with `ssh <user>@<host>.ts.net`
+  without copying an ssh key. A refusal only warns and names the fix (`sudo tailscale set --ssh`, or the
+  open-source `tailscaled` instead of the macOS app). Who may connect stays the tailnet policy's call.
+  Unit-tested; not yet run on a host.
+- Not built: a GitHub device-code login (`gh auth login --web`). It would give the host read and write
+  access to every repository of the account; the deploy key (one repository, read-only) stays the way.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, Google's Android CLI on a remote host, a full

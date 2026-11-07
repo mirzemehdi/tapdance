@@ -170,8 +170,10 @@ machine** (it was on 11-07) there is no "own machine" to run them from; use thes
   `ssh-copy-id -i ~/.ssh/rented-mac.pub m1@<mac-ip>` (or `cat … | ssh m1@<mac-ip> 'cat >> ~/.ssh/authorized_keys'`).
   Without `sshpass` on the VPS, feed the password through `SSH_ASKPASS` (a throwaway script that prints
   it, `SSH_ASKPASS_REQUIRE=force`, `DISPLAY=:0`, run with `setsid`), never on a command line; delete the
-  script afterwards. Tailscale SSH is not on by default on the host (`Host key verification failed`), so
-  the tailnet does not help here. [#126](https://github.com/mirzemehdi/tapdance/issues/126)
+  script afterwards. Tailscale SSH is not on by default on the host (`Host key verification failed`);
+  setting the host up with `host-setup.sh … --tailscale-ssh` (or `tapdance host up --tailscale-ssh`)
+  turns it on, after which the VPS reaches the Mac as `ssh m1@<mac>.<tailnet>.ts.net` with no key at all
+  (not yet run). [#126](https://github.com/mirzemehdi/tapdance/issues/126)
 - **Checkpoint B, GitHub access.** Best without a second machine: a **deploy key made on the Mac**, so
   no secret leaves it ([#127](https://github.com/mirzemehdi/tapdance/issues/127)). The agent runs
   `tapdance host builds key --repo git@github.com:<owner>/<repo>.git` on the Mac, which prints only the
