@@ -99,14 +99,15 @@ if ! servers_json=$(list apple-silicon server list zone=all); then
   printf '%-22s UNKNOWN (see the error above)\n' "Mac mini servers"
   unknown=$((unknown + 1))
 else
-  rows=$(jq -r '.[]? | "\(.name) id=\(.id) type=\(.type) status=\(.status) zone=\(.zone) created=\(.created_at // "?") deletable_at=\(.deletable_at // "?") scheduled_deletion=\(.deletion_scheduled // .schedule_deletion // "?")"' <<<"$servers_json" 2>/dev/null) || {
+  # A jq failure is UNKNOWN, never "none": printing nothing would read as nothing left.
+  if ! rows=$(jq -r '.[]? | "\(.name) id=\(.id) type=\(.type) status=\(.status) zone=\(.zone) created=\(.created_at // "?") deletable_at=\(.deletable_at // "?") scheduled_deletion=\(.deletion_scheduled // .schedule_deletion // "?")"' <<<"$servers_json" 2>/dev/null); then
     printf '%-22s UNKNOWN (unexpected output from scw)\n' "Mac mini servers"
     unknown=$((unknown + 1))
-    rows=""
-  }
-  report "Mac mini servers" \
-    "billed by the hour from creation until deletion, also while powered off (M1-M about EUR 0.11/hour, EUR 2.64 a day). Deletion is refused before deletable_at (the 24-hour minimum)." \
-    "$rows"
+  else
+    report "Mac mini servers" \
+      "billed by the hour from creation until deletion, also while powered off (M1-M about EUR 0.11/hour, EUR 2.64 a day). Deletion is refused before deletable_at (the 24-hour minimum)." \
+      "$rows"
+  fi
 fi
 
 # Private Networks attached to Apple silicon servers (zone-scoped), then VPC Private Networks in every
@@ -116,10 +117,14 @@ if ! pn_json=$(list apple-silicon private-network list zone=all); then
   printf '%-22s UNKNOWN (see the error above)\n' "Mac mini private nets"
   unknown=$((unknown + 1))
 else
-  pn_rows=$(jq -r '.[]? | "server=\(.server_id) private_network=\(.private_network_id) status=\(.status // "?") zone=\(.zone // "?")"' <<<"$pn_json" 2>/dev/null) || pn_rows=""
-  report "Mac mini private nets" \
-    "Private Network for Apple silicon: about EUR 0.03/hour per server while enabled (EUR 0.06 for 10 Gbps)." \
-    "$pn_rows"
+  if ! pn_rows=$(jq -r '.[]? | "server=\(.server_id) private_network=\(.private_network_id) status=\(.status // "?") zone=\(.zone // "?")"' <<<"$pn_json" 2>/dev/null); then
+    printf '%-22s UNKNOWN (unexpected output from scw)\n' "Mac mini private nets"
+    unknown=$((unknown + 1))
+  else
+    report "Mac mini private nets" \
+      "Private Network for Apple silicon: about EUR 0.03/hour per server while enabled (EUR 0.06 for 10 Gbps)." \
+      "$pn_rows"
+  fi
 fi
 
 if vpc_json=$(list vpc private-network list region=all); then

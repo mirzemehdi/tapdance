@@ -22,7 +22,7 @@ server with no device.
 | `checklists/mcp-app.json` | Your app: install from CI or from an APK file, launch, inspect, screenshot, optional tap and typing, recording, app logs, crash logs, sandbox push and pull (debuggable builds), rotate, audit, list, kill, clear, relaunch, release. |
 | `checklists/mcp-build.json` | A build on the host (`build_app`), then launch, inspect, screenshot, release. |
 | `checklists/mcp-ios-base.json` | iOS home screen: lease (`DEVICE`, `OS`), keys, inspect, screenshot, swipes, alert, rotate, recording, push to the Files app, notifications, language, logs, crash reports, audit, opened links, release. |
-| `checklists/mcp-ios-app.json` | iOS app: install `APP` (a simulator `.app`, or a `.zip` holding one), launch, launch with console, inspect, alert, tap and typing, recording, app logs, crash reports, push to the app's Documents, launch in de-DE, rotate, audit, kill, clear, relaunch, release. |
+| `checklists/mcp-ios-app.json` | iOS app: install from CI (`CI_REPO`, `CI_ARTIFACT`: a simulator `.app` artifact) or `APP` (a simulator `.app`, or a `.zip` holding one), launch, launch with console, inspect, alert, tap and typing, recording, app logs, crash reports, push to the app's Documents, launch in de-DE, rotate, audit, kill, clear, relaunch, release. |
 | `checklists/mcp-ios-build.json` | iOS build on the host (`build_app` with `BUILD_PROJECT` / `BUILD_SCHEME`), launch, inspect, screenshot, the same build again (reused), release. |
 
 ## Before you run anything
@@ -101,6 +101,8 @@ A JSON array of steps:
   runs in the output folder, which holds `push.txt` for the push steps.
 - `requires`: skip the step unless these parameters are set. `optional`: leave out an argument whose
   whole value is an unset `${KEY}`.
-- `stopOnFail`: skip the rest when this step fails (the lease, the launch). `timeoutSec`: default 900.
+- `stopOnFail`: skip the rest when this step fails (the lease, the launch), except steps marked
+  `"always": true`, which run anyway. Every checklist marks its `release_device` step that way, so a
+  failed run does not leave the device leased. `timeoutSec`: default 900.
 - `expectText`: fail the step unless the reply's text contains this.
 - `{ "tool": "__list" }` saves the server's tool list to `tools.json`.

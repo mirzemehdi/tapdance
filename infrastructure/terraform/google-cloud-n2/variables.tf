@@ -155,7 +155,7 @@ variable "subnet_cidr" {
 }
 
 variable "enable_iap_ssh" {
-  description = "Allow SSH (TCP 22) only from Google's IAP TCP-forwarding range 35.235.240.0/20, and enable the IAP API. Set false after the worker has joined to close SSH completely."
+  description = "Allow SSH (TCP 22) only from Google's IAP TCP-forwarding range 35.235.240.0/20, and enable the IAP API. Set false once setup is done and the agent's machine reaches the guard over Tailscale, to close SSH completely."
   type        = bool
   default     = true
 }

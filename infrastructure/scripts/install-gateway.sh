@@ -142,7 +142,16 @@ else
   else
     git clone --depth 1 --branch "$TAPDANCE_REF" "$TAPDANCE_REPO" "$TAPDANCE_SOURCE_DIR"
   fi
-  if command -v corepack >/dev/null 2>&1; then PNPM=(corepack pnpm); else PNPM=(npx --yes pnpm@10.20.0); fi
+  # pnpm comes from Corepack (bundled with Node 22) at the version package.json pins; npx is the
+  # fallback when a Node build ships without Corepack. The root build script calls a bare `pnpm`,
+  # so Corepack's pnpm shim goes into $BIN_DIR (on PATH, no sudo), like host-setup.sh does.
+  if command -v corepack >/dev/null 2>&1; then
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack enable --install-directory "$BIN_DIR" pnpm
+    hash -r
+    PNPM=(pnpm)
+  else
+    PNPM=(npx --yes pnpm@10.20.0)
+  fi
   (
     cd "$TAPDANCE_SOURCE_DIR"
     export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -180,9 +189,6 @@ else
     it into an issue or chat, or keep it in shell history.
 EOF
   tapdance gateway setup "${SETUP_ARGS[@]}"
-  note "Ignore the 'npm install -g tapdance' line printed above: that npm name is an unrelated"
-  note "package. Install Tapdance on the worker with infrastructure/scripts/install-android-worker.sh"
-  note "(Linux) or from a git checkout (macOS) instead."
 fi
 
 if [[ $INSTALL_SERVICE -eq 1 ]]; then
