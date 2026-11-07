@@ -224,29 +224,30 @@ export class SimlockProvider implements DeviceProvider {
       return checks;
     }
 
+    let gatewayWorkers: SimlockWorker[] = [];
     try {
       const status = await this.http.status();
       // A gateway's host facts describe the gateway machine, not the workers that run the devices (review).
       const host = status.daemon?.mode === "gateway" ? undefined : status.host;
       let caps = new Map((status.capabilities ?? []).map((c) => [c.name, c]));
-      // A gateway reports capabilities per worker; take the best state among connected workers.
-      if (caps.size === 0 && status.daemon?.mode === "gateway" && this.connection.operatorToken) {
-        const workers = (await this.workers().catch(() => [])).filter((w) => w.connection === "connected");
-        const rank = (state: string | undefined) => (state === "available" ? 2 : state === undefined ? 0 : 1);
-        const merged = new Map<string, { name: string; state: string; reason?: string }>();
-        for (const w of workers) {
-          for (const [name, state] of Object.entries(w.capabilities)) {
-            if (rank(state) > rank(merged.get(name)?.state)) merged.set(name, { name, state, reason: `on ${w.label ?? w.id}` });
-          }
-        }
-        caps = merged;
+      // A gateway reports capabilities per worker: its status lists them for any token (agent tokens
+      // included, without leases), `/v1/workers` only for an operator. Take the best state among
+      // connected workers.
+      const gateway = status.daemon?.mode === "gateway";
+      const fleet = gateway ? (status.workers ?? []) : [];
+      gatewayWorkers = fleet;
+      const starting = fleet.filter((w) => (w.connection ?? w.state) === "connected" && w.health === "starting");
+      if (caps.size === 0 && gateway) {
+        const workers = fleet.length > 0 ? fleet.map(toWorkerInfo) : this.connection.operatorToken ? await this.workers().catch(() => []) : [];
+        caps = mergedCapabilities(workers.filter((w) => w.connection === "connected"));
       }
       const ad = caps.get("agent-device");
+      const unknownYet = ad === undefined && starting.length > 0;
       checks.push({
         id: "simlock.agent-device",
         title: "agent-device served by Simlock",
-        status: ad?.state === "available" ? "pass" : "fail",
-        detail: ad === undefined ? "capability not reported" : `${ad.state}${ad.reason ? `: ${ad.reason}` : ""}`,
+        status: ad?.state === "available" ? "pass" : unknownYet ? "warn" : "fail",
+        detail: ad === undefined ? (unknownYet ? `unknown: ${starting.map((w) => w.label ?? w.id).join(", ")} still starting` : "capability not reported") : `${ad.state}${ad.reason ? `: ${ad.reason}` : ""}`,
         ...(ad?.state === "available"
           ? {}
           : {
@@ -323,6 +324,8 @@ export class SimlockProvider implements DeviceProvider {
           ...(same ? {} : { fix: `Run Simlock ${TESTED_SIMLOCK_VERSION} on the gateway and every worker: each release talks only to its own protocol version.` }),
         });
       }
+      // One row per worker behind a gateway, from its status (no operator token needed).
+      for (const w of fleet) checks.push(workerRow(w));
       if (this.axe) {
         const version = await this.axe.version();
         checks.push({
@@ -337,7 +340,17 @@ export class SimlockProvider implements DeviceProvider {
       checks.push({ id: "simlock.status", title: "Simlock status", status: "fail", detail: (error as Error).message });
     }
 
-    if (this.connection.operatorToken) {
+    const listed = gatewayWorkers;
+    if (listed.length > 0 && !this.connection.operatorToken) {
+      const online = listed.filter((w) => (w.connection ?? w.state) === "connected");
+      checks.push({
+        id: "simlock.workers",
+        title: "Workers online",
+        status: online.length > 0 ? "pass" : "fail",
+        detail: listed.map((w) => `${w.label ?? w.id}: ${w.connection ?? w.state ?? "unknown"}`).join(", "),
+        ...(online.length > 0 ? {} : { fix: "Start a worker and join it: `echo <join token> | tapdance worker login --gateway wss://… --accept-gateway-exec`." }),
+      });
+    } else if (this.connection.operatorToken) {
       try {
         const workers = await this.workers();
         const online = workers.filter((w) => w.connection === "connected" || w.connection === "self");
@@ -2042,6 +2055,49 @@ export function toUiElement(node: Record<string, unknown>): UiElement {
   return el;
 }
 
+/** The best state of each capability among `workers`, naming the worker it comes from. */
+function mergedCapabilities(workers: WorkerInfo[]): Map<string, { name: string; state: string; reason?: string }> {
+  const rank = (state: string | undefined) => (state === "available" ? 2 : state === undefined ? 0 : 1);
+  const merged = new Map<string, { name: string; state: string; reason?: string }>();
+  for (const w of workers) {
+    for (const [name, state] of Object.entries(w.capabilities)) {
+      if (rank(state) > rank(merged.get(name)?.state)) merged.set(name, { name, state, reason: `on ${w.label ?? w.id}` });
+    }
+  }
+  return merged;
+}
+
+/** A doctor row for one worker behind a gateway: connection, capacity per platform, capabilities. */
+export function workerRow(w: SimlockWorker): DoctorCheck {
+  const name = w.label ?? w.id;
+  const connection = (w.connection ?? w.state ?? "unknown").toLowerCase();
+  const starting = connection === "connected" && w.health === "starting";
+  const platforms = (["android", "ios"] as const)
+    .filter((p) => (w.capacity?.[p]?.limit ?? 0) > 0)
+    .map((p) => `${p} ${w.capacity?.[p]?.running ?? 0}/${w.capacity?.[p]?.limit ?? 0}`);
+  const caps = (w.capabilities ?? []).map((c) => `${c.name} ${c.state}`);
+  const agentDevice = w.capabilities?.find((c) => c.name === "agent-device")?.state;
+  const status: DoctorCheck["status"] = connection !== "connected" || starting ? "warn" : agentDevice === "available" ? "pass" : "warn";
+  return {
+    id: `simlock.worker.${w.id}`,
+    title: `Worker ${name}`,
+    status,
+    detail: [
+      starting ? "connected, still starting (capabilities unknown)" : connection,
+      platforms.length ? platforms.join(", ") : starting ? "" : "no capacity",
+      caps.length ? caps.join(", ") : starting ? "" : "no capabilities reported",
+      w.host?.os ? `${w.host.os}${w.host.arch ? ` ${w.host.arch}` : ""}` : "",
+    ]
+      .filter(Boolean)
+      .join("; "),
+    ...(status === "pass" || starting
+      ? {}
+      : connection !== "connected"
+        ? { fix: `Start ${name} again; it joins the gateway on its own (\`tapdance worker status\` there).` }
+        : { fix: `Run \`tapdance worker install\` on ${name} (it enables the bundled agent-device), then \`tapdance worker restart\`.` }),
+  };
+}
+
 function toWorkerInfo(w: SimlockWorker): WorkerInfo {
   const conn = (w.connection ?? w.state ?? "disconnected").toLowerCase();
   return {
@@ -2049,7 +2105,7 @@ function toWorkerInfo(w: SimlockWorker): WorkerInfo {
     ...(w.label ? { label: w.label } : {}),
     connection: conn === "connected" ? "connected" : conn === "incompatible" ? "incompatible" : "disconnected",
     platforms: (["android", "ios"] as const).map((p) => ({ platform: p, running: w.capacity?.[p]?.running ?? 0, limit: w.capacity?.[p]?.limit ?? 0 })),
-    leases: w.leases ?? 0,
+    leases: Array.isArray(w.leases) ? w.leases.length : (w.leases ?? 0),
     ...(w.host?.os ? { host: `${w.host.os} ${w.host.osVersion ?? ""} ${w.host.arch ?? ""}`.trim() } : {}),
     capabilities: Object.fromEntries((w.capabilities ?? []).map((c) => [c.name, c.state])),
     ...(w.lastSeenAt !== undefined ? { lastSeen: new Date(w.lastSeenAt).toISOString() } : {}),
