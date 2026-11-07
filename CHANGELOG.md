@@ -654,6 +654,22 @@ over Tailscale ([evidence](docs/testing/evidence/2026-11-06-rented-mac-ios.md)).
   the 24-hour minimum, automatic deletion, auto-login, 8 GB: no warm spare); troubleshooting for
   rented Macs.
 
+### After stage 3 (issues #121, #122)
+
+Unit-tested with a stand-in `gh` and `plutil`; not yet run on a host.
+
+- Added (#121): installs from CI on iOS leases. `app install --from-ci` and MCP `install_app` `from_ci`
+  take an artifact holding a simulator `.app` (the folder, the `.app`'s own contents, or one zipped
+  `.app`); the host unpacks it without a zip tool (no links, no paths outside the folder), restores the
+  execute bit on Mach-O files, refuses an `.ipa` or a device build (`CFBundleSupportedPlatforms` read
+  with `plutil`), installs it with `simctl install` and names its bundle id.
+- Added (#122): `tapdance host gh-login`, which logs the host's `gh` in with a token read with echo off
+  (or from stdin) and never printed; `gh auth login --with-token` echoed a pasted token over `ssh -t`.
+  Hints and guides name it.
+- Changed: a lease that times out asks the host to drop its request (a release of the lease id the
+  client chose) and says "the request was withdrawn" instead of "nothing was leased"; on the rented Mac
+  a request granted after the client gave up held the device until its TTL.
+
 ### Not yet proven
 
 A gateway across two machines over a real network, Google's Android CLI on a remote host, a full

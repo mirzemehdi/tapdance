@@ -386,12 +386,12 @@ export interface AppCiInstallResult {
   sha: string;
   branch: string;
   artifact: string;
-  /** The first 12 hex digits of the installed APK's sha256. */
-  apkSha256: string;
+  /** The first 12 hex digits of the installed APK's sha256 (Android; absent for an iOS .app). */
+  apkSha256?: string;
   /** The host had downloaded this run's artifact before and used that copy. */
   cached: boolean;
   installed: boolean;
-  /** The installed app's package, read from the APK on the host (#89); launch_app takes it. */
+  /** The installed app's package or bundle id, read on the host (#89, #121); launch_app takes it. */
   appId?: string;
   /** The installed APK's versionCode. */
   versionCode?: number;

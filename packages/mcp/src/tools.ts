@@ -230,7 +230,7 @@ export const TOOLS: ToolDefinition[] = [
     name: "install_app",
     title: "Install an app",
     description:
-      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (or a .zip/.tar holding one; .ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps. launch: an app id to relaunch once installed (saves a launch_app call). Android only, instead of path: from_ci {repo, artifact, run?, branch?} has the device's host download an APK the user's CI built (a GitHub Actions artifact) with the host's own read-only GitHub credentials and install it; you never need a GitHub token and the APK does not travel through this machine. The reply names the installed package (appId) and whether the host reused an earlier download (cached). The host's owner allow-lists the repository; a refusal names what to ask for.",
+      "Upload and install an app onto the leased device: an .apk or .aab for Android (an .aab becomes a universal APK with bundletool on this machine), a simulator .app bundle for iOS (or a .zip/.tar holding one; .ipa is refused). The path must be inside the project directory this server runs in. For iOS build with `xcodebuild -sdk iphonesimulator -derivedDataPath ./build ...` and pass ./build/Build/Products/Debug-iphonesimulator/<App>.app; for Android pass app/build/outputs/apk/debug/app-debug.apk. Returns the appId for launch_app; if it is missing, call list_apps. launch: an app id to relaunch once installed (saves a launch_app call). Instead of path: from_ci {repo, artifact, run?, branch?} has the device's host download the app the user's CI built (a GitHub Actions artifact: an APK, or for iOS a simulator .app or a zip of one) with the host's own read-only GitHub credentials and install it; you never need a GitHub token and the app does not travel through this machine. The reply names the installed package (appId) and whether the host reused an earlier download (cached). The host's owner allow-lists the repository; a refusal names what to ask for.",
     input: z
       .object({
         path: z.string().min(1).max(4096).optional().describe("Absolute or working-directory-relative path to the .apk or .app. Give path or from_ci."),
@@ -244,7 +244,7 @@ export const TOOLS: ToolDefinition[] = [
           })
           .strict()
           .optional()
-          .describe("Android only: install an APK from the user's GitHub Actions run instead of a local path."),
+          .describe("Install the app (an APK, or an iOS simulator .app) from the user's GitHub Actions run instead of a local path."),
         launch: appId.optional().describe("Relaunch this app once it is installed, like the CLI's --launch (saves a launch_app call)."),
       })
       .strict(),

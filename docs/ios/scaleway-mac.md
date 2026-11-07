@@ -137,11 +137,12 @@ scp m1@<mac-ip>:.tapdance/worker/pairing-my-agent.token .
 ### Private repositories for host builds
 
 `--git-auth gh` needs `gh` logged in on the Mac with a fine-grained, read-only token for the one
-repository (Contents: read-only, short expiry). `gh auth login --with-token` **echoes what you paste**
-over `ssh -t`; read it hidden instead (#122):
+repository (Contents: read-only, short expiry; add Actions: read-only for installs from CI).
+`gh auth login --with-token` **echoes what you paste** over `ssh -t`; `tapdance host gh-login` reads it
+with echo off (#122):
 
 ```bash
-read -rs T && printf '%s\n' "$T" | gh auth login --hostname github.com --with-token; unset T
+tapdance host gh-login
 tapdance host builds enable --repo https://github.com/<owner>/<repo> --git-auth gh --protected-ref main --allow-admin-account
 ```
 
@@ -152,7 +153,9 @@ tapdance connect https://<mac>.<tailnet>.ts.net:4720 < pairing-my-agent.token
 ```
 
 `doctor` then shows iOS available and Android as a warning ("not on this host"). From there it is the
-usual flow: `tapdance device lease --platform ios`, `app build --git …` or `app install <app.zip>`,
+usual flow: `tapdance device lease --platform ios`, `app build --git …`, `app install <app.zip>` or
+`app install --from-ci <owner/repo> --artifact <name>` (a simulator `.app` your CI built; the host needs
+`host artifacts enable --repo <owner/repo>`),
 `ui inspect`, … or the same through `tapdance mcp`. On iOS, the Home Screen is read with
 `ui inspect --app com.apple.springboard`.
 

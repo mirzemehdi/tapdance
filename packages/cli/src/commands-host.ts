@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "node:os";
@@ -34,6 +35,7 @@ import {
   Tapdance,
   TapdanceError,
   hostChecks,
+  redactSecrets,
   saveCredentials,
   toTapdanceError,
   userConfigPath,
@@ -821,6 +823,45 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             `${fingerprint ? `Fingerprint ${fingerprint}. ` : ""}The private key stays here: ${key}. Use ssh URLs (git@github.com:owner/repo.git) with --git-auth deploy-key.`,
             "GitHub accepts one deploy key on one repository only: for a second repository, use `tapdance host builds key --repo <url>`.",
             DEPLOY_KEYS_OFF,
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  host
+    .command("gh-login")
+    .description("Log this machine's gh in with a GitHub token read with echo off (or from stdin), for builds with --git-auth gh and installs from CI; never prints the token")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const gh = findOnPath("gh", process.env["PATH"] ?? "", existsSync) ?? ["/opt/local/bin/gh", "/opt/homebrew/bin/gh", "/usr/local/bin/gh"].find((p) => existsSync(p));
+        if (!gh) throw new TapdanceError("PROVIDER_UNAVAILABLE", "gh (GitHub's CLI) is not installed on this machine", { hint: "scripts/host-setup.sh --with-gh, or https://cli.github.com" });
+        if (process.stdin.isTTY) {
+          out.progress("Use a fine-grained token: only the repositories this host builds or installs from, Contents: read (builds) and Actions: read (installs from CI), a short expiry.");
+        }
+        // #122: `gh auth login --with-token` over `ssh -t` echoes what is pasted; this reads it hidden.
+        const token = await readSecret("GitHub token (input hidden):");
+        if (!token) throw new TapdanceError("USAGE", "No token given", { hint: "Paste the token at the prompt, or pipe it in: `tapdance host gh-login < token-file`." });
+        const login = await new Promise<{ code: number; text: string }>((resolveLogin) => {
+          const child = spawn(gh, ["auth", "login", "--hostname", "github.com", "--with-token"], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, GH_PROMPT_DISABLED: "1", NO_COLOR: "1" } });
+          let text = "";
+          child.stdout.on("data", (d: Buffer) => (text += d.toString("utf8")));
+          child.stderr.on("data", (d: Buffer) => (text += d.toString("utf8")));
+          child.on("error", (e) => resolveLogin({ code: 127, text: e.message }));
+          child.on("close", (code) => resolveLogin({ code: code ?? 1, text }));
+          child.stdin.end(`${token}\n`);
+        });
+        if (login.code !== 0) {
+          throw new TapdanceError("AUTH_FAILED", `gh did not accept the token: ${redactSecrets(login.text.trim().split("\n").slice(-2).join(" ")) || `exit ${login.code}`}`, { hint: "Check that the token is current and has access to the repositories (fine-grained: Contents and Actions read)." });
+        }
+        const status = await runCommand(gh, ["auth", "status", "--hostname", "github.com"]);
+        const who = /account (\S+)/.exec(status.out)?.[1] ?? /as (\S+)/.exec(status.out)?.[1];
+        out.result({ loggedIn: status.ok, ...(who ? { account: who } : {}) }, () =>
+          [
+            `gh is logged in${who ? ` as ${who}` : ""} on github.com; the token was not printed.`,
+            "Next: `tapdance host builds enable --repo <url> --git-auth gh` (builds) or `tapdance host artifacts enable --repo <owner/repo>` (installs from CI). Revoke the token on GitHub when you stop hosting.",
           ].join("\n"),
         );
       } catch (error) {

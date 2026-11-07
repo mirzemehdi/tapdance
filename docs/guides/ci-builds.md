@@ -98,7 +98,7 @@ On the host, once (off by default):
 
 ```bash
 # a fine-grained token: Actions: Read-only and Contents: Read-only on the app's repository
-read -rsp "GitHub token: " t && echo && printf '%s' "$t" | gh auth login --with-token; unset t
+tapdance host gh-login     # reads the token with echo off and passes it to gh auth login
 tapdance host artifacts enable --repo acme/app --branch main
 tapdance host artifacts status --check
 ```
@@ -107,7 +107,7 @@ tapdance host artifacts status --check
 when the token does not reach them (`--no-check` skips it); `status --check` does the same later.
 `tapdance host artifacts disable --repo acme/app` takes one repository off the list.
 
-On the agent's machine, with an Android lease:
+On the agent's machine, with an Android or iOS lease:
 
 ```bash
 tapdance app install --from-ci acme/app --artifact app-debug --launch com.acme.app
@@ -120,6 +120,13 @@ default branch) that has the artifact; forks' runs are never used. MCP: `install
 "com.acme.app"` to relaunch it in the same call. The reply names the installed package (`appId`,
 read by the host from the APK's manifest) and whether the host reused its earlier download (`cached`),
 so an agent can call `launch_app` without `list_apps` first.
+
+**iOS (#121, unit-tested only):** the artifact must hold a **simulator** build. Upload the `.app` folder
+(`build/Build/Products/Debug-iphonesimulator/<App>.app` after `xcodebuild -sdk iphonesimulator
+-derivedDataPath build …`), or a zip of it (`ditto -c -k --keepParent <App>.app app.zip`, which keeps
+file modes). The host unpacks it, gives Mach-O files their execute bit back (actions/upload-artifact
+drops file modes), checks with `plutil` that `CFBundleSupportedPlatforms` says `iPhoneSimulator`,
+installs it with `simctl install` and names its bundle id. An `.ipa` or a device build is refused.
 
 - **The token must select the repository whose workflow made the artifact.** A token for another
   repository (another repository of the same app, say) gets "GitHub answered 404" from Tapdance. An

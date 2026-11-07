@@ -35,4 +35,4 @@ export { listCrashReports, readCrashReport, summarizeCrash, crashReportsDir, typ
 export { consolePaths, clearConsole, readConsole } from "./console-capture.js";
 export { checkTimedTaps, orientationOf, playTouches, sequenceResult, toFramebuffer, viewportFromConfig, DEFAULT_HOLD_MS, type InputConfig, type PlayedTap, type Orientation } from "./touch-sequence.js";
 export { parseIosLinkLog, parseAndroidLinkLog, type OpenedLink } from "./links.js";
-export { checkCiRequest, fetchCiApk, ciAccessProbe, type CiAccess, githubRepo, ghEnv, ghFailure, readZipEntries, checkZipEntries, extractApk, artifactCacheBytes, ARTIFACT_NAME, RUN_ID, BRANCH_NAME, OWNER_GH_HINT, type CiInstallRequest, type ArtifactSettings, type CiApk, type ZipEntry } from "./ci-artifacts.js";
+export { checkCiRequest, fetchCiApk, fetchCiApp, extractApp, ciAccessProbe, type CiAccess, githubRepo, ghEnv, ghFailure, readZipEntries, checkZipEntries, extractApk, artifactCacheBytes, ARTIFACT_NAME, RUN_ID, BRANCH_NAME, OWNER_GH_HINT, type CiInstallRequest, type ArtifactSettings, type CiApk, type CiApp, type ZipEntry } from "./ci-artifacts.js";

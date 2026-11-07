@@ -512,11 +512,6 @@ export class SimlockProvider implements DeviceProvider {
 
   async installFromCi(handle: LeaseHandle, request: AppCiInstallRequest, onLine: (line: string) => void): Promise<AppCiInstallResult> {
     this.data(handle);
-    if (handle.platform !== "android") {
-      throw new TapdanceError("NOT_SUPPORTED", "Installing from CI works for Android leases only", {
-        hint: "For an iOS simulator, build a simulator .app (xcodebuild -sdk iphonesimulator) and upload it with `tapdance app install <path>`, or build it on the host with `tapdance app build`.",
-      });
-    }
     if (this.isLocal()) {
       throw new TapdanceError("NOT_SUPPORTED", "Installs from CI go through a worker guard", {
         hint: "On this machine, download the artifact yourself (gh run download <run-id> -n <artifact>) and run `tapdance app install <path>`.",
@@ -652,8 +647,12 @@ export class SimlockProvider implements DeviceProvider {
       });
     } catch (error) {
       if (waitSignal?.aborted) {
-        throw new TapdanceError("TIMEOUT", `No device was granted within ${Math.round((waitMs ?? 0) / 1000)} s; nothing was leased`, {
-          hint: "Every matching device is busy or still booting. Retry, raise session.leaseWaitSeconds, or ask for another model.",
+        // The host may still grant the request after this side gave up (seen on a rented Mac: granted
+        // after 59 s while the client had lost the link). Ask it to drop the lease id we chose, so a
+        // late grant does not hold a device until its TTL; best effort, never in the way of the error.
+        await client.leases.release({ leaseId, deviceKey: "", tenant: base.tenant, runId: base.runId, clientId: base.clientId } as never).catch(() => undefined);
+        throw new TapdanceError("TIMEOUT", `No device was granted within ${Math.round((waitMs ?? 0) / 1000)} s; the request was withdrawn`, {
+          hint: "Every matching device is busy or still booting. Retry, raise session.leaseWaitSeconds, or ask for another model. If the host granted it anyway, it ends at its TTL; `tapdance devices` shows what runs.",
         });
       }
       throw fromAgentDeviceError(error, "lease");

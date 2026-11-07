@@ -43,4 +43,4 @@ export function ghNeededFor(policy: { allow?: { builds?: boolean; artifacts?: bo
 }
 
 /** The owner's fix when `gh` is missing or not logged in. */
-export const GH_FIX = "install it (scripts/host-setup.sh --with-gh, or your package manager), then `gh auth login --with-token` with a fine-grained read-only token (Contents and Actions: read) for the allowed repositories";
+export const GH_FIX = "install it (scripts/host-setup.sh --with-gh, or your package manager), then `tapdance host gh-login` with a fine-grained read-only token (Contents and Actions: read) for the allowed repositories";

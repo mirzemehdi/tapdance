@@ -528,10 +528,10 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   app
     .command("install [path]")
     .description(
-      "Upload and install an app: Android .apk or .aab (an .aab becomes a universal APK with bundletool on this machine); iOS simulator .app bundle, or a .zip or .tar holding one (.ipa on a physical iPhone only). With --from-ci instead of a path: the device's host downloads an Android APK from a GitHub Actions artifact with its own credentials and installs it",
+      "Upload and install an app: Android .apk or .aab (an .aab becomes a universal APK with bundletool on this machine); iOS simulator .app bundle, or a .zip or .tar holding one (.ipa on a physical iPhone only). With --from-ci instead of a path: the device's host downloads the app from a GitHub Actions artifact with its own credentials and installs it (an Android APK, or an iOS simulator .app)",
     )
     .option("--app-id <id>", "package / bundle id, when the backend needs it")
-    .option("--from-ci <repo>", "Android: install from the user's CI instead of a path: a GitHub repository (owner/repo or URL) on the host's allow-list (`tapdance host artifacts enable`)")
+    .option("--from-ci <repo>", "install from the user's CI instead of a path (an APK, or an iOS simulator .app): a GitHub repository (owner/repo or URL) on the host's allow-list (`tapdance host artifacts enable`)")
     .option("--artifact <name>", "with --from-ci: the artifact's name (actions/upload-artifact name)")
     .option("--run <id>", "with --from-ci: the workflow run id (default: the newest successful run on --branch)")
     .option("--branch <name>", "with --from-ci: take the newest successful run on this branch (default: the repository's default branch)")
@@ -545,7 +545,7 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
             if (o.launch) await t.launchApp(o.launch, { relaunch: true });
             out.result({ installed: r, ...(o.launch ? { launched: o.launch } : {}) }, () =>
               [
-                `Installed ${r.appId ? `${r.appId}${r.versionCode !== undefined ? ` (versionCode ${r.versionCode})` : ""}, ` : ""}${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, apk sha256 ${r.apkSha256}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`,
+                `Installed ${r.appId ? `${r.appId}${r.versionCode !== undefined ? ` (versionCode ${r.versionCode})` : ""}, ` : ""}${r.artifact} from ${r.repo} run ${r.runId} (${r.branch} at ${r.sha.slice(0, 12)}, ${r.apkSha256 ? `apk sha256 ${r.apkSha256}` : "simulator app"}${r.cached ? ", the host's earlier download" : ""})${o.launch ? `; launched ${o.launch}` : ""}`,
                 ...launchMismatch(r.appId, o.launch),
               ].join("\n"),
             );

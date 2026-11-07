@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import type { CommandRunner } from "./build.js";
-import { checkCiRequest, ciAccessProbe, extractApk, fetchCiApk, githubRepo, type ArtifactSettings } from "./ci-artifacts.js";
+import { checkCiRequest, ciAccessProbe, extractApk, extractApp, fetchCiApk, fetchCiApp, githubRepo, type ArtifactSettings } from "./ci-artifacts.js";
 
 const SHA = "c".repeat(40);
 const settings: ArtifactSettings = { repos: ["acme/app"], branches: [], maxMB: 5 };
@@ -232,5 +232,66 @@ describe("install from CI: checking access when the owner allows a repository (f
     const missing = await ciAccessProbe("acme/app", answer({ at: "repos/acme/app", output: "gh: Not Found (HTTP 404)" }));
     expect(missing).toMatchObject({ ok: false, reason: "GH_NOT_FOUND" });
     expect(await ciAccessProbe("acme/app;id", answer())).toMatchObject({ ok: false, reason: "USAGE" });
+  });
+});
+
+// #121: iOS simulator apps from CI. Zips are built in memory; plutil and gh are stand-ins (mocked).
+describe("install from CI: iOS simulator .app", () => {
+  const MACHO = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 1, 2, 3, 4]);
+  const appFiles = (prefix: string) => [
+    { name: `${prefix}Info.plist`, data: Buffer.from("plist") },
+    { name: `${prefix}Demo`, data: MACHO },
+    { name: `${prefix}Frameworks/Lib.framework/Lib`, data: MACHO },
+    { name: `${prefix}Assets.car`, data: Buffer.from("assets") },
+  ];
+  const unpack = async (zip: Buffer) => {
+    const d = await mkdtemp(join(tmpdir(), "td-ci-app-"));
+    await writeFile(join(d, "a.zip"), zip);
+    return { d, r: await extractApp(join(d, "a.zip"), join(d, "out"), 1024 * 1024, d) };
+  };
+
+  it("unpacks a .app folder, an artifact that is the .app's contents, and a zipped .app; Mach-O files get +x", async () => {
+    for (const [zip, name] of [
+      [makeZip(appFiles("Debug-iphonesimulator/Demo.app/")), "Demo.app"],
+      [makeZip(appFiles("")), "App.app"],
+      [makeZip([{ name: "Demo.app.zip", data: makeZip(appFiles("Demo.app/")) }]), "Demo.app"],
+    ] as const) {
+      const { d, r } = await unpack(zip);
+      expect(r.app).toBe(join(d, "out", name));
+      expect((await readdir(r.app)).sort()).toEqual(["Assets.car", "Demo", "Frameworks", "Info.plist"]);
+      expect((await stat(join(r.app, "Demo"))).mode & 0o111).not.toBe(0);
+      expect((await stat(join(r.app, "Frameworks/Lib.framework/Lib"))).mode & 0o111).not.toBe(0);
+      expect((await stat(join(r.app, "Assets.car"))).mode & 0o111).toBe(0);
+      expect(r.digest).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+
+  it("refuses an .ipa, an artifact with no app, links and paths that leave the folder", async () => {
+    await expect(unpack(makeZip([{ name: "Demo.ipa", data: Buffer.from("x") }]))).rejects.toThrow(/\.ipa \(a device build\)/);
+    await expect(unpack(makeZip([{ name: "readme.txt", data: Buffer.from("x") }]))).rejects.toThrow(/no simulator \.app/);
+    await expect(unpack(makeZip([...appFiles("Demo.app/"), { name: "Demo.app/link", data: Buffer.from("/etc/passwd"), mode: 0o120777 }]))).rejects.toThrow(/symbolic link/);
+    await expect(unpack(makeZip([...appFiles("Demo.app/"), { name: "Demo.app/../../evil", data: Buffer.from("x") }]))).rejects.toThrow(/leaves its folder/);
+  });
+
+  it("downloads, checks the platform with plutil, installs nothing itself and reuses the download", async () => {
+    const zip = makeZip(appFiles("Demo.app/"));
+    const gh = fakeGh({ runs: [okRun(9)], artifacts: { "9": [{ id: 99, name: "ios-sim", size: zip.length, expired: false }] }, zip });
+    let platforms = ["iPhoneSimulator"];
+    const run: CommandRunner = async (command, args, o) => {
+      if (command === "plutil") return { code: 0, output: JSON.stringify({ CFBundleIdentifier: "com.acme.demo", CFBundleSupportedPlatforms: platforms }) };
+      return gh.run(command, args, o);
+    };
+    const root = await mkdtemp(join(tmpdir(), "td-ci-app-root-"));
+    const first = await fetchCiApp({ repo: "acme/app", artifact: "ios-sim" }, settings, root, () => undefined, run);
+    expect(first).toMatchObject({ appId: "com.acme.demo", cached: false, runId: "9" });
+    expect(first.app.endsWith("Demo.app")).toBe(true);
+    const again = await fetchCiApp({ repo: "acme/app", artifact: "ios-sim" }, settings, root, () => undefined, run);
+    expect(again.cached).toBe(true);
+    expect(gh.downloads()).toBe(1);
+    // An APK request for the same run does not take the cached .app.
+    await expect(fetchCiApk({ repo: "acme/app", artifact: "ios-sim" }, settings, root, () => undefined, run)).rejects.toThrow(/no \.apk/);
+    platforms = ["iPhoneOS"];
+    const root2 = await mkdtemp(join(tmpdir(), "td-ci-app-root-"));
+    await expect(fetchCiApp({ repo: "acme/app", artifact: "ios-sim" }, settings, root2, () => undefined, run)).rejects.toThrow(/iPhoneOS build, not a simulator build/);
   });
 });
