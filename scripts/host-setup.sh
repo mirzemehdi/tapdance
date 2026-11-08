@@ -81,6 +81,9 @@
 # The script never prints or stores tokens: `tapdance host up` writes the pairing token to a mode-600
 # file and prints only its path. Windows: use scripts/host-setup.ps1, which explains the options.
 
+# The whole script is one { … } block: under `curl | bash`, bash reads all of it before running any of
+# it, so a download cut off part-way runs nothing. Keep the closing brace the last line.
+{
 set -euo pipefail
 
 REPO="${TAPDANCE_REPO:-https://github.com/mirzemehdi/tapdance}"
@@ -786,3 +789,4 @@ rm -rf "$TMP"; trap - EXIT
 # Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
 if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
 exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"
+}

@@ -76,6 +76,48 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["nonsense-command"]).code).toBe(2);
   });
 
+  // Review: numbers were taken as given (NaN, negatives, out of range); refused like MCP refuses them.
+  it("refuses bad numeric options with exit 2 USAGE before touching a device", () => {
+    const env = { TAPDANCE_PROVIDER: "self-hosted", TAPDANCE_ENDPOINT: "https://gw.example.com", TAPDANCE_TOKEN: "slk_testtesttest" };
+    const cases: Array<[string[], string]> = [
+      [["device", "setting", "location", "--lat", "91", "--lon", "0"], "--lat"],
+      [["device", "setting", "location", "--lat", "abc", "--lon", "0"], "--lat"],
+      [["device", "setting", "location", "--lat", "10", "--lon", "-181"], "--lon"],
+      [["device", "shell", "--timeout", "-5", "--", "id"], "--timeout"],
+      [["device", "shell", "--timeout", "abc", "--", "id"], "--timeout"],
+      [["ui", "tap", "--text", "OK", "--settle-ms", "5"], "--settle-ms"],
+      [["ui", "tap", "--text", "OK", "--settle-ms", "abc"], "--settle-ms"],
+      [["view", "--port", "abc"], "--port"],
+      [["view", "--port", "70000"], "--port"],
+      [["mcp", "--http", "--port", "abc"], "--port"],
+      [["worker", "guard", "audit", "-n", "abc"], "--lines"],
+      [["worker", "guard", "audit", "-n", "0"], "--lines"],
+    ];
+    for (const [args, flag] of cases) {
+      const r = tapdance(["--json", ...args], env);
+      expect({ args, code: r.code }).toEqual({ args, code: 2 });
+      expect(JSON.parse(r.stdout).error).toMatchObject({ code: "USAGE", message: expect.stringContaining(flag) });
+    }
+  });
+
+  // Review: revoke matches ids only, and `revoke <label>` used to revoke nothing and exit 0.
+  it("worker guard revoke refuses an id that matches no active pairing", () => {
+    const r = tapdance(["--json", "worker", "guard", "revoke", "my-laptop"]);
+    expect(r.code).toBe(2);
+    expect(JSON.parse(r.stdout).error).toMatchObject({ code: "USAGE", hint: expect.stringContaining("tapdance worker guard tokens") });
+  });
+
+  // Review: under `curl | bash` a cut-off download must run nothing, so the body is one { … } block.
+  it("host-setup.sh is one block that bash parses before it runs anything", () => {
+    const script = readFileSync(join(root, "scripts/host-setup.sh"), "utf8");
+    const lines = script.split("\n").filter((l) => l.trim() !== "");
+    expect(lines.at(-1)).toBe("}");
+    expect(lines.find((l) => !l.startsWith("#"))).toBe("{");
+    // Parse only (`-n`): the whole script parses, and a download cut off half-way does not.
+    expect(spawnSync("bash", ["-n"], { input: script }).status).toBe(0);
+    expect(spawnSync("bash", ["-n"], { input: script.slice(0, Math.floor(script.length / 2)) }).status).not.toBe(0);
+  });
+
   // #131: `ui inspect` prints refs like @e3~s1, and agents pass one as the argument.
   it("ui tap takes a ref as its argument and points other text at --text", () => {
     const env = { TAPDANCE_PROVIDER: "self-hosted", TAPDANCE_ENDPOINT: "https://gw.example.com", TAPDANCE_TOKEN: "slk_testtesttest" };

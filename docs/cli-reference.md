@@ -1401,7 +1401,7 @@ Android emulators: run a command with `adb shell` inside the leased emulator
 Options:
   --stdin <file>       pass this text file on stdin (binary: base64 it and
                        decode on the device with `base64 -d`)
-  --timeout <seconds>  default 120
+  --timeout <seconds>  default 120, at most 600
   -h, --help           display help for command
 ```
 
@@ -1685,9 +1685,9 @@ Options:
   --x <x>                x coordinate (fallback)
   --y <y>                y coordinate (fallback)
   --no-settle            do not wait for the UI to settle
-  --settle-ms <ms>       also wait up to this long for the UI to come to rest
-                         and report whether the screen changed (a tap that
-                         auto-advances)
+  --settle-ms <ms>       also wait up to this long (100-30000) for the UI to
+                         come to rest and report whether the screen changed (a
+                         tap that auto-advances)
   --inject               Android: tap with a raw input event (`input tap`) at
                          the element's centre, for system screens that ignore
                          normal taps
