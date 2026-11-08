@@ -9,9 +9,10 @@ device, one step after another, and writes a PASS/FAIL report with evidence for 
 > first run hit adb timeouts on an overloaded test Mac). MCP `run_scenario` has run only against
 > FakeProvider. Unit tests: `packages/sdk/src/scenario.test.ts`.
 
-Every step goes through the same Tapdance calls as `tapdance ui …` and the MCP tools, so a scenario
-works wherever those work: on a local worker, through a gateway, and through device-only mode. It does
-not use agent-device's own replay or test commands.
+Every step goes through the same Tapdance calls as `tapdance ui …` and the MCP tools. It does not use
+agent-device's own replay or test commands. Scenarios have run only on a local worker (the real iOS
+simulator and Android emulator above). Through device-only mode or a gateway they should work the same
+way, because the calls are the same, but nobody has run one there yet.
 
 A replay repeats the steps. It does not restore the app's data, a signed-in account, the network,
 the location or the clock that the original run saw. If the flow depends on any of them, set them up

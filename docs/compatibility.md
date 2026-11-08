@@ -1,21 +1,24 @@
 # Compatibility
 
 Which versions Tapdance 0.1.0 has been run with, and what is only expected to work. "Tested" means
-exercised on real devices and tools on 2026-11-01
-([evidence](testing/evidence/2026-11-01-local-ios.md)); everything else is marked. [STATUS.md](../STATUS.md)
-is the authority on what is proven.
+exercised on real devices and tools, with an evidence record. The runs date from 2026-11-01 to
+2026-11-07; rows link their own evidence, and the rest link the
+[first local run](testing/evidence/2026-11-01-local-ios.md). Everything else is marked.
+[STATUS.md](../STATUS.md) is the authority on what is proven.
 
-## Test host
+## Test hosts
 
-MacBook Pro, Apple M1 Pro, 16 GB RAM, macOS 26.5 (arm64), local mode (one machine). iPhone 16 simulator
-on iOS 18.5, created by Simlock.
+The main test host: a MacBook Pro, Apple M1 Pro, 16 GB RAM, macOS 26.5 (arm64), in local mode (one
+machine), with an iPhone 16 simulator on iOS 18.5 created by Simlock. The remote hosts (a Google Cloud N2
+VM and a rented Scaleway Mac mini) and the Linux VPS used as the agent's machine have their own rows
+below.
 
 ## Matrix
 
 | Component | Version | Status with Tapdance 0.1.0 | Notes |
 | --- | --- | --- | --- |
 | Node.js | 22.22.0 | Tested | Minimum 22.13 (Tapdance's and Simlock's `engines`). `doctor` fails below it. |
-| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Bundled; the runs above used 0.4.0 (local worker; gateway + joined worker on one Mac) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when the clean baseline is captured, #103). 0.5.0 with the patch ran on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-04-vps-n2-android-rerun.md)) and on a rented Scaleway Mac ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md)). Gateway and worker on two machines not tested. |
+| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Tested (see notes for which runs) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when the clean baseline is captured, #103). Runs up to 2026-11-03 used Simlock 0.4.0: the local Mac, the gateway with its worker on one Mac, the first VPS runs and the first Google Cloud N2 runs. Runs from 2026-11-04 used 0.5.0 with the patch: the N2 reruns ([evidence](testing/evidence/2026-11-04-vps-n2-android-rerun.md)), the rented Scaleway Mac ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md)) and the two-host run ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). Gateway and worker on two machines not tested. |
 | [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | Tested | Bundled, exact pin. Simlock runs it through `capabilities.agent-device.command`. |
 | Xcode | 26.5 (17F42) | Tested | iOS 18.5 runtime used; iOS 26.5 runtime installed but not leased in the recorded run. |
 | [asc](https://github.com/rorkai/App-Store-Connect-CLI) | 5.17.1 (Homebrew) | Tested | `--version` and `apps list` through the CLI and `execute_tool`. |
@@ -29,10 +32,11 @@ on iOS 18.5, created by Simlock.
 | [fastlane](https://github.com/fastlane/fastlane) | any | **Untested** | Registered for pass-through. |
 | Cloud Mac: Scaleway Mac mini M1-M | 8 GB, macOS 27.2, Xcode 27.0, iOS 27.0 | Tested | `host-setup.sh --ios-only`, `host up`, `connect` from a Mac and from a Linux VPS; CLI and MCP checklists, host builds ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md), [VPS](testing/evidence/2026-11-07-vps-rented-mac-ios.md)). One simulator at a time on 8 GB. |
 | Cloud Macs: MacStadium, AWS EC2 Mac | | **Untested** | Documentation only. |
+| Several connect targets | an N2 host (Android) and the Scaleway Mac (iOS) | Tested | One Linux VPS agent connected to both; one session leased Android, then iOS, through the CLI and MCP; with the Mac down, iOS leases failed fast with `PROVIDER_UNREACHABLE` while Android kept working ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). |
 
 Platform support:
 
-| Host | Control machine (CLI, MCP) | Worker | Gateway |
+| OS | Agent's machine (CLI, MCP) | Worker (host) | Gateway |
 | --- | --- | --- | --- |
 | macOS | Yes (tested) | iOS simulators (tested), Android emulators (tested) | Yes (tested with the worker on the same Mac) |
 | Linux | Yes (tested: a Linux VPS as the agent's machine) | Android emulators with KVM (tested on a Google Cloud N2 VM) | Untested |

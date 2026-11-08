@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # host-setup.sh — make this Mac or Linux machine a Tapdance device host in one command:
 #
-#   curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label my-mac
+#   curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label my-vps
 #
 # 1. Checks the prerequisites: Node.js 22.13+, git, a JDK 17+, the Android SDK (command-line tools,
 #    platform-tools, emulator, the google_apis system image; --play-store for the Google Play image),

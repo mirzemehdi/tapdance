@@ -244,6 +244,33 @@ artifacts back on the control machine, human take-over, and one orchestration su
 tools. `mobilecli` is a candidate interaction backend to evaluate next to agent-device and AXe.
 "Mobdev" (named by the owner) has not been located yet.
 
+## Later decisions (2026-11-07)
+
+### Remote hosts: device-only mode, and several connect targets instead of a gateway pool
+
+The worker guard, built for personal Macs, became the path for **every** remote host. Field runs
+proved it across machines: a Linux VPS or a Mac as the agent's machine, and the owner's Mac, a Google
+Cloud N2 VM and a rented Scaleway Mac mini as hosts, each set up with `tapdance host up` and reached with
+`tapdance connect` over Tailscale (see STATUS.md, P-03, Q-06, Q-08). Gateway mode stays, for dedicated
+machines and behind `--accept-gateway-exec`, but has run on one Mac only.
+
+For one agent that needs Android and iOS (stage 4 of docs/hosting-plan.md), two designs were compared:
+a Simlock gateway pool with workers on several machines, and several **connect targets** on the agent's
+machine with routing by platform. The owner chose connect targets:
+
+- each host keeps its own guard, policy and pairing token, so every guard-only feature (uploads, host
+  builds, installs from CI, timed touches, console output, crash reports) keeps working, and one leaked
+  token reaches one host;
+- tokens are stored per origin on the agent's machine and never sent to another host;
+- a lease goes to the first target, in the order they were added, that serves the platform and answers;
+  a host that is down fails fast with `PROVIDER_UNREACHABLE`, and `--target` picks one;
+- one lease per session, as before.
+
+Proven on 2026-11-07: one Linux VPS agent drove an N2 host for Android and the rented Mac for iOS in one
+session, through the CLI and MCP, with one host down
+([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md); STATUS.md M-06). The gateway pool
+across machines (STATUS.md Q-06) was not run, by the owner's choice.
+
 ## What is reused, added, and out of scope
 
 | Reused from Simlock | Reused from agent-device | Added by Tapdance | Out of scope (MVP) |

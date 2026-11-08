@@ -1298,7 +1298,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             "",
             mcpSnippets(command),
             "",
-            dim("Codex and Cursor do not pass a session id: set the same TAPDANCE_SESSION_ID in the server's env and in the agent's shell if it uses both the CLI and MCP (docs/agents/)."),
+            dim("Codex and Cursor do not pass a session id: set the same TAPDANCE_SESSION_ID in the server's env and in the agent's shell if it uses both the CLI and MCP (docs/agents.md)."),
           ]
             .filter((line, i) => line !== "" || i !== 2)
             .join("\n"),

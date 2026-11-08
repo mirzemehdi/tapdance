@@ -112,6 +112,13 @@ describe("tapdance CLI (built)", () => {
     expect(JSON.parse(r.stdout).error.code).toBe("NOT_SUPPORTED");
   });
 
+  it("init --mode local points first at worker install, as the quick start does", () => {
+    const r = tapdance(["init", "--mode", "local", "--yes"]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("tapdance worker install");
+    expect(r.stdout).not.toContain("tapdance worker start");
+  });
+
   it("binds a stored token to the endpoint it was given", () => {
     const home = mkdtempSync(join(tmpdir(), "td-cli-"));
     const r = tapdance(["--json", "config", "set-token", "--endpoint", "https://gw.example"], { TAPDANCE_HOME: home }, "slk_testtoken\n");

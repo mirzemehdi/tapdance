@@ -153,7 +153,7 @@ export function registerSetupCommands(program: Command, globals: () => GlobalOpt
             "",
             bold("Next:"),
             mode === "local"
-              ? "  tapdance worker start      # start the local device worker (Simlock)\n  tapdance doctor\n  tapdance device lease --platform android"
+              ? "  tapdance worker install    # set up and start the local device worker (Simlock)\n  tapdance doctor\n  tapdance device lease --platform android"
               : `  tapdance config set-token  # if you skipped it (or export TAPDANCE_TOKEN)\n  tapdance doctor\n  tapdance workers list\n  tapdance device lease --platform android`,
             "  claude mcp add tapdance -- tapdance mcp   # give your agent the tools",
           ]

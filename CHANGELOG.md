@@ -15,7 +15,10 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 ([evidence](docs/testing/evidence/2026-11-01-gateway-single-host.md)) and through device-only mode
 ([evidence](docs/testing/evidence/2026-11-01-worker-guard.md)); Android emulators
 ([evidence](docs/testing/evidence/2026-11-01-android.md)); AXe as the iOS UI backend
-([evidence](docs/testing/evidence/2026-11-01-axe.md)). Not yet run across two machines or on Linux.
+([evidence](docs/testing/evidence/2026-11-01-axe.md)). Since then also across machines in device-only
+mode, including Android on a Linux/KVM host (a Google Cloud N2 VM), iOS on a rented Mac mini, and one
+agent reaching both at once (sections below and [STATUS.md](STATUS.md)). A gateway with a joined worker
+has run on one Mac only.
 
 ### Added
 
@@ -34,17 +37,16 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - Scenario files ([docs/scenarios.md](docs/scenarios.md)): `tapdance run <file>` replays a YAML or JSON
   flow on the session's device and writes a PASS/FAIL report with an evidence folder; exit code 12
   (`SCENARIO_FAILED`) on a failed step. SDK: `runScenario`, `loadScenario`, `scenarioFromToolCalls`.
-  Tested against FakeProvider only.
+  `tapdance run` passed on a real iOS simulator and Android emulator
+  ([evidence](docs/testing/evidence/2026-11-01-device-state-and-profiles.md)); MCP `run_scenario` and
+  the failure report are tested against FakeProvider only.
 - Device-only mode for personal Macs (`tapdance worker guard`); `worker login` requires
   `--accept-gateway-exec`.
 - `devices install`, MCP `list_apps`, and `config set-token --endpoint` (a token bound to its endpoint).
 - Google's Android CLI targets the leased emulator with `--device=<serial>`; AXe finds SwiftUI text
   fields by placeholder and waits for a just-launched app's accessibility tree.
-- An MCP server over stdio and Streamable HTTP (bearer token) with the tools `list_workers`,
-  `list_devices`, `lease_device`, `get_device_status`, `release_device`, `install_app`, `launch_app`,
-  `stop_app`, `inspect_screen`, `tap`, `swipe`, `wait_for`, `handle_alert`, `type_text`, `press_key`,
-  `take_screenshot`, `start_recording`, `stop_recording`, `get_logs`, `get_crash_logs`, `list_tools`,
-  `execute_tool` and `get_test_artifacts`.
+- An MCP server over stdio and Streamable HTTP (bearer token) with 41 tools; the full list is in
+  [docs/mcp.md](docs/mcp.md).
 - Session-scoped leases with a detached keepalive, `--hold`, idle release and a per-session lock.
 - Local artifact storage with a per-session manifest.
 - A loopback browser viewer (`tapdance view`) with live H.264 video, input, and human take-over and
@@ -54,13 +56,23 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - An external tool registry (metadata only) for `asc`, `android`, `axe`, `maestro`, `fastlane` and
   `xcodebuild`, with argument forwarding, approved environment, timeouts and `asc` read-only by
   default for agents.
-- An optional AXe backend for iOS simulators (`ios.uiBackend: "axe"`); not yet run on a real install.
+- An optional AXe backend for iOS simulators (`ios.uiBackend: "axe"`), run on a real Mac
+  ([evidence](docs/testing/evidence/2026-11-01-axe.md)).
 - `tapdance report` for redacted, issue-ready bug reports, and GitHub issue templates.
-- Reference Terraform and install scripts for a Google Cloud N2 Android worker (not yet provisioned).
+- Reference Terraform and install scripts for a Google Cloud N2 Android worker, applied on real VMs
+  ([evidence](docs/testing/evidence/2026-11-03-gcp-n2-android.md)).
 - `worker guard install` / `uninstall`: the worker guard as a LaunchAgent (`dev.tapdance.guard`) or
   systemd user unit, with `--keep-awake` (`caffeinate -i`) on macOS.
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
+
+### Changed
+
+- Docs reorganised for readers: a shorter README, a docs index (`docs/README.md`), a glossary, and
+  merged or renamed pages (old paths keep a short page that links to the new one).
+- `tapdance init --mode local` now names `tapdance worker install` as the first next step (it said
+  `worker start`, which skips the first-time setup), and the session-id note `tapdance connect` prints
+  points at `docs/agents.md`.
 
 ### Stage 4: one agent, several hosts
 

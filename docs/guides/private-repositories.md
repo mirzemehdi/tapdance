@@ -1,18 +1,17 @@
-# Private repositories for builds on the host
+# Private repositories for host builds
 
-How a device host (your Mac, a Linux machine, a [Google Cloud N2 VM](../deployment/google-cloud-n2.md))
-builds an app whose code is private, and what each way leaves on the host. Read
-[builds on the host](../deployment/one-command-host.md#builds-on-the-host) first: builds are off by
-default, and a build runs the repository's own scripts on the host.
+How a host (your Mac, a Linux machine, a [Google Cloud N2 VM](../deployment/google-cloud-n2.md)) builds
+an app whose code is private, and what each way leaves on the host. Read [host builds](host-builds.md)
+first: builds are off by default, and a build runs the repository's own scripts on the host.
 
-> **Status: the token route is run; the rest is unit-tested.** On a Google Cloud N2 VM a fine-grained
-> token cloned a private repository over `https://`, and its Android build succeeded once the app's
-> CMake was installed on the host, through the CLI and MCP
-> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). The per-repository deploy key and build
-> files are tested with a fake git, Xcode and Gradle only: the real deploy key attempt was refused
-> because the organization had deploy keys turned off. See [STATUS.md](../../STATUS.md) (H-13, H-14).
+> Proven: a fine-grained, read-only token with `--git-auth gh` cloned a private repository over
+> `https://` on a Google Cloud N2 VM, and its Android build succeeded through the CLI and MCP
+> ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)). Not proven: a build through a deploy
+> key. `host builds key --repo` ran on a rented Mac and printed the key, but the organization had deploy
+> keys turned off, so the key was never used
+> ([evidence](../testing/evidence/2026-11-07-two-hosts-android-ios.md)). Unit-tested only: build files.
 
-## Pick one
+## Pick a way
 
 | Way | Best for | What it reaches | What the host keeps |
 | --- | --- | --- | --- |
@@ -20,7 +19,7 @@ default, and a build runs the repository's own scripts on the host.
 | **A deploy key per repository** (`host builds key --repo`) | One or two repositories; git servers other than GitHub; not when the organization has turned deploy keys off | One repository, read-only, over ssh | One ssh private key per repository |
 | **No repository access:** build elsewhere, then `tapdance app install` | Code or secrets that should never be on the host | Nothing | Nothing but the apps you install |
 
-The third way is often the best one: build in CI or on the agent's machine and install the APK. See
+The third way is often the best one: build in CI or on the agent's machine and install the app. See
 [build in CI, test with Tapdance](ci-builds.md).
 
 **Whatever the host keeps, every build can read.** A build runs the repository's Gradle or Xcode
@@ -29,6 +28,12 @@ deploy key, every build file and `~/.gradle/gradle.properties`. Allow only repos
 use `--protected-ref main` so only reviewed commits are built.
 
 ## A fine-grained GitHub token
+
+**What you need:** a GitHub account or organization that owns the repositories, and the
+[GitHub CLI](https://cli.github.com/) on the host. `host-setup.sh --with-gh` installs it; otherwise
+Ubuntu: `sudo apt-get install -y gh`, macOS: `brew install gh`.
+
+**Steps:**
 
 1. On GitHub: **Settings › Developer settings › Personal access tokens › Fine-grained tokens ›
    Generate new token**.
@@ -43,27 +48,30 @@ use `--protected-ref main` so only reviewed commits are built.
    APKs](ci-builds.md#let-the-host-fetch-the-artifact). Nothing else. One token can serve both; it must
    select every repository it is used for, including the one whose workflow makes the artifact.
 6. Generate it and copy it.
+7. On the host, as the account that runs the guard, log `gh` in. `host gh-login` reads the token with
+   echo off and passes it to `gh auth login`:
 
-On the host, as the account that runs the guard. Install the [GitHub CLI](https://cli.github.com/) if
-it is missing (Ubuntu: `sudo apt-get install -y gh`; macOS: `brew install gh`), then:
+   ```bash
+   tapdance host gh-login
+   gh auth status
+   ```
 
-```bash
-tapdance host gh-login     # reads the token with echo off and passes it to gh auth login
-gh auth status
+8. Allow the repository:
 
-tapdance host builds enable --repo https://github.com/acme/app --git-auth gh --protected-ref main
-```
+   ```bash
+   tapdance host builds enable --repo https://github.com/acme/app --git-auth gh --protected-ref main
+   ```
 
-`host builds enable` checks that git reaches each `--repo` the way builds do (`git ls-remote <url> HEAD`
-with the `gh` credential helper) and prints a warning with the fix when it cannot, for example when
-the token does not cover that repository. It is a warning, not a refusal; `--no-check` skips it, and
+**Check it worked:** `host builds enable` checks that git reaches each `--repo` the way builds do
+(`git ls-remote <url> HEAD` with the `gh` credential helper) and prints a warning with the fix when it
+cannot, for example when the token does not cover that repository. It is a warning, not a refusal; `--no-check` skips it, and
 `tapdance host builds status --check` runs it again for every repository on the list.
 
 - Use `https://` URLs, both in `host builds enable` and in the agent's `tapdance app build --git`. The
   allow-list compares URLs as written, so `https://github.com/acme/app` and
   `git@github.com:acme/app.git` are different entries.
-- `--git-auth` applies to every repository on the allow-list, and each `host builds enable` sets it
-  (the default is `none`). Pass `--git-auth gh` every time you add a repository.
+- `--git-auth` applies to every repository on the allow-list. A `host builds enable` without it keeps
+  the current setting (`none` until you set one).
 - **Submodules** on GitHub that the token covers are fetched, also when `.gitmodules` lists them with
   ssh URLs (`git@github.com:…`): with `--git-auth gh` the submodule step fetches github.com over https,
   where `gh` signs in (unit-tested only). Others (other hosts, repositories the token does not cover)
@@ -76,6 +84,8 @@ the token does not cover that repository. It is a warning, not a refusal; `--no-
   `sdkmanager "cmake;3.31.6"` for the host's owner to run (6 s); the next build succeeded.
 
 ## A deploy key per repository
+
+Not proven: no build has run through a deploy key yet (see the status note at the top).
 
 GitHub accepts a deploy key on one repository only, so each repository gets its own key. An
 organization can turn deploy keys off for all its repositories; GitHub then answers "Deploy keys are
@@ -166,9 +176,9 @@ What an attacker who gets the hosting account learns, per way:
 | The build cache (`~/.tapdance/worker/builds/`) | A clone of each repository the host built, and the last builds | Treat the source as read. |
 | No repository access | Only the apps you installed | Nothing about your source. |
 
-The agent's machine holds only the guard token. With it, an attacker can ask for a build of an
-allow-listed repository at an allowed ref, but cannot read the token, keys or build files through the
-guard. See the [threat model](../security/threat-model.md).
+The agent's machine holds only the pairing token. With it, an attacker can ask for a build of an
+allow-listed repository at an allowed ref, but cannot read the GitHub token, keys or build files through
+the guard. See the [threat model](../security/threat-model.md).
 
 ## When a build cannot sign in
 
