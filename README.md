@@ -10,6 +10,23 @@ did.**
                                 ◀── screenshots, videos, logs       Mac or a rented machine
 ```
 
+You connect Tapdance to your agent once. After that you just tell the agent what to check, in your own
+words.
+
+## Contents
+
+- [What it looks like](#what-it-looks-like)
+- [What you can ask](#what-you-can-ask)
+- [Get started](#get-started)
+  - [1. Install Tapdance](#1-install-tapdance)
+  - [2. Set up the phones](#2-set-up-the-phones)
+  - [3. Connect your agent](#3-connect-your-agent)
+- [Watch, and take over](#watch-and-take-over)
+- [Keep your machines safe](#keep-your-machines-safe)
+- [Project status](#project-status)
+- [Learn more](#learn-more)
+- [Credits and license](#credits-and-license)
+
 ## What it looks like
 
 You ask your agent in plain words. It borrows a phone, drives your app, and brings back proof.
@@ -35,130 +52,118 @@ Agent:  lease_device        → Pixel 8, Android 14
 
 This shows the kind of steps an agent takes. It is an example, not a recorded session.
 
-## Install Tapdance
+## What you can ask
 
-Install it on the computer where your agent runs. No Mac? Skip this section: the
-[walkthrough without a Mac](docs/guides/start-without-a-mac.md) covers the install too.
+You don't need to learn any commands. Write what you want checked, the way you would ask a teammate.
+The agent picks the steps. Screenshots, videos and logs land in `tapdance-artifacts/` in your project.
 
-You need git and Node.js 22 or 24, at least 22.13. Node 25 and later no longer include corepack,
-which the install uses. Tapdance is not on npm yet, so it installs from source:
+**Check a change before you open a pull request**
+
+> I just changed the checkout flow. Build the debug APK, install it on an Android phone, buy the
+> cheapest item with the test card from TESTING.md, and tell me if anything looks broken. Record a
+> video of the whole flow so I can attach it to the PR.
+
+**Reproduce a bug report**
+
+> A user says the app crashes when they rotate the phone on the profile screen. Try it on an iPhone and
+> on an Android phone. If it crashes, send me the crash log and the steps that caused it.
+
+**Screenshots for the store or a design review**
+
+> Take screenshots of the home, search and settings screens on an iPhone, in English, German and
+> Japanese, in light and dark mode. Name the files so I can tell them apart.
+
+**Try harder conditions**
+
+> Turn on the largest text size and check that no button label is cut off on the sign-up screens. Then
+> do the same in landscape.
+
+> On Android, turn off Wi-Fi, open the app, and check that the offline message appears instead of a
+> spinner. Turn Wi-Fi back on and check that it recovers.
+
+**Notifications and links**
+
+> Post a "new message from Sam" notification on the Android phone, open it, and check that it lands in
+> the right chat. Then open the link `myapp://orders/42` and check that the order screen shows order 42.
+
+**Things only a person should type**
+
+> Sign in with Google on the Android phone. When you reach the Google sign-in screen, ask me to do it,
+> wait until I hand back, and then check that my name shows in the menu.
+
+The agent pauses and asks you. You sign in yourself in the live view in your browser, so the agent
+never sees your password. See [watch, and take over](#watch-and-take-over).
+
+**Compare both platforms**
+
+> Walk through onboarding on an Android phone and on an iPhone, one after the other, and list every
+> screen where the two versions look or behave differently.
+
+**Explore an unfamiliar app**
+
+> Open the app, tap through every screen you can reach from the main menu, and give me a short map of
+> the app with a screenshot of each screen.
+
+Some of this depends on where the phones run. Wi-Fi and airplane mode can be switched on Android
+emulators only, and an iPhone app must be built for the simulator. Your agent tells you when something
+cannot be done.
+
+## Get started
+
+Three steps: install Tapdance, set up the machine that runs the phones, and connect your agent.
+
+### 1. Install Tapdance
+
+Install it on the computer where your agent runs. You need Node.js 22.13 or newer.
 
 ```bash
-mkdir -p ~/.local/bin
-export PATH="$HOME/.local/bin:$PATH"
-git clone https://github.com/mirzemehdi/tapdance.git
-cd tapdance
-corepack enable --install-directory ~/.local/bin pnpm
-pnpm install
-pnpm build
-ln -s "$PWD/packages/cli/dist/main.js" ~/.local/bin/tapdance
-tapdance --version
+npm install -g tapdance-cli
 ```
 
-The `export` line puts `~/.local/bin` on your `PATH` for this terminal only. Add the same line to your
-shell's startup file, such as `~/.zshrc` or `~/.bashrc`, to keep it. Do not run `npm install -g tapdance`: that name belongs to a
-different package. The [installation guide](docs/installation.md) has more detail.
+The command is `tapdance`. The npm package called just `tapdance` is a different project, so install
+`tapdance-cli`. If npm cannot find it, the first release is not out yet: the
+[installation guide](docs/installation.md#from-source) shows how to install from source.
 
-## Pick your situation
+### 2. Set up the phones
 
-### I have a Mac
+Pick the situation that fits you.
 
-Everything runs on your Mac: your agent, Tapdance and the phones.
-
-- **You need:** macOS with Xcode and one iOS simulator runtime for iPhones. For Android phones, the
-  Android SDK, which Android Studio installs.
-- **Cost:** free.
-- **Time:** about 15 minutes if Xcode is already installed.
-
-In your app's project folder:
+**I have a Mac.** Everything runs on your Mac. It is free, and takes about 15 minutes if Xcode is
+already installed. You need Xcode with one iOS simulator runtime for iPhones, and the Android SDK, which
+Android Studio installs, for Android phones. Then run:
 
 ```bash
-tapdance init --mode local --yes
 tapdance worker install
 tapdance doctor
 ```
 
-`worker install` starts the part of Tapdance that creates and runs the phones on your Mac. `doctor`
-checks everything and tells you what is missing. If you only want iPhones, run
-`tapdance config set platforms.android.enabled false` before `doctor`, so it skips the Android checks.
+`worker install` starts the part of Tapdance that runs the phones. `doctor` checks everything and tells
+you what is missing. The [quick start](docs/quick-start.md) has the details.
 
-Borrow a phone by hand once, to see it work:
-
-```bash
-tapdance device lease --platform ios --device "iPhone 16"
-tapdance app launch com.apple.Preferences
-tapdance screenshot
-tapdance device release
-```
-
-The first phone takes about 40 seconds to start. Later ones take a second or less, because Tapdance
-keeps a spare one ready. The screenshot lands in `./tapdance-artifacts/`.
-
-The [quick start](docs/quick-start.md) walks through each step. Then give it to your agent, below.
-
-### My agent runs elsewhere, and I have a Mac or Mac mini for the phones
-
-Your agent runs on a laptop or a server. A Mac you own runs the phones. The two talk over a private
-network between your machines, called Tailscale, which is free.
-
-- **You need:** a Mac with Xcode, a free Tailscale account, and both machines logged in to it.
-  Tapdance installed on the agent's computer.
-- **Cost:** free.
-- **Time:** about 30 minutes.
-
-On the Mac, run one command. `--label` is a name for the computer your agent runs on:
+**My agent runs elsewhere, and I have a Mac or Mac mini for the phones.** Your agent runs on a laptop or
+a server, and your Mac runs the phones. The two talk over Tailscale, a free private network between
+your machines. It is free and takes about 30 minutes. On the Mac, run one command; `--label` is a name
+for the computer your agent runs on:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label my-laptop
 ```
 
-It installs what is missing and asks you to approve a few steps. It ends by printing the Mac's address
-and the line to run on your agent's computer. It also saves a token file on the Mac,
-`~/.tapdance/worker/pairing-my-laptop.token`. That file is the key to your phones.
+It ends by printing one line to run on your agent's computer, and saves a token file that is the key to
+your phones. The [guide for your own Mac](docs/deployment/one-command-host.md) walks through it.
 
-Copy the token file to your agent's computer privately, for example with `scp`. Then, on that computer,
-run the line the Mac printed. It looks like this:
+**I don't have a Mac.** Rent the machines: Android phones on Google Cloud, iPhones on a Mac mini from
+Scaleway. You create three accounts: Google Cloud, Scaleway and Tailscale. Google Cloud costs about
+USD 0.20 an hour while the machine runs, plus about USD 7 a month for its disk until you delete it. The
+Mac mini costs about EUR 3 a day, billed for at least 24 hours. Allow about 1.5 hours, most of it
+waiting for Scaleway to install macOS. The [walkthrough without a Mac](docs/guides/start-without-a-mac.md)
+goes from the accounts to your first test, and ends with how to stop paying.
 
-```bash
-tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-my-laptop.token
-```
+**I only need Android.** Use your own Mac (as above, with only the Android SDK), or Google Cloud (the
+walkthrough without a Mac, skipping Scaleway). A Linux PC with hardware virtualization can run Android
+phones too, though it has only been tried on Google Cloud so far. Windows cannot run the phones.
 
-`connect` checks the Mac and prints the lines that add Tapdance to your agent. The
-[guide for your own Mac](docs/deployment/one-command-host.md) also covers keeping it awake and taking
-access away again.
-
-### I don't have a Mac
-
-Rent the machines that run the phones: Android phones on Google Cloud, iPhones on a Mac mini rented
-from Scaleway.
-
-- **You need:** a laptop, a Google account and a payment card. You create three accounts, in this
-  order: Google Cloud, Scaleway and Tailscale. If your app's code is private, a GitHub token too.
-- **Cost:** Google Cloud is about USD 0.20 an hour while the machine runs, plus about USD 7 a month for
-  its disk until you delete it. The Scaleway Mac mini is about EUR 3 a day, billed for at least 24
-  hours. Tailscale is free.
-- **Time:** about 1.5 hours until both phones work, most of it waiting for Scaleway to install macOS.
-  Building your iOS app on the rented Mac adds 30 to 60 minutes the first time.
-- **Apps:** native and Kotlin Multiplatform apps can be built on the rented Mac. Flutter and React
-  Native apps have not been tried there; your CI can build them instead.
-
-The [walkthrough without a Mac](docs/guides/start-without-a-mac.md) goes from creating the accounts to
-your agent testing your app. It ends with how to stop paying.
-
-### I only need Android
-
-Pick the machine that runs the Android phones:
-
-- **Your own Mac.** Follow "I have a Mac" and install only the Android SDK. Free.
-- **Google Cloud.** Follow the walkthrough without a Mac and skip the Scaleway steps. About USD 0.20
-  an hour while it runs.
-- **A Linux PC** with hardware virtualization turned on. It can run Android phones too, but so far it
-  has only been tried on Google Cloud, not on a physical PC.
-
-A Windows computer cannot run the phones. It is expected to run your agent and Tapdance, but that has
-not been tried yet.
-
-## Give it to your agent
+### 3. Connect your agent
 
 For Claude Code, in your app's project folder:
 
@@ -166,17 +171,18 @@ For Claude Code, in your app's project folder:
 claude mcp add tapdance -- tapdance mcp
 ```
 
-Start Claude Code and run `/mcp`: a server called `tapdance` should be listed.
-[Connect your agent](docs/agents.md) covers Codex, Cursor and other agents.
+Start Claude Code and run `/mcp`: a server called `tapdance` should be listed. Then ask it something
+from [what you can ask](#what-you-can-ask). Codex, Cursor and other agents are in
+[connect your agent](docs/agents.md).
 
-Then ask it in plain words:
+## Watch, and take over
 
-- "Install the debug build on an iPhone and check that onboarding works in dark mode."
-- "Reproduce the crash from issue 42 on Android 14 and send me the logs."
-- "Take screenshots of every settings screen in German."
+You can watch the phone live in your browser while the agent works. Touching the screen takes over, so
+you can type a password or approve a purchase yourself. One click hands it back to the agent. The
+[agent guide](docs/agents.md#watching-the-agent) shows how to open the live view.
 
-You can watch the phone live in your browser while the agent works, and take over to type a password
-yourself. The [agent guide](docs/agents.md#watching-the-agent) shows how.
+Tapdance also works from the terminal and from scripts, without an agent. The
+[CLI reference](docs/cli-reference.md) lists every command.
 
 ## Keep your machines safe
 
@@ -222,7 +228,13 @@ Tapdance builds on other people's work:
 
 - [Simlock](https://github.com/callstackincubator/simlock) runs the phones and lends them out.
 - [agent-device](https://github.com/callstack/agent-device) drives them: taps, typing, screenshots.
-- AXe, the App Store Connect CLI, fastlane, Maestro and Google's Android CLI run as external tools.
+- [AXe](https://github.com/cameroncooke/AXe) is an optional way to drive iPhone simulators.
+- [App Store Connect CLI](https://github.com/rorkai/App-Store-Connect-CLI) (`asc`) runs as an external
+  tool for App Store Connect.
+- [fastlane](https://github.com/fastlane/fastlane) runs as an external tool, when you allow it.
+- [Maestro](https://github.com/mobile-dev-inc/maestro) runs test flows as an external tool.
+- [Google's Android CLI](https://developer.android.com/cli) runs as an external tool against the
+  borrowed Android phone.
 
 [NOTICE.md](NOTICE.md) lists every project with its license.
 

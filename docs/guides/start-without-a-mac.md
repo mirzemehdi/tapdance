@@ -93,7 +93,7 @@ sudo tailscale up
 [tailscale.com/download](https://tailscale.com/download) instead. **You should see** your laptop under
 **Machines** in the Tailscale admin console.
 
-**Node.js 22 or 24.** Ubuntu's own Node.js is too old. One easy way is nvm:
+**Node.js 22.13 or newer.** Ubuntu's own Node.js is too old. One easy way is nvm:
 
 ```bash
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
@@ -101,26 +101,17 @@ source ~/.bashrc
 nvm install 22
 ```
 
-Use Node 22 or 24: Node 25 and later no longer include corepack, which the next step uses.
+Any Node.js from 22.13 on works.
 
-**Tapdance.** It is not on npm yet, so it installs from source into a folder in your home directory:
+**Tapdance:**
 
 ```bash
-mkdir -p ~/.local/bin
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-cd ~
-git clone https://github.com/mirzemehdi/tapdance.git
-cd tapdance
-corepack enable --install-directory ~/.local/bin pnpm
-pnpm install
-pnpm build
-ln -s "$PWD/packages/cli/dist/main.js" ~/.local/bin/tapdance
+npm install -g tapdance-cli
 tapdance --version
 ```
 
-**You should see** a version such as `0.1.0`. Keep the `~/tapdance` folder: step 6 copies a script
-from it.
+**You should see** a version such as `0.1.0`. The npm package called just `tapdance` is a different
+project, so install `tapdance-cli`.
 
 **The gcloud command-line tool.** Install it from
 [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install). Then point it at your
@@ -282,13 +273,11 @@ lines to add Tapdance to Claude Code, Codex or Cursor.
 
 ## 6. Set up the Mac
 
-Wait until Scaleway shows the Mac as ready. Then, on your laptop, copy one script to the Mac and run
-it, using the IP address from the Scaleway page:
+Wait until Scaleway shows the Mac as ready. Then, from your laptop, have the Mac download one script
+and run it, using the IP address from the Scaleway page:
 
 ```bash
-cd ~/tapdance
-scp infrastructure/scripts/macos-auto-login.sh m1@<mac-ip>:
-ssh -t m1@<mac-ip> 'bash macos-auto-login.sh m1'
+ssh -t m1@<mac-ip> 'curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/infrastructure/scripts/macos-auto-login.sh -o macos-auto-login.sh && bash macos-auto-login.sh m1'
 ```
 
 The first time, ssh asks "Are you sure you want to continue connecting?": type `yes`. The script asks
@@ -383,7 +372,7 @@ gcloud compute instances start tapdance-n2 --zone=us-central1-a
 `connect` already printed the lines for your agent. For Claude Code, from your app's project folder:
 
 ```bash
-claude mcp add tapdance -- "$(command -v node)" "$HOME/tapdance/packages/cli/dist/main.js" mcp
+claude mcp add tapdance -- "$(command -v node)" "$(command -v tapdance)" mcp
 ```
 
 The full paths matter because Node.js came from nvm. Claude Code started from a desktop launcher or an
