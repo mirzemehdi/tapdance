@@ -89,6 +89,21 @@ Proven on 2026-11-07 from a Linux VPS with a Google Cloud N2 host (Android) and 
   its place and platforms, drops the old address's token) instead of refusing; `doctor` reports a target
   that does not answer within the 5 s lease probe as down at once, instead of after its own two 15 s tries
   (about 30 s with a hung host).
+- After the run (#137, #138): iOS "Runner command deadline exceeded" (agent-device's test runner still
+  starting, the first command after a cold lease on a slow host) is retryable `PROVIDER_UNREACHABLE`; a
+  read is retried once at once, an action goes back to the agent with "read the screen first". `devices`
+  no longer prints capacity for a platform a host cannot run (iOS on Linux, Android without an SDK);
+  `--json` / `list_devices` mark it `served: false`, and the merged capacity counts only hosts that can
+  run the platform. Unit-tested.
+- After a review of the stage 4 change: a session whose lease sits on a target that was removed or
+  re-pointed could neither release nor lease again (the router threw before the SDK could catch it); it
+  now releases the record. `connect` with a wrong token for a second host failed only as a warning and
+  reported "Connected" (exit 0); a refused token now fails. Leases prefer a target with a free slot or a
+  warm spare, and skip one with no capacity for the platform, instead of queueing on the first that
+  lists it. The 5 s target probe also bounds the device list, not only healthz. `config.json` and
+  `credentials.json` are written to a temp file and renamed. `lease_device` `reuse` with another
+  `target` no longer returns the lease from the first. `connect --platform any` clears a limit. The
+  saved per-origin token wins over an older token bound elsewhere. Unit-tested.
 
 ### Added in the field-test round (issues #1–#19)
 

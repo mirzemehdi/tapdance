@@ -171,7 +171,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: "list_devices",
     title: "List leasable devices",
-    description: "Device models and OS versions you can lease, current capacity, and running devices. Call before lease_device when unsure which model names exist.",
+    description: "Device models and OS versions you can lease, current capacity, and running devices. Call before lease_device when unsure which model names exist. A capacity entry with served:false is a platform that host cannot run (no room, whatever its limit says).",
     input: z.object({ platform: platform.optional() }).strict(),
     annotations: { readOnlyHint: true, openWorldHint: false },
     run: async (t, a) => {

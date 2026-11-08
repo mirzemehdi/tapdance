@@ -90,6 +90,11 @@ export interface CapacitySummary {
   limit: number;
   warm: number;
   leased: number;
+  /**
+   * False when the host cannot run this platform at all (iOS on Linux, Android without an SDK): Simlock
+   * still reports a limit for it, which is not free room (#138). Absent from older providers: served.
+   */
+  served?: boolean;
 }
 
 export interface DeviceInventory {

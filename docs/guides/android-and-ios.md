@@ -24,7 +24,7 @@ tapdance connect --list
 NAME  ENDPOINT                                   PLATFORMS  TOKEN
 n2    https://n2-host.<tailnet>.ts.net:4720      any        saved (94b0a9)
 mac   https://mac-mini.<tailnet>.ts.net:4720     any        saved (f14618)
-Leases go to the first target (in this order) that serves the platform; `--target <name>` picks one. `tapdance doctor` checks each.
+Leases go to the first target (in this order) that serves the platform and has room; `--target <name>` picks one. `tapdance doctor` checks each.
 ```
 
 The `TOKEN` column is the token's fingerprint, never the token; it should match what `host up` printed
@@ -32,10 +32,12 @@ on that host. To move a target to a new address (for example from an SSH tunnel 
 run `connect` with the new endpoint and the same `--name`: the target keeps its place and its platforms,
 and the token saved for the old address is removed.
 
-- **Routing.** A lease goes to the first target, in `connect --list` order, that answers and serves the
-  platform (and the model or OS version, when the lease names one). `tapdance device lease --target mac`
+- **Routing.** A lease goes to the first target, in `connect --list` order, that answers, serves the
+  platform (and the model or OS version, when the lease names one) and has a free slot or a warm spare;
+  when all of them are full, to the first, where the request waits. A host with no capacity for the
+  platform is skipped (choosing by free slot is unit-tested only). `tapdance device lease --target mac`
   (MCP: `lease_device` with `target`) picks a host. `--platform android` on `connect` limits a host to
-  one platform.
+  one platform; `--platform any` clears that.
 - **Follow-up calls stay on the lease's host.** Install, UI, screenshots, recording, logs, files and
   release all go to the host that granted the lease, with that host's token. Each token is stored under
   its own origin in `~/.tapdance/credentials.json` (mode 600) and is never sent to another host.

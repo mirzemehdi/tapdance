@@ -66,7 +66,12 @@ describe("connect targets in the user config", () => {
   it("parses --platform lists", () => {
     expect(parsePlatforms(["android,ios", "ios"])).toEqual(["android", "ios"]);
     expect(parsePlatforms(undefined)).toBeUndefined();
-    expect(() => parsePlatforms(["windows"])).toThrow(/android or ios/);
+    expect(() => parsePlatforms(["windows"])).toThrow(/android, ios or any/);
+    // `any` clears a limit set before (review).
+    expect(parsePlatforms(["any"])).toEqual([]);
+    const limited = { provider: "self-hosted" as const, targets: [{ name: "mac", endpoint: MAC, platforms: ["ios" as const] }] };
+    expect(upsertTarget(limited, { endpoint: MAC, platforms: [] }).target.platforms).toBeUndefined();
+    expect(upsertTarget(limited, { endpoint: MAC }).target.platforms).toEqual(["ios"]);
   });
 });
 

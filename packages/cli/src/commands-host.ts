@@ -1247,7 +1247,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
     .command("connect [endpoint]")
     .description("On the agent's machine: add a host's guard as a connect target (reads the token from stdin), check it, and print MCP setup for Claude Code, Codex and Cursor. Connect each host once; leases go to the host that serves the platform")
     .option("--name <name>", "the target's name for `--target` and `tapdance disconnect` (default: the host's first DNS label)")
-    .option("--platform <platform...>", "route only these platforms to this host (android, ios); default: whatever it serves")
+    .option("--platform <platform...>", "route only these platforms to this host (android, ios; `any` clears an earlier limit); default: whatever it serves")
     .option("--list", "list the connect targets and whether a token is saved for each; changes nothing")
     .action(async (endpoint: string | undefined, o: { name?: string; platform?: string[]; list?: boolean }) => {
       const g = globals();
@@ -1325,7 +1325,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           [
             `Removed target ${removed.name} (${removed.endpoint}) and its token.`,
             left.length ? `Targets left: ${left.map((t) => t.name).join(", ")}.` : dim("No targets left; add one with `tapdance connect <endpoint>`."),
-            dim(`A lease still held there runs out on its own; the host can revoke this machine with \`tapdance worker guard revoke <label>\`.`),
+            dim(`A lease still held there ends at its time limit on that host; \`tapdance device release\` in its session drops the record here. The host can revoke this machine with \`tapdance worker guard revoke <label>\`.`),
           ].join("\n"),
         );
       } catch (error) {
@@ -1341,7 +1341,9 @@ async function listTargets(out: Output): Promise<void> {
   const { targets, migrated } = currentTargets(user);
   const rows = targets.map((t) => {
     const origin = urlOrigin(t.endpoint) ?? t.endpoint;
-    const token = migrated ? (resolved.credentials.token ?? targetToken(resolved.credentials, origin)) : targetToken(resolved.credentials, origin);
+    // An older unbound token serves the migrated endpoint; one bound elsewhere does not (review).
+    const legacy = migrated && resolved.credentials.token !== undefined && (resolved.credentials.endpoint === undefined || resolved.credentials.endpoint === origin) ? resolved.credentials.token : undefined;
+    const token = targetToken(resolved.credentials, origin) ?? legacy;
     return { name: t.name, endpoint: t.endpoint, platforms: t.platforms ?? ["any"], token: token ? tokenFingerprint(token) : undefined };
   });
   out.result({ targets: rows, ...(migrated ? { singleEndpoint: migrated } : {}), ...(resolved.endpointSource === "env" || resolved.endpointSource === "project" ? { overriddenBy: resolved.endpointSource } : {}) }, () =>

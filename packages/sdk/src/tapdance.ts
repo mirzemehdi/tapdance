@@ -431,7 +431,9 @@ export class Tapdance {
       if (existing !== undefined) {
         const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch(() => undefined);
         if (status?.state === "active" || status?.state === "unknown" || status === undefined) {
-          if (options.reuse && existing.handle.platform === options.platform && (!options.device || options.device === existing.handle.model)) {
+          // A lease from another target than the one asked for is not "the same device" (review).
+          const sameTarget = !options.target || options.target === existing.handle.location.target || options.target === existing.handle.location.endpoint;
+          if (options.reuse && sameTarget && existing.handle.platform === options.platform && (!options.device || options.device === existing.handle.model)) {
             return { record: existing, summary: summarize(existing, status), reused: true };
           }
           throw new TapdanceError("LEASE_ALREADY_HELD", `This session already holds ${existing.handle.model} (${existing.handle.platform})`, {

@@ -84,7 +84,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
   /** One host's (or the only endpoint's) models, capacity and devices. */
   const renderInventory = (inv: Omit<DeviceInventory, "hosts">): string => {
           const lines: string[] = [];
-          for (const c of inv.capacity) lines.push(`${bold(c.platform)}: ${c.running}/${c.limit} running, ${c.leased} leased${c.warm ? `, ${c.warm} warm spare${c.warm > 1 ? "s" : ""} (booted, not in use; kept for a fast next lease)` : ""}`);
+          // A platform the host cannot run has a limit but no room; its note says why (#138).
+          for (const c of inv.capacity.filter((x) => x.served !== false)) lines.push(`${bold(c.platform)}: ${c.running}/${c.limit} running, ${c.leased} leased${c.warm ? `, ${c.warm} warm spare${c.warm > 1 ? "s" : ""} (booted, not in use; kept for a fast next lease)` : ""}`);
           for (const c of inv.catalog) {
             lines.push("", `${bold(c.platform === "ios" ? "iOS" : "Android")} models: ${c.models.slice(0, 25).join(", ")}${c.models.length > 25 ? dim(` … +${c.models.length - 25}`) : ""}`);
             if (c.osVersions.length) lines.push(`  OS versions: ${c.osVersions.join(", ")}${c.defaultOsVersion ? ` (default ${c.defaultOsVersion})` : ""}`);

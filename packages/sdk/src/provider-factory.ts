@@ -33,7 +33,8 @@ export async function createProvider(
       const origin = urlOrigin(config.endpoint) ?? config.endpoint;
       // A token `tapdance connect` saved for this origin serves it too (TAPDANCE_ENDPOINT naming one target).
       const saved = credentials.tokens?.[origin];
-      const token = credentials.token === undefined && saved !== undefined ? saved : boundToken(credentials.token, credentials.endpoint, origin, resolved.endpointSource, false);
+      // The saved per-origin token wins unless the older single token is bound to this very origin (review).
+      const token = saved !== undefined && (credentials.token === undefined || credentials.endpoint !== origin) ? saved : boundToken(credentials.token, credentials.endpoint, origin, resolved.endpointSource, false);
       const operatorToken = boundToken(credentials.operatorToken, credentials.operatorEndpoint, origin, resolved.endpointSource, true);
       return new SimlockProvider(
         remoteConnection({
@@ -73,9 +74,21 @@ function simlockTarget(resolved: ResolvedConfig, target: ResolvedTarget, session
     ...base,
     provider,
     probe: async (timeoutMs) => {
+      // The whole probe keeps to the budget: a host whose healthz answers but whose status hangs is
+      // as down as one that does not answer at all (review).
+      const started = Date.now();
       const h = await provider.http.healthz(timeoutMs);
       if (!h.ok) throw new TapdanceError("PROVIDER_UNREACHABLE", `${target.endpoint}/v1/healthz answered HTTP ${h.status}`, { details: { status: h.status } });
-      return provider.inventory();
+      const left = Math.max(timeoutMs - (Date.now() - started), 500);
+      let timer: NodeJS.Timeout | undefined;
+      const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new TapdanceError("PROVIDER_UNREACHABLE", `${target.endpoint} did not list its devices within ${Math.round(timeoutMs / 1000)} s`)), left);
+      });
+      try {
+        return await Promise.race([provider.inventory(), late]);
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }

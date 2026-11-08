@@ -273,6 +273,12 @@ describe("error mapping", () => {
     const slow = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Daemon request timed out" }, "press home");
     expect(slow.code).toBe("PROVIDER_UNREACHABLE");
     expect(slow.retryable).toBe(true);
+    // #137: the XCUITest runner still starting is retryable too; a read is retried by the SDK, an
+    // action goes back to the agent with "read the screen first".
+    const runner = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Runner command deadline exceeded" }, "press home");
+    expect(runner).toMatchObject({ code: "PROVIDER_UNREACHABLE", retryable: true, hint: expect.stringContaining("read the screen") });
+    expect(runner.details?.["reason"]).toBeUndefined();
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Runner command deadline exceeded" }, "inspect").details?.["reason"]).toBe("DAEMON_UNAVAILABLE");
     // Simlock's INTERNAL (simctl timed out on an overloaded 8 GB Mac) is the host's fault, not the request's.
     const internal = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: Internal error" }, "lease");
     expect(internal.code).toBe("PROVIDER_UNAVAILABLE");
@@ -580,6 +586,8 @@ describe("platform on offer (#39)", () => {
     const inventory = await provider.inventory();
     expect(inventory.notes).toContain("No android on this host: it has no Android SDK.");
     expect(inventory.notes.some((n) => n.startsWith("android is not available"))).toBe(false);
+    // #138: the Android limit is not room on this host.
+    expect(inventory.capacity).toEqual([expect.objectContaining({ platform: "android", served: false }), expect.objectContaining({ platform: "ios", served: true })]);
   });
 });
 
