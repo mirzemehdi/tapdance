@@ -66,6 +66,12 @@ has run on one Mac only.
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
+### Worker guard (2026-11-08)
+
+- Screenshot and recording outputs are accepted only in the temporary-file form agent-device's own
+  client sends a remote daemon, and options that name files on the host are refused for every
+  command.
+
 ### Changed
 
 - Docs reorganised for readers: a shorter README, a docs index (`docs/README.md`), a glossary, and
