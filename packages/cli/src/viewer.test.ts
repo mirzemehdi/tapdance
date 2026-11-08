@@ -1,11 +1,13 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Tapdance } from "@tapdance/sdk";
 import { FakeProvider } from "../../sdk/src/testing.js";
 import { Script } from "node:vm";
-import { parseTailnetNames, startViewer } from "./viewer.js";
+import { parseTailnetNames, startViewer, waitForStop } from "./viewer.js";
 import { VIEWER_PAGE } from "./viewer-page.js";
 
 /** MOCKED provider (FakeProvider): proves the viewer's own HTTP rules, not a real device stream. */
@@ -71,6 +73,60 @@ describe("tapdance view (MOCKED device)", () => {
     expect(ok.status).toBe(200);
     expect(ok.type).toBe("image/png");
     expect(ok.body.subarray(1, 4).toString()).toBe("PNG");
+  });
+
+  // Review: server.close() waited for the open /stream response, so Ctrl-C hung while a page was open.
+  it("closes within a second while a page holds the live stream open (MOCKED stream that never ends)", async () => {
+    const upstream = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/octet-stream" });
+      res.write(Buffer.from([0, 1, 2, 3]));
+      // never ends
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const upstreamPort = (upstream.address() as AddressInfo).port;
+    try {
+      const home = await mkdtemp(join(tmpdir(), "td-view-"));
+      const cwd = await mkdtemp(join(tmpdir(), "td-view-proj-"));
+      const t = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "v2", source: "test" }, provider: new FakeProvider() });
+      await t.lease({ platform: "android" });
+      const record = (await t.current())!;
+      vi.spyOn(t, "viewer").mockResolvedValue({ endpoints: { streamUrl: `http://127.0.0.1:${upstreamPort}/stream`, inputUrl: `ws://127.0.0.1:${upstreamPort}/input`, headers: {} }, record } as never);
+      const v = await startViewer(t, { host: "127.0.0.1", port: 0, holdMs: 5000, log: () => undefined });
+      const port = new URL(v.url).port;
+      const key = /k=([A-Za-z0-9_-]+)/.exec(v.url)![1]!;
+      const { request } = await import("node:http");
+      const gotBytes = new Promise<void>((resolve, reject) => {
+        const req = request({ host: "127.0.0.1", port, path: "/stream", headers: { host: `127.0.0.1:${port}`, cookie: `td_view=${key}` } }, (res) => {
+          expect(res.statusCode).toBe(200);
+          res.once("data", () => resolve());
+          res.on("error", () => undefined);
+        });
+        req.on("error", () => undefined);
+        req.on("timeout", () => reject(new Error("no stream")));
+        req.end();
+      });
+      await gotBytes;
+      const started = Date.now();
+      await Promise.race([v.close(), new Promise((_, reject) => setTimeout(() => reject(new Error("close() hung")), 1000))]);
+      expect(Date.now() - started).toBeLessThan(1000);
+    } finally {
+      upstream.closeAllConnections();
+      await new Promise<void>((resolve) => upstream.close(() => resolve()));
+    }
+  });
+
+  // Review: the viewer said it stops when the lease ends; now it checks.
+  it("waitForStop ends once the session holds no lease (MOCKED device)", async () => {
+    const home = await mkdtemp(join(tmpdir(), "td-view-"));
+    const cwd = await mkdtemp(join(tmpdir(), "td-view-proj-"));
+    const t = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "v3", source: "test" }, provider: new FakeProvider() });
+    await t.lease({ platform: "android" });
+    const listeners = process.listenerCount("SIGINT");
+    const waiting = waitForStop(t, 20);
+    await new Promise((r) => setTimeout(r, 60));
+    await t.release();
+    await expect(waiting).resolves.toBe("lease-ended");
+    expect(process.listenerCount("SIGINT")).toBe(listeners);
   });
 
   it("reads this machine's MagicDNS name and addresses from tailscale status", () => {

@@ -31,9 +31,10 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
       run(globals(), async (t, out) => {
         const cfg = t.resolved.config.viewer;
         if (o.tailscale && o.host) throw new TapdanceError("USAGE", "--tailscale listens on loopback behind tailscale serve; leave out --host");
-        if (o.tailscale && !(Number(o.port ?? cfg.port) > 0)) throw new TapdanceError("USAGE", "--tailscale needs a fixed --port (tailscale serve exposes that port)");
-        const host = o.tailscale ? "127.0.0.1" : (o.host ?? cfg.host);
+        if (o.port !== undefined && (!/^\d+$/.test(o.port) || Number(o.port) > 65535)) throw new TapdanceError("USAGE", `--port must be an integer from 0 to 65535, not "${o.port}"`);
         const port = o.port === undefined ? cfg.port : Number(o.port);
+        if (o.tailscale && !(port > 0)) throw new TapdanceError("USAGE", "--tailscale needs a fixed --port (tailscale serve exposes that port)");
+        const host = o.tailscale ? "127.0.0.1" : (o.host ?? cfg.host);
         if (!isPrivateHost(host) && host !== "0.0.0.0") {
           throw new TapdanceError("USAGE", `Refusing to serve the viewer on public address ${host}`, { hint: "Keep it on 127.0.0.1 and use `ssh -L` or a private network." });
         }
@@ -52,8 +53,11 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
           throw error;
         });
         const close = async () => {
-          await closeViewer();
-          await served?.stop();
+          try {
+            await closeViewer();
+          } finally {
+            await served?.stop();
+          }
         };
         const shown = served
           ? url.replace(`http://${host}:${port}`, `https://${served.dnsName}:${port}`)
@@ -73,10 +77,8 @@ export function registerViewerCommand(program: Command, globals: () => GlobalOpt
                 : dim("Open it from a device on the same network. Over plain http on a non-localhost address, browsers do not allow the video decoder, so the page shows refreshed screenshots; for live video run `tapdance view --tailscale` (needs HTTPS Certificates on the tailnet) or use ssh -L to localhost."),
           ].join("\n"),
         );
-        await new Promise<void>((resolve) => {
-          process.once("SIGINT", resolve);
-          process.once("SIGTERM", resolve);
-        });
+        const why = await waitForStop(t);
+        if (why === "lease-ended") out.progress("This session's lease ended; stopping the viewer.");
         await close();
       }),
     );
@@ -136,6 +138,30 @@ async function warm(origin: string, out: { progress: (m: string) => void }): Pro
   await fetch(`${origin.replace(/\/+$/, "")}/favicon.ico`, { signal: AbortSignal.timeout(30_000) }).catch(() => undefined);
 }
 
+/**
+ * Resolves on Ctrl-C (SIGINT/SIGTERM) or once this session holds no lease any more (its record is
+ * gone: released from another command or lost), checked every `intervalMs`.
+ */
+export async function waitForStop(t: Pick<Tapdance, "current">, intervalMs = 5000): Promise<"signal" | "lease-ended"> {
+  return new Promise((resolve) => {
+    const done = (why: "signal" | "lease-ended") => {
+      clearInterval(timer);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      resolve(why);
+    };
+    const onSignal = () => done("signal");
+    const timer = setInterval(() => {
+      t.current().then(
+        (record) => record === undefined && done("lease-ended"),
+        () => undefined, // a busy session lock is not the lease ending; look again next time
+      );
+    }, intervalMs);
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  });
+}
+
 export async function startViewer(
   t: Tapdance,
   options: { host: string; port: number; holdMs: number; allowedHosts?: string[]; log: (m: string) => void },
@@ -181,6 +207,9 @@ export async function startViewer(
     res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" }).end(JSON.stringify(body));
   };
 
+  // Long-lived upstream connections (the video stream, input sockets), ended on close.
+  const streams = new Set<Readable>();
+  const inputs = new Set<WebSocket>();
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://viewer");
     try {
@@ -236,6 +265,8 @@ export async function startViewer(
         }
         res.writeHead(200, { "Content-Type": "application/octet-stream", "Cache-Control": "no-store", "X-Accel-Buffering": "no" });
         const body = Readable.fromWeb(upstream.body as never);
+        streams.add(body);
+        body.once("close", () => streams.delete(body));
         req.on("close", () => body.destroy());
         body.pipe(res);
         return;
@@ -291,6 +322,8 @@ export async function startViewer(
     }
     wss.handleUpgrade(req, socket, head, (client) => {
       const upstream = new WebSocket(endpoints.inputUrl, { headers: endpoints.headers });
+      inputs.add(upstream);
+      upstream.once("close", () => inputs.delete(upstream));
       const pending: Buffer[] = [];
       upstream.on("open", () => {
         for (const m of pending.splice(0)) upstream.send(m);
@@ -328,8 +361,15 @@ export async function startViewer(
     url: `http://${shownHost}:${port}/#k=${key}`,
     close: async () => {
       await hold(0);
+      // server.close() alone waits for every open response and socket: a page left open (its video
+      // stream, its input socket) would keep Ctrl-C waiting forever.
+      for (const client of wss.clients) client.terminate();
       wss.close();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      for (const upstream of inputs) upstream.terminate();
+      for (const body of streams) body.destroy();
+      const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+      server.closeAllConnections();
+      await closed;
     },
   };
 }
