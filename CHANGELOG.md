@@ -80,6 +80,32 @@ has run on one Mac only.
   `worker start`, which skips the first-time setup), and the session-id note `tapdance connect` prints
   points at `docs/agents.md`.
 
+### Code review fixes (2026-11-08)
+
+- Config and credentials files with a `__proto__`, `constructor` or `prototype` key are refused with
+  `CONFIG_INVALID`; `viewer.host` is now read only from the user config or `view --host`.
+- In local mode the operator token is sent only to the origin it is bound to.
+- Redaction also covers per-origin token maps, credentials in URLs and `Basic` authorization.
+- Simlock's nested exec error event keeps its code (a command past its time limit is `TIMEOUT`, not
+  `DEVICE_ERROR`); time limits and dropped connections while a response streams in are `TIMEOUT` or
+  `PROVIDER_UNREACHABLE` instead of an internal error; a restarting Simlock daemon is a retryable
+  `PROVIDER_UNREACHABLE`.
+- Long device calls (host builds, installs from CI, recordings) no longer get idle-released while
+  they run. A lease on a removed connect target is not reused, and `device release` says that host
+  keeps the device until its time limit.
+- Host builds refuse a scheme, configuration or Gradle task starting with `-`; the build cache keys
+  Xcode settings by list, so builds that used them rebuild once.
+- Worker guard: the lease id is checked where Simlock reads it; audit lines are bounded and the log
+  rotates at 10 MB (`audit.log.1`); upload and artifact ids expire an hour after last use.
+- `worker guard revoke` with an unknown id exits 2; `mcp --http` on a taken port reports `USAGE`;
+  `tapdance view` closes promptly with a page open and stops when the lease ends; numeric options are
+  range-checked; `gateway token` fails without a secret; `gateway setup` keeps the rest of
+  `~/.tapdance/config.json`; the pairing token file is written mode 600 through a temp file;
+  `host-setup.sh` runs nothing if its download is cut off; a missing AXe binary no longer crashes the
+  process.
+- Removed: the unused `stream-framing` module and `androidInstallHint` export, and `@tapdance/core` as a
+  dependency of `@tapdance/mcp`.
+
 ### Stage 4: one agent, several hosts
 
 Proven on 2026-11-07 from a Linux VPS with a Google Cloud N2 host (Android) and a rented Mac mini (iOS)

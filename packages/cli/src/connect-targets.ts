@@ -68,8 +68,10 @@ export function removeTarget(config: UserConfig, which: string): { config: UserC
   return { config: { ...rest, ...(targets.length > 0 ? { targets } : {}) }, removed, ...(migrated ? { migrated } : {}) };
 }
 
-/** `--platform android --platform ios` or `--platform android,ios`. */
-/** `--platform` values; `any` alone gives [], which clears a target's earlier limit (review). */
+/**
+ * `--platform` values: `--platform android --platform ios` or `--platform android,ios`. `any` alone
+ * gives [], which clears a target's earlier limit (review).
+ */
 export function parsePlatforms(values: string[] | undefined): Platform[] | undefined {
   if (!values || values.length === 0) return undefined;
   const all = values.flatMap((v) => v.split(",")).map((v) => v.trim().toLowerCase());

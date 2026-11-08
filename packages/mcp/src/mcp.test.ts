@@ -6,7 +6,8 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Tapdance, TapdanceError, type LeaseHandle, type LeaseRequest } from "@tapdance/sdk";
 import { FakeProvider } from "@tapdance/sdk/testing";
-import { TOOLS, createMcpServer, createProgressRouter, startRenewal } from "./index.js";
+import { createServer } from "node:http";
+import { TOOLS, createMcpServer, createProgressRouter, runHttp, startRenewal } from "./index.js";
 
 const REQUIRED = [
   "list_workers", "list_devices", "lease_device", "get_device_status", "release_device", "install_app", "launch_app", "stop_app",
@@ -447,5 +448,23 @@ describe("MCP server lifecycle", () => {
     expect(log).toHaveBeenCalledWith(expect.stringContaining("tapdance: renewal check failed: session lock busy"));
     expect(log).toHaveBeenCalledTimes(2);
     expect(unhandled).toEqual([]);
+  });
+
+  // A taken port used to be an uncaught exception and a promise that never settled (review).
+  it("runHttp rejects with USAGE when the port is already in use", async () => {
+    const taken = createServer();
+    await new Promise<void>((resolve) => taken.listen(0, "127.0.0.1", resolve));
+    const address = taken.address();
+    const port = typeof address === "object" && address ? address.port : 0;
+    try {
+      const error = await runHttp({ host: "127.0.0.1", port, authToken: "test-token" }).then(
+        () => undefined,
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(TapdanceError);
+      expect(error).toMatchObject({ code: "USAGE", message: expect.stringContaining(`Port ${port}`) });
+    } finally {
+      await new Promise<void>((resolve) => taken.close(() => resolve()));
+    }
   });
 });

@@ -82,7 +82,7 @@ generated index is stale, or when any doc or hint names a `tapdance` command tha
    `ERROR_CODES`.
 10. **Never fall back to software emulation** when KVM is missing. Report it.
 11. **A repository's config is not trusted.** `tools.paths`, `tools.mcpEnabled`,
-    `tools.allowMutation`, `ios.axePath` and `simlock.profilePath` are read only from
+    `tools.allowMutation`, `ios.axePath`, `simlock.profilePath` and `viewer.host` are read only from
     `~/.tapdance/config.json` or the environment. A saved token is sent only to the endpoint origin it
     was saved for. Do not add a config key that lets a project file choose an executable or where a
     token goes.

@@ -110,6 +110,15 @@ describe("builds on the host (#45)", () => {
     expect(() => checkBuildRequest({ repo: "file:///etc", ref: "main", platform: "ios" }, settings)).toThrow(/https/);
   });
 
+  it("refuses a scheme, configuration or Gradle task that starts with a dash", () => {
+    const base = { repo: "https://github.com/acme/pianolune", ref: "main" };
+    expect(() => checkBuildRequest({ ...base, platform: "android", gradleTask: "--stop" }, settings)).toThrow(/gradleTask/);
+    expect(() => checkBuildRequest({ ...base, platform: "ios", scheme: "-list" }, settings)).toThrow(/scheme/);
+    expect(() => checkBuildRequest({ ...base, platform: "ios", configuration: "-showBuildSettings" }, settings)).toThrow(/configuration/);
+    expect(checkBuildRequest({ ...base, platform: "android", gradleTask: ":androidApp:assemble-Debug" }, settings)).toMatchObject({ gradleTask: ":androidApp:assemble-Debug" });
+    expect(checkBuildRequest({ ...base, platform: "ios", scheme: "My App-Dev", configuration: "Release" }, settings)).toMatchObject({ scheme: "My App-Dev", configuration: "Release" });
+  });
+
   it("clones, checks out the exact commit and builds the iOS app for the simulator", async () => {
     const root = await mkdtemp(join(tmpdir(), "td-build-"));
     const { run, calls } = fakeRunner(root);
@@ -234,6 +243,16 @@ describe("builds on the host (#45)", () => {
     expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", configuration: "Debug", gradleTask: "assembleDebug" })).toBe(ios);
     expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", configuration: "Release" })).not.toBe(ios);
     expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App" }, "abc")).not.toBe(ios);
+  });
+
+  it("keys two different lists of Xcode settings apart even when they join to the same text", () => {
+    const sha = "2af7bdd49255aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const repo = "https://github.com/acme/pianolune";
+    const one = buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", xcodeSettings: ["ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO"] });
+    const two = buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", xcodeSettings: ["ARCHS=x86_64", "ONLY_ACTIVE_ARCH=NO"] });
+    expect(one).not.toBe(two);
+    // No settings and an empty list are the same build.
+    expect(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App", xcodeSettings: [] })).toBe(buildKey(sha, { repo, ref: "main", platform: "ios", scheme: "App" }));
   });
 
   it("names a host network failure, builds a known commit from the cache, and reuses a build (#61)", async () => {

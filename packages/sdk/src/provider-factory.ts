@@ -18,7 +18,9 @@ export async function createProvider(
   switch (config.provider) {
     case "local": {
       const connection = await readLocalProfile(config.simlock.profilePath ?? defaultProfilePath(env));
-      if (credentials.operatorToken) connection.operatorToken = credentials.operatorToken;
+      // An operator token saved for another endpoint (a gateway) is not sent to the local worker.
+      const bound = credentials.operatorEndpoint;
+      if (credentials.operatorToken && (bound === undefined || bound === urlOrigin(connection.baseUrl))) connection.operatorToken = credentials.operatorToken;
       return new SimlockProvider(connection, { iosBackend: config.ios.uiBackend, ...(config.ios.axePath ? { axePath: config.ios.axePath } : {}) });
     }
     case "self-hosted": {

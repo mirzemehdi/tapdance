@@ -52,21 +52,16 @@ export const DAEMON_UNAVAILABLE_REASON = "DAEMON_UNAVAILABLE";
 const STALE_CLAIM_HINT =
   "An earlier session's claim on this device outlived its worker process. Lease again: a worker guard clears such claims before each lease. On the worker machine, `tapdance worker cleanup` clears them by hand.";
 
-/**
- * What to do about Android install refusals people meet in practice: a build signed with another key
- * (CI runners usually make a fresh debug key per run) cannot update the installed app.
- */
-export function androidInstallHint(output: string, appId?: string, surface: HintSurface = "both"): string | undefined {
-  const reason = installRefusal(output);
-  return reason ? installRefusalHint(reason, appId, surface) : undefined;
-}
-
 /** Who reads a hint: a CLI user, an MCP agent, or either (a worker guard does not know which). */
 export type HintSurface = "cli" | "mcp" | "both";
 
 /** `details.reason` of an Android install refusal Tapdance has a hint for. */
 export type InstallRefusal = "INSTALL_SIGNATURE" | "INSTALL_DOWNGRADE" | "INSTALL_STORAGE";
 
+/**
+ * The Android install refusals people meet in practice, e.g. a build signed with another key (CI
+ * runners usually make a fresh debug key per run) cannot update the installed app.
+ */
 export function installRefusal(output: string): InstallRefusal | undefined {
   if (/INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match/i.test(output)) return "INSTALL_SIGNATURE";
   if (/INSTALL_FAILED_VERSION_DOWNGRADE/i.test(output)) return "INSTALL_DOWNGRADE";

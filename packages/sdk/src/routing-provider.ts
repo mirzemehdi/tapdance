@@ -64,6 +64,16 @@ function reasonOf(error: unknown): string {
   return message.split("\n")[0] || "no answer";
 }
 
+/** `details.reason` of the error for a lease whose connect target was removed (`tapdance disconnect`). */
+export const TARGET_REMOVED = "TARGET_REMOVED";
+
+/** The removed target's origin when `error` says a lease's connect target is gone, else undefined. */
+export function removedTargetOf(error: unknown): string | undefined {
+  if (!(error instanceof TapdanceError) || error.details?.["reason"] !== TARGET_REMOVED) return undefined;
+  const endpoint = error.details["endpoint"];
+  return typeof endpoint === "string" ? endpoint : "a removed connect target";
+}
+
 /**
  * Routes leases across several connect targets (one Simlock worker guard or gateway each) and sends
  * every call about a lease to the target that issued it, never to another one: the target is found
@@ -86,7 +96,7 @@ export class RoutingProvider implements DeviceProvider {
     if (target === undefined) {
       throw new TapdanceError("FORBIDDEN", `This lease belongs to ${origin}, which is not a connect target any more`, {
         hint: `Connect it again (\`tapdance connect ${origin}\` with its token on stdin) to use or release the lease, or let the lease expire there.`,
-        details: { endpoint: origin, targets: this.targets.map((t) => t.name) },
+        details: { reason: TARGET_REMOVED, endpoint: origin, targets: this.targets.map((t) => t.name) },
       });
     }
     return target;

@@ -237,6 +237,30 @@ describe("Tapdance with several targets (mocked hosts)", () => {
     expect(n2.fake.calls.map((c) => c.method)).not.toContain("tap");
   });
 
+  it("a lease on a disconnected target is not reused, and release says the host still holds it", async () => {
+    const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
+    const cwd = await mkdtemp(join(tmpdir(), "td-proj-"));
+    const n2 = target("n2", N2, ["android"]);
+    const mac = target("mac", MAC, ["ios"]);
+    const before = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "s1", source: "test" }, provider: new RoutingProvider([n2, mac]) });
+    await before.lease({ platform: "android", target: "n2" });
+    // `tapdance disconnect n2`: the next process routes across mac only.
+    const t = await Tapdance.create({ cwd, env: { TAPDANCE_HOME: home }, session: { id: "s1", source: "test" }, provider: new RoutingProvider([mac]) });
+    await expect(t.lease({ platform: "android", reuse: true })).rejects.toMatchObject({
+      code: "LEASE_ALREADY_HELD",
+      hint: expect.stringContaining("tapdance device release"),
+      details: expect.objectContaining({ orphaned: N2 }),
+    });
+    const released = await t.release();
+    expect(released).toMatchObject({ released: false, orphaned: N2, message: expect.stringContaining("time limit") });
+    expect(released.unreachable).toBeUndefined();
+    // Still released "here" (M-06): the record is gone, so the session can lease again.
+    expect(await t.current()).toBeUndefined();
+    expect(n2.fake.active.size).toBe(1);
+    expect(n2.fake.calls.map((c) => c.method)).not.toContain("release");
+    expect((await t.lease({ platform: "ios" })).summary.location).toMatchObject({ endpoint: MAC, target: "mac" });
+  });
+
   it("refuses --target when no targets are configured", async () => {
     const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
     const t = await Tapdance.create({ cwd: home, env: { TAPDANCE_HOME: home }, session: { id: "s1", source: "test" }, provider: new FakeProvider() });

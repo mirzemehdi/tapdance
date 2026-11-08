@@ -19,7 +19,8 @@ export async function renewIfDue(tapdance: Tapdance, options: { idleMs: number; 
     const holdUntil = hold ? Date.parse(hold.until) : Number.NaN;
     const lastUsed = Math.max(Date.parse(record.lastUsedAt ?? record.handle.createdAt), Number.isFinite(holdUntil) ? holdUntil : 0);
     const held = Number.isFinite(holdUntil) && holdUntil > now;
-    if (options.idleMs > 0 && !held && now - lastUsed > options.idleMs) {
+    // A device call still running in this process (a long build, say) is use too.
+    if (options.idleMs > 0 && !held && !tapdance.inUseNow && now - lastUsed > options.idleMs) {
       options.log?.(`Releasing ${record.handle.model}: unused for ${Math.round((now - lastUsed) / 60_000)} min`);
       await tapdance.release();
       return "released-idle";

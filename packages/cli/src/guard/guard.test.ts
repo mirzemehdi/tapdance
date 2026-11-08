@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { LeaseHandle } from "@tapdance/core";
 import { SimlockProvider } from "@tapdance/provider-simlock";
-import { GuardPolicySchema, GuardTokens, type GuardPolicy } from "./policy.js";
+import { GuardPolicySchema, GuardTokens, audit, type GuardPolicy } from "./policy.js";
 import { execOf } from "./rules.js";
 import { startGuard, type GuardOptions } from "./server.js";
 
@@ -154,7 +154,11 @@ async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {
       headers: { ...(secret ? { authorization: `Bearer ${secret}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers },
       ...(body !== undefined ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
     });
-  const rpc = (secret: string, method: string, params: Record<string, unknown>) => call(secret, "POST", "/v1/agent-device/rpc", { jsonrpc: "2.0", id: 1, method, params });
+  // agent-device names a command's lease in meta (and flags), the copies Simlock reads; a test that
+  // gives only `leaseId` gets the meta copy too, as the real client sends it.
+  const withMeta = (method: string, params: Record<string, unknown>) =>
+    method === "agent_device.command" && typeof params["leaseId"] === "string" && params["meta"] === undefined ? { ...params, meta: { leaseId: params["leaseId"] } } : params;
+  const rpc = (secret: string, method: string, params: Record<string, unknown>) => call(secret, "POST", "/v1/agent-device/rpc", { jsonrpc: "2.0", id: 1, method, params: withMeta(method, params) });
   const allocate = (secret: string, leaseId: string, extra: Record<string, unknown> = {}) => rpc(secret, "agent_device.lease.allocate", { leaseId, platform: "ios", ...extra });
   const exec = (secret: string, leaseId: string, tool: string, args: string[]) => call(secret, "POST", `/v1/leases/${leaseId}/exec`, { tool, args });
   const forwardedExecs = () => upstream.seen.filter((s) => s.path.endsWith("/exec"));
@@ -364,6 +368,40 @@ describe("worker guard vs a malicious remote client", () => {
     expect((await stat(auditFile)).mode & 0o777).toBe(0o600);
   });
 
+  it("an unauthenticated caller cannot write long audit lines (path and reason are cut to 200 characters)", async () => {
+    const t = await setup();
+    const long = `/v1/${"x".repeat(8000)}`;
+    expect((await t.call(undefined, "GET", long)).status).toBe(404);
+    expect((await t.call(undefined, "GET", `/v1/status?${"q".repeat(8000)}`)).status).toBe(401);
+    const lines = (await readFile(join(t.home, "worker", "audit.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l) as { path: string; reason: string });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.path).toHaveLength(200);
+    expect(lines[0]!.path.endsWith("…")).toBe(true);
+    expect(lines[0]!.reason).toHaveLength(200);
+    expect(lines[0]!.reason.endsWith("…")).toBe(true);
+    expect(lines[1]).toMatchObject({ path: "/v1/status", reason: "unauthenticated" });
+    for (const l of lines) expect(JSON.stringify(l).length).toBeLessThan(700);
+  });
+
+  it("rotates the audit log by size, keeping one older file (mode 600)", async () => {
+    const home = await mkdtemp(join(tmpdir(), "td-audit-"));
+    const env = { TAPDANCE_HOME: home };
+    const file = join(home, "worker", "audit.log");
+    const entry = (n: number) => ({ method: "GET", path: `/v1/n${n}`, decision: "deny" as const, reason: "unauthenticated" });
+    for (let n = 0; n < 3; n++) await audit(entry(n), env, 200);
+    // Each line is ~100 bytes: the third write found the file at or over 200 bytes and rotated first.
+    expect(await readFile(`${file}.1`, "utf8")).toContain("/v1/n1");
+    expect(await readFile(file, "utf8")).toContain("/v1/n2");
+    expect(await readFile(file, "utf8")).not.toContain("/v1/n0");
+    for (let n = 3; n < 5; n++) await audit(entry(n), env, 200);
+    // The next rotation replaces the older .1.
+    expect(await readFile(`${file}.1`, "utf8")).not.toContain("/v1/n1");
+    expect(await readFile(`${file}.1`, "utf8")).toContain("/v1/n3");
+    expect(await readFile(file, "utf8")).toContain("/v1/n4");
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(`${file}.1`)).mode & 0o777).toBe(0o600);
+  });
+
   it("disabling a capability in the local policy refuses it", async () => {
     const t = await setup({ allow: { install: false, interaction: true, inspection: true, screenshots: true, recording: false, logs: false, streaming: false, input: false, physicalDevices: false } });
     await t.allocate(t.alice.secret, A);
@@ -386,6 +424,27 @@ describe("worker guard: lease ids in real agent-device requests", () => {
     expect((await t.rpc(t.mallory.secret, "agent_device.command", real({ meta: A, flags: A }))).status).toBe(403);
     const forwarded = t.upstream.seen.filter((s) => s.path === "/v1/agent-device/rpc").map((s) => s.body);
     expect(forwarded.some((b) => b.includes("tdg_client_side"))).toBe(false);
+  });
+
+  it("refuses a lease id only in a field Simlock does not read (mocked Simlock)", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    const before = t.upstream.seen.length;
+    const raw = (method: string, params: Record<string, unknown>) => t.call(t.alice.secret, "POST", "/v1/agent-device/rpc", { jsonrpc: "2.0", id: 1, method, params });
+    // Simlock reads a command's lease from meta.leaseId ?? flags.leaseId; params.leaseId alone (even the
+    // client's own lease) would reach it as an unleased command.
+    expect((await raw("agent_device.command", { command: "snapshot", leaseId: A })).status).toBe(403);
+    // A non-string copy in the field Simlock reads first does not let a string in another field stand in.
+    expect((await raw("agent_device.command", { command: "snapshot", meta: { leaseId: 5 }, flags: { leaseId: A } })).status).toBe(403);
+    expect((await raw("agent_device.command", { command: "snapshot", leaseId: A, meta: { leaseId: false } })).status).toBe(403);
+    // Lease calls: Simlock reads params.leaseId only.
+    expect((await raw("agent_device.lease.release", { flags: { leaseId: A } })).status).toBe(403);
+    expect((await raw("agent_device.lease.heartbeat", { meta: { leaseId: A } })).status).toBe(403);
+    expect(t.upstream.seen.length).toBe(before);
+    // The shapes agent-device sends still pass.
+    expect((await raw("agent_device.command", { command: "snapshot", flags: { leaseId: A } })).status).toBe(200);
+    expect((await raw("agent_device.command", { command: "snapshot", meta: { leaseId: A }, flags: { leaseId: A } })).status).toBe(200);
+    expect((await raw("agent_device.lease.heartbeat", { leaseId: A, ttlMs: 1000 })).status).toBe(200);
   });
 });
 
@@ -528,6 +587,28 @@ describe("worker guard: hardening", () => {
     const mine = await t.call(t.alice.secret, "GET", "/v1/agent-device/artifacts/art-aaaa");
     expect(mine.status).toBe(200);
     expect(await mine.text()).toBe("PNGDATA");
+  });
+
+  it("13b. upload and artifact ids are forgotten an hour after last use, not while in use (mocked Simlock, injected clock)", async () => {
+    let clock = Date.now();
+    const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 240, maxUploadMB: 1, tokenDays: 7 } }, {}, { now: () => clock });
+    await t.allocate(t.alice.secret, A);
+    const lease = { "x-agent-device-lease-id": A };
+    const pre = await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, lease);
+    const { uploadId } = (await pre.json()) as { uploadId: string };
+    // A long upload: each chunk keeps the id remembered.
+    clock += 50 * 60_000;
+    expect((await t.call(t.alice.secret, "PUT", `/v1/agent-device/upload/direct/${uploadId}`, "bytes", lease)).status).toBe(200);
+    clock += 50 * 60_000;
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, lease)).status).toBe(200);
+    const shot = await t.rpc(t.alice.secret, "agent_device.command", { command: "screenshot", leaseId: A });
+    expect(JSON.stringify(await shot.json())).toContain("art-aaaa");
+    clock += 59 * 60_000;
+    expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/artifacts/art-aaaa")).status).toBe(200);
+    // An hour after last use both are dropped (agent-device itself dropped them long before).
+    clock += 2 * 60_000;
+    expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/artifacts/art-aaaa")).status).toBe(404);
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, lease)).status).toBe(403);
   });
 
   it("14. the device-command channel allows exactly the shapes Tapdance builds (#14)", async () => {
@@ -1121,7 +1202,7 @@ describe("worker guard: hardening", () => {
       fetch(`${again.url}/v1/agent-device/rpc`, {
         method: "POST",
         headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "agent_device.command", params: { leaseId: A, command: "screenshot" } }),
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "agent_device.command", params: { leaseId: A, meta: { leaseId: A }, command: "screenshot" } }),
       });
     expect((await shot(t.alice.secret)).status).toBe(200);
     expect((await shot(t.mallory.secret)).status).toBe(403);

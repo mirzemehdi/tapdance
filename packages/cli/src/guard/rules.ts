@@ -139,13 +139,18 @@ export function rpcOf(body: unknown, policy: GuardPolicy, isPhysical: (leaseId: 
   const b = body as { method?: unknown; params?: unknown };
   const method = typeof b.method === "string" ? b.method.replace(/^agent_device\./, "") : "";
   const params = (b.params && typeof b.params === "object" ? b.params : {}) as Record<string, unknown>;
-  // agent-device repeats the lease in params, params.meta and params.flags; every copy must agree,
-  // so a request cannot name its own lease in one place and someone else's in another.
+  // agent-device repeats the lease in params, params.meta and params.flags; every copy present must be
+  // the same string, so a request cannot name its own lease in one place and someone else's in another.
   const sub = (key: string) => (params[key] && typeof params[key] === "object" ? (params[key] as Record<string, unknown>) : {});
-  const ids = [params["leaseId"], sub("meta")["leaseId"], sub("flags")["leaseId"]].filter((v): v is string => typeof v === "string");
-  if (new Set(ids).size > 1) return deny("conflicting lease ids in one request");
-  const leaseId = ids[0];
-  if (method === "lease.allocate" || method === "lease.heartbeat" || method === "lease.release") {
+  const copies = [params["leaseId"], sub("meta")["leaseId"], sub("flags")["leaseId"]].filter((v) => v !== undefined && v !== null);
+  if (copies.some((v) => typeof v !== "string")) return deny("lease ids must be strings");
+  if (new Set(copies).size > 1) return deny("conflicting lease ids in one request");
+  const isLeaseCall = method === "lease.allocate" || method === "lease.heartbeat" || method === "lease.release";
+  // The lease checked here is the copy Simlock acts on: params.leaseId for lease calls, and for
+  // commands `meta.leaseId ?? flags.leaseId` (simlock 0.5.0, commandLeaseId). A copy Simlock does not
+  // read never stands in for one it does.
+  const leaseId = (isLeaseCall ? params["leaseId"] : (sub("meta")["leaseId"] ?? sub("flags")["leaseId"])) as string | undefined;
+  if (isLeaseCall) {
     if (!leaseId || !LEASE.test(leaseId)) return deny("lease calls need a 32-hex lease id");
     const physical = (v: unknown) => v === true || v === "true";
     if (method === "lease.allocate" && (physical(params["physical"]) || physical(sub("flags")["physical"])) && !policy.allow.physicalDevices) {
@@ -158,7 +163,7 @@ export function rpcOf(body: unknown, policy: GuardPolicy, isPhysical: (leaseId: 
   const command = typeof params["command"] === "string" ? params["command"].toLowerCase() : "";
   let area = COMMANDS[command];
   if (!area) return deny(`agent-device command "${command || "(none)"}" is not part of the device API`);
-  if (!leaseId || !LEASE.test(leaseId)) return deny("commands must name their lease");
+  if (!leaseId || !LEASE.test(leaseId)) return deny("commands must name their lease in meta.leaseId or flags.leaseId");
   // A push to a simulator or emulator holds no one's private data; to a physical phone it needs the
   // notifications switch (#49).
   if (command === "push" && !isPhysical(leaseId)) area = "interaction";

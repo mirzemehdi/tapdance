@@ -28,7 +28,13 @@ const SIMLOCK_CODE_MAP: Record<string, ErrorCode> = {
   BAD_REQUEST: "USAGE",
   STREAM_UNAVAILABLE: "NOT_SUPPORTED",
   INPUT_UNAVAILABLE: "NOT_SUPPORTED",
+  // Simlock's transport 503s: the daemon is restarting or lost its worker link for a moment.
+  DAEMON_STOPPING: "PROVIDER_UNREACHABLE",
+  DAEMON_CONNECTION_LOST: "PROVIDER_UNREACHABLE",
+  RELAY_TARGET_MISSING: "PROVIDER_UNREACHABLE",
 };
+
+const TRANSPORT_HINT = "The Simlock daemon or its worker link is restarting. Retry in a few seconds; check with `tapdance doctor` if it persists.";
 
 /** Shared with the agent-device error path so both say the same thing about an offline worker. */
 export const WORKER_OFFLINE_HINT = "The machine holding your device is offline; the lease stays yours. Retry this call in 30-60 s; do not release the device.";
@@ -207,7 +213,7 @@ export class SimlockHttp {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/files?${new URLSearchParams(query)}`, { timeoutMs: 300_000 });
     if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw filesUnsupported();
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/files");
-    return Buffer.from(await response.arrayBuffer());
+    return readingBody("Reading the file", 300_000, async () => Buffer.from(await response.arrayBuffer()));
   }
 
   /** A worker guard's touch route: plays timed taps on the lease's simulator from the host (#58). */
@@ -259,7 +265,7 @@ export class SimlockHttp {
     const response = await this.request(`/v1/leases/${encodeURIComponent(leaseId)}/crashes/${encodeURIComponent(name)}${appId ? `?${new URLSearchParams({ app: appId })}` : ""}`, { timeoutMs: 120_000 });
     if (response.status === 404 && !(response.headers.get("content-type") ?? "").includes("json")) throw crashesUnsupported();
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/crashes/{name}");
-    return { name: decodeURIComponent(response.headers.get("x-tapdance-crash-name") ?? name), text: await response.text() };
+    return { name: decodeURIComponent(response.headers.get("x-tapdance-crash-name") ?? name), text: await readingBody("Reading the crash report", 120_000, () => response.text()) };
   }
 
   /**
@@ -277,7 +283,7 @@ export class SimlockHttp {
       throw new TapdanceError("NOT_SUPPORTED", "This endpoint cannot build apps", { hint: "Builds run on a worker in device-only mode (tapdance worker guard) whose owner turned them on: tapdance host builds enable." });
     }
     if (!response.ok || !response.body) throw await toError(response, "/v1/leases/{id}/build");
-    return this.readResultStream(response, onLine, "build");
+    return this.readResultStream(response, onLine, "build", timeoutMs);
   }
 
   /**
@@ -302,34 +308,41 @@ export class SimlockHttp {
       throw await toError(new Response(text, { status: response.status, headers: response.headers }), "/v1/leases/{id}/ci-install");
     }
     if (!response.ok || !response.body) throw await toError(response, "/v1/leases/{id}/ci-install");
-    return this.readResultStream(response, onLine, "install from CI");
+    return this.readResultStream(response, onLine, "install from CI", timeoutMs);
   }
 
   /** Reads a guard's NDJSON stream ({"log"}, then {"result"} or {"error"}). */
-  private async readResultStream<T>(response: Response, onLine: (line: string) => void, what: string): Promise<T> {
+  private async readResultStream<T>(response: Response, onLine: (line: string) => void, what: string, timeoutMs: number): Promise<T> {
     let buffer = "";
     let result: T | undefined;
     const decoder = new TextDecoder();
-    for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
-      buffer += decoder.decode(chunk, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const raw of lines) {
-        if (!raw.trim()) continue;
-        const msg = JSON.parse(raw) as { log?: string; result?: typeof result; error?: { code: string; message: string; hint?: string; tail?: string; details?: Record<string, unknown> } };
-        if (msg.log !== undefined) onLine(msg.log);
-        if (msg.result) result = msg.result;
-        if (msg.error) {
-          // The few details a guard names (why, and which app), so a caller can act on them (#85, #89).
-          const given = msg.error.details && typeof msg.error.details === "object" ? msg.error.details : {};
-          const details: Record<string, unknown> = Object.fromEntries(
-            Object.entries(given).filter(([k, v]) => ["reason", "appId", "gitAuth", "keyFingerprint"].includes(k) && typeof v === "string" && v.length <= 300),
-          );
-          if (msg.error.tail) details["tail"] = msg.error.tail;
-          throw new TapdanceError(msg.error.code as never, msg.error.message, { ...(msg.error.hint ? { hint: msg.error.hint } : {}), ...(Object.keys(details).length > 0 ? { details } : {}) });
+    await readingBody(`The ${what}`, timeoutMs, async () => {
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        buffer += decoder.decode(chunk, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const raw of lines) {
+          if (!raw.trim()) continue;
+          let msg: { log?: string; result?: typeof result; error?: { code: string; message: string; hint?: string; tail?: string; details?: Record<string, unknown> } };
+          try {
+            msg = JSON.parse(raw) as typeof msg;
+          } catch (error) {
+            throw new TapdanceError("PROVIDER_UNREACHABLE", `The ${what} stream sent a line that is not JSON: ${raw.slice(0, 120)}`, { cause: error });
+          }
+          if (msg.log !== undefined) onLine(msg.log);
+          if (msg.result) result = msg.result;
+          if (msg.error) {
+            // The few details a guard names (why, and which app), so a caller can act on them (#85, #89).
+            const given = msg.error.details && typeof msg.error.details === "object" ? msg.error.details : {};
+            const details: Record<string, unknown> = Object.fromEntries(
+              Object.entries(given).filter(([k, v]) => ["reason", "appId", "gitAuth", "keyFingerprint"].includes(k) && typeof v === "string" && v.length <= 300),
+            );
+            if (msg.error.tail) details["tail"] = msg.error.tail;
+            throw new TapdanceError(msg.error.code as never, msg.error.message, { ...(msg.error.hint ? { hint: msg.error.hint } : {}), ...(Object.keys(details).length > 0 ? { details } : {}) });
+          }
         }
       }
-    }
+    });
     if (!result) throw new TapdanceError("PROVIDER_UNREACHABLE", `The ${what} stream ended without a result`);
     return result;
   }
@@ -346,7 +359,7 @@ export class SimlockHttp {
     });
     if (!response.ok || !response.body) throw await toError(response, "/v1/agent-device/artifacts/{id}");
     await mkdir(dirname(destination), { recursive: true });
-    await pipeline(Readable.fromWeb(response.body as never), createWriteStream(destination, { mode: 0o600 }));
+    await readingBody("Downloading the artifact", timeoutMs, () => pipeline(Readable.fromWeb(response.body as never), createWriteStream(destination, { mode: 0o600 })));
   }
 
   /**
@@ -361,7 +374,7 @@ export class SimlockHttp {
       timeoutMs,
     });
     if (!response.ok) throw await toError(response, "/v1/leases/{id}/exec");
-    return parseExecStream(await response.text());
+    return parseExecStream(await readingBody("The command", timeoutMs, () => response.text()));
   }
 }
 
@@ -409,8 +422,11 @@ export function parseExecStream(body: string): ExecResult {
     } else if (event === "exit") {
       exitCode = typeof payload["exitCode"] === "number" ? payload["exitCode"] : -1;
     } else if (event === "error") {
-      const code = typeof payload["code"] === "string" ? payload["code"] : "EXEC_FAILED";
-      const message = typeof payload["message"] === "string" ? payload["message"] : "exec failed";
+      // Simlock 0.5 nests it as {"error":{"code","message"}}; older senders put it at the top level.
+      const nested = payload["error"];
+      const err = nested !== null && typeof nested === "object" ? (nested as Record<string, unknown>) : payload;
+      const code = typeof err["code"] === "string" ? err["code"] : "EXEC_FAILED";
+      const message = typeof err["message"] === "string" ? err["message"] : "exec failed";
       const hint = code === "PASSTHROUGH_REFUSED" ? PASSTHROUGH_REFUSED_HINT : code === "WORKER_UNREACHABLE" ? WORKER_OFFLINE_HINT : undefined;
       throw new TapdanceError(SIMLOCK_CODE_MAP[code] ?? "DEVICE_ERROR", `${code}: ${message}`, hint === undefined ? {} : { hint });
     }
@@ -459,7 +475,34 @@ async function toError(response: Response, path: string): Promise<TapdanceError>
             ? PASSTHROUGH_REFUSED_HINT
             : mapped === "DEVICE_UNAVAILABLE" && /RUNTIME_MISSING|UNKNOWN_MODEL/.test(code)
               ? "Install the runtime or system image on a worker: `tapdance devices install <ios|android> <version>`, then check `tapdance devices`."
-              : given;
+              : /^(DAEMON_STOPPING|DAEMON_CONNECTION_LOST|RELAY_TARGET_MISSING)$/.test(code)
+                ? (given ?? TRANSPORT_HINT)
+                : given;
   const retryAfter = Number(response.headers.get("retry-after"));
-  return new TapdanceError(mapped, message, { ...(hint === undefined ? {} : { hint }), details: { status: response.status, backendCode: code }, ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000 } : {}) });
+  // A Retry-After says the same call will work later, so the error is retryable whatever its code.
+  const retry = Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterMs: retryAfter * 1000, retryable: true } : {};
+  return new TapdanceError(mapped, message, { ...(hint === undefined ? {} : { hint }), details: { status: response.status, backendCode: code }, ...retry });
+}
+
+/**
+ * Runs a read of a response body. `request()` covers only the fetch itself; a timeout or a broken
+ * connection while the body streams in would otherwise escape as a raw DOMException.
+ */
+async function readingBody<T>(what: string, timeoutMs: number, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (error) {
+    if (error instanceof TapdanceError) throw error;
+    const names = [error, error instanceof Error ? error.cause : undefined].map((e) => (e instanceof Error || e instanceof DOMException ? e.name : ""));
+    if (names.includes("TimeoutError") || names.includes("AbortError")) {
+      throw new TapdanceError("TIMEOUT", `${what} did not finish within ${Math.round(timeoutMs / 1000)} s`, { cause: error });
+    }
+    // A local file system failure (the download's destination) is not Simlock's fault.
+    if (error instanceof Error && "syscall" in error) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new TapdanceError("PROVIDER_UNREACHABLE", `${what} broke off while reading Simlock's answer: ${reason}`, {
+      hint: "The connection to Simlock dropped. Retry; check the endpoint with `tapdance doctor` if it keeps happening.",
+      cause: error,
+    });
+  }
 }

@@ -80,8 +80,8 @@ export type CommandRunner = (
 
 const REF = /^(?!-)(?!.*\.\.)[A-Za-z0-9._/-]{1,200}$/;
 const PROJECT = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}\.(xcodeproj|xcworkspace)$/;
-const NAME = /^[A-Za-z0-9 _.-]{1,100}$/;
-const GRADLE_TASK = /^[A-Za-z0-9:_-]{1,200}$/;
+const NAME = /^(?!-)[A-Za-z0-9 _.-]{1,100}$/;
+const GRADLE_TASK = /^(?!-)[A-Za-z0-9:_-]{1,200}$/;
 const DIR = /^(?![/~])(?!.*\.\.)[A-Za-z0-9 _./-]{1,300}$/;
 const SETTING_VALUE = /^[A-Za-z0-9 _.,=-]{0,200}$/;
 
@@ -290,7 +290,7 @@ export function buildKey(sha: string, req: BuildRequest, filesDigest = ""): stri
   // both must land on one key (#104).
   const inputs =
     req.platform === "ios"
-      ? [sha, req.platform, req.project ?? "", req.scheme ?? "", req.configuration ?? "Debug", (req.xcodeSettings ?? []).join(" ")]
+      ? [sha, req.platform, req.project ?? "", req.scheme ?? "", req.configuration ?? "Debug", JSON.stringify(req.xcodeSettings ?? [])]
       : [sha, req.platform, req.gradleTask ?? "assembleDebug", normalDir(req.dir)];
   if (filesDigest) inputs.push(`files:${filesDigest}`);
   return createHash("sha256").update(inputs.join("\u0000")).digest("hex").slice(0, 16);

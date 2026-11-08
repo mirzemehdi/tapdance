@@ -1,5 +1,5 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, renameSync, statSync } from "node:fs";
 import { appendFile, chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
@@ -261,9 +261,30 @@ export interface AuditEntry {
   leaseId?: string;
 }
 
-/** Local, append-only record of what remote clients asked for. Never bodies, tokens or secrets. */
-export async function audit(entry: AuditEntry, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+/** Longest path or reason written to the audit log; longer ones end in "…". */
+export const AUDIT_FIELD_MAX = 200;
+/** Above this size the audit log moves to audit.log.1 (replacing an older one) and starts again. */
+export const AUDIT_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Redacted first, so a cut never leaves part of a secret the redaction would no longer match. */
+const clip = (text: string) => {
+  const clean = redactSecrets(text);
+  return clean.length > AUDIT_FIELD_MAX ? `${clean.slice(0, AUDIT_FIELD_MAX - 1)}…` : clean;
+};
+
+/**
+ * Local, append-only record of what remote clients asked for. Never bodies, tokens or secrets. Any
+ * unauthenticated caller can add a line, so each line is bounded and the file is rotated by size.
+ */
+export async function audit(entry: AuditEntry, env: NodeJS.ProcessEnv = process.env, maxBytes = AUDIT_MAX_BYTES): Promise<void> {
   const file = join(guardDir(env), "audit.log");
   await mkdir(guardDir(env), { recursive: true, mode: 0o700 });
-  await appendFile(file, `${redactSecrets(JSON.stringify({ at: new Date().toISOString(), ...entry }))}\n`, { mode: 0o600 });
+  // Checked and renamed synchronously, so two requests logging at once cannot both rotate.
+  try {
+    if (statSync(file).size >= maxBytes) renameSync(file, `${file}.1`);
+  } catch {
+    // No log yet.
+  }
+  const line = { at: new Date().toISOString(), ...entry, path: clip(entry.path), ...(entry.reason !== undefined ? { reason: clip(entry.reason) } : {}) };
+  await appendFile(file, `${redactSecrets(JSON.stringify(line))}\n`, { mode: 0o600 });
 }
