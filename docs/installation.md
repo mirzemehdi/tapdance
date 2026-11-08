@@ -51,8 +51,7 @@ The package is `tapdance-cli`; the command it installs is `tapdance`. Do not run
 tapdance`: that name belongs to an unrelated package (a Test Anything Protocol harness). The npm package
 carries the same patched Simlock and agent-device as a source build, so both run the same code.
 
-If npm says `tapdance-cli` is not found, the first release is not published yet. Install from source
-until it is.
+Install from source, below, to work on Tapdance itself or to try a change before it is released.
 
 ### From source
 

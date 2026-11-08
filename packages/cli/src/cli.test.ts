@@ -424,7 +424,7 @@ describe("tapdance CLI (built)", () => {
       }
     }
     expect([...new Set(missing)]).toEqual([]);
-  }, 120_000);
+  }, 300_000);
 
   it("documents every command, MCP tool and config key in its reference page", async () => {
     const help = (args: string[]) => tapdance([...args, "--help"]).stdout;
@@ -458,7 +458,7 @@ describe("tapdance CLI (built)", () => {
     const stale = spawnSync(process.execPath, [join(root, "scripts/gen-cli-index.mjs"), "--check"], { encoding: "utf8" });
     expect(stale.status, stale.stderr).toBe(0);
     expect({ undocumented, missingTools, missingKeys }).toEqual({ undocumented: [], missingTools: [], missingKeys: [] });
-  }, 120_000);
+  }, 300_000);
 });
 
 describe("repository URL", () => {

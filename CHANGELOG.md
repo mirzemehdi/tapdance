@@ -71,7 +71,8 @@ has run on one Mac only.
 - `scripts/pack-npm.mjs` builds one npm package, `tapdance-cli` (command `tapdance`), with the workspace
   packages and the patched Simlock and agent-device bundled. `.github/workflows/release.yml` tests,
   packs, smoke-tests and publishes it on a version tag through npm trusted publishing
-  ([releasing](docs/releasing.md)). Not published yet.
+  ([releasing](docs/releasing.md)). 0.1.0 is on npm. Unit tests allow 60 s each on CI, where the
+  release workflow's macOS runner is slower than a developer's Mac.
 
 ### Worker guard (2026-11-08)
 

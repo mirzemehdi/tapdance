@@ -112,8 +112,6 @@ npm install -g tapdance-cli
 tapdance --version
 ```
 
-If npm says `tapdance-cli` is not found, the first release is not published yet. Install from source
-for now, as the [installation guide](../installation.md#from-source) shows.
 
 **You should see** a version such as `0.1.0`. The npm package called just `tapdance` is a different
 project, so install `tapdance-cli`.

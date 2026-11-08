@@ -22,6 +22,9 @@ export default defineConfig({
           name: "unit",
           include: ["packages/*/src/**/*.test.ts"],
           exclude: ["**/*.integration.test.ts"],
+          // Many CLI tests start the built CLI several times. Hosted CI runners (the release workflow's
+          // macOS runner) are slower than a developer's Mac, so vitest's 5 s default is too tight there.
+          testTimeout: process.env["CI"] ? 60_000 : 30_000,
         },
       },
       {
