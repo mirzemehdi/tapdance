@@ -15,7 +15,7 @@ the next stage's prompt is below.
 | 2 | Google Cloud N2 VM (Android) | This Mac, acting as the agent's machine; repeated from a Linux VPS | ✅ ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); from a Linux VPS ✅ ([evidence](testing/evidence/2026-11-03-vps-n2-android.md), [rerun](testing/evidence/2026-11-04-vps-n2-android-rerun.md)); to repeat it: [field-test runbook](testing/field-test-cloud-android.md) |
 | 3 | A rented Mac (iOS) | This Mac, acting as the agent's machine; repeated from a Linux VPS | ✅ ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md), Scaleway M1-M); from a Linux VPS ✅ ([evidence](testing/evidence/2026-11-07-vps-rented-mac-ios.md)); to repeat it: [field-test runbook](testing/field-test-rented-mac-ios.md) |
 | 4 | Both at once: Linux host for Android, Mac host for iOS | One agent, one connection | ✅ ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md), Linux VPS agent, N2 + rented Mac, several connect targets; [guide](guides/android-and-ios.md)). Gateway pool across machines not run (owner's choice, STATUS Q-06) |
-| 5 | Tapdance Cloud: our fleet, user signs up and connects | The user's agent | ⬜ |
+| 5 | Tapdance Cloud in steps: the customer's own cloud first, then our machines, one customer per machine | The user's agent | ⬜ |
 
 Rules for every stage: the repository's CLAUDE.md and AGENTS.md apply. In particular, ask before
 creating or starting anything that costs money; keep this Mac's live host untouched (scratch
@@ -197,69 +197,128 @@ store my cloud credentials, and ask before anything that costs money or starts s
 
 ---
 
-## Stage 5 · Tapdance Cloud (hosted, open-source core)
+## Stage 5 · Tapdance Cloud, one step at a time
 
-**Goal.** A Postiz-style model. The open-source core stays self-hostable (stages 1–4). A hosted service
-lets a user sign up, get an API key, run `tapdance connect` (or pick "Tapdance Cloud" in `tapdance
-init`, today "not available yet"), and test Android and iOS without renting anything.
+**Goal.** Make it easy to test Android and iOS without owning the hardware, and charge for it only
+where we add work. The open-source core stays free and self-hostable (stages 1–4). Stage 5 grows in
+small steps, each one useful on its own, and each a business only if the one before it found users.
 
-**What it adds on top of stage 4:**
+**Direction (owner's decisions, 2026-11-09):**
+- **One customer per machine.** A customer's phones run on machines that only they use. We create
+  those machines when needed and destroy them afterwards. No customer shares a Mac with another
+  customer, so the macOS licence question about shared simulator minutes does not arise, and wiping
+  a device means deleting the machine.
+- **Bring your own cloud first.** The first versions run on the customer's own Google Cloud and
+  Scaleway accounts, or their own Mac or Mac mini. Their cloud bill goes straight to them. Our
+  fleet comes last, once people want it.
+- **Thin cost-plus pricing.** Where we resell machines, the price is our cost plus a small margin:
+  10–20 % net, after tax, before VAT. No markup on what the customer pays their cloud directly.
 
-| Area | Needs |
-| --- | --- |
-| Accounts | Sign-up, teams, API keys; `connect` takes a cloud key instead of a pairing token |
-| Isolation | Fresh device per lease, wiped after; per-tenant network egress limits; the guard's allow-list; abuse handling (user-uploaded apps run on our machines) |
-| Billing | Stripe, metered per device-minute, quotas and spend caps, free tier |
-| Fleet | Android: always-on base load on rented bare-metal KVM servers (several emulators each, no nested-virtualization penalty), with Google Cloud N2 VMs started on demand for peaks. iOS: Scaleway Mac minis (hourly, 24-hour minimum), MacStadium only if monthly works out cheaper at scale. Health checks, autoscaling, image and Xcode updates |
-| Console | Web console for many sessions: live view, takeover, recordings, logs, usage |
-| Operations | Monitoring, status page, backups, support, terms and privacy policy |
+**Steps:**
 
-**Decide before building (these are the owner's calls):**
-- **Licence: decided.** Tapdance is AGPL-3.0-only (like Postiz) since 2026-11-03: anyone may
-  self-host it, but a modified Tapdance offered as a service must publish its changes. Before taking
-  outside contributions, decide whether to ask for a contributor licence agreement, so that a
-  commercial licence (for companies that cannot accept AGPL, e.g. for the SDK) stays possible.
-- **Apple's macOS licence.** Renting from Scaleway meets Apple's rental rule: Scaleway leases the
-  whole Mac to us for at least 24 hours. What remains is our own use of it: running short simulator
-  sessions for many customers on one Mac. That is what CI and device-cloud vendors already sell
-  (Bitrise, Codemagic, Appetize, BrowserStack), so it is not a blocker, but get a quick legal read
-  of the macOS and Xcode terms before launch. A "dedicated Mac" plan (one customer per Mac for at
-  least 24 hours) avoids the question entirely.
-- **Pricing and margins.** Android carries the margin. iOS may need a higher per-minute price or a
-  dedicated-Mac plan.
-- **Positioning.** BrowserStack, Sauce Labs, LambdaTest, Firebase Test Lab, AWS Device Farm and
-  Appetize sell device minutes. Tapdance's edge is that it is built for agents:
-  - MCP first;
-  - human takeover;
-  - precise device tools: timed taps, link capture, crash reports, audit;
-  - the open-source core as the funnel.
+| Step | What the customer gets | Who pays whom | State |
+| --- | --- | --- | --- |
+| 5.0 | Plan: architecture, prices, decisions written down | – | ⬜ |
+| 5.1 | **Bring your own cloud, self-run.** One command creates a host in *their* Google Cloud or Scaleway account, sets it up and connects their agent. One command removes it | Customer pays their cloud. Tapdance is free | ⬜ |
+| 5.2 | **Tapdance account.** Sign up, log in from the CLI, see your hosts (cloud or own Mac mini) and usage in one place | Free tier, paid plan ready | ⬜ |
+| 5.3 | **Managed bring your own cloud.** We start their machines when a lease needs one, stop them when idle, keep images and Xcode updated, enforce spend caps. Their own Mac mini joins too | Customer pays their cloud, and pays us a small subscription | ⬜ |
+| 5.4 | **Our fleet, dedicated per customer.** No cloud account needed. We create a machine for them in our account, bill per hour (Android) or per Mac day (iOS), and destroy it after | Customer pays us cost plus margin | ⬜ |
+| 5.5 | **Console and operations.** Web console (live view, take-over, recordings, logs, usage), status page, terms, privacy, support | – | ⬜ |
 
-**Done when (first version):**
-- A stranger signs up, gets a key, connects their agent and tests an Android and an iOS app.
-- They are billed per minute and see their usage.
-- Their devices are wiped after use.
-- Its own STATUS and evidence entries cover each claim.
+### Pricing model (draft, not final)
 
-**Prompt** (it starts with design, not code):
+**Formula.** With net margin *m* after tax, price = cost × (1 − t) / (1 − t − m), where *t* is the
+tax rate on profit. At t = 30 %, that is cost ÷ 0.86 for m = 10 % and cost ÷ 0.71 for m = 20 %.
+Payment fees (Stripe) count as cost. VAT is added on top of the price and passed through. If tax is
+charged on revenue rather than profit, the price has to be about 1.7–2× cost instead; check this
+before publishing prices.
+
+| What | Our cost (approx.) | Price at 10–20 % net (indicative) |
+| --- | --- | --- |
+| Own machines and bring your own cloud, self-run (5.1) | ~0 | Free |
+| Managed bring your own cloud, own Mac mini included (5.3) | Control plane, support | ~$5 / month or ~$49 / year |
+| Android, our Google Cloud N2 (5.4) | ~$0.19–0.21 / hour | ~$0.25–0.35 / hour; Spot ~$0.10 |
+| iOS, our Scaleway M1-M, 24-hour minimum (5.4) | €2.64 / day | ~€3.10–3.70 / day |
+| iOS, our Scaleway M2-M (5.4) | €4.08 / day | ~€4.75–5.75 / day |
+| iOS, a Mac kept for a month (5.4) | ~€80 / month | ~€92–112 / month |
+
+The 24-hour Mac minimum is passed on honestly: an iOS customer pays for at least one Mac day.
+
+### What stays the same
+
+The CLI, MCP tools and SDK do not change. A customer's agent still runs `tapdance connect`, and
+leases still go through the worker guard on a host. Stages 5.1–5.4 only change **who creates the
+host** (the customer, by hand → one command → our control plane in their account → our control
+plane in our account) and **who pays**. `provider: "cloud"` (refused today with NOT_SUPPORTED) is
+added in 5.2 or 5.3, when there is an account to connect to.
+
+**Done when (whole stage):**
+- A stranger with only a laptop and a card signs up, connects their agent, and tests an Android
+  and an iOS app.
+- They see their usage, they are billed correctly, and a spend cap stops machines before it is
+  passed.
+- After they finish, no machine of theirs is left running, in their account or ours.
+- STATUS and evidence entries cover each claim.
+
+### 5.0 · Plan
 
 ```text
-Do stage 5 of docs/hosting-plan.md: plan Tapdance Cloud, a hosted service on top of the
-open-source core, Postiz style. Read that file, CLAUDE.md, AGENTS.md, PRODUCT.md, STATUS.md,
-ROADMAP.md, docs/architecture-decision.md and the stage 2–4 evidence first. Build nothing yet.
-1. Write docs/cloud/architecture.md:
-   - accounts and API keys, and how `tapdance connect` / `tapdance init` reach the cloud;
-   - tenant isolation and device wiping, egress limits and abuse handling;
-   - metering and Stripe billing;
-   - the fleet (bare-metal KVM base plus N2 on demand for Android, Scaleway Macs for iOS),
-     scheduling and health;
-   - the web console;
-   - operations.
-   Say what the existing gateway/guard/Simlock pieces cover and what is new.
-2. List the owner decisions with options and your recommendation: a contributor licence
-   agreement (the licence itself is AGPL-3.0-only, decided), the Apple macOS licence question for
-   shared iOS minutes (flag for a lawyer, don't decide it), pricing and free tier, the first fleet
-   (bare-metal KVM vs N2 for Android, Scaleway vs MacStadium for iOS) with monthly costs.
-3. Propose a first version that a stranger could use end to end, split into stages like this
-   file, each with its own prompt, and add them to docs/hosting-plan.md.
-Ask me the decisions you need; commit only the docs, with my identity and no AI attribution.
+Do step 5.0 of docs/hosting-plan.md: plan Tapdance Cloud as the steps 5.1–5.5 that stage 5
+describes. Read that file, CLAUDE.md, AGENTS.md, PRODUCT.md, STATUS.md, ROADMAP.md,
+docs/architecture-decision.md and the stage 2–4 evidence first. Build nothing yet.
+Follow the owner's direction in stage 5: one customer per machine, bring your own cloud first,
+thin cost-plus pricing.
+1. Write docs/cloud/architecture.md, one section per step:
+   - 5.1: provisioning a host in the customer's own Google Cloud or Scaleway account from the CLI,
+     using their own logged-in gcloud / scw, building on infrastructure/terraform/google-cloud-n2,
+     scripts/host-setup.sh and `host up`; teardown and idle auto-stop; their credentials never
+     leave their machine;
+   - 5.2: accounts, API keys, CLI login, how `tapdance connect` and `provider: "cloud"` reach the
+     account;
+   - 5.3: a control plane that starts and stops machines in the customer's account with the
+     narrowest access possible (scoped service account / project API key, encrypted, revocable),
+     spend caps, image updates;
+   - 5.4: our fleet with one customer per machine, metering, Stripe, abuse handling (card required,
+     egress limits, the guard's allow-list);
+   - 5.5: console and operations.
+   For each: what existing pieces (guard, connect targets, Simlock, gateway, terraform) cover and
+   what is new.
+2. Write docs/cloud/pricing.md: our cost per item from current list prices, the formula from stage
+   5, and the price table at 10 % and 20 % net. Include Stripe fees and a free tier proposal.
+3. List the decisions that remain, with options and your recommendation: contributor licence
+   agreement; storing customer cloud credentials in 5.3 vs a customer-side agent that holds them;
+   Google Cloud vs bare-metal KVM for our Android fleet; whether tax is on profit or revenue (ask me,
+   don't guess).
+4. Write a prompt for each of 5.1–5.5 into docs/hosting-plan.md under its heading.
+Ask me the decisions you need; commit only the docs, with my identity and no AI attribution; open a PR.
 ```
+
+### 5.1 · Bring your own cloud, self-run
+
+**Goal.** Today's stage 2–4 guides take a dozen manual steps. Make them one command each way.
+Roughly: `tapdance host create --cloud gcp` (Android) or `--cloud scaleway` (iOS) creates the
+machine in the customer's own account with their own logged-in cloud CLI, sets it up, runs `host
+up`, and connects this machine's agent. `tapdance host destroy` removes everything and checks that
+nothing billable is left. The exact command names come out of 5.0.
+
+**Done when:** a stranger with a Google Cloud and a Scaleway account goes from nothing to their
+agent testing both platforms in under 30 minutes with three commands or fewer, and after `destroy`
+the leftovers scripts find nothing. Evidence file from a real run.
+
+**Prompt:** written by step 5.0.
+
+### 5.2 · Tapdance account
+
+**Prompt:** written by step 5.0.
+
+### 5.3 · Managed bring your own cloud
+
+**Prompt:** written by step 5.0.
+
+### 5.4 · Our fleet, dedicated per customer
+
+**Prompt:** written by step 5.0.
+
+### 5.5 · Console and operations
+
+**Prompt:** written by step 5.0.
