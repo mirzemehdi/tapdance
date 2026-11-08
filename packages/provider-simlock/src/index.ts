@@ -23,11 +23,10 @@ export {
   androidSdk,
   type ProfileRecord,
 } from "./profile-provider.js";
-export { androidInstallHint, BACKEND_SYNTAX, fromAgentDeviceError, installRefusal, installRefusalHint, readerHint, withInstallHintFor, type HintSurface, type InstallRefusal } from "./agent-device-errors.js";
+export { BACKEND_SYNTAX, fromAgentDeviceError, installRefusal, installRefusalHint, readerHint, withInstallHintFor, type HintSurface, type InstallRefusal } from "./agent-device-errors.js";
 export { readApkManifest, parseBinaryManifest, type ApkManifest } from "./apk-manifest.js";
 export { settleGuest, parseGuestState, busyBetween, dialogFromDumpsys, dialogInNodes, dialogAdvice, SETTLED_CPU, SETTLED_SAMPLES, READY_BUDGET_MS, DEFAULT_CPU_CHECK_MS, MAX_CPU_CHECK_MS, BUSY_EXIT_CPU, BUSY_EXIT_SAMPLES, busyFromTheStart, fallingTrend, settleAndWarmUp, type GuestSample, type SystemDialog, type SettleResult } from "./guest-settle.js";
 export { chooseAndroidImage, isPlayImageTag, type ImageChoice } from "./image-choice.js";
-export { decodeFrames, SCREEN_FRAME_TAG, type ScreenFrame } from "./stream-framing.js";
 export { releaseStaleDeviceClaims, agentDeviceCli, simlockHomeDir, type StaleClaimReport, type StaleClaimOptions } from "./stale-claims.js";
 export { checkBuildRequest, runBuild, FailureDigest, isNotableBuildLine, hostSimulatorArch, hostNetworkHint, XCODE_SETTING_KEYS, normalizeRepo, buildCacheDir, spawnRunner, deployKeyFor, gitEnv, gitAuthHint, gitAuthContext, describeGitAuth, githubOverHttps, gitAccessProbe, gradleDaemonArgs, buildKey, type GitAuthContext, type GitAccess, type BuildRequest, type BuildSettings, type BuildResult, type CommandRunner } from "./build.js";
 export { repoSlug, repoIdentity, repoDisplay, isSshUrl, sshFingerprint, keyFingerprint, removeRepoKey, repoKeyPath, buildFilesDir, checkBuildFilePath, addBuildFile, removeBuildFile, readBuildFiles, listAllBuildFiles, buildFilesDigest, BUILD_FILE_MAX_BYTES, BUILD_FILES_MAX, type BuildFileEntry } from "./build-files.js";

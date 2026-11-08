@@ -56,11 +56,6 @@ export interface PlayedTap extends TimedTap {
   driftMs: number;
 }
 
-/**
- * Plays `steps` on an open input socket: waits for the channel's configuration, then sends each touch
- * at its time (begin at `t`, end after `hold`). A tap that starts before the previous one ended ends
- * that one first (the channel has one finger). Answers when each touch began, against the schedule.
- */
 /** The input channel's answer: the framebuffer in pixels (always portrait, whatever the rotation). */
 export interface InputConfig {
   width: number;
@@ -78,6 +73,11 @@ export function viewportFromConfig(config: InputConfig, orientation: Orientation
   return orientation.startsWith("landscape") ? { width: long, height: short } : { width: short, height: long };
 }
 
+/**
+ * Plays `steps` on an open input socket: waits for the channel's configuration, then sends each touch
+ * at its time (begin at `t`, end after `hold`). A tap that starts before the previous one ended ends
+ * that one first (the channel has one finger). Answers when each touch began, against the schedule.
+ */
 export async function playTouches(
   socket: TouchSocket,
   steps: TimedTap[],

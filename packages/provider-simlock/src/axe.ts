@@ -245,8 +245,10 @@ export class AxeBackend {
   startRecording(udid: string, outPath: string): { pid: number } {
     this.check(udid);
     const child = spawn(this.bin, ["record-video", "--udid", udid, "--output", outPath, "--fps", "15"], { detached: true, stdio: "ignore" });
+    // A missing binary emits "error" after spawn returns; without a listener it would crash the process.
+    child.on("error", () => undefined);
     child.unref();
-    if (!child.pid) throw new TapdanceError("DEVICE_ERROR", "Could not start axe record-video");
+    if (!child.pid) throw new TapdanceError("DEVICE_ERROR", "Could not start axe record-video", { hint: `Check that AXe is installed: ${this.bin} --version` });
     return { pid: child.pid };
   }
 
