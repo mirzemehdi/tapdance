@@ -1,7 +1,7 @@
 # Try Tapdance on your own computer
 
-In local mode your coding agent, Tapdance and the devices all run on one computer. Nothing leaves
-the machine and no token is copied by hand.
+Your agent, Tapdance and the phones all run on one computer, usually your Mac. Nothing leaves the
+machine, and there is no token to copy. These docs call this **local mode**.
 
 Proven on a Mac (MacBook Pro M1 Pro, macOS 26.5, Xcode 26.5): iOS simulators
 ([evidence](../testing/evidence/2026-11-01-local-ios.md)), Android emulators

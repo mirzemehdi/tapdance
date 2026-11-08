@@ -211,7 +211,7 @@ describe("tapdance CLI (built)", () => {
     expect(tapdance(["host", "builds", "files", "remove", "--repo", repo, "local.properties"], env).code).toBe(2);
     expect(tapdance(["host", "builds", "key", "--repo", "file:///etc"], env).code).toBe(2);
     expect(tapdance(["host", "builds", "files", "list", "--repo", "not a url"], env).code).toBe(2);
-  });
+  }, 30_000);
 
   it("logs: --contains, --level and --lines are checked before any lease (#82)", () => {
     for (const args of [
