@@ -550,6 +550,28 @@ describe("worker guard: hardening", () => {
     expect(await mine.text()).toBe("PNGDATA");
   });
 
+  it("13b. upload and artifact ids are forgotten an hour after last use, not while in use (mocked Simlock, injected clock)", async () => {
+    let clock = Date.now();
+    const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 240, maxUploadMB: 1, tokenDays: 7 } }, {}, { now: () => clock });
+    await t.allocate(t.alice.secret, A);
+    const lease = { "x-agent-device-lease-id": A };
+    const pre = await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, lease);
+    const { uploadId } = (await pre.json()) as { uploadId: string };
+    // A long upload: each chunk keeps the id remembered.
+    clock += 50 * 60_000;
+    expect((await t.call(t.alice.secret, "PUT", `/v1/agent-device/upload/direct/${uploadId}`, "bytes", lease)).status).toBe(200);
+    clock += 50 * 60_000;
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, lease)).status).toBe(200);
+    const shot = await t.rpc(t.alice.secret, "agent_device.command", { command: "screenshot", leaseId: A });
+    expect(JSON.stringify(await shot.json())).toContain("art-aaaa");
+    clock += 59 * 60_000;
+    expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/artifacts/art-aaaa")).status).toBe(200);
+    // An hour after last use both are dropped (agent-device itself dropped them long before).
+    clock += 2 * 60_000;
+    expect((await t.call(t.alice.secret, "GET", "/v1/agent-device/artifacts/art-aaaa")).status).toBe(404);
+    expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, lease)).status).toBe(403);
+  });
+
   it("14. the device-command channel allows exactly the shapes Tapdance builds (#14)", async () => {
     const { deviceCommands: dc } = await import("@tapdance/provider-simlock");
     const all = GuardPolicySchema.parse({ allow: { notifications: true } });

@@ -55,7 +55,7 @@ export interface GuardOptions {
   platform?: NodeJS.Platform;
   /** How often the cost guard checks, in ms (default 60 s). */
   hostStopIntervalMs?: number;
-  /** The clock the cost guard uses (tests move it forward). */
+  /** The clock the cost guard and the upload/artifact id expiry use (tests move it forward). */
   now?: () => number;
 }
 
@@ -156,17 +156,46 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   };
   /** Leases of physical phones (allocated with `physical`): no device shell on these. */
   const physicalLeases = book.physical;
+  const now = options.now ?? Date.now;
+  /**
+   * How long the guard remembers whose upload or artifact id is whose, from when it last saw the id.
+   * agent-device 0.21.35 drops uploads 5 minutes after upload or the last chunk and artifacts after
+   * 15 minutes; the margin keeps an id remembered for as long as agent-device can still use it.
+   */
+  const ID_TTL_MS = 60 * 60_000;
+  type Owned = Map<string, { owner: string; at: number }>;
   /** agent-device upload id → guard token id, learned from upload replies. */
-  const uploads = new Map<string, string>();
+  const uploads: Owned = new Map();
   /** agent-device artifact id → guard token id, learned from the replies to that token's commands. */
-  const artifacts = new Map<string, string>();
+  const artifacts: Owned = new Map();
+  /** Drops expired ids. Entries are kept in the order they were last seen, so the oldest come first. */
+  const prune = (into: Owned) => {
+    for (const [id, e] of into) {
+      if (now() - e.at < ID_TTL_MS) break;
+      into.delete(id);
+    }
+  };
+  const ownerOf = (into: Owned, id: string): string | undefined => {
+    prune(into);
+    return into.get(id)?.owner;
+  };
+  /** Notes that `owner` used `id` again: it stays remembered for another ID_TTL_MS. */
+  const refresh = (into: Owned, id: string, owner: string) => {
+    into.delete(id);
+    into.set(id, { owner, at: now() });
+  };
   /** Records every id of `key` ("uploadId", "artifactId") in a reply as belonging to `owner`. */
-  const learnIds = (text: string, key: string, into: Map<string, string>, owner: string) => {
-    for (const m of text.matchAll(new RegExp(`"${key}"\\s*:\\s*"([A-Za-z0-9_.-]{1,200})"`, "g"))) if (!into.has(m[1]!)) into.set(m[1]!, owner);
+  const learnIds = (text: string, key: string, into: Owned, owner: string) => {
+    prune(into);
+    for (const m of text.matchAll(new RegExp(`"${key}"\\s*:\\s*"([A-Za-z0-9_.-]{1,200})"`, "g"))) {
+      const known = into.get(m[1]!);
+      if (!known || known.owner === owner) refresh(into, m[1]!, owner);
+    }
   };
   /** An upload id named by `text` (a request body or path) that belongs to another client. */
   const foreignUpload = (text: string, owner: string): string | undefined => {
-    for (const [id, who] of uploads) if (who !== owner && text.includes(id)) return id;
+    prune(uploads);
+    for (const [id, e] of uploads) if (e.owner !== owner && text.includes(id)) return id;
     return undefined;
   };
   const upstreamHeaders = { Authorization: `Bearer ${upstream.token}` };
@@ -191,7 +220,6 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
   };
 
   // ---------------------------------------------------------------- cost guard (policy.hostStop)
-  const now = options.now ?? Date.now;
   const stopPlatform = options.platform ?? process.platform;
   const stopSettings = hostStopApplies(hostPolicy.hostStop, stopPlatform) ? hostPolicy.hostStop : undefined;
   if (!stopSettings && stopPlatform === "darwin" && hostPolicy.hostStop && (hostPolicy.hostStop.idleMinutes > 0 || hostPolicy.hostStop.maxUptimeHours > 0)) {
@@ -1028,18 +1056,20 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
           }
           const owner_ = token.id;
           const directId = /\/upload\/direct\/([A-Za-z0-9_-]+)$/.exec(r.path)?.[1];
-          if (directId && uploads.get(directId) !== token.id) {
+          if (directId && ownerOf(uploads, directId) !== token.id) {
             await decide("deny", { reason: "upload belongs to another client", leaseId: uploadLease });
             return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours");
           }
+          if (directId) refresh(uploads, directId, token.id);
           if (r.path.endsWith("/finalize")) {
             const body = await readBody(req, 64 * 1024);
             const text = body?.toString("utf8") ?? "";
             const named = /"uploadId"\s*:\s*"([A-Za-z0-9_.-]+)"/.exec(text)?.[1];
-            if (!named || uploads.get(named) !== token.id) {
+            if (!named || ownerOf(uploads, named) !== token.id) {
               await decide("deny", { reason: "finalize of an upload that is not this client's", leaseId: uploadLease });
               return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours");
             }
+            refresh(uploads, named, token.id);
             await decide("allow", { command: "upload finalize", leaseId: uploadLease });
             await forward(req, res, body, undefined, (t) => learnIds(t, "artifactId", artifacts, owner_));
             return;
@@ -1069,7 +1099,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
         }
         case "artifact": {
           const id = decodeURIComponent(r.path.split("/").pop() ?? "");
-          if (artifacts.get(id) !== token.id) {
+          if (ownerOf(artifacts, id) !== token.id) {
             await decide("deny", { reason: "artifact belongs to another client or is unknown" });
             return send(res, 404, "NOT_FOUND", "No such artifact for this token");
           }
