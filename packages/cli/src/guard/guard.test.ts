@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { LeaseHandle } from "@tapdance/core";
 import { SimlockProvider } from "@tapdance/provider-simlock";
-import { GuardPolicySchema, GuardTokens, type GuardPolicy } from "./policy.js";
+import { GuardPolicySchema, GuardTokens, audit, type GuardPolicy } from "./policy.js";
 import { execOf } from "./rules.js";
 import { startGuard, type GuardOptions } from "./server.js";
 
@@ -327,6 +327,40 @@ describe("worker guard vs a malicious remote client", () => {
     expect(log).not.toContain(t.alice.secret);
     expect(log).not.toContain("slk_");
     expect((await stat(auditFile)).mode & 0o777).toBe(0o600);
+  });
+
+  it("an unauthenticated caller cannot write long audit lines (path and reason are cut to 200 characters)", async () => {
+    const t = await setup();
+    const long = `/v1/${"x".repeat(8000)}`;
+    expect((await t.call(undefined, "GET", long)).status).toBe(404);
+    expect((await t.call(undefined, "GET", `/v1/status?${"q".repeat(8000)}`)).status).toBe(401);
+    const lines = (await readFile(join(t.home, "worker", "audit.log"), "utf8")).trim().split("\n").map((l) => JSON.parse(l) as { path: string; reason: string });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]!.path).toHaveLength(200);
+    expect(lines[0]!.path.endsWith("…")).toBe(true);
+    expect(lines[0]!.reason).toHaveLength(200);
+    expect(lines[0]!.reason.endsWith("…")).toBe(true);
+    expect(lines[1]).toMatchObject({ path: "/v1/status", reason: "unauthenticated" });
+    for (const l of lines) expect(JSON.stringify(l).length).toBeLessThan(700);
+  });
+
+  it("rotates the audit log by size, keeping one older file (mode 600)", async () => {
+    const home = await mkdtemp(join(tmpdir(), "td-audit-"));
+    const env = { TAPDANCE_HOME: home };
+    const file = join(home, "worker", "audit.log");
+    const entry = (n: number) => ({ method: "GET", path: `/v1/n${n}`, decision: "deny" as const, reason: "unauthenticated" });
+    for (let n = 0; n < 3; n++) await audit(entry(n), env, 200);
+    // Each line is ~100 bytes: the third write found the file at or over 200 bytes and rotated first.
+    expect(await readFile(`${file}.1`, "utf8")).toContain("/v1/n1");
+    expect(await readFile(file, "utf8")).toContain("/v1/n2");
+    expect(await readFile(file, "utf8")).not.toContain("/v1/n0");
+    for (let n = 3; n < 5; n++) await audit(entry(n), env, 200);
+    // The next rotation replaces the older .1.
+    expect(await readFile(`${file}.1`, "utf8")).not.toContain("/v1/n1");
+    expect(await readFile(`${file}.1`, "utf8")).toContain("/v1/n3");
+    expect(await readFile(file, "utf8")).toContain("/v1/n4");
+    expect((await stat(file)).mode & 0o777).toBe(0o600);
+    expect((await stat(`${file}.1`)).mode & 0o777).toBe(0o600);
   });
 
   it("disabling a capability in the local policy refuses it", async () => {
