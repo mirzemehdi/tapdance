@@ -47,6 +47,13 @@ Use a scratch `TAPDANCE_HOME` for anything beyond `--help`.
 To build and pack without publishing, run the workflow by hand from the Actions tab with **publish**
 off. The tarball is attached to the run as an artifact.
 
+## How 0.1.0 was published
+
+0.1.0 went to npm on 2026-11-08 by hand, from the owner's Mac: `npm publish` of the packed tarball,
+with a one-time password, because the release workflow's tests hit their time limits on GitHub's slower
+macOS runner. Setting up trusted publishing for the new package first created a placeholder version,
+`0.0.0-stage`. The unit tests now allow 60 s each on CI, so the next tag publishes from the workflow.
+
 ## First-time setup on npm
 
 The workflow publishes through npm's trusted publishing: GitHub Actions proves who it is, and no npm
@@ -65,4 +72,3 @@ token is stored in the repository.
 
 - `scripts/host-setup.sh` still installs Tapdance from source on a host. Switching it to the npm
   package is a separate change.
-- The README and the guides still show the install from source until the first version is on npm.

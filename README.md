@@ -53,10 +53,9 @@ On the computer where your agent runs, with [Node.js](https://nodejs.org) 22.13 
 npm install -g tapdance-cli
 ```
 
-The command is `tapdance`. The npm package called just `tapdance` is a different project.
-
-The first npm release is on its way. Until it is published, that command fails with "not found": install
-from source for now, as the [installation guide](docs/installation.md#from-source) shows.
+The command is `tapdance`. The npm package called just `tapdance` is a different project. To work on
+Tapdance itself, the [installation guide](docs/installation.md#from-source) shows how to install from
+source.
 
 ### 2. Connect your agent
 
