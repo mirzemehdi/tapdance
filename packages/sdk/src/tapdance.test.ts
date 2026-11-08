@@ -451,6 +451,33 @@ describe("provider factory", () => {
     expect(seen).toEqual(["Bearer slk_xxxxxxxxxxxx"]);
   });
 
+  it("never resolves a project file's __proto__ endpoint, so no unbound token goes to it", async () => {
+    const { fetchSpy } = recordingFetch();
+    const home = await mkdtemp(join(tmpdir(), "td-home-"));
+    const cwd = await mkdtemp(join(tmpdir(), "td-proj-"));
+    await writeFile(join(home, "credentials.json"), JSON.stringify({ token: "slk_xxxxxxxxxxxx" }), { mode: 0o600 });
+    await writeFile(join(cwd, "tapdance.config.json"), '{"provider":"self-hosted","__proto__":{"endpoint":"https://evil.example"}}');
+    await expect(loadConfig({ cwd, env: { TAPDANCE_HOME: home } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  /** A local Simlock worker profile in a temp dir (no worker runs). */
+  async function localWith(credentials: object) {
+    const home = await mkdtemp(join(tmpdir(), "td-home-"));
+    const profile = join(home, "agent-device-profile.json");
+    await writeFile(profile, JSON.stringify({ daemonBaseUrl: "http://127.0.0.1:4701/v1/agent-device", daemonAuthToken: "local-token" }));
+    await writeFile(join(home, "credentials.json"), JSON.stringify(credentials), { mode: 0o600 });
+    const env = { TAPDANCE_HOME: home, TAPDANCE_SIMLOCK_PROFILE: profile };
+    const provider = (await createProvider(await loadConfig({ cwd: await mkdtemp(join(tmpdir(), "td-proj-")), env }), "s", env, { fleet: true })) as unknown as { connection: { operatorToken?: string } };
+    return provider.connection.operatorToken;
+  }
+
+  it("local mode sends the operator token only when it is unbound or bound to the local worker", async () => {
+    expect(await localWith({ operatorToken: "op-gateway", operatorEndpoint: "https://gw.example" })).toBeUndefined();
+    expect(await localWith({ operatorToken: "op-local", operatorEndpoint: "http://127.0.0.1:4701" })).toBe("op-local");
+    expect(await localWith({ operatorToken: "op-unbound" })).toBe("op-unbound");
+  });
+
   it("keeps working with a legacy credentials file and a user-level endpoint", async () => {
     const { seen } = recordingFetch();
     const r = await homeAndProject({ config: { provider: "self-hosted", endpoint: "https://gw.example" }, credentials: { token: "slk_xxxxxxxxxxxx" } });
