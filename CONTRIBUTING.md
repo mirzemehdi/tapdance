@@ -29,6 +29,13 @@ To run the CLI you just built:
 node packages/cli/dist/main.js --help
 ```
 
+When you try commands, set `TAPDANCE_HOME` to a scratch directory, so you do not overwrite your own
+`~/.tapdance/config.json` or `credentials.json`:
+
+```bash
+export TAPDANCE_HOME="$(mktemp -d)"
+```
+
 ## Repository layout
 
 | Path | What it holds |
@@ -38,13 +45,21 @@ node packages/cli/dist/main.js --help
 | `packages/sdk` | The `Tapdance` class used by the CLI and MCP server, the provider factory, keepalive, host checks (Xcode, Android SDK, KVM), and the external tool registry. `@tapdance/sdk/testing` exports `FakeProvider`. |
 | `packages/mcp` | MCP tool definitions (`tools.ts`) and the stdio and Streamable HTTP server. |
 | `packages/cli` | The `tapdance` command, the browser viewer, `tapdance report`, and the worker guard for device-only mode (`src/guard/`). |
-| `scripts/` | `gen-cli-index.mjs`: generates the command index in `docs/cli-reference.md` (`pnpm docs:cli`; `pnpm docs:check` fails when it is stale). |
+| `scripts/gen-cli-index.mjs` | Generates the command index in `docs/cli-reference.md` (`pnpm docs:cli`; `pnpm docs:check` fails when it is stale). |
+| `scripts/host-setup.sh`, `scripts/host-setup.ps1` | One-command host setup: checks and installs prerequisites, then runs `tapdance host up`. |
+| `scripts/field-test/` | Field-test tooling: the CLI and MCP checklist drivers and their JSON checklists. Not shipped. |
+| `patches/` | pnpm patches applied to upstream packages at install: `simlock@0.5.0.patch` and `agent-device@0.21.35.patch` (listed in [NOTICE.md](NOTICE.md)). |
+| `examples/` | Small demo apps for real-device runs (`ios-demo`, `android-demo`). |
 | `docs/` | User documentation, the ADR, test procedures and evidence. |
 | `infrastructure/` | Reference Terraform and install scripts. Nothing in `packages/` depends on it. |
 
 ## Tests
 
-There are two kinds of tests, and they are kept apart on purpose.
+There is no CI yet (STATUS.md Q-11). Run `pnpm test` on your machine before you open a pull request,
+and keep it green.
+
+There are two kinds of tests, and they are kept apart on purpose. The details, including the fakes
+and how they are labelled, are in [docs/testing/unit-tests.md](docs/testing/unit-tests.md).
 
 | | Unit tests | Integration tests |
 | --- | --- | --- |
@@ -64,40 +79,38 @@ index is stale: after adding a command or flag, run `pnpm build && pnpm docs:cli
 ### Running the real integration test
 
 The integration test drives the built `tapdance mcp` over stdio against a Simlock worker on your
-machine. It is skipped (and reported as skipped) unless you opt in.
+machine. It boots a real simulator or emulator. It is skipped (and reported as skipped) unless you opt
+in.
 
 ```bash
 pnpm build
-node packages/cli/dist/main.js worker install   # enables agent-device, streaming and input on the local worker
+node packages/cli/dist/main.js worker install
 TAPDANCE_IT_PLATFORM=ios TAPDANCE_IT_DEVICE="iPhone 16" TAPDANCE_IT_OS=18.5 pnpm test:integration
 ```
 
-| Variable | Meaning |
-| --- | --- |
-| `TAPDANCE_IT_PLATFORM` | `ios` or `android`. Required; without it the test is skipped. |
-| `TAPDANCE_IT_DEVICE` | Device model, for example `iPhone 16` or `Pixel 8`. |
-| `TAPDANCE_IT_OS` | OS version (Android: API level). |
-| `TAPDANCE_IT_APP` | Optional path to an `.apk` or simulator `.app` to install. |
-| `TAPDANCE_IT_APP_ID` | Optional package or bundle id for that app. |
-| `TAPDANCE_IT_ENDPOINT` | Optional gateway or worker URL. When set, the test runs through it with `provider: "self-hosted"` instead of the local worker. |
-| `TAPDANCE_IT_TOKEN` | The agent token for `TAPDANCE_IT_ENDPOINT`. Never commit it or paste it into evidence. |
+`worker install` enables agent-device, streaming and input on the local worker. The environment
+variables (`TAPDANCE_IT_*`) are listed in
+[unit-tests.md](docs/testing/unit-tests.md#the-integration-test).
 
-So far only iOS on macOS has been run: once against the local worker, and once through a gateway and
-joined worker on the same Mac. Android and a real two-machine network have not. If you run it on Android, or on any setup STATUS.md
-lists as untested, please record the result as evidence (next section), whether it passed or not.
+It has run on iOS and on Android with a custom app against the local worker on one Mac, and once
+through a gateway and joined worker on the same Mac (STATUS.md Q-02). It has not run across two
+machines. If you run it on a setup STATUS.md lists as untested, record the result as evidence (next
+section), whether it passed or not.
+
+### Real-hardware procedures
+
+Steps that cannot be automated are in [docs/testing/e2e-procedures.md](docs/testing/e2e-procedures.md).
+Field tests on real hosts (a cloud VM, a rented Mac) follow
+[docs/testing/field-testing.md](docs/testing/field-testing.md) and its runbooks.
 
 ## Real-device claims need evidence
 
 Tapdance never claims a real-device result it cannot show. If your change moves a STATUS.md row to ✅,
 or a document says something "works", add an evidence file in
 [docs/testing/evidence/](docs/testing/evidence/) named `YYYY-MM-DD-<topic>.md`, and link it from the
-row. Follow [the existing example](docs/testing/evidence/2026-11-01-local-ios.md):
-
-- **Environment:** host, OS, CPU, Xcode or Android SDK versions, Simlock and agent-device versions,
-  device model and OS, and the topology (which machine runs the agent, the gateway and the worker).
-- **What ran:** the exact commands or MCP calls, in order, with the results that matter.
-- **Re-run:** commands someone else can use to repeat it.
-- **Not covered:** what this run does not prove.
+row. [docs/testing/evidence/README.md](docs/testing/evidence/README.md) defines the name, the
+sections (environment, what ran, results by requirement, artifacts, re-run, not covered, issues) and
+the secret check to run before you commit.
 
 Remove tokens, hostnames you do not want public, and personal data before you commit. `tapdance
 report` output is already redacted, but read it anyway.
@@ -166,12 +179,20 @@ Behaviour, requirements, status and docs change in the **same pull request**.
   ❓ needs a product decision.
 - **Update the "Last updated" date** at the top of STATUS.md.
 - **Docs must not claim more than STATUS.md does.** If a procedure is untested, say so in the doc.
+- **A new or changed command or flag:** run `pnpm build`, then `pnpm docs:cli` to regenerate the
+  command index in `docs/cli-reference.md`, and update the hand-written part above it. Never edit the
+  generated index ("Command index" and below) by hand; `pnpm docs:check` fails when it is stale.
+- **Exact names come from the code.** Every command, flag, config key, environment variable and MCP
+  tool a doc names must exist: check with `node packages/cli/dist/main.js <command> --help`,
+  `packages/mcp/src/tools.ts` and `packages/core/src/config.ts`.
 
 ## Upstream first
 
 If a change belongs in Simlock, agent-device, AXe or another upstream project, open an issue or pull
-request there and link it from STATUS.md. Tapdance does not fork upstream projects to add features,
-and removes its own code when an upstream tool gains the capability.
+request there and link it from STATUS.md. Tapdance does not fork upstream projects, and removes its own
+code when an upstream tool gains the capability. Where a fix cannot wait, a small pnpm patch in
+`patches/` changes the upstream package in place (today Simlock 0.5.0 and agent-device 0.21.35); list
+it in [NOTICE.md](NOTICE.md) and propose the change upstream.
 
 ## Pull requests and issues
 

@@ -296,7 +296,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
   host
     .command("up")
     .description("Worker, guard service, pairing, Tailscale and a self-test, step by step; prints a block to paste to the agent's machine")
-    .option("--label <name>", "name for the control machine's pairing (default: the pairing this host already has, if only one; else this machine's hostname)")
+    .option("--label <name>", "name the pairing after the agent's machine that will use it, e.g. --label my-vps (default: the pairing this host already has, if only one; else this machine's hostname)")
     .option("--allow-admin-account", "run the guard from an administrator account (not recommended)")
     .option("--no-tailscale", "do not expose the guard with `tailscale serve`; the endpoint stays on loopback")
     .option("--keep-awake", "macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline")
@@ -603,7 +603,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           );
         }
         // Refuse before starting anything, so a refused guard does not leave the worker half up.
-        assertGuardHostSafe(allowAdminAccount, "Run `tapdance host resume --allow-admin-account` to accept running the guard from this account, or use a dedicated standard account (docs/security/personal-mac.md).");
+        assertGuardHostSafe(allowAdminAccount, "Run `tapdance host resume --allow-admin-account` to accept running the guard from this account, or use a dedicated standard account (docs/security/device-only-mode.md).");
         out.progress("Starting the worker");
         if (state.workerService !== false) await setWorkerService(true, out);
         await startWorker(out);
@@ -1298,7 +1298,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
             "",
             mcpSnippets(command),
             "",
-            dim("Codex and Cursor do not pass a session id: set the same TAPDANCE_SESSION_ID in the server's env and in the agent's shell if it uses both the CLI and MCP (docs/agents/)."),
+            dim("Codex and Cursor do not pass a session id: set the same TAPDANCE_SESSION_ID in the server's env and in the agent's shell if it uses both the CLI and MCP (docs/agents.md)."),
           ]
             .filter((line, i) => line !== "" || i !== 2)
             .join("\n"),

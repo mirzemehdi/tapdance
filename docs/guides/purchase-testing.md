@@ -1,8 +1,12 @@
 # Testing in-app purchases
 
 How an agent tests "buy → entitlement unlocked → restore" with Tapdance: Google Play Billing on an
-Android emulator, StoreKit on the iOS simulator. What is proven is in [STATUS.md](../../STATUS.md)
-(D-10, U-13); the billing flows below have **not** been run end to end with a real Play Console app yet.
+Android emulator, StoreKit on the iOS simulator.
+
+Proven: device profiles on Android and iOS, created and leased on one Mac, with a lease's changes thrown
+away ([evidence](../testing/evidence/2026-11-01-device-state-and-profiles.md)), and the
+`request_human` hand-off. Not run: the billing flows below end to end with a real Play Console app, a
+real Google sign-in and Play purchase.
 
 ## Android: Play Billing on an emulator
 
@@ -76,8 +80,7 @@ StoreKit testing needs no Apple account on the simulator. It uses a StoreKit con
    confirm). Transactions are local to the simulator and disappear at release.
 
 Sandbox purchases with a real App Store Connect sandbox account need a sign-in on each new simulator:
-the agent calls `request_human` and you sign in through `tapdance view`. iOS device profiles are not
-built yet. The hand-off, step by step:
+the agent calls `request_human` and you sign in through `tapdance view`. The hand-off, step by step:
 
 1. The agent runs `tapdance device request-human --reason "Sign in a Sandbox Apple ID: Settings › App
    Store › Sandbox Account" --wait 600`.
@@ -86,5 +89,15 @@ built yet. The hand-off, step by step:
 3. The agent relaunches the app and buys through the sheet; the sandbox account stays signed in until
    the lease ends.
 
+When the agent runs on the Mac with the simulators, an iOS device profile can save you that sign-in:
+`tapdance device profile create <name> -p ios` makes a template simulator you set up once, and each
+`device lease -p ios --profile <name>` boots a clone of it. Profiles are local only. Keeping a sandbox
+sign-in in a profile has not been tried. See [device profiles](../cli-reference.md#device-profiles).
+
 A StoreKit configuration file is a scheme option, not a build setting, so `app build` cannot attach one
 yet (#15).
+
+## If it fails
+
+See [troubleshooting](../troubleshooting.md), and for leases on a Play image the
+[system images](../platforms/android.md#system-images) section.

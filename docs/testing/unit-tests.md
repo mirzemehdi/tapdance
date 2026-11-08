@@ -45,22 +45,61 @@ If you change anything under `packages/cli/src`, run `pnpm build` again before r
 
 ## What the unit tests cover
 
-The total is whatever `pnpm test` reports; it grows with each change, so this page does not keep a
-running count. The per-file numbers below are `it(` blocks as of 2026-11-01 and may lag.
+The count is whatever `pnpm test` reports; it grows with each change, so this page keeps no count.
+Unit tests live next to the code, in `packages/*/src/**/*.test.ts`. There is no CI yet (STATUS.md
+Q-11): run `pnpm test` yourself before every pull request.
 
-| File | Tests | What it checks |
-| --- | --- | --- |
-| `packages/core/src/core.test.ts` | 28 | Error codes map to the documented exit codes; secrets (`slk_…`, bearer headers, token fields, private keys) are redacted from messages; config defaults, strict validation, precedence (user file ← project file ← environment) and the refusal of tokens in config files; credentials file written with mode 600; session identity order (`TAPDANCE_SESSION_ID`, then the agent's session id, then a per-user id); element target validation; the session store and the per-session artifact manifest. |
-| `packages/provider-simlock/src/provider.test.ts` | 33 | Parsing Simlock's `exec` stream; refusing to send a token over plain `http://` to a public host; per-session agent-device client ids; reading Simlock's local agent-device profile; selector escaping and snapshot-to-element mapping; settle-diff summaries; app path checks (`.apk`, `.aab`, `.app`, `.ipa`); H.264 stream framing; agent-device error mapping; the Simlock HTTP client against a fake `fetch`; the AXe backend's tree flattening, UDID checks and "not installed" error. |
-| `packages/sdk/src/tapdance.test.ts` | 35 | Session scoping: no device action without a lease, one lease per session, one session cannot release another's lease, stale records are replaced, `HUMAN_HELD` while a person controls the device, disabled platforms refused, one recording at a time. Keepalive: renews after a third of the TTL, defers to another live renewer, reports a lost lease, releases an idle lease. Ownership rules and concurrent leases. The provider factory has no fake cloud provider and needs an endpoint for `self-hosted`. |
-| `packages/sdk/src/tools.test.ts` | 4 | External tool runs with fake executables on a temporary `PATH`: a private key never reaches the saved stdout/stderr files, a truncated capture never holds half a key, and an `executableOverride` that is not the tool's own program is refused with `FORBIDDEN` before anything is spawned. |
-| `packages/mcp/src/mcp.test.ts` | 19 | Every required MCP tool exists and none is a raw shell (`shell`, `exec`, `adb`, `simctl`, `run_on_device`); every tool has a description and refuses unknown keys; a whole agent flow over an in-memory MCP transport; install paths confined to the project; structured errors; `execute_tool` behaviour (see below). |
-| `packages/cli/src/cli.test.ts` | 10 | The built CLI: version output; `NO_ACTIVE_LEASE` with exit code 3 and JSON on stdout; bad arguments exit 2; tokens refused in config; `provider: "cloud"` refused with `NOT_SUPPORTED` (exit 8); `config set-token` binds the token to its endpoint (mode 600, `--endpoint` or the configured endpoint, plain `http://` to a public host refused); no hint names a bare `simlock` command or a global `npm` install. Two doc-coverage checks: every `tapdance <command>` named in a code hint or in the docs (`docs/`, `infrastructure/`, `examples/`, README, CONTRIBUTING, SECURITY, AGENTS, CLAUDE) exists in `--help`; and every command is in `docs/cli-reference.md`, every MCP tool in `docs/mcp.md`, every config key in `docs/configuration.md`, and the generated command index in `docs/cli-reference.md` is current (`pnpm docs:check`). |
-| `packages/cli/src/guard/guard.test.ts` | 21 | Malicious-client tests against the worker guard (device-only mode), with a recording fake Simlock: no shell, `sudo`, file reads or deletes, Keychain, policy or token routes, other clients' leases or status, bad/expired/revoked tokens, build commands, and the session, upload and TTL limits. Denied requests never reach the fake Simlock. API boundary only; see [personal-mac.md](../security/personal-mac.md). |
+The main files:
 
-Run `pnpm test` to get the current count rather than trusting this table.
+- **`packages/core/src/core.test.ts`.** Error codes map to the documented exit codes; secrets
+  (`slk_…`, bearer headers, token fields, private keys) are redacted from messages; config defaults,
+  strict validation, precedence (user file ← project file ← environment) and the refusal of tokens in
+  config files; credentials file written with mode 600; session identity order
+  (`TAPDANCE_SESSION_ID`, then the agent's session id, then a per-user id); element target validation;
+  the session store and the per-session artifact manifest.
+- **`packages/provider-simlock/src/provider.test.ts`.** Parsing Simlock's `exec` stream; refusing to
+  send a token over plain `http://` to a public host; per-session agent-device client ids; reading
+  Simlock's local agent-device profile; selector escaping and snapshot-to-element mapping; settle-diff
+  summaries; app path checks (`.apk`, `.aab`, `.app`, `.ipa`); H.264 stream framing; agent-device
+  error mapping; the Simlock HTTP client against a fake `fetch`; the AXe backend's tree flattening,
+  UDID checks and "not installed" error.
+- **`packages/sdk/src/tapdance.test.ts`.** Session scoping: no device action without a lease, one
+  lease per session, one session cannot release another's lease, stale records are replaced,
+  `HUMAN_HELD` while a person controls the device, disabled platforms refused, one recording at a
+  time. Keepalive: renews after a third of the TTL, defers to another live renewer, reports a lost
+  lease, releases an idle lease. Ownership rules and concurrent leases. The provider factory has no
+  fake cloud provider and needs an endpoint for `self-hosted`.
+- **`packages/sdk/src/tools.test.ts`.** External tool runs with fake executables on a temporary
+  `PATH`: a private key never reaches the saved stdout/stderr files, a truncated capture never holds
+  half a key, and an `executableOverride` that is not the tool's own program is refused with
+  `FORBIDDEN` before anything is spawned.
+- **`packages/sdk/src/routing-provider.test.ts`, `packages/core/src/connect-targets.test.ts`,
+  `packages/cli/src/connect-targets.test.ts`.** Several connect targets: routing by platform and by
+  `--target`, a host that is down, per-origin tokens, `connect --list` and `disconnect`.
+- **`packages/mcp/src/mcp.test.ts`.** Every required MCP tool exists and none is a raw shell
+  (`shell`, `exec`, `adb`, `simctl`, `run_on_device`); every tool has a description and refuses
+  unknown keys; a whole agent flow over an in-memory MCP transport; install paths confined to the
+  project; structured errors; `execute_tool` behaviour (see below).
+- **`packages/cli/src/cli.test.ts`.** The built CLI: version output; `NO_ACTIVE_LEASE` with exit code 3
+  and JSON on stdout; bad arguments exit 2; tokens refused in config; `provider: "cloud"` refused with
+  `NOT_SUPPORTED` (exit 8); `config set-token` binds the token to its endpoint (mode 600, `--endpoint`
+  or the configured endpoint, plain `http://` to a public host refused); no hint names a bare
+  `simlock` command or a global `npm` install. Two doc-coverage checks: every `tapdance <command>`
+  named in a code hint or in the docs (`docs/`, `infrastructure/`, `examples/`, README, CONTRIBUTING,
+  SECURITY, AGENTS, CLAUDE) exists in `--help`; and every command is in `docs/cli-reference.md`, every
+  MCP tool in `docs/mcp.md`, every config key in `docs/configuration.md`, and the generated command
+  index in `docs/cli-reference.md` is current (`pnpm docs:check`).
+- **`packages/cli/src/guard/guard.test.ts`.** Malicious-client tests against the worker guard
+  (device-only mode), with a recording fake Simlock: no shell, `sudo`, file reads or deletes,
+  Keychain, policy or token routes, other clients' leases or status, bad/expired/revoked tokens, build
+  commands, and the session, upload and TTL limits. Denied requests never reach the fake Simlock. API
+  boundary only; see [device-only mode](../security/device-only-mode.md).
 
-Test areas added in the latest round (unit tests only, against fakes; none of this is a real-device
+Other test files cover the host commands (`packages/cli/src/host/`), the guard's service and idle stop
+(`packages/cli/src/guard/`), the viewer, host builds and installs from CI, scenarios and the audit log.
+List them all with `find packages -name '*.test.ts' -not -path '*/node_modules/*'`.
+
+More areas the unit tests cover (against fakes; none of this is a real-device
 result):
 
 - **Session lock** (`core.test.ts`): atomic acquisition with an owner token, takeover of a lock left by a
@@ -126,8 +165,10 @@ It is skipped, and reported as skipped, unless `TAPDANCE_IT_PLATFORM` is set.
 | `TAPDANCE_IT_OS` | OS version, e.g. `18.5`, or an Android API level, e.g. `35`. | any |
 | `TAPDANCE_IT_APP` | Path to an `.apk` or simulator `.app` to install first. | none; the test uses Settings |
 | `TAPDANCE_IT_APP_ID` | Package or bundle id to launch. | `com.apple.Preferences` (iOS), `com.android.settings` (Android) |
-| `TAPDANCE_IT_ENDPOINT` | URL of a Simlock gateway (for example `http://127.0.0.1:4700`). When set, the server runs with `TAPDANCE_PROVIDER=self-hosted` and this endpoint instead of local mode. | unset (local mode) |
-| `TAPDANCE_IT_TOKEN` | Agent token for that gateway, passed to the server as `TAPDANCE_TOKEN`. Only used with `TAPDANCE_IT_ENDPOINT`. | empty |
+| `TAPDANCE_IT_ENDPOINT` | URL of a self-hosted endpoint: a Simlock gateway or worker (for example `http://127.0.0.1:4700`). When set, the server runs with `TAPDANCE_PROVIDER=self-hosted` and `TAPDANCE_ENDPOINT` set to it, instead of local mode. | unset (local mode) |
+| `TAPDANCE_IT_TOKEN` | Agent token for that endpoint, passed to the server as `TAPDANCE_TOKEN`. Only used with `TAPDANCE_IT_ENDPOINT`. Never commit it or paste it into evidence. | empty |
+
+This is the one list of these variables; CONTRIBUTING.md and AGENTS.md link here.
 
 Things to know before you run it:
 
@@ -139,9 +180,8 @@ Things to know before you run it:
   ([evidence](evidence/2026-11-01-gateway-single-host.md)); it has not been run across two machines.
   The CLI steps in [e2e-procedures.md](e2e-procedures.md) cover the two-machine setups.
 - The local worker must be running with agent-device enabled: run `tapdance worker install` once.
-- Because the working directory is a temporary folder, `install_app` refuses an app outside it unless
-  you also set `TAPDANCE_ALLOWED_ROOTS` to the folder that holds the app, for example
-  `TAPDANCE_ALLOWED_ROOTS="$(dirname "$TAPDANCE_IT_APP")"`.
+- The working directory is a temporary folder, so `install_app` would refuse an app outside it. With
+  `TAPDANCE_IT_APP` set, the test sets `TAPDANCE_ALLOWED_ROOTS` to the app's folder itself.
 - It has been run for real on iOS (twice, on 2026-11-01) and on Android with the demo APK (on the same
   Mac, 2026-11-01). See [evidence/2026-11-01-local-ios.md](evidence/2026-11-01-local-ios.md) and
   [evidence/2026-11-01-android.md](evidence/2026-11-01-android.md).

@@ -58,8 +58,8 @@ audit and the questions you need answered; create nothing yet.
 **Goal.** A user without a spare Mac rents one and follows one doc to make it an iOS host. Their agent
 tests an iOS app end to end on it, through the CLI and MCP. Candidates:
 - [Scaleway Mac mini](ios/scaleway-mac.md): hourly, 24-hour minimum;
-- [AWS EC2 Mac](ios/aws-ec2-mac.md): dedicated host, 24-hour minimum;
-- [MacStadium](ios/macstadium.md): monthly.
+- [AWS EC2 Mac](ios/other-cloud-macs.md#aws-ec2-mac): dedicated host, 24-hour minimum;
+- [MacStadium](ios/other-cloud-macs.md#macstadium): monthly.
 
 Pick the cheapest that works and document the others as "same steps, not run".
 
@@ -127,6 +127,15 @@ hosted product, so it is proven while still self-hosted.
 - Losing one host leaves the other usable, with a clear error.
 - One doc ("Android and iOS from one agent") covers it. STATUS.md and evidence are updated.
 - Nothing is left that bills: both leftover checks exit 0.
+
+**Outcome (2026-11-07).** The questions are answered: the agent's machine holds several connect
+targets (`tapdance connect --name`, one pairing token per host), a lease goes to the first target that
+serves the platform and answers, and a host that is down fails fast with `PROVIDER_UNREACHABLE` while
+the other keeps working. A Linux VPS drove an N2 host (Android) and a rented Mac (iOS) in one session,
+through the CLI and MCP, with `doctor` and `devices` showing both
+([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md),
+[guide](guides/android-and-ios.md)). The gateway pool across machines was not run, by the owner's
+choice. The text below is the plan as it was written before the run.
 
 **What stages 2 and 3 taught, for this stage:** both hosts were torn down, so this stage rents them
 again (N2 about USD 0.19-0.21/h; a Scaleway Mac mini bills a 24-hour minimum). An 8 GB Mac mini holds

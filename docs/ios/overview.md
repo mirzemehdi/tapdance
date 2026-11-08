@@ -1,17 +1,26 @@
 # iOS with Tapdance: overview
 
-This page explains what an iOS setup needs, how the pieces connect, which automation backend to pick,
-and what has actually been tested. The other pages in this folder go into each part:
+Where iOS simulators can run, how a remote agent reaches them, which automation backend to pick, and
+what has been tested. Words such as **host**, **guard** and **connect target** are defined in the
+[glossary](../glossary.md).
 
-| Page | What it covers |
+## Pick your page
+
+| You have | Go to |
 | --- | --- |
-| [local-mac-worker.md](local-mac-worker.md) | Turning a Mac you own into a worker: install, runtimes, joining a gateway, keeping it awake |
-| [scaleway-mac.md](scaleway-mac.md) | Renting an Apple Silicon Mac mini from Scaleway and making it a worker |
-| [macstadium.md](macstadium.md) | Using a MacStadium bare-metal Mac as a worker (manual) |
-| [aws-ec2-mac.md](aws-ec2-mac.md) | Using an AWS EC2 Mac dedicated host as a worker (manual) |
-| [simulator-management.md](simulator-management.md) | What Simlock does with simulators, runtimes, the warm pool, slim mode, `.app` vs `.ipa` |
-| [remote-browser-access.md](remote-browser-access.md) | Watching and driving a simulator from your browser |
-| [xcode-cloud-integration.md](xcode-cloud-integration.md) | Xcode Cloud, Codemagic and GitHub Actions as build sources, and `asc` |
+| A Mac, and the agent runs on it | [Local](../deployment/local.md) |
+| A Mac, and the agent runs elsewhere (a laptop, a Linux VPS) | [Host devices for a remote agent](../deployment/one-command-host.md) |
+| No Mac: rent one | [Scaleway Mac mini](scaleway-mac.md) (proven) or [other cloud Macs](other-cloud-macs.md) (MacStadium, AWS EC2 Mac; not run) |
+| Android and iOS for one agent | [Android and iOS for one agent](../guides/android-and-ios.md) |
+
+More iOS pages:
+
+- [Simulator management](simulator-management.md): runtimes, warm spares, slim mode, `.app` vs `.ipa`.
+- [Browser viewer](../deployment/browser-access.md): watch and drive a simulator from your browser.
+- [CI builds](../guides/ci-builds.md): Xcode Cloud, Codemagic and GitHub Actions as build sources,
+  and `asc`.
+- [Host builds](../guides/host-builds.md): the Mac builds your app from git, so an agent without Xcode
+  can test it.
 
 ## iOS needs a Mac
 
@@ -19,107 +28,101 @@ The iOS Simulator ships with Xcode, and Xcode runs only on macOS on Apple hardwa
 
 - An iOS simulator always runs on a Mac with Xcode installed, its license accepted and its first-launch
   setup done.
-- No Linux VPS, Windows machine or Linux KVM server can host an iOS simulator. Tapdance never tries.
-  On a non-Mac host, `tapdance worker check` and `tapdance doctor` report iOS as skipped:
-  "needs a macOS worker with Xcode".
-- Your coding agent does **not** need to run on the Mac. It can run on an ordinary Linux VPS and reach
-  the Mac through a gateway.
+- No Linux or Windows machine can host an iOS simulator. Tapdance never tries. On a non-Mac host,
+  `tapdance worker check` and `tapdance doctor` report iOS as skipped, not as a failure.
+- Your agent does **not** need to run on the Mac. It can run on a Linux VPS and reach the Mac in
+  device-only mode.
 
-## Architecture
+## How a remote agent reaches the Mac
 
 ```text
- Linux VPS (no KVM, no Xcode)                         Mac (Apple Silicon, Xcode)
- ┌──────────────────────────────┐                     ┌──────────────────────────────┐
- │ Coding agent (Claude Code,   │                     │ Simlock worker daemon        │
- │ Codex, Cursor, ...)          │                     │  ├─ creates/boots/wipes its  │
- │   │ MCP or CLI               │                     │  │  own iOS simulators       │
- │   ▼                          │   outbound wss://   │  ├─ agent-device daemon      │
- │ Tapdance (CLI / MCP / SDK)   │◄────────────────────┤  │  (UI, screenshots, video) │
- │   │ HTTP + agent token       │   (worker dials     │  └─ stream + input helpers   │
- │   ▼                          │    out; no inbound  │                              │
- │ Simlock gateway (127.0.0.1)  │    port on the Mac) │ iOS Simulator (iPhone 16 ...)│
- │ behind TLS or Tailscale      │                     │                              │
- └──────────────────────────────┘                     └──────────────────────────────┘
+ agent's machine (laptop or Linux VPS;          Mac host (Apple Silicon, Xcode)
+ no Xcode needed)                               ┌──────────────────────────────────┐
+ ┌──────────────────────────────┐   Tailscale   │ guard  (the only thing reachable)│
+ │ your agent (Claude Code,     │   (private,   │   │                              │
+ │ Codex, Cursor, ...)          │    HTTPS)     │   ▼                              │
+ │   │ MCP or CLI               │               │ worker (Simlock, loopback only)  │
+ │   ▼                          │               │   ├─ creates, boots and wipes    │
+ │ Tapdance (CLI / MCP / SDK) ──┼──────────────>│   │  its own iOS simulators      │
+ │   connect target + pairing   │               │   └─ agent-device (UI, video)    │
+ │   token (tdg_…)              │               │ iOS Simulator (iPhone …)         │
+ └──────────────────────────────┘               └──────────────────────────────────┘
 ```
 
 - **The agent** talks to Tapdance through MCP (`tapdance mcp`) or the CLI.
-- **Tapdance** holds the session's lease, keeps it renewed, uploads your `.app`, and stores screenshots,
-  recordings and logs on the agent's machine.
-- **The gateway** is a [Simlock](https://github.com/callstackincubator/simlock) daemon (MIT) that owns no
-  devices. It queues lease requests and routes them to workers. `tapdance gateway setup` starts one.
-- **The Mac worker** is a Simlock worker joined to the gateway with `tapdance worker login`. It dials
-  out to the gateway over an authenticated WebSocket, so the Mac needs no inbound port.
-- **[agent-device](https://github.com/callstack/agent-device)** (MIT) runs on the worker. Simlock fronts
-  it, so Tapdance on the VPS can upload the app, read the accessibility tree, tap, type, swipe, and
-  download screenshots and MP4 recordings back to the VPS.
+- **Tapdance** on the agent's machine holds the session's lease, keeps it renewed, uploads your `.app`,
+  and saves screenshots, recordings and logs on the agent's machine.
+- **The guard** on the Mac is the only thing the agent's machine can reach. It allows a fixed list of
+  device actions, checks the pairing token on each request, and logs every request. It never gives a
+  shell on the Mac. `tapdance host up` installs it; `tapdance connect` on the agent's machine saves the
+  Mac as a connect target.
+- **The worker** is a [Simlock](https://github.com/callstackincubator/simlock) daemon (MIT) on the Mac,
+  on loopback only. It creates, boots and wipes the simulators.
+- **[agent-device](https://github.com/callstack/agent-device)** (MIT) runs on the Mac too. Through the
+  guard, Tapdance uploads the app, reads the screen's elements, taps, types and swipes, and downloads
+  screenshots and MP4 recordings to the agent's machine.
 
-You can also run everything on one Mac (local mode): the agent, Tapdance and the worker on the same
-machine, with no gateway. The recommended setup for a remote agent is device-only mode instead (`host up`
-on the Mac, `connect` on the agent's machine): see [one-command-host.md](../deployment/one-command-host.md).
+In local mode, the agent, Tapdance and the worker are all on one Mac, with no guard. Gateway mode
+(workers joined to a Simlock gateway) is advanced and has run on one Mac only: see
+[gateway mode](../deployment/gateway-mode.md).
 
-Why Tapdance is built this way, and what it adds on top of Simlock and agent-device, is in the
-[architecture decision record](../architecture-decision.md).
+Why Tapdance is built this way is in the [architecture decision record](../architecture-decision.md).
 
 ## iOS automation backends
 
 Tapdance has one set of platform-neutral tools (`inspect_screen`, `tap`, `swipe`, `type_text`,
-`take_screenshot`, and so on). On iOS, the work behind them is done by one of two backends. You choose
-with the `ios.uiBackend` config key.
+`take_screenshot`, and so on). On iOS, one of two backends does the work. The `ios.uiBackend` config key
+picks it.
 
 | | agent-device (default) | AXe (opt-in) |
 | --- | --- | --- |
 | Config | `ios.uiBackend: "agent-device"` | `ios.uiBackend: "axe"` |
 | Upstream | [callstack/agent-device](https://github.com/callstack/agent-device), MIT | [cameroncooke/AXe](https://github.com/cameroncooke/AXe), MIT (bundles Meta's IDB, MIT) |
-| Where Tapdance runs | Anywhere: on the Mac, or on a VPS through a gateway | Only on the Mac that hosts the simulator |
+| Where Tapdance runs | Anywhere: on the Mac, or on another machine through the guard | Only on the Mac that hosts the simulator |
 | Simlock device set | Simlock's own set (default) or Xcode's default set | Must be Xcode's default set: `drivers.ios.deviceSet default` |
 | How to enable | `tapdance worker install` | `tapdance worker install --ios-backend axe`, plus `brew install cameroncooke/axe/axe` |
-| Tested for real | Yes, on one Mac (see below) | Yes, on one Mac: a custom app's sign-in flow ([evidence](../testing/evidence/2026-11-01-axe.md)) |
+| Tested for real | Yes: on one Mac, and on Mac hosts in device-only mode | Yes, on one Mac: a custom app's sign-in flow ([evidence](../testing/evidence/2026-11-01-axe.md)) |
 
 Why AXe is limited: AXe drives the simulator through CoreSimulator on the Mac it runs on, so it cannot
 reach a simulator on another machine. It also reads only Xcode's default device set, while Simlock keeps
 its simulators in a separate set by default. `tapdance worker install --ios-backend axe` therefore sets
 Simlock's `drivers.ios.deviceSet` to `default` and writes `ios.uiBackend: "axe"` to
-`~/.tapdance/config.json`. If you use AXe with a remote Mac worker, Tapdance refuses with
-`NOT_SUPPORTED` and tells you to set `ios.uiBackend` back to `"agent-device"`.
+`~/.tapdance/config.json`. With a remote Mac, Tapdance refuses AXe with `NOT_SUPPORTED` and tells you to
+set `ios.uiBackend` back to `"agent-device"`.
 
-Switching the device set has side effects; read
+Switching the device set has side effects. Read
 [simulator-management.md](simulator-management.md#device-sets) before you do it on a Mac that already
 has Simlock simulators.
 
-## What is verified today
+## What is tested
 
-[STATUS.md](../../STATUS.md) is the source of truth. As of 2026-11-07:
+As of 2026-11-07 ([STATUS.md](../../STATUS.md) has the details):
 
-| Flow | State | Evidence |
-| --- | --- | --- |
-| Local mode on one Mac (MacBook Pro M1 Pro, macOS 26.5, Xcode 26.5, iPhone 16 / iOS 18.5 simulator): lease, launch, inspect, tap, swipe, screenshot, MP4, logs, crash logs, release, through the CLI and MCP over stdio | Verified | [2026-11-01-local-ios.md](../testing/evidence/2026-11-01-local-ios.md) |
-| Browser viewer (`tapdance view`) stream, input and human take-over, on the same Mac | Verified (scripted, and in a real browser through a gateway on the same Mac) | same, and [2026-11-01-gateway-single-host.md](../testing/evidence/2026-11-01-gateway-single-host.md) |
-| `asc` pass-through (`tapdance asc -- ...`) | Verified for read-only commands | same |
-| Installing a custom simulator `.app` (`examples/ios-demo`) in local mode | Verified locally, and a 47 MB `.app` zip from a Linux VPS through the worker guard; not yet run through a gateway | STATUS F-01 |
-| Gateway + joined Mac worker, both on the same Mac (CLI, MCP stdio, viewer) | Verified | [2026-11-01-gateway-single-host.md](../testing/evidence/2026-11-01-gateway-single-host.md) |
-| Agent on another Mac → rented Scaleway Mac mini, device-only mode over Tailscale (CLI and MCP, host build of a private app) | Verified | [2026-11-06-rented-mac-ios.md](../testing/evidence/2026-11-06-rented-mac-ios.md) |
-| Linux VPS agent → separate Mac worker | Device-only mode verified: a VPS drove a rented Scaleway Mac mini (CLI and MCP, host build, `.app` upload) ([2026-11-07-vps-rented-mac-ios.md](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)); gateway mode **not tested** | STATUS Q-08 |
-| AXe backend | Verified on one Mac (lease, install, launch, inspect, type, tap, `ui wait`, screenshot, MP4) | [2026-11-01-axe.md](../testing/evidence/2026-11-01-axe.md), STATUS U-02, Q-09 |
-| Scaleway Mac mini M1-M | Verified: set up once, driven from a Mac and from a Linux VPS ([guide](scaleway-mac.md)) | STATUS G-05, G-06, Q-08 |
-| MacStadium, AWS EC2 Mac | **Not tested**; these pages are written from provider docs (same steps as Scaleway) | STATUS G-05 |
-| Physical iPhone leases | **Not tested** | STATUS D-06 |
-| Streamable HTTP MCP (`tapdance mcp --http`) | Partly verified (auth, tool list, read calls); full device loop not run | STATUS S-01 |
+- **Proven, local mode on one Mac** (MacBook Pro M1 Pro, macOS 26.5, Xcode 26.5, iPhone 16 with iOS
+  18.5): lease, install a custom `.app`, launch, inspect, tap, swipe, screenshot, MP4, logs, crash logs,
+  release, through the CLI and MCP over stdio ([evidence](../testing/evidence/2026-11-01-local-ios.md)).
+  The browser viewer and read-only `asc` commands on the same Mac. The AXe backend
+  ([evidence](../testing/evidence/2026-11-01-axe.md)).
+- **Proven, device-only mode with a rented Mac:** a Scaleway Mac mini M1-M driven from a Mac
+  ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)) and from a Linux VPS
+  ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)): CLI and MCP, host builds of a
+  private app, and a 47 MB `.app` zip uploaded from Linux.
+- **Proven, two hosts for one agent:** a Linux VPS leased Android on a Google Cloud N2 VM and iOS on the
+  rented Mac in one session, through the CLI and MCP, with one host down
+  ([evidence](../testing/evidence/2026-11-07-two-hosts-android-ios.md)).
+- **Proven on one Mac only:** gateway mode ([evidence](../testing/evidence/2026-11-01-gateway-single-host.md)).
+- **Not run:** gateway mode across machines, MacStadium and AWS EC2 Mac, physical iPhones, installs of
+  an iOS app from CI on a Mac host, the full device loop over Streamable HTTP MCP (`tapdance mcp
+  --http`).
 
-The Scaleway page and the device-only route (`host up` → `connect`) have been run. Treat the gateway
-procedures across two machines and the MacStadium and AWS EC2 Mac pages as a careful plan, not a proven
-recipe.
-If you run one, please file what happened with `tapdance report`.
+If you run something listed as not run, please file what happened with `tapdance report`.
 
-## Security in one paragraph
+## Security in short
 
-Read this before you join a Mac to anything. An agent token that can lease on a Simlock worker is
-close to shell access on that Mac as the user that runs the daemon (Simlock's `exec` and agent-device
-can run commands and install apps there). A joined worker gives its gateway operator rights over it:
-whoever controls the gateway can lease, release, install runtimes and read the worker's config.
-Leasing is **not** a sandbox. Use a dedicated macOS user (or a dedicated Mac) for the worker, keep the
-gateway behind TLS or on a private network such as Tailscale, and never commit tokens. Tapdance
-stores tokens in `~/.tapdance/credentials.json` (mode 600) or reads them from `TAPDANCE_TOKEN`; it
-refuses config files that contain a token.
+On iOS, installing an app is code execution on the Mac: a simulator app runs as an ordinary macOS
+process under the account that runs the worker. Host from a dedicated account, or a Mac that holds
+nothing of yours, and give a pairing token only the areas it needs (`host up --scope`). The
+[threat model](../security/threat-model.md) explains what a token can do and what limits it.
 
 ## Apple licensing note
 

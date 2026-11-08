@@ -12,7 +12,7 @@ replaced.
 | Order | Source | Notes |
 | --- | --- | --- |
 | 1 | Built-in defaults | The tables below. |
-| 2 | User config `~/.tapdance/config.json` | `$TAPDANCE_HOME/config.json` when `TAPDANCE_HOME` is set. Written by `init --global`, `gateway setup` and `worker install --ios-backend axe`. |
+| 2 | User config `~/.tapdance/config.json` | `$TAPDANCE_HOME/config.json` when `TAPDANCE_HOME` is set. Written by `init --global`, `config set --global`, `connect`, `disconnect`, `gateway setup` and `worker install --ios-backend axe`. |
 | 3 | Project config `tapdance.config.json` | The nearest one found walking up from the working directory (like git finds `.git`). Replaced by `--config <path>` or `TAPDANCE_CONFIG`, which must exist. The [security settings](#security-settings-are-user-only) are ignored here. |
 | 4 | Environment variables | Highest. See [environment variables](#environment-variables). |
 
@@ -67,11 +67,26 @@ ignored value never takes effect. In addition, a `tools.paths.<name>` entry must
 
 | Key | Default | Values | Meaning |
 | --- | --- | --- | --- |
-| `provider` | `"local"` | `local`, `self-hosted`, `cloud` | `local`: the Simlock worker on this machine. `self-hosted`: a Simlock gateway or worker at `endpoint`. `cloud`: reserved for a future hosted provider; refused today with `NOT_SUPPORTED`. |
-| `endpoint` | none | `http://` or `https://` URL | Base URL of the Simlock gateway or worker for `self-hosted`, e.g. `https://gateway.example.com`. Plain `http://` is refused unless the host is private (loopback, RFC 1918, link-local, Tailscale's 100.64.0.0/10, `*.ts.net`), because the token would travel unencrypted. |
-| `targets` | none | list of `{name, endpoint, platforms?}` | Several self-hosted hosts at once, written by [`tapdance connect`](cli-reference.md#connect): a lease goes to the first target that serves its platform, or to `--target <name>`. `platforms` (`["android"]`, `["ios"]`) limits what is routed to that host. Read only from `~/.tapdance/config.json`: a project file's `targets` is ignored with a warning. When set, `endpoint` in the user file is ignored; `TAPDANCE_ENDPOINT` or a project file's `endpoint` still selects one host. |
+| `provider` | `"local"` | `local`, `self-hosted`, `cloud` | `local`: the Simlock worker on this machine. `self-hosted`: remote hosts, as connect targets (`targets`) or one `endpoint`. `cloud`: reserved for a future hosted provider; refused today with `NOT_SUPPORTED`. |
+| `endpoint` | none | `http://` or `https://` URL | One host for `self-hosted`: the base URL of a guard, gateway or worker, e.g. `https://gateway.example.com`. Connect targets are the usual way to reach a host; a single `endpoint` is mainly for [gateway mode](deployment/gateway-mode.md). Plain `http://` is refused unless the host is private (loopback, RFC 1918, link-local, Tailscale's 100.64.0.0/10, `*.ts.net`), because the token would travel unencrypted. |
+| `targets` | none | list of `{name, endpoint, platforms?}` | Several self-hosted hosts at once ([connect targets](glossary.md#device-only-mode)), written by [`tapdance connect`](cli-reference.md#connect). `platforms` (`["android"]`, `["ios"]`) limits what is routed to that host. User config only; see [connect targets](#connect-targets) below. |
 | `platforms.android.enabled` | `true` | boolean | `false` refuses Android leases and skips Android host checks in `doctor`. |
 | `platforms.ios.enabled` | `true` | boolean | Same for iOS. |
+
+#### Connect targets
+
+A lease goes to the first connect target, in the order they were added, that serves the platform and
+answers. A host that is down is skipped fast with `PROVIDER_UNREACHABLE`. `device lease --target <name>`
+(MCP `lease_device` `target`) picks one. Preferring a host with a free slot is unit-tested only.
+
+`targets` is read only from `~/.tapdance/config.json`. A project file's `targets` is ignored with a
+warning. Targets apply only when `provider` is `self-hosted` (`connect` sets it).
+
+An `endpoint` from `TAPDANCE_ENDPOINT` or from a project `tapdance.config.json` overrides the targets:
+it names one host on purpose, and Tapdance then talks only to it. An `endpoint` in the user file is
+ignored while targets are set, with a warning. A project file that sets `provider: "local"` also
+turns the targets off, because the project file wins over the user file. `connect` warns when the
+current directory overrides the endpoint.
 
 ### Session and lease
 
@@ -82,7 +97,24 @@ ignored value never takes effect. In addition, a `tools.paths.<name>` entry must
 | `session.maxSessionMinutes` | `240` | 1–1440 | The keepalive stops renewing after this long; the lease then expires on its own. |
 | `session.leaseWaitSeconds` | `330` | 0–3600 | How long a lease request may wait in the queue. The Simlock provider caps it at 330 s. |
 | `session.idleReleaseMinutes` | `30` | 0–1440 | Release a lease nobody has used for this long. `0` never. Enforced by the background keepalive and the MCP server (not by `device lease --hold`). |
-| `session.settleSeconds` | `15` | 0–300 | Android emulators: once the leased guest has booted with no "isn't responding" or crash dialog in front (waited for up to 90 s, an ANR answered with Wait), how long the lease checks its CPU before handing it out. 3 calm readings in a row or a clearly falling load end the check early; a guest still busy goes out with a notice (commands work, 2-10 s each for a few minutes). With 15 or less, a guest whose first 3 readings are all 80 % or more and not falling goes out at once (after about 5 s) with that notice, since it stays busy far longer than the check (55-60 s after a release on a Google Cloud N2 VM); a larger value waits for it instead. The snapshot-helper warm-up (#102, at most 15 s) runs alongside this check, so a lease takes about the longer of the two. `0` skips the CPU check (the boot and dialog checks still run). Raise it when the first minute's slower commands matter (timing-sensitive tests); each lease then waits up to that long on a busy host. `device lease --settle` and MCP `lease_device` `settle_seconds` override it per lease. A project file may set it. |
+| `session.settleSeconds` | `15` | 0–300 | Android emulators: how long a lease checks the booted guest's CPU before handing it out. `0` skips the check. Details below. |
+
+`session.settleSeconds` in detail:
+
+- The check starts once the guest has booted with no "isn't responding" or crash dialog in front (the
+  lease waits up to 90 s for that, and answers an ANR with Wait).
+- 3 calm readings in a row, or a clearly falling load, end the check early. A guest still busy at the
+  end goes out with a notice: commands work, 2-10 s each for a few minutes.
+- With 15 or less, a guest whose first 3 readings are all 80 % or more and not falling goes out at once
+  (after about 5 s) with that notice, since it stays busy far longer than the check (55-60 s after a
+  release on a Google Cloud N2 VM). A larger value waits for it instead.
+- The snapshot-helper warm-up (at most 15 s) runs alongside this check, so a lease takes about the
+  longer of the two.
+- `0` skips the CPU check; the boot and dialog checks still run.
+- Raise it when the first minute's slower commands matter (timing-sensitive tests); each lease then
+  waits up to that long on a busy host.
+- `device lease --settle` and MCP `lease_device` `settle_seconds` override it per lease. A project file
+  may set it.
 
 ### iOS backend
 
@@ -134,7 +166,8 @@ refused, and `tapdance config set` refuses keys containing "token" or "secret".
 | Connect target tokens | `self-hosted` mode with `targets`: calls to each target | `~/.tapdance/credentials.json` `"tokens"`, a map from origin to token written by `tapdance connect`; each goes only to its origin. `TAPDANCE_TOKEN` is not used for targets. |
 | Operator token | `tapdance workers list` and the workers check in `doctor` through a gateway | `~/.tapdance/credentials.json` `"operatorToken"` (bound to `"operatorEndpoint"`), then `TAPDANCE_OPERATOR_TOKEN` |
 
-Store them with:
+Connect target tokens are stored by `tapdance connect` (it reads the host's pairing token file on
+stdin). For gateway mode, store the agent and operator tokens with:
 
 ```bash
 printf '%s' "$AGENT_TOKEN" | tapdance config set-token --endpoint https://gateway.example.com
@@ -215,6 +248,8 @@ What the tokens can do, plainly:
 | --- | --- |
 | `TAPDANCE_SESSION_ID` | Session identity. Overrides the agent's own session variable. See [session identity](cli-reference.md#session-identity). |
 | `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, `PI_SESSION_ID` | Read, in that order, when `TAPDANCE_SESSION_ID` is unset. Set by the agent tools, not by you. |
+| `TAPDANCE_BUNDLETOOL` | Path to Google's bundletool (an executable or a `.jar`, run with `java`) for turning an `.aab` into an APK, when it is not on `PATH`. `tools.paths.bundletool` works too. |
+| `TAPDANCE_PROFILE_HEADLESS` | `1`: [device profiles](cli-reference.md#device-profiles) run without a window, both while you edit one (the Android emulator gets `-no-window`; the Simulator app is not opened) and when a lease boots an Android profile. For a host with no screen. |
 | `TAPDANCE_ALLOWED_ROOTS` | Extra directories (colon-separated; semicolon on Windows) from which the MCP server accepts `install_app` paths and `execute_tool` `cwd`, besides its working directory. |
 | `TAPDANCE_DEBUG` | Any value: print the underlying stack trace with CLI errors. |
 | `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` | Any value: lets `tapdance worker guard pair` (and the pairing step of `tapdance host up`) run without a terminal on stdin. For scripted setup by the Mac's owner only; never set it in a service environment, because anything that can then run `guard pair` can mint a token. |

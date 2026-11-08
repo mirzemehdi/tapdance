@@ -50,7 +50,7 @@ export function assertGuardHostSafe(allowAdminAccount: boolean, adminHint?: stri
   if (process.getuid?.() === 0) throw new TapdanceError("FORBIDDEN", "Refusing to run the worker guard as root");
   if (isMacAdmin() && !allowAdminAccount) {
     throw new TapdanceError("FORBIDDEN", `This macOS account (${userInfo().username}) is an administrator`, {
-      hint: adminHint ?? "Run the worker as a dedicated standard account (infrastructure/scripts/macos-create-worker-account.sh); see docs/security/personal-mac.md.",
+      hint: adminHint ?? "Run the worker as a dedicated standard account (infrastructure/scripts/macos-create-worker-account.sh); see docs/security/device-only-mode.md.",
     });
   }
   const gateway = joinedGateway();

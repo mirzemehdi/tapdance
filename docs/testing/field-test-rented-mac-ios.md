@@ -180,16 +180,18 @@ machine** (it was on 11-07) there is no "own machine" to run them from; use thes
   it, `SSH_ASKPASS_REQUIRE=force`, `DISPLAY=:0`, run with `setsid`), never on a command line; delete the
   script afterwards. Tailscale SSH is not on by default on the host (`Host key verification failed`);
   setting the host up with `host-setup.sh … --tailscale-ssh` (or `tapdance host up --tailscale-ssh`)
-  turns it on, after which the VPS reaches the Mac as `ssh m1@<mac>.<tailnet>.ts.net` with no key at all
-  (not yet run). [#126](https://github.com/mirzemehdi/tapdance/issues/126)
+  turns it on, after which the VPS reaches the Mac as `ssh m1@<mac>.<tailnet>.ts.net` with no key at all.
+  Not yet run on a Mac: on the stage 4 N2 host it turned Tailscale SSH on, but the ssh login waited for
+  the owner's check-mode approval and was not completed (STATUS W-07). [#126](https://github.com/mirzemehdi/tapdance/issues/126)
 - **Checkpoint B, GitHub access.** Best without a second machine: a **deploy key made on the Mac**, so
   no secret leaves it ([#127](https://github.com/mirzemehdi/tapdance/issues/127)). The agent runs
   `tapdance host builds key --repo git@github.com:<owner>/<repo>.git` on the Mac, which prints only the
   public key and the repository's deploy-keys page; the owner adds it there, read-only, from any browser
   (a phone works), and the agent allows the ssh URL with `--git-auth deploy-key`. It covers host builds
   only (installs from CI still need `gh` with Actions read), and organizations can turn deploy keys off.
-  The deploy key is unit-tested only and has not yet been run on a rented Mac (STATUS H-13); the token
-  route through `host gh-login` is the one that ran (11-07). For a token instead: the owner runs `tapdance host gh-login` in the Terminal of the console's VNC
+  On a rented Mac (stage 4, 2026-11-07) the command made the key and printed its public half, but the
+  key was never added to GitHub (the organization turns deploy keys off), so a build through it is
+  still unproven (STATUS H-13); the token route through `host gh-login` is the one that ran (11-07). For a token instead: the owner runs `tapdance host gh-login` in the Terminal of the console's VNC
   desktop and pastes it there, so the agent never sees it. If the owner pastes the token into the
   agent's chat anyway (11-07), the agent must pipe it over ssh stdin to `tapdance host gh-login` without
   printing it, delete any temporary file, and say that the token passed through the chat; the owner
@@ -221,7 +223,7 @@ Checkpoint A, owner: ssh access to the Mac
   Wait until they confirm, then check `ssh -i ~/.ssh/rented-mac m1@<mac-ip> 'tapdance host status'`.
 
 Checkpoint B, owner: GitHub access for host builds
-- Preferred, no token anywhere (unit-tested only; not yet run on a rented Mac): on the Mac run
+- Preferred, no token anywhere (a build through a deploy key is not yet proven): on the Mac run
     tapdance host builds key --repo git@github.com:<owner>/<repo>.git
   and give the owner the public key it prints and the deploy-keys page it names. The owner adds it there
   with "Allow write access" off and tells you when. Then allow the ssh URL:

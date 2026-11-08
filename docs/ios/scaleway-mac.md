@@ -1,23 +1,35 @@
 # iOS simulators on a rented Scaleway Mac mini
 
-You have no spare Mac. You rent a Mac mini from Scaleway, make it an iOS host with one script, and your
-agent (on your laptop, a Linux VPS, anywhere in your tailnet) leases iOS simulators on it through the
-worker guard: `host-setup.sh` → `host up` → `connect`, the same path as
-[one-command-host.md](../deployment/one-command-host.md).
+## What you get
 
-> **Status: set up end to end once (2026-11-06/07) and driven from two kinds of agent's machine.** A
-> Mac mini **M1-M** (8 GB) with macOS 27.2 and Xcode 27.0 in `fr-par-3`, set up over ssh with nobody
-> at the screen, served iOS 27 simulators to an agent on a Mac over Tailscale: the CLI and MCP
-> checklists, a reboot with the worker, guard and Tailscale coming back, and builds of a private
-> Kotlin Multiplatform app on the Mac ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)).
-> The next day an agent on a Linux VPS ran the same checklists against the same Mac in device-only
-> mode ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)). Not run: other offers (M2,
-> M4), other macOS versions, the standard-account setup, gateway mode. Prices are Scaleway's published
-> rates. See [STATUS.md](../../STATUS.md) (G-05, Q-08).
+You have no spare Mac. You rent a Mac mini from Scaleway and make it an iOS **host** with one script.
+Your agent (on your laptop, a Linux VPS, anywhere in your tailnet) leases iOS simulators on it through
+the **guard**, in [device-only mode](../security/device-only-mode.md): `host-setup.sh` → `host up` on the
+Mac, `connect` on the agent's machine. It is the same path as
+[host devices for a remote agent](../deployment/one-command-host.md). The Mac can also be one
+**connect target** next to an Android host, so one agent tests both platforms: see
+[Android and iOS for one agent](../guides/android-and-ios.md).
+
+> **Status: proven.** A Mac mini **M1-M** (8 GB) with macOS 27.2 and Xcode 27.0 in `fr-par-3`, set up
+> over ssh with nobody at the screen, served iOS 27 simulators to an agent on a Mac over Tailscale: the
+> CLI and MCP checklists, a reboot with the worker, guard and Tailscale coming back, and host builds of a
+> private Kotlin Multiplatform app ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)). The
+> next day an agent on a Linux VPS ran the same checklists against the same Mac
+> ([evidence](../testing/evidence/2026-11-07-vps-rented-mac-ios.md)), and then used it next to an
+> Android host ([evidence](../testing/evidence/2026-11-07-two-hosts-android-ios.md)). Not run: other
+> offers (M2, M4), other macOS versions, a standard (non-administrator) account, gateway mode. Prices
+> are Scaleway's published rates.
 
 > **For a test run** (an agent or you trying this for a day), follow
 > [field-test-rented-mac-ios.md](../testing/field-test-rented-mac-ios.md): the checkpoints, the
 > resource log, and a teardown that ends with nothing left that bills.
+
+## What you need
+
+- A Scaleway account and an SSH key added to its project.
+- A Tailscale account. The agent's machine must be in the same tailnet.
+- Tapdance installed on the agent's machine ([installation](../installation.md)).
+- At least EUR 2.64 (excluding VAT): Scaleway bills a Mac mini for 24 hours at least.
 
 ## The path at a glance
 
@@ -53,7 +65,9 @@ Scaleway's Apple silicon offers, read on 2026-11-06 (excluding VAT; [pricing](ht
   supports (macOS 27.2 came with Xcode 27.0). A version other than the default took about an hour to
   install.
 
-## 1. Rent it
+## Steps
+
+### 1. Rent it
 
 In the console, **Bare Metal > Apple silicon > Create Mac mini**: the offer, the macOS version,
 **No commitment**, Private Networks off, your **SSH key** (add it to the project first; when the agent
@@ -73,7 +87,7 @@ SIP cannot be turned off.
 ssh -i ~/.ssh/<your-key> m1@<mac-ip>
 ```
 
-## 2. Xcode and an iOS runtime
+### 2. Xcode and an iOS runtime
 
 Over ssh, as `m1` (the script in step 4 does both too, asking first):
 
@@ -86,7 +100,7 @@ No Apple ID is needed for the runtime. To install another Xcode, use
 [xcodes](https://github.com/XcodesOrg/xcodes) (your Apple ID and 2FA code, typed by you), then the two
 commands above; not run in this setup.
 
-## 3. Automatic login
+### 3. Automatic login
 
 iOS simulators boot and run over ssh with nobody logged in (checked: a simulator booted, its Home Screen
 rendered and screenshots worked). What needs a login is the **worker and guard**: they are LaunchAgents,
@@ -110,7 +124,7 @@ ssh m1@<mac-ip> 'who; launchctl print gui/$(id -u) >/dev/null && echo "login ses
 `m1` on `console` means it worked. `/etc/kcpassword` is obfuscation, not encryption: use automatic login
 only on a Mac that holds nothing of yours, like this one.
 
-## 4. Host setup
+### 4. Host setup
 
 ```bash
 ssh -t m1@<mac-ip>
@@ -130,10 +144,11 @@ bash host-setup.sh --ios-only --with-gh --allow-admin-account --label my-agent
   password, then prints a login link: open it in your browser and approve the machine.
 - `host up` then installs the worker and guard services, asks you to approve the pairing, serves the
   guard on Tailscale (`https://` when the tailnet has HTTPS certificates) and runs a self-test lease.
+  `--label my-agent` names the pairing after the agent's machine, not the Mac.
 - `--tailscale-ssh` (passed on to `host up`) also turns on Tailscale SSH: a VPS in your tailnet then
   reaches the Mac with `ssh m1@<mac>.<tailnet>.ts.net`, with no key to copy (#126). Your tailnet policy
   decides who may (by default you, after a browser approval about every 12 hours). A shell over
-  Tailscale SSH is outside the worker guard, so an agent on that VPS could act as `m1`: let it in only
+  Tailscale SSH is outside the guard, so an agent on that VPS could act as `m1`: let it in only
   for setup, limit the rule's `src` and `users` (no root), and turn it off afterwards with
   `sudo tailscale set --ssh=false`. Not yet run on a rented Mac.
 
@@ -144,11 +159,12 @@ clipboard: it would be the Mac's):
 scp m1@<mac-ip>:.tapdance/worker/pairing-my-agent.token .
 ```
 
-### Private repositories for host builds
+#### Private repositories for host builds
 
-With no machine but the agent's, a **deploy key** is simplest: no secret leaves the Mac (#127). It is
-unit-tested only, not yet run on a rented Mac (STATUS H-13); the `gh` token route below is the one the
-field runs used.
+With no machine but the agent's, a **deploy key** is simplest: no secret leaves the Mac (#127).
+Creating the key ran on a rented Mac; a build through it has not run yet. The `gh` token route below is
+the one the field runs used. More in [private repositories](../guides/private-repositories.md) and
+[host builds](../guides/host-builds.md).
 
 ```bash
 tapdance host builds key --repo git@github.com:<owner>/<repo>.git
@@ -169,22 +185,39 @@ tapdance host gh-login
 tapdance host builds enable --repo https://github.com/<owner>/<repo> --git-auth gh --protected-ref main --allow-admin-account
 ```
 
-## 5. Connect the agent's machine
+### 5. Connect the agent's machine
 
 ```bash
-tapdance connect https://<mac>.<tailnet>.ts.net:4720 < pairing-my-agent.token
+tapdance connect https://<mac>.<tailnet>.ts.net:4720 --name mac < pairing-my-agent.token
 ```
 
-`doctor` then shows iOS available and Android as a warning ("not on this host"). From there it is the
-usual flow: `tapdance device lease --platform ios`, `app build --git …`, `app install <app.zip>` or
-`app install --from-ci <owner/repo> --artifact <name>` (a simulator `.app` your CI built; the host needs
-`host artifacts enable --repo <owner/repo>`; for iOS this is unit-tested only, not yet run on a Mac
-host, STATUS F-05),
-`ui inspect`, … or the same through `tapdance mcp`. On iOS, the Home Screen is read with
-`ui inspect --app com.apple.springboard`.
+`--name` is optional; it is the name `device lease --target` and `tapdance disconnect` use. If the agent's
+machine already has an Android host, this adds the Mac as a second connect target: iOS leases go to the
+Mac.
+
+From there it is the usual flow: `tapdance device lease --platform ios`, `app build --git …`,
+`app install <app.zip>`, `ui inspect`, … or the same through `tapdance mcp`. On iOS, the Home Screen is
+read with `ui inspect --app com.apple.springboard`.
+
+`app install --from-ci <owner/repo> --artifact <name>` installs a simulator `.app` your CI built (the
+host needs `host artifacts enable --repo <owner/repo>`). For iOS this is unit-tested only, not yet run
+on a Mac host.
 
 Commands over plain `ssh mac 'tapdance …'` work (`host status`, `worker restart`, `host builds …`):
 the script sources its environment from `~/.zshenv`.
+
+## Check it worked
+
+On the agent's machine:
+
+```bash
+tapdance doctor --no-host
+tapdance device lease --platform ios
+tapdance device release
+```
+
+`doctor` shows iOS simulators available on the Mac, and Android as not on this host (a warning, not a
+failure). The first lease is a cold boot: on the M1-M it took 77-143 s.
 
 ## 8 GB: one simulator at a time
 
@@ -197,7 +230,8 @@ ssh mac 'tapdance host warm android=0,ios=0'
 ```
 
 The cost: every lease is a cold boot (about 77-143 s measured) and the first command after it can take 30 s
-or more while agent-device starts its runner. On a 16 GB offer, keep the default spare.
+or more while agent-device starts its runner. On a 16 GB offer, keep the default spare. More in
+[warm spares](simulator-management.md#warm-spares).
 
 ## Reboot
 
@@ -211,6 +245,15 @@ ssh m1@<mac-ip> 'who; tapdance host status'
 
 Without automatic login the Mac waits at the login window: `tailscaled` is up (it is a system daemon),
 but the worker and guard are not, and the agent's calls fail.
+
+## If it fails
+
+- **Leases fail with "Internal error", or `simctl` is slow:** the 8 GB Mac is out of memory. Turn the
+  warm spare off ([8 GB](#8-gb-one-simulator-at-a-time)).
+- **The agent's calls fail after a reboot:** automatic login is not set ([step 3](#3-automatic-login)).
+- **The first iOS command after a cold lease times out** ("Runner command deadline exceeded"): it is
+  retryable; run it again.
+- Everything else: [troubleshooting](../troubleshooting.md).
 
 ## Stop paying: delete it
 

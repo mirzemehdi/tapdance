@@ -22,22 +22,28 @@ after the command, but put them first for pass-through commands (`asc`, `android
 
 ## Command overview
 
+Global flags for every command: `--json`, `-c, --config <path>`, `--session <id>`, `-q, --quiet`
+([global options](#global-options)).
+
 | Area | Commands |
 | --- | --- |
 | Setup | [`init`](#init), [`doctor`](#doctor), [`config`](#config) |
-| Discovery | [`devices`](#devices), [`workers`](#workers) |
-| Lease | [`device lease / status / renew / release`](#device) |
-| Apps | [`app install / launch / stop / list`](#app) |
-| UI | [`ui inspect / tap / swipe / type / wait / alert / key`](#ui) |
+| Devices | [`devices`](#devices), [`devices install`](#devices), [`workers`](#workers) |
+| Lease | [`device lease / status / renew / release`](#device), [`device profile`](#device-profiles) |
+| Device state | [`device setting / push / pull / notifications / perf / shell`](#device-state), [`device clipboard / crashes / links`](#device) |
+| People | [`device request-human`](#device), [`device done`](#device), [`view`](#view) |
+| Apps | [`app install / launch / stop / kill / build / uninstall / clear / list`](#app) |
+| UI | [`ui inspect / audit / tap / type / swipe / wait / sequence / alert / key`](#ui) |
 | Evidence | [`screenshot`](#screenshot), [`record start / stop`](#record), [`logs`](#logs), [`artifacts`](#artifacts) |
-| Device state | [`device setting / push / pull / notifications / perf / shell`](#device-state) |
 | Scenarios | [`run`](#run) |
-| Human access | [`view`](#view) |
-| Workers and gateways | [`worker …`](#worker), [`gateway …`](#gateway), [`simlock`](#simlock) |
-| Hosting for a remote agent | [`host up / status / down`](#host), [`connect`](#connect) |
+| Hosting (on the host) | [`host up`](#host-up), [`host status / pause / resume / warm / builds / artifacts / token / gh-login / down`](#host) |
+| Hosting (on the agent's machine) | [`connect`](#connect), [`connect --list`](#connect), [`disconnect`](#connect) |
+| Self-hosting | [`worker …`](#worker), [`worker guard …`](#worker), [`gateway …`](#gateway), [`simlock`](#simlock) |
 | External tools | [`tools`](#tools), [`tool`](#tool-asc-android), [`asc`](#tool-asc-android), [`android`](#tool-asc-android) |
-| Agents | [`mcp`](#mcp) |
-| Feedback | [`report`](#report) |
+| Agents | [`mcp`](#mcp) (stdio), [`mcp --http`](#mcp) (Streamable HTTP) |
+| Reporting | [`report`](#report) |
+
+Exit codes: [exit codes](#exit-codes). Who owns a lease: [session identity](#session-identity).
 
 ## Setup
 
@@ -62,7 +68,7 @@ Creates `tapdance.config.json` in the current directory, or `~/.tapdance/config.
 In an interactive terminal without `--mode`, `init` offers: 1) local device, 2) self-hosted worker,
 3) Tapdance Cloud (not available). For self-hosted it also asks for the agent token (hidden input) and
 stores it in `~/.tapdance/credentials.json` with mode 600. The interactive prompts have not been
-exercised in an automated TTY test yet (STATUS C-07).
+exercised in an automated TTY test yet.
 
 ### `doctor`
 
@@ -87,7 +93,7 @@ Host checks run by default in local mode only. `--no-host` skips them. Exit code
 fails, 0 otherwise (warnings do not fail). `doctor` and `workers list` load the operator token when one
 is stored; no other command, and never the MCP server, loads it.
 
-KVM state of *remote* workers is not reported: Simlock does not expose it (STATUS C-05).
+KVM state of *remote* workers is not reported: Simlock does not expose it.
 
 With several [connect targets](#connect), `doctor` checks each host and prints one section per target
 (endpoint, reachable, the token's role and label, capabilities, capacity per platform, Simlock version),
@@ -118,7 +124,7 @@ the user file (`--global`) or the environment; in a project file they are ignore
 ([why](configuration.md#security-settings-are-user-only)). See [configuration.md](configuration.md) for
 every key.
 
-## Discovery
+## Devices and workers
 
 ### `devices`
 
@@ -137,7 +143,7 @@ several [connect targets](#connect) it prints one section per host, a host that 
 `devices install ios 18.5` or `devices install android 35` installs an iOS runtime or Android system
 image **on this machine's worker** by running the bundled `simlock --local component install`. Downloads
 are several GB. Android images need their SDK licences accepted first (see
-[installation.md](installation.md#android-macos-or-linux-with-kvm)). Simlock's installer fetches only `google_apis`; with
+[Android requirements](platforms/android.md#requirements)). Simlock's installer fetches only `google_apis`; with
 `--image-tag google_apis_playstore`, `google_atd` or `aosp_atd`, Tapdance runs the SDK's `sdkmanager`
 for `system-images;android-<version>;<tag>;<host ABI>` instead (it may ask you to accept a licence).
 See [platforms/android.md](platforms/android.md) for which tier to use.
@@ -159,7 +165,8 @@ needs an operator token (`tapdance config set-token --operator`), otherwise it f
 
 ```text
 tapdance device lease -p <android|ios> [-d <model>] [--os <version>] [--image-tag <tag>] [--physical]
-                      [--profile <name>] [--target <name>] [--ttl <minutes>] [--wait <seconds>] [--no-keepalive] [--hold]
+                      [--profile <name>] [--target <name>] [--ttl <minutes>] [--wait <seconds>] [--settle <seconds>]
+                      [--no-keepalive] [--hold]
 tapdance device status
 tapdance device renew [--ttl <minutes>]
 tapdance device release
@@ -179,7 +186,7 @@ tapdance device done
 | `--image-tag <tag>` | Android system image tag, e.g. `google_apis_playstore`. Leave it out for normal testing: on a host that has both a Play image and `google_apis` (a host set up before `host-setup.sh` installed `google_apis`, then set up again), Tapdance asks for `google_apis` and says so; on a host with one kind, Simlock picks it. With a tag (given or chosen) and no `--os`, Tapdance asks for the host's default API level (the one `tapdance devices` shows as default) when that tag is installed there, instead of the newest level that has it. The "a warm spare is ready" line counts only a spare of the requested tag. |
 | `--physical` | Lease an enrolled physical device instead. Untested. |
 | `--profile <name>` | Boot a [device profile](#device-profiles) from this machine instead of a Simlock device. |
-| `--target <name>` | With several [connect targets](#connect): lease from this one (name or endpoint). Without it the lease goes to the first target, in `connect --list` order, that answers, serves the platform (and the `--device` model and plain `--os` version, when given) and has a free slot or a warm spare; when every such target is full, to the first of them, where the request waits. A target with no capacity for the platform is skipped. A target that does not answer within 5 s is skipped for another host of the same platform; when none is left, the lease fails at once with `PROVIDER_UNREACHABLE` (retryable) naming that host and the targets that are up. Another platform is never leased instead. `USAGE` when no targets are configured. |
+| `--target <name>` | With several [connect targets](#connect): lease from this one (name or endpoint). See [routing](#routing) for what happens without it. `USAGE` when no targets are configured. |
 | `--ttl <minutes>` | Lease TTL, 1–240. Default `session.defaultTtlMinutes` (30). |
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
 | `--settle <seconds>` | Android emulators: how long to check the guest's CPU after it has booted with no dialog in front, 0–300. Default `session.settleSeconds` (15). `0` skips the CPU check. |
@@ -380,7 +387,7 @@ package or bundle id when the backend needs it.
 
 `install --from-ci` installs an app that your CI built instead of a local file: the device's host
 downloads the GitHub Actions artifact `--artifact` with its own `gh` login and installs its newest
-`.apk` (Android) or its simulator `.app` (iOS, #121: the `.app` folder, an artifact that is the `.app`'s
+`.apk` (Android) or its simulator `.app` (iOS: the `.app` folder, an artifact that is the `.app`'s
 own contents, or one zipped `.app` inside it; a device build or an `.ipa` is refused; unit-tested only). `--run` names the workflow run; otherwise the host takes the newest
 successful run on `--branch` (default: the repository's default branch) that has the artifact. Give a
 path or `--from-ci`, not both. It needs a worker guard whose owner allowed the repository with
@@ -419,7 +426,7 @@ and `Log` lines are already in logcat.
 `build` (through a worker guard whose owner turned builds on) builds the app on the machine that runs
 the leased device, from an allow-listed git repository and ref, and installs it on the lease; the log
 streams as progress and the reply names the exact commit. This is how an agent without Xcode gets an
-iOS app onto a remote simulator. See [Builds on the host](deployment/one-command-host.md#builds-on-the-host).
+iOS app onto a remote simulator. See [host builds](guides/host-builds.md).
 The reply says whether the host built it or reused its earlier build of the same commit and settings
 (`reused`, with `builtAt`; a build from MCP `build_app` counts, and an option left out equals its default), the ref you asked for next to the exact commit, and on Android the installed
 package (`appId`). When the host cannot sign in to the repository the error is `AUTH_FAILED` (exit 5),
@@ -538,7 +545,7 @@ A failed step gets a screenshot and the full UI tree in the run's evidence folde
 step lines to stderr. Exit code 0 on PASS, 12 on FAIL, 2 for an invalid scenario file, and the usual
 codes when the run cannot start (3 when there is no device and nothing to lease).
 
-## Human access
+## People
 
 ### `view`
 
@@ -580,12 +587,12 @@ Behind a `tailscale serve` (or another proxy) you set up yourself on another por
 to this machine's tailnet names on any port; `--allow-host` names are compared without a port too. A
 refused name gets `403` with the `Host` it saw and the `--allow-host` to add.
 
-## Workers and gateways
+## Self-hosting
 
-These commands manage the bundled Simlock daemons on this machine. Two-machine setups (gateway on a
-VPS, worker on a laptop or a Google Cloud N2 VM) are implemented but **have not been tested across
-machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
-[deployment/](deployment/) describe the full procedure.
+These commands manage the bundled Simlock daemons on this machine: the [worker](glossary.md), the
+guard and, for gateway mode, the gateway. For a remote agent, `host up` runs the worker and guard steps
+for you ([`host up`](#host-up)). Gateway mode is advanced and has run on one Mac only, not across
+machines ([gateway mode](deployment/gateway-mode.md)).
 
 ### `worker`
 
@@ -595,8 +602,8 @@ machines yet** ([STATUS.md](../STATUS.md), M-02, Q-06). The deployment guides in
 | `worker install [--no-stream] [--ios-backend <agent-device\|axe>] [--service]` | Configure the bundled Simlock worker (agent-device on, pointing at the bundled agent-device; stream and input on unless `--no-stream`), restart it, and print the host checks. `--ios-backend axe` also sets Simlock's `drivers.ios.deviceSet` to `default` and `ios.uiBackend: "axe"` in `~/.tapdance/config.json`. `--service` installs a launchd / systemd `--user` login service. Refused on Windows. |
 | `worker login --accept-gateway-exec --gateway <url> [--label <name>] [--token-stdin] [--no-viewer]` | Join a gateway. `--accept-gateway-exec` is required: without it the command refuses with `FORBIDDEN`, because a joined gateway, and every agent token it issues, can run programs on this machine (Simlock's exec; `simctl spawn` starts any program). Pass it only on a machine you dedicate to being a worker. The worker dials out over an authenticated WebSocket; no inbound port is opened. The URL must be `wss://`, or `ws://` to a private address (loopback, RFC 1918, Tailscale 100.64/10 or `*.ts.net`); `http(s)://` is converted. The join token comes from `TAPDANCE_WORKER_TOKEN`, else stdin when piped (`--token-stdin` documents that), else a hidden prompt. `--no-viewer` leaves stream and input off. |
 | `worker logout` | Leave the gateway, turn the worker's own HTTP API back on, restart. Revoke the join token on the gateway afterwards. |
-| `worker guard start` / `pair [--scope <areas>]` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator, H-02, and over Tailscale in the field runs with a Mac, a Google Cloud N2 VM and a rented Mac mini as hosts; the dedicated-account script is untested). A local server in front of the Simlock worker that remote control machines reach instead of a gateway, enforcing a policy file on the worker. `pair` must run in a terminal on the Mac (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [security/personal-mac.md](security/personal-mac.md). |
-| `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`, log `~/.tapdance/worker/guard.log`, moved to `guard.log.1` at 5 MB when the service is installed; the user journal is not always kept on cloud VMs) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). `host up` installs the guard this way: it ran on a Google Cloud N2 VM (systemd) and a rented Mac mini (LaunchAgent), and the guard came back after a restart of each (W-07). See [security/personal-mac.md](security/personal-mac.md#keep-the-guard-running). |
+| `worker guard start` / `pair [--scope <areas>]` / `tokens` / `revoke` / `policy` / `audit` | Device-only mode (verified on one Mac with a real simulator, and over Tailscale in the field runs with a Mac, a Google Cloud N2 VM and a rented Mac mini as hosts; the dedicated-account script is untested). A local server in front of the Simlock worker that the agent's machine reaches instead of the worker, enforcing a policy file on the host. `pair` must run in a terminal on the host (unless `TAPDANCE_GUARD_PAIR_NONINTERACTIVE` is set) and prints a token once. See [device-only mode](security/device-only-mode.md). |
+| `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`, log `~/.tapdance/worker/guard.log`, moved to `guard.log.1` at 5 MB when the service is installed; the user journal is not always kept on cloud VMs) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). `host up` installs the guard this way: it ran on a Google Cloud N2 VM (systemd) and a rented Mac mini (LaunchAgent), and the guard came back after a restart of each. See [device-only mode](security/device-only-mode.md#keep-the-guard-running). |
 | `worker cleanup` | Release device claims left behind by agent-device processes that have gone (a worker restart, the machine going offline mid-lease). Such a claim blocks the next lease of that emulator with "owned by session …". Only claims whose owner process is provably dead are touched; an unfinished screen recording of such a session is set aside (renamed `*.abandoned-<time>`) so its claim can go. `worker start`/`restart` and the worker guard (before each lease) do this on their own. |
 | `worker start` / `stop` / `status` / `restart` | Start, stop, show, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. `start` and `restart` check the worker's login service first: when it starts another Simlock than this Tapdance ships (after `git pull && pnpm install` with a new Simlock patch, pnpm puts it in a new `simlock@…_patch_hash=…` folder, and the unit or plist still names the old one) or a Node or Simlock that is gone, they install it again (Simlock's `daemon install`: rewrites `~/.config/systemd/user/com.callstack.simlock.worker.service` or `~/Library/LaunchAgents/com.callstack.simlock.worker.plist` and reloads systemd/launchd) instead of starting the old one, and say so. Simlock's config, including the warm-spare settings, is not touched, and its device records are checked with `doctor --fix`, never reset, so learned spares are kept. On Linux, before that install, they set up the user manager (linger, its bus; this works over a non-interactive `ssh … --command`) and check that `systemctl --user` answers; when it does not they stop with exit 10 and change nothing. If the install still fails, the worker is started without the service, the error says the login service is now missing and to run `tapdance worker install --service`, and the exit code is 10 (`HOST_CHECK_FAILED`); `start`, `restart` and `host status` then warn until a login service is installed again. |
 | `worker logs [-n, --lines <n>] [--contains <text>] [--since <when>]` | Print the worker daemon's log, read from Simlock's `daemon.log` (and `daemon.log.1`, where Simlock moves it at 5 MB): the last 100 lines by default, up to 5000 with `-n`; with a filter, the last `n` matching lines. `--contains` keeps lines containing the text (case-insensitive, like `tapdance logs`); `--since` keeps lines from the last `30s`, `10m`, `2h` or `1d`, or since an ISO time. For example `tapdance worker logs --contains "clean baseline"` finds the line Simlock logs when it saves a device's clean snapshot, however many lines came after it. `--json` returns `{ path, lines }`. |
@@ -628,32 +635,107 @@ tapdance simlock -- <simlock arguments>
 Runs the Simlock 0.5.0 CLI bundled with Tapdance (with Tapdance's patch), for operators. Put `--` before Simlock's own options
 (`tapdance simlock -- --version`), or Tapdance parses them itself. Agents should not need it.
 
-## Hosting for a remote agent
+## Hosting
 
-One command per side for device-only mode: `host up` on the Mac or Linux machine that runs the
-devices, `connect` on the machine where the agent runs. Run end to end on the owner's Mac and on a
-Google Cloud N2 VM driven from a Mac ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)), and on a
-rented Scaleway Mac mini set up over ssh for iOS ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md);
-over ssh `host up` does not offer the clipboard: copy the token file with `scp`); `pause`,
-`resume` and `down --all` are unit-tested only ([STATUS.md](../STATUS.md), W-07). Full guide: [deployment/one-command-host.md](deployment/one-command-host.md).
+One command per side for [device-only mode](glossary.md): `host up` on the Mac or Linux machine that
+runs the devices (the host), `connect` on the machine where the agent runs. Full guide:
+[one-command host](deployment/one-command-host.md).
+
+Proven, each pair over Tailscale (agent's machine → host): a Linux VPS → the owner's Mac
+([evidence](testing/evidence/2026-11-02-vps-field-runs.md)); a Mac and a Linux VPS → a Google Cloud N2
+VM ([Mac](testing/evidence/2026-11-03-gcp-n2-android.md), [VPS](testing/evidence/2026-11-03-vps-n2-android.md));
+a Mac and a Linux VPS → a rented Scaleway Mac mini set up over ssh
+([Mac](testing/evidence/2026-11-06-rented-mac-ios.md), [VPS](testing/evidence/2026-11-07-vps-rented-mac-ios.md));
+one Linux VPS → two connect targets at once, an N2 host for Android and a rented Mac for iOS
+([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). Unit-tested only: `host pause`,
+`host resume` and `host down --all`.
 
 ### `host`
 
 | Command | Meaning |
 | --- | --- |
-| `host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--tailscale-ssh] [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>] [--idle-stop <minutes\|off>] [--max-uptime <hours\|off>] [-y, --yes]` | Eight steps, each printed with its name: prerequisites (the `worker check` checks plus a JDK check and, on Linux, cloud-VM detection; installs nothing and prints install commands), account (root, joined gateway, administrator refusals; on an admin account it stops and prints the exact command to run again with `--allow-admin-account`), worker (`worker install --service`, which on Linux without a display also sets headless emulators with the `swiftshader_indirect` GPU mode; left alone on a re-run when it already runs with the guard service, except that a login service still starting another Simlock than this Tapdance's, as after an update, is installed again with a worker restart when no lease runs, and only warned about while one does), guard service (`worker guard install`), pairing (a guard token labelled with `--label`; without it, the host's only active pairing is kept, so `host up --idle-stop 10` never pairs a new machine, and with none it is the hostname; several pairings and no `--label` are refused. Approved at a terminal or with `--yes`, and a run that would need approval without a terminal is refused before any step changes anything, naming the pairing the host already has. The token is written to `~/.tapdance/worker/pairing-<label>.token` with mode 600 and never printed; a valid token file is kept, `--repair` revokes and reissues), tailscale (`tailscale serve --bg --https=4720 http://127.0.0.1:4720` and the MagicDNS endpoint; `--http` with a warning recommending HTTPS Certificates when the tailnet has none; or loopback with instructions when Tailscale is missing, logged out or `--no-tailscale`; with `--tailscale-ssh` also `tailscale set --ssh`, so tailnet machines can `ssh <user>@<name>` without copying keys: a refusal only warns, naming `sudo tailscale set --ssh` or, with the Tailscale app on macOS, that it needs the open-source `tailscaled`; who may connect is the tailnet policy's `ssh` section; unit-tested, not yet run on a host, #126), self-test (through the guard with the new token: list devices, lease Android or else iOS, screenshot, release; `--skip-self-test` keeps only the device list), summary (the `TAPDANCE HOST READY` block with the `tapdance connect` line, a security note on what the token allows (the iOS simulator sentence on macOS only), and on Tailscale a suggested ACL). At the end it offers to copy the token to the clipboard, except on Linux without a display or without a clipboard tool, where it points at the token file and `host token --show` instead. `--scope` limits a newly issued pairing token to those policy areas (see [threat model](security/threat-model.md)). `--idle-stop` and `--max-uptime` set the cost guard (`hostStop` in the guard policy; Linux only, refused on macOS): power the machine off after that many minutes with no lease, guard request or build (30 by default on a detected cloud VM, off elsewhere), and after that many hours up take no new leases and power off when the last one ends (off by default). The stop command is fixed (`sudo -n /usr/bin/systemctl poweroff`); when sudo does not allow it, `host up` prints the one sudoers rule to add. A changed setting restarts an idle guard; the ready block shows it on a `cost guard:` line ([cost guardrails](deployment/google-cloud-n2.md#cost-guardrails)). On a detected cloud VM the block adds a `cloud VM:` line: it bills while running, its disk bills even when stopped, and where to read how to delete it ([tear down](deployment/google-cloud-n2.md#tear-down) on Google Cloud, otherwise [the overview](deployment/self-hosted-overview.md#when-you-are-done-with-a-rented-machine)). For a short-lived test host, pass `--idle-stop off` with Terraform's ephemeral mode ([field test](testing/field-test-cloud-android.md)). A failed step prints the step, the command, the tail of its output and a fix, and exits with the error's code. Refused on Windows (`NOT_SUPPORTED`). |
+| `host up [options]` | Set this machine up as a host, in eight steps. See [`host up`](#host-up) below. |
 | `host status` | Each step's state on this machine (prerequisites, account, worker, guard service, cost guard, pairings, Tailscale) and the endpoint. The prerequisites row says `ios needs a Mac` on Linux, and when the Android SDK is not found from this shell it says so (it also looks in `~/Android/Sdk`, so a command over ssh without a login profile still finds what `host-setup.sh` installed). The worker row reads Simlock's RAM budget from `capacity.ramBudget`. The cost guard row shows the idle stop and uptime cap, how long the host has been idle and when it will power off (`idle 1 min, powers off in about 9 min (around 15:43 UTC)`; the guard checks once a minute and the shutdown takes a minute or two more), and fails when sudo does not allow the stop command. On a detected cloud VM a `cloud VM` row says what still bills and links the tear-down steps. When builds with `--git-auth gh` or installs from CI are on, a `gh` row says whether `gh auth status` works (`host up` warns when it does not). |
 | `host pause` | Stop hosting for now and keep the pairing: removes the guard's login service (and its `caffeinate`), turns off `tailscale serve`, ends the worker's leases, shuts down the emulators and simulators it created, stops the worker and removes its login service, so nothing starts at your next login. Records how the guard ran in `~/.tapdance/worker/paused.json`. The VPS cannot reach this machine until `resume`. |
 | `host resume [--allow-admin-account] [--keep-awake]` | Start hosting again the way it ran before `pause` (the flags are remembered from `pause`; pass them when no pause was recorded, or use `host up` after `host down`). It checks the account before starting anything: reinstalls the worker's and the guard's login services (with `--allow-admin-account` / `--keep-awake` as before), resets stale device records, serves the guard on Tailscale again, and says whether the pairing token is still valid (if not: `host up --repair`, then `host token`). |
 | `host warm <android=N,ios=M> [--now]` | Set how many booted spare devices the worker keeps, without re-running `host up`. Simlock reads this at start and a restart ends running leases, so it saves the setting and restarts the worker only when nothing is leased; otherwise it says it applies at the next `worker restart`. `--now` restarts anyway (ending running leases). |
 | `host warm default [--now]` | Back to Simlock's default: one booted spare of each device kind a lease used (learned from leases). Removes the `warmPool.enabled` and `warmPool.reserveRunning.*` keys `host warm` wrote to `~/.simlock/config.json` and restarts like `host warm`. |
 | `host warm` | Show the warm-spare setting (Simlock's default, set by `host warm`, or off) and the spares the worker keeps now, with how many are ready. |
-| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--gradle-idle-minutes <n>] [--no-check] [--allow-admin-account]` / `host builds disable [--repo <url>]…` / `host builds status [--check]` / `host builds key [--repo <url>] [--remove]` | Let the agent build apps on this machine from allow-listed git repositories ([Builds on the host](deployment/one-command-host.md#builds-on-the-host)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it, then checks that this machine can read each `--repo` with that auth (`git ls-remote <url> HEAD` with the same key or `gh`) and prints a warning with the fix when it cannot; `--no-check` skips that, for offline setup. `--gradle-idle-minutes` sets how long an idle Gradle and Kotlin daemon of an Android build stays alive (default 10; 0 builds with `--no-daemon`). `disable` turns builds off and keeps the list; `disable --repo <url>` removes that URL from the list and leaves builds on (the ssh and https URLs of a repository are separate entries). `key` creates a read-only deploy key and prints its public half and fingerprint; with `--repo` the key is for that repository only and its ssh builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `key --remove` deletes the key (with `--repo`, that repository's; without, the shared one) and prints its fingerprint so you delete it on GitHub too. `status` lists each repository with its deploy key (`not used (https)` next to an https URL) and number of build files; `--check` adds whether this machine can read it. Output keeps the repository's case as you typed it. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
+| `host builds enable --repo <url>… [--git-auth gh\|deploy-key\|none] [--protected-ref <branch>]… [--timeout-minutes <n>] [--gradle-idle-minutes <n>] [--no-check] [--allow-admin-account]` / `host builds disable [--repo <url>]…` / `host builds status [--check]` / `host builds key [--repo <url>] [--remove]` | Let the agent build apps on this machine from allow-listed git repositories ([host builds](guides/host-builds.md)). Off by default. `enable` adds to the allow-list and sets `--git-auth` for every repository on it, then checks that this machine can read each `--repo` with that auth (`git ls-remote <url> HEAD` with the same key or `gh`) and prints a warning with the fix when it cannot; `--no-check` skips that, for offline setup. `--gradle-idle-minutes` sets how long an idle Gradle and Kotlin daemon of an Android build stays alive (default 10; 0 builds with `--no-daemon`). `disable` turns builds off and keeps the list; `disable --repo <url>` removes that URL from the list and leaves builds on (the ssh and https URLs of a repository are separate entries). `key` creates a read-only deploy key and prints its public half and fingerprint; with `--repo` the key is for that repository only and its ssh builds use it whatever `--git-auth` says (GitHub accepts a deploy key on one repository). `key --remove` deletes the key (with `--repo`, that repository's; without, the shared one) and prints its fingerprint so you delete it on GitHub too. `status` lists each repository with its deploy key (`not used (https)` next to an https URL) and number of build files; `--check` adds whether this machine can read it. Output keeps the repository's case as you typed it. `enable` and `disable` restart the guard when no lease is running. See [private repositories](guides/private-repositories.md). |
 | `host builds files add --repo <url> <path-in-repo> [--from <file>]` / `host builds files list [--repo <url>]` / `host builds files remove --repo <url> <path-in-repo>` | Build files: config a repository keeps out of git (`google-services.json`, `local.properties`, `.env`), copied into the checkout before each build of that repository and removed after it. `add` reads `--from` or stdin (at most 1 MB, 50 files per repository) and refuses absolute paths, `..`, `.git` and `.gitmodules`; `list` shows path, size and the start of the sha256, never the content. Owner-only: no guard route or MCP tool reads or writes them. |
-| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>] [--no-check]` / `host artifacts disable [--repo <owner/repo>]…` / `host artifacts status [--check]` | Let the agent install apps your CI built (`app install --from-ci`: Android APKs, iOS simulator `.app`s): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's lease (an APK on Android, a simulator `.app` on iOS). Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `enable` then checks that `gh` can read each `--repo` and list its Actions artifacts and warns with the fix when it cannot (`--no-check` skips it). `disable --repo` removes repositories from the list and leaves installs from CI on. `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in; `--check` also tries each repository. `enable` and `disable` restart the guard when no lease is running. Ran for Android on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); iOS is unit-tested only (F-05). |
-| `host gh-login` | Logs this machine's `gh` in to github.com with a token it reads with echo off at the terminal (or from stdin: `tapdance host gh-login < token-file`), for builds with `--git-auth gh` and installs from CI. The token goes to `gh auth login --with-token` on stdin and is never printed; `gh auth login --with-token` alone echoes a pasted token over `ssh -t` (#122). Then it runs `gh auth status`. Ran on a rented Mac mini with the token piped over ssh stdin; `host status` then showed `gh` ok ([evidence](testing/evidence/2026-11-07-vps-rented-mac-ios.md)). |
+| `host artifacts enable --repo <owner/repo>… [--branch <name>]… [--max-mb <n>] [--no-check]` / `host artifacts disable [--repo <owner/repo>]…` / `host artifacts status [--check]` | Let the agent install apps your CI built (`app install --from-ci`: Android APKs, iOS simulator `.app`s): this machine downloads the GitHub Actions artifact with its own `gh` login (use a fine-grained, read-only token: Actions: read, Contents: read) and installs it on the agent's lease (an APK on Android, a simulator `.app` on iOS). Off by default (`allow.artifacts` and `artifacts` in the guard policy). `--branch` limits installs to runs on those branches (it replaces the list); forks' runs are never used. `--max-mb` caps the artifact and APK size (default 512). `enable` then checks that `gh` can read each `--repo` and list its Actions artifacts and warns with the fix when it cannot (`--no-check` skips it). `disable --repo` removes repositories from the list and leaves installs from CI on. `status` shows the allow-list, the download cache (newest 3 per repository) and whether `gh` is signed in; `--check` also tries each repository. `enable` and `disable` restart the guard when no lease is running. Ran for Android on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); iOS is unit-tested only. |
+| `host gh-login` | Logs this machine's `gh` in to github.com with a token it reads with echo off at the terminal (or from stdin: `tapdance host gh-login < token-file`), for builds with `--git-auth gh` and installs from CI. The token goes to `gh auth login --with-token` on stdin and is never printed; `gh auth login --with-token` alone echoes a pasted token over `ssh -t`. Then it runs `gh auth status`. Ran on a rented Mac mini with the token piped over ssh stdin; `host status` then showed `gh` ok ([evidence](testing/evidence/2026-11-07-vps-rented-mac-ios.md)). |
 | `host token [--label <name>] [--copy \| --show]` | Hand the pairing token over: copies it to the clipboard (`pbcopy`, `wl-copy`/`xclip`/`xsel`) by default (over ssh it refuses with `USAGE`, since the clipboard would be the host's: `scp` the file or use `--show`); `--show` prints it once with a warning. Prints a 6-character fingerprint (SHA-256) that `connect` prints too, so both sides can check they hold the same token without showing it. `host up` also offers to copy it at the end. |
 | `host down [--revoke] [--all] [-y, --yes]` | Remove the guard service and `tailscale serve` for the guard's port, after a confirmation (`--yes` skips it; required without a terminal). `--revoke` also revokes every guard token and deletes the pairing token files. `--all` is everything: `--revoke`, plus end the worker's leases, shut down the devices it created, stop it and remove its login service. Without `--all` the worker keeps running. To come back later without re-pairing, use `host pause` / `host resume` instead. |
+
+### `host up`
+
+```text
+tapdance host up [--label <name>] [--allow-admin-account] [--no-tailscale] [--keep-awake] [--tailscale-ssh]
+                 [--repair] [--skip-self-test] [--warm android=N,ios=M] [--scope <areas>]
+                 [--idle-stop <minutes|off>] [--max-uptime <hours|off>] [-y, --yes]
+```
+
+Sets this Mac or Linux machine up as a host for an agent on another machine. Name the pairing after the
+agent's machine: `tapdance host up --label my-vps`. Refused on Windows (`NOT_SUPPORTED`).
+
+It runs eight steps and prints each one's name. A failed step prints the step, the command, the tail of
+its output and a fix, and exits with the error's code.
+
+1. **Prerequisites.** The `worker check` checks, a JDK check and, on Linux, cloud-VM detection. It
+   installs nothing; it prints the install commands.
+2. **Account.** Refuses root, a worker that joined a gateway, and an administrator account. On an admin
+   account it stops and prints the exact command to run again with `--allow-admin-account`.
+3. **Worker.** Runs `worker install --service`. On Linux without a display it also sets headless
+   emulators with the `swiftshader_indirect` GPU mode. On a re-run a worker that already runs with the
+   guard service is left alone, with one exception: a login service that still starts another Simlock
+   than this Tapdance's (after an update) is installed again, with a worker restart, when no lease runs;
+   while a lease runs it only warns.
+4. **Guard service.** Runs `worker guard install`.
+5. **Pairing.** Issues a [pairing token](glossary.md) named with `--label`. Without `--label`, the
+   host's only active pairing is kept (so `host up --idle-stop 10` never pairs a new machine); with no
+   pairing, the label is this machine's hostname; with several pairings, `--label` is required. You
+   approve the pairing at the terminal, or with `--yes`. A run that would need approval without a
+   terminal is refused before any step changes anything, and names the pairing the host already has.
+   The token is written to `~/.tapdance/worker/pairing-<label>.token` (mode 600) and never printed. A
+   valid token file is kept; `--repair` revokes it and issues a new one.
+6. **Tailscale.** Runs `tailscale serve --bg --https=4720 http://127.0.0.1:4720` and prints the
+   MagicDNS endpoint. When the tailnet has no HTTPS Certificates, the guard is served over plain
+   `http://` inside the tailnet instead, with a warning that recommends turning them on. When
+   Tailscale is missing or logged out, or with `--no-tailscale`, the endpoint stays on loopback and
+   it prints what to do.
+7. **Self-test.** Through the guard with the new token: list devices, lease Android (or else iOS),
+   take a screenshot, release. `--skip-self-test` keeps only the device list.
+8. **Summary.** The `TAPDANCE HOST READY` block with the `tapdance connect` line to run on the agent's
+   machine, a security note on what the token allows (the iOS simulator sentence on macOS only), and on
+   Tailscale a suggested ACL. Then it offers to copy the token to the clipboard. On Linux without a
+   display or a clipboard tool, and over ssh, it points at the token file and `host token --show`
+   instead: copy the file with `scp`.
+
+| Option | Meaning |
+| --- | --- |
+| `--label <name>` | The pairing's name: the agent's machine, for example `my-vps`. |
+| `--allow-admin-account` | Run the guard from an administrator account (not recommended). |
+| `--no-tailscale` | Do not expose the guard with `tailscale serve`; the endpoint stays on loopback. |
+| `--keep-awake` | macOS: run the guard under `caffeinate -i` so idle sleep does not take it offline. |
+| `--tailscale-ssh` | Also run `tailscale set --ssh`, so tailnet machines can `ssh <user>@<name>` without copying keys. Who may connect is the tailnet policy's `ssh` section; a shell this way is outside the guard. A refusal only warns, naming `sudo tailscale set --ssh` or, with the Tailscale app on macOS, that it needs the open-source `tailscaled`. Ran on an N2 host: it turned Tailscale SSH on and printed the policy warning; a login through it was not completed ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). |
+| `--repair` | Revoke the pairing with this label and issue a new token. |
+| `--skip-self-test` | Do not lease a device through the guard at the end. |
+| `--warm android=N,ios=M` | Booted spare devices to keep ready (0 frees the memory). Default: Simlock keeps one per device kind used. Later, change it with [`host warm`](#host). |
+| `--scope <areas>` | Limit a newly issued pairing token to these policy areas, for example `interaction,inspection,screenshots` (see [threat model](security/threat-model.md)). |
+| `--idle-stop <minutes\|off>` | Linux cloud VMs: power the machine off after this many minutes with no lease, guard request or build. Default 30 on a detected cloud VM, off elsewhere. Refused on macOS. |
+| `--max-uptime <hours\|off>` | Linux cloud VMs: after this many hours up, take no new leases and power off when the last one ends. Default off. Refused on macOS. |
+| `-y, --yes` | Approve the pairing without a prompt (you are at this machine). |
+
+**Cost guard.** `--idle-stop` and `--max-uptime` are stored as `hostStop` in the guard policy. The stop
+command is fixed (`sudo -n /usr/bin/systemctl poweroff`); when sudo does not allow it, `host up` prints
+the one sudoers rule to add. A changed setting restarts an idle guard, and the ready block shows it on a
+`cost guard:` line ([cost guardrails](deployment/google-cloud-n2.md#cost-guardrails)). On a detected
+cloud VM the block adds a `cloud VM:` line: the VM bills while running, its disk bills even when
+stopped, and it says where to read how to delete it ([tear down](deployment/google-cloud-n2.md#tear-down)
+on Google Cloud, otherwise [the overview](deployment/self-hosted-overview.md#when-you-are-done-with-a-rented-machine)).
+For a short-lived test host, pass `--idle-stop off` with Terraform's ephemeral mode
+([field test](testing/field-test-cloud-android.md)).
 
 ### `connect`
 
@@ -663,7 +745,7 @@ tapdance connect --list
 tapdance disconnect <name|endpoint>
 ```
 
-On the agent's machine (macOS, Linux or Windows): first checks that `<endpoint>/v1/healthz` answers
+On the agent's machine (macOS or Linux; Windows expected to work, not tested): first checks that `<endpoint>/v1/healthz` answers
 (two tries, 15 s each) and saves nothing if it does not; an `http://` address that the guard now serves
 over HTTPS fails with the `https://` command to use. Then it reads the guard token from stdin (or a hidden
 prompt; never from argv), adds the host as a **connect target** in `~/.tapdance/config.json` (`provider:
@@ -673,16 +755,37 @@ and Cursor (`tapdance mcp`, or absolute Node.js and CLI paths when `tapdance` is
 the current directory's `tapdance.config.json` or `TAPDANCE_ENDPOINT` overrides the endpoint. Exit 10 when
 a check fails. Plain `http://` is accepted only for private addresses.
 
-Run it once per host, for example an Android host and a Mac: each becomes a target, and a lease goes to
-the first target (in the order they were added) that serves its platform; `device lease --target <name>`
-(MCP: `lease_device` `target`) picks one. Every later call about a lease (install, UI, screenshots, logs,
-release …) goes to the host that granted it, with that host's token only. See
+Run it once per host, for example an Android host and a Mac: each becomes a target. See
 [Android and iOS from one agent](guides/android-and-ios.md).
+
+#### Routing
+
+A lease goes to the first connect target, in the order they were added, that serves the platform and
+answers. A host that is down is skipped fast with `PROVIDER_UNREACHABLE`. `device lease --target <name>`
+(MCP: `lease_device` `target`) picks one.
+
+The details:
+
+- "Serves the platform" also means the `--device` model and a plain `--os` version, when given. A target
+  set with `connect --platform`, or with no capacity for the platform, is skipped. Another platform is
+  never leased instead.
+- A target that does not answer within 5 s is skipped for another host of the same platform. When none
+  is left, the lease fails at once with `PROVIDER_UNREACHABLE` (retryable), naming that host and the
+  targets that are up.
+- Among the targets that fit, one with a free slot or a warm spare is preferred; when all are full, the
+  request waits on the first. (Unit-tested only.)
+- Every later call about a lease (install, UI, screenshots, logs, release …) goes to the host that
+  granted it, with that host's token only.
+
+Proven with an N2 host and a rented Mac: routing by platform and by `--target`, and a stopped host
+reported in under 1 s ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)).
+
+#### Options and updates
 
 | Option | Meaning |
 | --- | --- |
 | `--name <name>` | The target's name (lower-case letters, digits, dashes; at most 32). Default: the host's first DNS label (`n2-host` for `https://n2-host.tail1234.ts.net`), with `-2`, `-3` … when taken. |
-| `--platform <platform...>` | Route only these platforms to this host (`--platform android`, or `android,ios`). Default: whatever the host serves, read from it at lease time. |
+| `--platform <platform...>` | Route only these platforms to this host (`--platform android`, or `android,ios`). Default: whatever the host serves, read from it at lease time. `--platform any` clears an earlier limit. |
 | `--list` | Print the targets in routing order with their platforms and whether a token is saved (its fingerprint, never the token). Changes nothing. |
 
 Connecting an endpoint that is already a target (same origin) updates it: its address, its token, and
@@ -695,8 +798,12 @@ is; the next `connect` turns it into the first target and moves its token to the
 
 `tapdance disconnect <name|endpoint>` removes a target and its saved token. A lease still held on that
 host ends there at its time limit; `tapdance device release` in that session drops the record on this
-machine (the release cannot reach the host any more). The host revokes this machine with
-`tapdance worker guard revoke <label>`.
+machine (the release cannot reach the host any more). The host revokes this machine's pairing with
+`tapdance worker guard revoke <id>` (`tapdance worker guard tokens` lists the ids and labels).
+
+When the pairing token expires or is revoked, calls fail with `AUTH_FAILED`. The host's owner issues a
+new one (`tapdance host up --label <name> --repair`), and you run `tapdance connect` again with the new
+token file.
 
 ## External tools
 
@@ -745,7 +852,7 @@ Runs the MCP server. stdio by default. `--http` serves Streamable HTTP on `--hos
 otherwise a random token printed once on stderr. Global `--config` and `--session` apply to stdio. See
 [mcp.md](mcp.md).
 
-## Feedback
+## Reporting
 
 ### `report`
 
@@ -789,13 +896,13 @@ From `packages/core/src/errors.ts`:
 | 4 | `PROVIDER_UNREACHABLE`, `PROVIDER_UNAVAILABLE`, `WORKER_OFFLINE` | Worker or gateway not answering, a missing capability or tool, the worker holding the device is offline. |
 | 5 | `AUTH_FAILED`, `FORBIDDEN` | Missing, revoked or wrong token; an action this caller may not do. |
 | 6 | `NO_CAPACITY`, `DEVICE_UNAVAILABLE` | No free device, unknown model, missing runtime or image. |
-| 7 | `DEVICE_ERROR`, `ELEMENT_NOT_FOUND`, `APP_NOT_INSTALLED` | The device command failed; the target element is not on screen. (`APP_NOT_INSTALLED` is defined but not raised by the current provider.) |
+| 7 | `DEVICE_ERROR`, `ELEMENT_NOT_FOUND`, `APP_NOT_INSTALLED` | The device command failed; the target element is not on screen; the app is not installed (or, on iOS, has no data container on the simulator). |
 | 8 | `NOT_SUPPORTED` | Not available in this setup (Tapdance Cloud, remote tool targets, AXe through a gateway). |
 | 9 | `TIMEOUT` | No device granted in time, another Tapdance process busy with the session. |
 | 10 | `HOST_CHECK_FAILED` | `doctor` found a failing check, or `worker check` found a KVM failure. (The code itself is defined; these commands set exit 10 directly.) |
 | 11 | `HUMAN_HELD` | A person is controlling the device in the viewer. Retry after `retryAfterMs`. |
-| 13 | `CANCELLED` | `device request-human` was cancelled (`--cancel` from another call, or Ctrl-C). |
 | 12 | `SCENARIO_FAILED`, `ASSERTION_FAILED` | `run`: the scenario ran and a step failed. (`ASSERTION_FAILED` appears on a failed expectation inside the report, not as a command error.) |
+| 13 | `CANCELLED` | `device request-human` was cancelled (`--cancel` from another call, or Ctrl-C). |
 
 Pass-through commands (`tool`, `asc`, `android`, `simlock`, `devices install`) exit with the wrapped
 program's exit code.
@@ -2310,9 +2417,10 @@ Worker, guard service, pairing, Tailscale and a self-test, step by step; prints
 a block to paste to the agent's machine
 
 Options:
-  --label <name>             name for the control machine's pairing (default:
-                             the pairing this host already has, if only one;
-                             else this machine's hostname)
+  --label <name>             name the pairing after the agent's machine that
+                             will use it, e.g. --label my-vps (default: the
+                             pairing this host already has, if only one; else
+                             this machine's hostname)
   --allow-admin-account      run the guard from an administrator account (not
                              recommended)
   --no-tailscale             do not expose the guard with `tailscale serve`; the
