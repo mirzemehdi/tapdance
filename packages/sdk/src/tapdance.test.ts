@@ -351,6 +351,65 @@ describe("keepalive", () => {
     expect(renews).toBeGreaterThan(1);
   });
 
+  /** MOCKED: a FakeProvider whose buildApp runs until `finish` is called. */
+  async function longBuild() {
+    const s = await setup();
+    await s.t.lease({ platform: "android" });
+    let finish: () => void = () => undefined;
+    let started = false;
+    s.provider.buildApp = async () => {
+      started = true;
+      await new Promise<void>((r) => (finish = r));
+      return { sha: "abc", seconds: 1, artifact: "app.apk", installed: true };
+    };
+    const other = await Tapdance.create({ cwd: s.cwd, env: { TAPDANCE_HOME: s.home }, session: { id: "s1", source: "test" }, provider: s.provider });
+    const ago = (ms: number) => s.t.store.update(s.t.sessionId, (r) => ({ ...r, lastUsedAt: new Date(Date.now() - ms).toISOString() }));
+    const run = async () => {
+      const build = s.t.buildApp({ repo: "o/r", ref: "main" });
+      while (!started) await new Promise((r) => setTimeout(r, 5));
+      return { build };
+    };
+    return { ...s, other, ago, run, finish: () => finish() };
+  }
+
+  it("MOCKED: no idle release while a long device call runs in this process", async () => {
+    const { t, provider, ago, run, finish } = await longBuild();
+    await ago(60 * 60_000);
+    const { build } = await run();
+    await ago(60 * 60_000);
+    expect(await renewIfDue(t, { idleMs: 1 })).not.toBe("released-idle");
+    expect(provider.active.size).toBe(1);
+    finish();
+    await expect(build).resolves.toMatchObject({ sha: "abc", reused: false });
+    expect(await renewIfDue(t, { idleMs: 30 * 60_000 })).not.toBe("released-idle");
+  });
+
+  it("MOCKED: a long device call counts as use for a keepalive in another process", async () => {
+    const { other, provider, ago, run, finish } = await longBuild();
+    await ago(20 * 60_000);
+    const { build } = await run();
+    // The call marked the lease used when it started, though the last call was 20 min ago.
+    expect(await renewIfDue(other, { idleMs: 10 * 60_000 })).not.toBe("released-idle");
+    expect(provider.active.size).toBe(1);
+    finish();
+    await build;
+  });
+
+  it("MOCKED: a long device call keeps marking the lease used while it runs", async () => {
+    const realSetTimeout = setTimeout;
+    const { t, other, provider, ago, run, finish } = await longBuild();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const { build } = await run();
+    await ago(40 * 60_000);
+    // Every third of the idle limit (30 min by default), at most every 5 min.
+    vi.advanceTimersByTime(5 * 60_000);
+    for (let i = 0; i < 200 && Date.parse((await t.current())!.lastUsedAt!) < Date.now() - 60_000; i++) await new Promise((r) => realSetTimeout(r, 5));
+    expect(await renewIfDue(other, { idleMs: 30 * 60_000 })).not.toBe("released-idle");
+    expect(provider.active.size).toBe(1);
+    finish();
+    await build;
+  });
+
   it("releases an idle lease", async () => {
     const { t, provider } = await setup();
     await t.lease({ platform: "android" });

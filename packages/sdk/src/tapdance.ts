@@ -213,6 +213,8 @@ export class Tapdance {
   readonly artifacts: LocalArtifactStore;
   private providerPromise: Promise<DeviceProvider> | undefined;
   private profileProviderInstance: DeviceProvider | undefined;
+  /** Device calls and lease tools this instance is running now. */
+  private inUse = 0;
 
   private constructor(
     readonly resolved: ResolvedConfig,
@@ -345,6 +347,7 @@ export class Tapdance {
   /** Runs a device action; a lost lease clears the session record so the next call says so plainly. */
   private async onDevice<T>(fn: (handle: LeaseHandle, provider: DeviceProvider, record: SessionRecord) => Promise<T>): Promise<T> {
     const { record, provider } = await this.active();
+    const done = await this.keepInUse(record.handle.leaseId, record.lastUsedAt ?? record.handle.createdAt);
     try {
       // The host's device daemon can miss one call (#67): the call never reached the device, so run it
       // once more after a short pause before failing the agent's step.
@@ -381,7 +384,36 @@ export class Tapdance {
         }
       }
       throw error;
+    } finally {
+      done();
     }
+  }
+
+  /** True while this instance runs a device call or a lease tool: the idle release must wait. */
+  get inUseNow(): boolean {
+    return this.inUse > 0;
+  }
+
+  /**
+   * Counts a long device call (a build, an install from CI, a recording, a tool run) as use while it
+   * runs: marks the lease used at the start when it was last used more than 30 s ago (or always, with
+   * no `lastUsedAt`), then again every third of the idle limit (at most 5 min), so a keepalive in
+   * another process does not idle-release it mid-call. Returns the function that ends it.
+   */
+  private async keepInUse(leaseId: string, lastUsedAt?: string): Promise<() => void> {
+    this.inUse++;
+    if (lastUsedAt === undefined || !(Date.now() - Date.parse(lastUsedAt) <= 30_000)) await this.touch(leaseId);
+    const idleMs = this.resolved.config.session.idleReleaseMinutes * 60_000;
+    const every = idleMs > 0 ? Math.max(10_000, Math.min(5 * 60_000, Math.floor(idleMs / 3))) : 5 * 60_000;
+    const timer = setInterval(() => void this.touch(leaseId), every);
+    timer.unref();
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      clearInterval(timer);
+      this.inUse--;
+    };
   }
 
   /** Marks the session's lease as used now, so the keepalive's idle release leaves it alone. */
@@ -988,12 +1020,7 @@ export class Tapdance {
     }
     const prefix = options.inherit ? undefined : await this.artifacts.allocate(this.session.id, "log", "run");
     // A tool driving the leased device is use: keep the idle release away while it runs.
-    let toucher: NodeJS.Timeout | undefined;
-    if (leaseInUse !== undefined) {
-      await this.touch(leaseInUse);
-      toucher = setInterval(() => void this.touch(leaseInUse), 5 * 60_000);
-      toucher.unref();
-    }
+    const done = leaseInUse !== undefined ? await this.keepInUse(leaseInUse) : undefined;
     const run = await runTool(spec, {
       args,
       ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -1005,9 +1032,7 @@ export class Tapdance {
       ...(prefix ? { outputPrefix: prefix.replace(/\.run$/, "") } : {}),
       ...(options.inherit ? { inherit: true } : {}),
       ...(cfg.paths[name] ? { executableOverride: cfg.paths[name] } : {}),
-    }).finally(() => {
-      if (toucher) clearInterval(toucher);
-    });
+    }).finally(() => done?.());
     if (leaseInUse !== undefined) await this.touch(leaseInUse);
     if (run.truncated && run.stdoutPath) {
       const artifact = await this.artifacts.record({ kind: "log", path: run.stdoutPath, sessionId: this.session.id, note: `${name} ${args.slice(0, 3).join(" ")} (full stdout)` });
