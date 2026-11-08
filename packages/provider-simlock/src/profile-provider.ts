@@ -211,6 +211,8 @@ export class ProfileProvider extends SimlockProvider {
       detached: true,
       stdio: "ignore",
     });
+    // A failed spawn emits "error" after spawn returns; without a listener it would crash the process.
+    child.on("error", () => undefined);
     child.unref();
     if (!child.pid) throw new TapdanceError("DEVICE_ERROR", "Could not start the emulator");
     const serial = `emulator-${port}`;

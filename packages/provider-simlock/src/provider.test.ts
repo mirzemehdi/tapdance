@@ -5,7 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import { TapdanceError } from "@tapdance/core";
 import {
   SimlockHttp,
-  decodeFrames,
   fromAgentDeviceError,
   isPrivateHost,
   parseExecStream,
@@ -16,8 +15,8 @@ import {
   validateAppPath,
 } from "./index.js";
 import { BACKEND_SYNTAX, CODE_MAP, readerHint } from "./agent-device-errors.js";
+import { WORKER_OFFLINE_HINT } from "./http.js";
 import { RAW_INPUT_APPS, SimlockProvider, actionResult, appInFront, bundleIdOf, describeBadHealth, editableFocus, focusedPackage, frontApp, iosAppPredicate, matchesTarget, parseSimctlApps, summarizeDiff, switchKnobPoint, toLogResult, triesNote, withoutFillTargetDoubt } from "./provider.js";
-import { encodeFrame } from "./stream-framing.js";
 
 describe("exec stream", () => {
   it("collects stdout, stderr and the exit code", () => {
@@ -27,6 +26,20 @@ describe("exec stream", () => {
 
   it("turns an error event into a TapdanceError", () => {
     expect(() => parseExecStream('event: error\ndata: {"code":"EXEC_TIMEOUT","message":"slow"}\n\n')).toThrow(/EXEC_TIMEOUT/);
+  });
+
+  it("reads Simlock 0.5's nested error event", () => {
+    const timeout = (() => {
+      try {
+        parseExecStream('event: error\ndata: {"error":{"code":"EXEC_TIMEOUT","message":"adb ran past 120 s"}}\n\n');
+      } catch (e) {
+        return e as TapdanceError;
+      }
+    })();
+    expect(timeout).toMatchObject({ code: "TIMEOUT", message: "EXEC_TIMEOUT: adb ran past 120 s" });
+    expect(() => parseExecStream('event: error\ndata: {"error":{"code":"WORKER_UNREACHABLE","message":"gone"}}\n\n')).toThrow(
+      expect.objectContaining({ code: "WORKER_OFFLINE", hint: WORKER_OFFLINE_HINT }),
+    );
   });
 
   it("refuses a stream with no exit", () => {
@@ -190,18 +203,6 @@ describe("app paths", () => {
     expect(() => validateAppPath(join(dir, "App.ipa"), "ios", false)).toThrow(/simulator \.app/);
     expect(validateAppPath(join(dir, "App.app"), "ios", false)).toBe(join(dir, "App.app"));
     expect(() => validateAppPath(join(dir, "app-debug.apk"), "ios", false)).toThrow(/not an iOS/);
-  });
-});
-
-describe("stream framing", () => {
-  it("splits whole frames and keeps the partial tail", () => {
-    const a = encodeFrame(0x05, new TextEncoder().encode('{"codec":"h264"}'));
-    const b = encodeFrame(0x02, new Uint8Array([1, 2, 3]));
-    const joined = new Uint8Array([...a, ...b.subarray(0, 4)]);
-    const { frames, rest } = decodeFrames(joined);
-    expect(frames).toHaveLength(1);
-    expect(frames[0]!.tag).toBe(0x05);
-    expect(rest).toHaveLength(4);
   });
 });
 
@@ -373,6 +374,61 @@ describe("Simlock HTTP client", () => {
     }) as typeof fetch);
     await expect(http.identity()).rejects.toMatchObject({ code: "PROVIDER_UNREACHABLE" });
   });
+
+  it("treats Simlock's transport 503s as a brief outage to retry (mocked transport)", async () => {
+    for (const code of ["DAEMON_STOPPING", "DAEMON_CONNECTION_LOST", "RELAY_TARGET_MISSING"]) {
+      const http = new SimlockHttp("http://x", "t", fake({ "/v1/status": () => new Response(JSON.stringify({ error: { code, message: "down" } }), { status: 503 }) }));
+      const error = await http.status().catch((e: unknown) => e as TapdanceError);
+      expect(error, code).toMatchObject({ code: "PROVIDER_UNREACHABLE", retryable: true, hint: expect.stringMatching(/Retry in a few seconds/) });
+    }
+  });
+
+  it("makes an error with Retry-After retryable whatever its code (mocked transport)", async () => {
+    const http = new SimlockHttp("http://x", "t", fake({
+      "/v1/status": () => new Response(JSON.stringify({ error: { code: "CAPABILITY_MISSING", message: "later" } }), { status: 503, headers: { "retry-after": "5" } }),
+    }));
+    await expect(http.status()).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE", retryable: true, retryAfterMs: 5000 });
+  });
+
+  /** A body that sends `first`, then fails with `error` (a time limit hit while the body streams in). */
+  const breaking = (first: string, error: unknown, init: ResponseInit = {}): Response =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(first));
+        },
+        pull(controller) {
+          controller.error(error);
+        },
+      }),
+      init,
+    );
+
+  it("reports a time limit hit while reading a body as TIMEOUT (mocked transport)", async () => {
+    const timeout = () => new DOMException("x", "TimeoutError");
+    const http = new SimlockHttp("http://x", "t", fake({
+      "/v1/leases/l1/exec": () => breaking("event: output\ndata: {}\n\n", timeout()),
+      "/v1/leases/l1/build": () => breaking('{"log":"cloning"}\n', timeout()),
+      "/v1/leases/l1/files": () => breaking("abc", timeout()),
+      "/v1/leases/l1/crashes/latest": () => breaking("Incident", timeout()),
+    }));
+    await expect(http.exec("l1", "adb", ["shell", "true"], 5_000)).rejects.toMatchObject({ code: "TIMEOUT", retryable: true, message: "The command did not finish within 5 s" });
+    const lines: string[] = [];
+    await expect(http.build("l1", {}, (l) => lines.push(l), 60_000)).rejects.toMatchObject({ code: "TIMEOUT", message: "The build did not finish within 60 s" });
+    expect(lines).toEqual(["cloning"]);
+    await expect(http.getFile("l1", { app: "x" })).rejects.toMatchObject({ code: "TIMEOUT" });
+    await expect(http.crash("l1", "latest")).rejects.toMatchObject({ code: "TIMEOUT" });
+  });
+
+  it("reports a dropped connection while reading a body as PROVIDER_UNREACHABLE (mocked transport)", async () => {
+    const http = new SimlockHttp("http://x", "t", fake({ "/v1/leases/l1/exec": () => breaking("event: output\ndata: {}\n\n", new TypeError("terminated")) }));
+    await expect(http.exec("l1", "adb", ["shell", "true"])).rejects.toMatchObject({ code: "PROVIDER_UNREACHABLE", retryable: true });
+  });
+
+  it("refuses a result stream line that is not JSON (mocked transport)", async () => {
+    const http = new SimlockHttp("http://x", "t", fake({ "/v1/leases/l1/build": () => new Response('{"log":"a"}\n<html>Bad Gateway</html>\n') }));
+    await expect(http.build("l1", {}, () => undefined)).rejects.toMatchObject({ code: "PROVIDER_UNREACHABLE", message: expect.stringMatching(/not JSON: <html>Bad Gateway/) });
+  });
 });
 
 describe("AXe backend", () => {
@@ -427,6 +483,20 @@ describe("AXe backend", () => {
   it("explains a missing AXe install", async () => {
     const { AxeBackend } = await import("./axe.js");
     await expect(new AxeBackend("/nonexistent/axe").describe("6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90")).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+  });
+
+  it("refuses to record with a missing AXe without crashing the process", async () => {
+    const { AxeBackend } = await import("./axe.js");
+    const uncaught = vi.fn();
+    process.on("uncaughtException", uncaught);
+    try {
+      expect(() => new AxeBackend("/nonexistent/axe").startRecording("6F1D2A8C-3B4E-4F7A-9C2D-8E5B1A7F3C90", "/tmp/td-never.mp4")).toThrow(TapdanceError);
+      // The spawn failure arrives as an "error" event after spawn returns.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(uncaught).not.toHaveBeenCalled();
+    } finally {
+      process.off("uncaughtException", uncaught);
+    }
   });
 });
 
@@ -961,20 +1031,18 @@ describe("iOS on a host that is not a Mac", () => {
 
 describe("Android install refusals", () => {
   it("says to uninstall when a build is signed with another key (CI debug keys differ per run)", async () => {
-    const { androidInstallHint, fromAgentDeviceError } = await import("./agent-device-errors.js");
+    const { fromAgentDeviceError } = await import("./agent-device-errors.js");
     const adb = "Failure [INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package com.measify.pianolune signatures do not match newer version; ignoring!]";
-    expect(androidInstallHint(adb)).toMatch(/Uninstall it first/);
-    expect(androidInstallHint("Success")).toBeUndefined();
     expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").hint).toMatch(/app uninstall/);
     expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: adb }, "install").details).toMatchObject({ reason: "INSTALL_SIGNATURE" });
   });
 
   it("names the real package, and only its reader's syntax, in a downgrade hint (#89)", async () => {
-    const { androidInstallHint, installRefusal, withInstallHintFor } = await import("./agent-device-errors.js");
+    const { installRefusal, installRefusalHint, withInstallHintFor } = await import("./agent-device-errors.js");
     const { TapdanceError } = await import("@tapdance/core");
     const adb = "adb: failed to install app.apk: Failure [INSTALL_FAILED_VERSION_DOWNGRADE: Downgrade detected: Update version code 2 is older than current 3]";
     expect(installRefusal(adb)).toBe("INSTALL_DOWNGRADE");
-    const both = androidInstallHint(adb, "com.measify.pianolune")!;
+    const both = installRefusalHint("INSTALL_DOWNGRADE", "com.measify.pianolune");
     expect(both).toContain('MCP uninstall_app {app_id: "com.measify.pianolune"}');
     expect(both).toContain("`tapdance app uninstall com.measify.pianolune`");
     expect(both).not.toContain("<appId>");
