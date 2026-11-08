@@ -350,7 +350,6 @@ export interface DeviceNotification {
   postedAt?: string;
 }
 
-/** Device-level operations beyond UI driving. Optional for providers; absent means NOT_SUPPORTED. */
 /** An app build on the device's host from a git repository (iOS: xcodebuild; Android: Gradle). */
 export interface AppBuildRequest {
   repo: string;
@@ -428,11 +427,15 @@ export interface TimedTap {
   toY?: number;
 }
 
+/** Device-level operations beyond UI driving. Optional for providers; absent means NOT_SUPPORTED. */
 export type DeviceOperation =
   | { kind: "uninstall"; appId: string }
   | { kind: "clear-app-data"; appId: string }
-  /** Android: taps (or holds) at set times, run as one script inside the emulator so the network adds no delay between them. */
-  /** `orientation` (iOS, landscape apps): which way the device is turned; default from the screen shape, landscape = landscape-left. */
+  /**
+   * Taps (or holds) at set times. Android: run as one script inside the emulator so the network adds
+   * no delay between them. `orientation` (iOS, landscape apps): which way the device is turned;
+   * default from the screen shape, landscape = landscape-left.
+   */
   | { kind: "tap-sequence"; steps: TimedTap[]; orientation?: "portrait" | "landscape-left" | "landscape-right" | "portrait-upside-down" }
   /** Read or write the device clipboard (paste flows, checking what "Copy link" copied). */
   | { kind: "clipboard"; action: "get" } | { kind: "clipboard"; action: "set"; text: string }

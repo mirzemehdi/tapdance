@@ -157,6 +157,8 @@ export const USER_ONLY_CONFIG_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["tools", "allowMutation"],
   ["ios", "axePath"],
   ["simlock", "profilePath"],
+  // Which interface `tapdance view` listens on: a repository must not open it to the network.
+  ["viewer", "host"],
 ];
 
 /** Removes the user-only keys from a project file's contents, returning what was there. */
@@ -166,7 +168,7 @@ function stripUserOnly(project: Record<string, unknown>): { kept: Record<string,
   for (const path of USER_ONLY_CONFIG_KEYS) {
     const [section, key] = path;
     const value = kept[section];
-    if (value === null || typeof value !== "object" || Array.isArray(value) || !(key in value)) continue;
+    if (value === null || typeof value !== "object" || Array.isArray(value) || !Object.hasOwn(value, key)) continue;
     const { [key]: dropped, ...rest } = value as Record<string, unknown>;
     kept[section] = rest;
     removed.push({ key: `${section}.${key}`, path, value: dropped });
@@ -210,6 +212,20 @@ export function findProjectConfig(cwd: string): string | undefined {
   }
 }
 
+/** Keys that name an object's prototype machinery: no config or credentials file has a reason to use them. */
+const RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** The dotted path of the first reserved key anywhere in a parsed JSON value, if there is one. */
+function reservedKeyPath(value: unknown, path: readonly string[] = []): string | undefined {
+  if (value === null || typeof value !== "object") return undefined;
+  for (const [key, child] of Object.entries(value)) {
+    if (RESERVED_KEYS.has(key)) return [...path, key].join(".");
+    const found = reservedKeyPath(child, [...path, key]);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 async function readJson(path: string): Promise<Record<string, unknown>> {
   let text: string;
   try {
@@ -217,23 +233,32 @@ async function readJson(path: string): Promise<Record<string, unknown>> {
   } catch (error) {
     throw new TapdanceError("CONFIG_INVALID", `Cannot read ${path}`, { cause: error });
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
+    parsed = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
       throw new Error("not a JSON object");
     }
-    return parsed as Record<string, unknown>;
   } catch (error) {
     throw new TapdanceError("CONFIG_INVALID", `${path} is not a JSON object: ${(error as Error).message}`, {
       hint: `Fix the file, or run \`tapdance init --force\` to rewrite it.`,
     });
   }
+  // JSON.parse keeps these as own keys; merged into an object they would set its prototype.
+  const reserved = reservedKeyPath(parsed);
+  if (reserved !== undefined) {
+    throw new TapdanceError("CONFIG_INVALID", `${path} uses the reserved key "${reserved}"`, {
+      hint: "Remove it: __proto__, constructor and prototype are not settings.",
+    });
+  }
+  return parsed as Record<string, unknown>;
 }
 
 function deepMerge(base: Record<string, unknown>, over: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { ...base };
   for (const [key, value] of Object.entries(over)) {
-    const current = out[key];
+    if (RESERVED_KEYS.has(key)) continue;
+    const current = Object.hasOwn(out, key) ? out[key] : undefined;
     if (
       value !== null &&
       typeof value === "object" &&
@@ -345,8 +370,9 @@ export async function loadConfig(
   if (existsSync(userPath)) {
     const user = await readJson(userPath);
     merged = deepMerge(merged, user);
-    if (user["endpoint"] !== undefined) endpointSource = "user";
-    userEndpoint = typeof user["endpoint"] === "string" ? user["endpoint"] : undefined;
+    const ownEndpoint = Object.hasOwn(user, "endpoint") ? user["endpoint"] : undefined;
+    if (ownEndpoint !== undefined) endpointSource = "user";
+    userEndpoint = typeof ownEndpoint === "string" ? ownEndpoint : undefined;
     sources.push(userPath);
   }
   const projectPath = options.configPath ?? env["TAPDANCE_CONFIG"] ?? findProjectConfig(cwd);
@@ -356,13 +382,13 @@ export async function loadConfig(
     }
     const { kept, removed } = stripUserOnly(await readJson(projectPath));
     ignored = removed;
-    if ("targets" in kept) {
+    if (Object.hasOwn(kept, "targets")) {
       delete kept["targets"];
       projectTargetsIgnored = projectPath;
     }
     merged = deepMerge(merged, kept);
     // Repeating the user's own endpoint does not make it the project's.
-    const projectEndpoint = kept["endpoint"];
+    const projectEndpoint = Object.hasOwn(kept, "endpoint") ? kept["endpoint"] : undefined;
     if (projectEndpoint !== undefined && (typeof projectEndpoint !== "string" || userEndpoint === undefined || urlOrigin(projectEndpoint) !== urlOrigin(userEndpoint))) {
       endpointSource = "project";
     }

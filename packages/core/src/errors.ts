@@ -97,10 +97,16 @@ const SECRET_PATTERNS: RegExp[] = [
   // GitHub tokens (`host gh-login` puts one on the host): classic, OAuth, app and fine-grained.
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
   /(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,
+  // A Basic credential in an Authorization header; a bare `Basic …` is checked in redactBasic.
+  /(\bAuthorization"?\s*[:=]\s*"?Basic\s+)[A-Za-z0-9+/=]{4,}/gi,
+  // A password in a URL's userinfo (`https://user:secret@host`); `git@github.com:` and `user@host` have no scheme.
+  /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s:@/]+:)(?!\[REDACTED\])[^\s@/]+(?=@)/g,
+  // A token as a URL's whole userinfo (`https://<token>@host`): long, and with a digit, unlike a user name.
+  /(\b[A-Za-z][A-Za-z0-9+.-]*:\/\/)(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]{20,}(?=@)/g,
   /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
   /(#k=)[A-Za-z0-9_-]{16,}/g,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
-  /("?(?:token|secret|daemonAuthToken|authorization|password|api[_-]?key|private[_-]?key)"?\s*[:=]\s*"?)(?!Bearer\b|\[REDACTED\])[^"\s,}]{6,}/gi,
+  /("?(?:token|secret|daemonAuthToken|authorization|password|api[_-]?key|private[_-]?key)"?\s*[:=]\s*"?)(?!Bearer\b|Basic\b|\[REDACTED\])[^"\s,}]{6,}/gi,
   // Environment-style names such as ASC_PRIVATE_KEY_B64=…; case-sensitive so a bare `key=` is left alone.
   /(\b[A-Z][A-Z0-9_]*KEY(?:_B64)?"?\s*[:=]\s*"?)(?!\[REDACTED\])[^"\s,}]{6,}/g,
 ];
@@ -130,6 +136,19 @@ function redactOrphanPemTails(text: string): string {
   return out + text.slice(from);
 }
 
+const BASIC = /\b(Basic\s+)([A-Za-z0-9+/]{8,}={0,2})(?![A-Za-z0-9+/=])/gi;
+
+/**
+ * `Basic <base64>` outside a header: redacted only when the word after it looks like base64 (a
+ * length that is a multiple of 4, and a digit, `+`, `/`, `=` or an inner capital), so prose such as
+ * "Basic configuration" is left alone.
+ */
+function redactBasic(text: string): string {
+  return text.replace(BASIC, (match, prefix: string, value: string) =>
+    value.length % 4 === 0 && (/[0-9+/=]/.test(value) || (/[a-z]/.test(value) && /[A-Z]/.test(value.slice(1)))) ? `${prefix}[REDACTED]` : match,
+  );
+}
+
 export function redactSecrets(text: string): string {
   let out = text;
   for (const pattern of SECRET_PATTERNS) {
@@ -137,10 +156,22 @@ export function redactSecrets(text: string): string {
       typeof prefix === "string" && match.startsWith(prefix) ? `${prefix}[REDACTED]` : "[REDACTED]",
     );
   }
-  return redactOrphanPemTails(out);
+  return redactOrphanPemTails(redactBasic(out));
 }
 
 const SECRET_KEYS = /^(token|secret|daemonAuthToken|authorization|password|operatorToken|joinToken|apiKey|privateKey|joinUrl)$/i;
+/**
+ * The per-origin token map in credentials.json (`tokens: { origin: token }`): every value is
+ * redacted and the origins stay readable. An array under `tokens` (the guard's token list, which
+ * holds no secrets) is redacted like any other value.
+ */
+const TOKEN_MAP_KEY = /^tokens$/i;
+
+function redactTokenMap(map: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [origin, item] of Object.entries(map)) out[origin] = item === undefined || item === null ? item : "[REDACTED]";
+  return out;
+}
 
 export function redactObject<T>(value: T): T {
   if (typeof value === "string") return redactSecrets(value) as T;
@@ -148,7 +179,9 @@ export function redactObject<T>(value: T): T {
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = SECRET_KEYS.test(key) && item !== undefined && item !== null ? "[REDACTED]" : redactObject(item);
+      if (TOKEN_MAP_KEY.test(key) && item !== undefined && item !== null && !Array.isArray(item)) {
+        out[key] = typeof item === "object" ? redactTokenMap(item as Record<string, unknown>) : "[REDACTED]";
+      } else out[key] = SECRET_KEYS.test(key) && item !== undefined && item !== null ? "[REDACTED]" : redactObject(item);
     }
     return out as T;
   }

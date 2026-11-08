@@ -48,7 +48,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createProvider } from "./provider-factory.js";
-import { RoutingProvider } from "./routing-provider.js";
+import { RoutingProvider, removedTargetOf } from "./routing-provider.js";
 
 export interface TapdanceOptions {
   cwd?: string;
@@ -213,6 +213,8 @@ export class Tapdance {
   readonly artifacts: LocalArtifactStore;
   private providerPromise: Promise<DeviceProvider> | undefined;
   private profileProviderInstance: DeviceProvider | undefined;
+  /** Device calls and lease tools this instance is running now. */
+  private inUse = 0;
 
   private constructor(
     readonly resolved: ResolvedConfig,
@@ -345,6 +347,7 @@ export class Tapdance {
   /** Runs a device action; a lost lease clears the session record so the next call says so plainly. */
   private async onDevice<T>(fn: (handle: LeaseHandle, provider: DeviceProvider, record: SessionRecord) => Promise<T>): Promise<T> {
     const { record, provider } = await this.active();
+    const done = await this.keepInUse(record.handle.leaseId, record.lastUsedAt ?? record.handle.createdAt);
     try {
       // The host's device daemon can miss one call (#67): the call never reached the device, so run it
       // once more after a short pause before failing the agent's step.
@@ -381,7 +384,36 @@ export class Tapdance {
         }
       }
       throw error;
+    } finally {
+      done();
     }
+  }
+
+  /** True while this instance runs a device call or a lease tool: the idle release must wait. */
+  get inUseNow(): boolean {
+    return this.inUse > 0;
+  }
+
+  /**
+   * Counts a long device call (a build, an install from CI, a recording, a tool run) as use while it
+   * runs: marks the lease used at the start when it was last used more than 30 s ago (or always, with
+   * no `lastUsedAt`), then again every third of the idle limit (at most 5 min), so a keepalive in
+   * another process does not idle-release it mid-call. Returns the function that ends it.
+   */
+  private async keepInUse(leaseId: string, lastUsedAt?: string): Promise<() => void> {
+    this.inUse++;
+    if (lastUsedAt === undefined || !(Date.now() - Date.parse(lastUsedAt) <= 30_000)) await this.touch(leaseId);
+    const idleMs = this.resolved.config.session.idleReleaseMinutes * 60_000;
+    const every = idleMs > 0 ? Math.max(10_000, Math.min(5 * 60_000, Math.floor(idleMs / 3))) : 5 * 60_000;
+    const timer = setInterval(() => void this.touch(leaseId), every);
+    timer.unref();
+    let ended = false;
+    return () => {
+      if (ended) return;
+      ended = true;
+      clearInterval(timer);
+      this.inUse--;
+    };
   }
 
   /** Marks the session's lease as used now, so the keepalive's idle release leaves it alone. */
@@ -429,7 +461,19 @@ export class Tapdance {
     return this.store.withLock(this.session.id, async () => {
       const existing = await this.store.get(this.session.id);
       if (existing !== undefined) {
-        const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch(() => undefined);
+        let removedTarget: string | undefined;
+        const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch((error: unknown) => {
+          removedTarget = removedTargetOf(error);
+          return undefined;
+        });
+        // Its host is no longer a connect target: nothing here can use the lease or end it, so it is
+        // neither reused nor silently replaced.
+        if (removedTarget !== undefined) {
+          throw new TapdanceError("LEASE_ALREADY_HELD", `This session's lease on ${existing.handle.model} is on ${removedTarget}, which is not a connect target any more`, {
+            hint: `Run \`tapdance device release\` (MCP: release_device) to forget it (that host frees the device when its time limit runs out), then lease again; or connect the host again (\`tapdance connect ${removedTarget}\`) to keep using it.`,
+            details: { orphaned: removedTarget, leaseId: existing.handle.leaseId, expiresAt: existing.handle.expiresAt },
+          });
+        }
         if (status?.state === "active" || status?.state === "unknown" || status === undefined) {
           // A lease from another target than the one asked for is not "the same device" (review).
           const sameTarget = !options.target || options.target === existing.handle.location.target || options.target === existing.handle.location.endpoint;
@@ -530,7 +574,7 @@ export class Tapdance {
    * Releases this session's lease. Only ever this session's: there is no id to pass. With
    * `onlyOwnedBy`, releases only a lease that process created (the MCP server's shutdown uses it).
    */
-  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; unreachable?: boolean; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
+  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; unreachable?: boolean; orphaned?: string; message?: string; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
     const record = await this.store.get(this.session.id);
     if (record === undefined) return { released: false };
     if (options.onlyOwnedBy && (record.owner?.kind !== options.onlyOwnedBy.kind || record.owner.pid !== options.onlyOwnedBy.pid)) {
@@ -549,7 +593,11 @@ export class Tapdance {
         this.progress(`Could not stop the recording before release: ${(error as Error).message}`);
       }
     }
-    const result: { released: boolean; unreachable?: boolean } = await provider.release(record.handle).catch(() => ({ released: false }));
+    let orphaned: string | undefined;
+    const result: { released: boolean; unreachable?: boolean } = await provider.release(record.handle).catch((error: unknown) => {
+      orphaned = removedTargetOf(error);
+      return { released: false };
+    });
     // An unreachable worker still holds the lease: keep the record so release can be run again.
     if (!result.unreachable) {
       await this.store.delete(this.session.id, record.handle.leaseId);
@@ -565,6 +613,13 @@ export class Tapdance {
     return {
       released: result.released,
       ...(result.unreachable ? { unreachable: true } : {}),
+      // Forgotten here, but not ended: the removed target's host keeps the device until the time limit.
+      ...(orphaned !== undefined
+        ? {
+            orphaned,
+            message: `${orphaned} is not a connect target any more, so the lease was not released there: this session forgot it, and that host keeps ${record.handle.model} until the lease's time limit (${record.handle.expiresAt}).`,
+          }
+        : {}),
       device: summarize(record, { state: "ended", handle: record.handle }),
       ...(artifacts.length > 0 ? { artifacts } : {}),
     };
@@ -988,12 +1043,7 @@ export class Tapdance {
     }
     const prefix = options.inherit ? undefined : await this.artifacts.allocate(this.session.id, "log", "run");
     // A tool driving the leased device is use: keep the idle release away while it runs.
-    let toucher: NodeJS.Timeout | undefined;
-    if (leaseInUse !== undefined) {
-      await this.touch(leaseInUse);
-      toucher = setInterval(() => void this.touch(leaseInUse), 5 * 60_000);
-      toucher.unref();
-    }
+    const done = leaseInUse !== undefined ? await this.keepInUse(leaseInUse) : undefined;
     const run = await runTool(spec, {
       args,
       ...(options.cwd ? { cwd: options.cwd } : {}),
@@ -1005,9 +1055,7 @@ export class Tapdance {
       ...(prefix ? { outputPrefix: prefix.replace(/\.run$/, "") } : {}),
       ...(options.inherit ? { inherit: true } : {}),
       ...(cfg.paths[name] ? { executableOverride: cfg.paths[name] } : {}),
-    }).finally(() => {
-      if (toucher) clearInterval(toucher);
-    });
+    }).finally(() => done?.());
     if (leaseInUse !== undefined) await this.touch(leaseInUse);
     if (run.truncated && run.stdoutPath) {
       const artifact = await this.artifacts.record({ kind: "log", path: run.stdoutPath, sessionId: this.session.id, note: `${name} ${args.slice(0, 3).join(" ")} (full stdout)` });
