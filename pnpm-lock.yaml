@@ -74,9 +74,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.32.2
         version: 1.32.2(zod@4.6.7)
-      '@tapdance/core':
-        specifier: workspace:*
-        version: link:../core
       '@tapdance/sdk':
         specifier: workspace:*
         version: link:../sdk
