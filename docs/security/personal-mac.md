@@ -130,7 +130,7 @@ Tokens also expire on their own: 7 days by default. Set `limits.tokenDays` (1–
   inspection, install, interaction, screenshots, recording, logs, `settings`, `perf`, `notifications`.
   `settings` passes only device settings (never the macOS host permissions `accessibility`,
   `screen-recording`, `input-monitoring`); `perf` only `perf frames` and `perf memory sample` (no
-  xctrace/simpleperf profiles, no output paths); `push` only an app id and an inline JSON payload.
+  xctrace/simpleperf profiles); `screenshot` and `record` outputs only as agent-device's own `/tmp/agent-device-…` files, and no option that names a host file on any command; `push` only an app id and an inline JSON payload.
   Commands that run code, touch files on the Mac or capture the host — `batch`, `replay`, `test`,
   `install-from-source`, `metro`, `trace`, `debug`, `doctor`, `audio` (it records the Mac's own audio
   with Screen Recording permission) and anything unknown — are refused.
