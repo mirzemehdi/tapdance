@@ -5,7 +5,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import { Tapdance, processSessionIdentity, renewIfDue, type TapdanceOptions } from "@tapdance/sdk";
+import { Tapdance, TapdanceError, processSessionIdentity, renewIfDue, type TapdanceOptions } from "@tapdance/sdk";
 import { SERVER_INSTRUCTIONS, TOOLS, errorResult, type ToolExtra } from "./tools.js";
 
 export const SERVER_NAME = "tapdance";
@@ -219,7 +219,16 @@ export async function runHttp(options: HttpServerOptions): Promise<{ server: Ser
     }
   });
 
-  await new Promise<void>((resolve) => http.listen(options.port, options.host, resolve));
+  await new Promise<void>((resolve, reject) => {
+    http.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        reject(new TapdanceError("USAGE", `Port ${options.port} on ${options.host} is already in use`, { hint: "Stop whatever listens there, or pick another port with `tapdance mcp --http --port <port>`." }));
+      } else if (error.code === "EADDRNOTAVAIL" || error.code === "EACCES") {
+        reject(new TapdanceError("USAGE", `Cannot listen on ${options.host}:${options.port} (${error.code})`, { hint: "Use an address this machine has (127.0.0.1 by default) and a port above 1023." }));
+      } else reject(error);
+    });
+    http.listen(options.port, options.host, resolve);
+  });
   const address = http.address();
   const port = typeof address === "object" && address ? address.port : options.port;
   const url = `http://${options.host.includes(":") ? `[${options.host}]` : options.host}:${port}/mcp`;
