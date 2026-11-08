@@ -1,6 +1,6 @@
 {
   "name": "@tapdance/cli",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Let your agent put your app through its paces. CLI and MCP server for Android emulators and iOS simulators.",
   "license": "AGPL-3.0-only",
   "type": "module",

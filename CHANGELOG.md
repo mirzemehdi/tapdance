@@ -8,9 +8,16 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
-## [Unreleased]
+## [0.2.0] - 2026-11-08
+
+**Upgrade every machine together.** Tapdance 0.2.0 runs Simlock 0.6.0, which cannot talk to the
+Simlock 0.5.0 in Tapdance 0.1.x. Update the agent's machine and every host (`npm install -g
+tapdance-cli@latest`, then `tapdance worker restart` or `tapdance host up` on each host). Not yet run
+on a real device yet: the run is tracked in #153.
 
 ### Changed
+
+- The README, local guide and gateway guide say Tapdance is on npm.
 
 - Simlock 0.6.0 (was 0.5.0) and agent-device 0.21.36 (was 0.21.35), exact pins (#143). Unit-tested
   only: no real device has run on these versions yet. Simlock 0.6.0 makes every emulator and
