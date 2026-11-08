@@ -66,6 +66,37 @@ describe("RoutingProvider (mocked hosts)", () => {
     expect(android.location).toMatchObject({ endpoint: N2, target: "n2" });
   });
 
+  // Review: a full host does not take a lease another host has room for; a 0 limit is not a candidate.
+  it("prefers a target with a free slot, and skips one with no capacity for the platform", async () => {
+    const withCapacity = (t: ReturnType<typeof target>, cap: { limit: number; leased: number; warm?: number }) => {
+      const inner = t.fake.inventory.bind(t.fake);
+      t.fake.inventory = async () => ({ ...(await inner()), capacity: [{ platform: "android", running: cap.leased, limit: cap.limit, warm: cap.warm ?? 0, leased: cap.leased }] });
+      t.probe = () => t.fake.inventory();
+      return t;
+    };
+    const full = withCapacity(target("full", "https://full.example.com", ["android"]), { limit: 1, leased: 1 });
+    const free = withCapacity(target("free", "https://free.example.com", ["android"]), { limit: 2, leased: 0 });
+    expect((await new RoutingProvider([full, free]).lease("s1", lease("android"))).location).toMatchObject({ target: "free" });
+    // Every slot taken everywhere: the first in order still takes it (and queues there).
+    const full2 = withCapacity(target("full2", "https://full2.example.com", ["android"]), { limit: 1, leased: 1 });
+    expect((await new RoutingProvider([full, full2]).lease("s2", lease("android"))).location).toMatchObject({ target: "full" });
+    const none = withCapacity(target("none", "https://none.example.com", ["android"]), { limit: 0, leased: 0 });
+    expect((await new RoutingProvider([none, free]).lease("s3", lease("android"))).location).toMatchObject({ target: "free" });
+  });
+
+  // #138: a Linux host's iOS limit is not room for iOS.
+  it("adds only hosts that can run a platform to its capacity", async () => {
+    const n2 = target("n2", N2, ["android"]);
+    const inner = n2.fake.inventory.bind(n2.fake);
+    n2.fake.inventory = async () => {
+      const inv = await inner();
+      return { ...inv, capacity: [...inv.capacity, { platform: "ios", running: 0, limit: 2, warm: 0, leased: 0, served: false }] };
+    };
+    n2.probe = () => n2.fake.inventory();
+    const inv = await new RoutingProvider([n2, target("mac", MAC, ["ios"])]).inventory();
+    expect(inv.capacity.find((c) => c.platform === "ios")).toMatchObject({ limit: 1, served: true });
+  });
+
   it("prefers config order when several targets serve the platform, and --target overrides it", async () => {
     const a = target("a", "https://a.example.com", ["android"]);
     const b = target("b", "https://b.example.com", ["android"]);
@@ -103,6 +134,9 @@ describe("RoutingProvider (mocked hosts)", () => {
     // A lease from a host that is no longer a target is refused, not sent elsewhere.
     const stray = { ...handle, location: { ...handle.location, endpoint: "https://gone.example.com" }, providerData: { baseUrl: "https://gone.example.com" } };
     expect(() => router.targetFor(stray)).toThrow(/not a connect target any more/);
+    // Review: it rejects rather than throws, so `release(...).catch(...)` in the SDK drops the record.
+    await expect(router.release(stray).catch(() => "caught")).resolves.toBe("caught");
+    await expect(router.status(stray).catch(() => "caught")).resolves.toBe("caught");
   });
 
   it("fails fast and names the host when the platform's only host is down, and the other still leases", async () => {

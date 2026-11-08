@@ -42,7 +42,10 @@ export function upsertTarget(
   const target: TargetConfig = {
     name: add.name ?? before?.name ?? targetNameFor(add.endpoint, others),
     endpoint: add.endpoint,
-    ...((add.platforms ?? before?.platforms) ? { platforms: add.platforms ?? before!.platforms! } : {}),
+    ...(() => {
+      const platforms = add.platforms !== undefined ? add.platforms : before?.platforms;
+      return platforms && platforms.length > 0 ? { platforms } : {};
+    })(),
   };
   if (index >= 0) targets[index] = target;
   else targets.push(target);
@@ -66,12 +69,15 @@ export function removeTarget(config: UserConfig, which: string): { config: UserC
 }
 
 /** `--platform android --platform ios` or `--platform android,ios`. */
+/** `--platform` values; `any` alone gives [], which clears a target's earlier limit (review). */
 export function parsePlatforms(values: string[] | undefined): Platform[] | undefined {
   if (!values || values.length === 0) return undefined;
+  const all = values.flatMap((v) => v.split(",")).map((v) => v.trim().toLowerCase());
+  if (all.length === 1 && all[0] === "any") return [];
   const out = new Set<Platform>();
-  for (const value of values.flatMap((v) => v.split(","))) {
-    const p = value.trim().toLowerCase();
-    if (p !== "android" && p !== "ios") throw new TapdanceError("USAGE", `--platform must be android or ios, got "${value}"`);
+  for (const value of all) {
+    const p = value;
+    if (p !== "android" && p !== "ios") throw new TapdanceError("USAGE", `--platform must be android, ios or any, got "${value}"`);
     out.add(p);
   }
   return [...out];

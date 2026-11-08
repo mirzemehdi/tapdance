@@ -179,7 +179,7 @@ tapdance device done
 | `--image-tag <tag>` | Android system image tag, e.g. `google_apis_playstore`. Leave it out for normal testing: on a host that has both a Play image and `google_apis` (a host set up before `host-setup.sh` installed `google_apis`, then set up again), Tapdance asks for `google_apis` and says so; on a host with one kind, Simlock picks it. With a tag (given or chosen) and no `--os`, Tapdance asks for the host's default API level (the one `tapdance devices` shows as default) when that tag is installed there, instead of the newest level that has it. The "a warm spare is ready" line counts only a spare of the requested tag. |
 | `--physical` | Lease an enrolled physical device instead. Untested. |
 | `--profile <name>` | Boot a [device profile](#device-profiles) from this machine instead of a Simlock device. |
-| `--target <name>` | With several [connect targets](#connect): lease from this one (name or endpoint). Without it the lease goes to the first target, in `connect --list` order, that answers and serves the platform (and the `--device` model and plain `--os` version, when given). A target that does not answer within 5 s is skipped for another host of the same platform; when none is left, the lease fails at once with `PROVIDER_UNREACHABLE` (retryable) naming that host and the targets that are up. Another platform is never leased instead. `USAGE` when no targets are configured. |
+| `--target <name>` | With several [connect targets](#connect): lease from this one (name or endpoint). Without it the lease goes to the first target, in `connect --list` order, that answers, serves the platform (and the `--device` model and plain `--os` version, when given) and has a free slot or a warm spare; when every such target is full, to the first of them, where the request waits. A target with no capacity for the platform is skipped. A target that does not answer within 5 s is skipped for another host of the same platform; when none is left, the lease fails at once with `PROVIDER_UNREACHABLE` (retryable) naming that host and the targets that are up. Another platform is never leased instead. `USAGE` when no targets are configured. |
 | `--ttl <minutes>` | Lease TTL, 1–240. Default `session.defaultTtlMinutes` (30). |
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
 | `--settle <seconds>` | Android emulators: how long to check the guest's CPU after it has booted with no dialog in front, 0–300. Default `session.settleSeconds` (15). `0` skips the CPU check. |
@@ -694,7 +694,9 @@ removed. When the endpoint is already a different target, `connect` refuses and 
 is; the next `connect` turns it into the first target and moves its token to the per-origin map.
 
 `tapdance disconnect <name|endpoint>` removes a target and its saved token. A lease still held on that
-host runs out there on its own; the host revokes this machine with `tapdance worker guard revoke <label>`.
+host ends there at its time limit; `tapdance device release` in that session drops the record on this
+machine (the release cannot reach the host any more). The host revokes this machine with
+`tapdance worker guard revoke <label>`.
 
 ## External tools
 
@@ -2662,7 +2664,8 @@ Options:
   --name <name>             the target's name for `--target` and `tapdance
                             disconnect` (default: the host's first DNS label)
   --platform <platform...>  route only these platforms to this host (android,
-                            ios); default: whatever it serves
+                            ios; `any` clears an earlier limit); default:
+                            whatever it serves
   --list                    list the connect targets and whether a token is
                             saved for each; changes nothing
   -h, --help                display help for command

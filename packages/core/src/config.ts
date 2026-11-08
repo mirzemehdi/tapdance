@@ -1,4 +1,5 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -441,8 +442,18 @@ export function targetNameFor(endpoint: string, taken: readonly string[] = []): 
 
 export async function writeJsonFile(path: string, data: unknown, mode?: number): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, mode === undefined ? {} : { mode });
-  if (mode !== undefined) await chmod(path, mode);
+  // A temp file renamed into place: a process reading the file meanwhile (an MCP server starting, a
+  // second `connect`) sees the old or the new content, never a half-written one, and a token file is
+  // mode 600 from its first byte (review).
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: mode ?? 0o644 });
+    if (mode !== undefined) await chmod(tmp, mode);
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 /**

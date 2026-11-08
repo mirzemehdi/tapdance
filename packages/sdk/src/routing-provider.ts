@@ -144,7 +144,9 @@ export class RoutingProvider implements DeviceProvider {
             : await target.provider.doctor(options).catch((error: unknown): DoctorCheck[] => [{ id: "provider", title: "Device provider", status: "fail", detail: reasonOf(error) }]);
         const usable = !("error" in probe) && !checks.some((c) => c.status === "fail" && (c.id === "simlock.reachable" || c.id === "simlock.auth" || c.id === "provider"));
         const served = "inventory" in probe ? servedPlatforms(probe.inventory).filter((p) => !target.platforms || target.platforms.includes(p)) : [];
-        return { target, checks, usable, served, error: "error" in probe ? probe.error : undefined };
+        // A host that answers but refuses this machine's token is a setup error, not a host that is down.
+        const refused = checks.some((c) => c.status === "fail" && c.id === "simlock.auth");
+        return { target, checks, usable, served, refused, error: "error" in probe ? probe.error : undefined };
       }),
     );
     const anyUsable = sections.some((s) => s.usable);
@@ -169,13 +171,14 @@ export class RoutingProvider implements DeviceProvider {
       checks.push({
         id: `target.${s.target.name}`,
         title: `Target ${s.target.name}`,
-        status: s.usable ? "pass" : anyUsable ? "warn" : "fail",
+        status: s.usable ? "pass" : anyUsable && !s.refused ? "warn" : "fail",
         detail: `${s.target.endpoint}${s.target.platforms ? ` (only ${s.target.platforms.join(", ")})` : ""}: ${s.usable ? `up, serves ${s.served.length ? s.served.join(", ") : "nothing yet"}` : `down${s.error ? ` (${s.error})` : ""}`}`,
         target: s.target.name,
       });
       for (const c of s.checks) {
         // A host that is down is a warning while another one works: the setup is still usable.
-        let status = c.status === "fail" && !s.usable && anyUsable ? "warn" : c.status;
+        // A refused token stays a failure: `connect` with a wrong token must not report success (review).
+        let status = c.status === "fail" && !s.usable && anyUsable && c.id !== "simlock.auth" ? "warn" : c.status;
         let detail = c.detail;
         // A platform this host does not run is no problem when another target serves it.
         const platform = /^simlock\.capacity\.(android|ios)$/.exec(c.id)?.[1] as Platform | undefined;
@@ -220,8 +223,10 @@ export class RoutingProvider implements DeviceProvider {
     const capacity = (["android", "ios"] as const)
       .filter((p) => !filter.platform || p === filter.platform)
       .map((platform) => {
-        const rows = up.flatMap((h) => h.inventory!.capacity.filter((c) => c.platform === platform));
-        return rows.reduce((a, c) => ({ platform, running: a.running + c.running, limit: a.limit + c.limit, warm: (a.warm ?? 0) + (c.warm ?? 0), leased: a.leased + c.leased }), { platform, running: 0, limit: 0, warm: 0, leased: 0 });
+        // Only hosts that can run the platform add room for it (#138).
+        const rows = up.flatMap((h) => h.inventory!.capacity.filter((c) => c.platform === platform && c.served !== false));
+        const sum = rows.reduce((a, c) => ({ platform, running: a.running + c.running, limit: a.limit + c.limit, warm: (a.warm ?? 0) + (c.warm ?? 0), leased: a.leased + c.leased }), { platform, running: 0, limit: 0, warm: 0, leased: 0 });
+        return { ...sum, served: rows.length > 0 };
       });
     return {
       catalog: up.flatMap((h) => h.inventory!.catalog),
@@ -266,18 +271,32 @@ export class RoutingProvider implements DeviceProvider {
 
     const down: Array<{ target: RouteTarget; reason: string }> = [];
     const skipped: string[] = [];
-    for (const target of candidates) {
-      let inventory: DeviceInventory;
-      try {
-        inventory = await target.probe(TARGET_PROBE_MS);
-      } catch (error) {
-        down.push({ target, reason: reasonOf(error) });
-        options?.onProgress?.(`${target.name} (${target.endpoint}) does not answer: ${reasonOf(error)}`);
+    // Ask every candidate at once, then pick in config order: the first that can run the request and
+    // has a free slot (or a warm spare), else the first that can run it at all, where it queues (review).
+    const probes = await Promise.all(
+      candidates.map(async (target) => {
+        try {
+          return { target, inventory: await target.probe(TARGET_PROBE_MS) };
+        } catch (error) {
+          return { target, error };
+        }
+      }),
+    );
+    const fit: RouteTarget[] = [];
+    const roomy: RouteTarget[] = [];
+    for (const probe of probes) {
+      const { target } = probe;
+      if (!("inventory" in probe) || probe.inventory === undefined) {
+        const reason = reasonOf(probe.error);
+        down.push({ target, reason });
+        options?.onProgress?.(`${target.name} (${target.endpoint}) does not answer: ${reason}`);
         continue;
       }
+      const inventory = probe.inventory;
       const entries = inventory.catalog.filter((c) => c.platform === request.platform && (c.models.length > 0 || c.osVersions.length > 0));
-      if (entries.length === 0) {
-        skipped.push(`${target.name} serves ${servedPlatforms(inventory).join(", ") || "nothing"}`);
+      const capacity = inventory.capacity.find((c) => c.platform === request.platform);
+      if (entries.length === 0 || capacity?.served === false || capacity?.limit === 0) {
+        skipped.push(capacity?.limit === 0 && entries.length > 0 ? `${target.name} has no ${request.platform} capacity` : `${target.name} serves ${servedPlatforms(inventory).join(", ") || "nothing"}`);
         continue;
       }
       const why = entries.map((e) => mismatch(e, request)).find((m) => m !== undefined);
@@ -285,9 +304,14 @@ export class RoutingProvider implements DeviceProvider {
         skipped.push(`${target.name} ${why}`);
         continue;
       }
-      if (down.length > 0) options?.onProgress?.(`Leasing ${request.platform} from ${target.name} instead`);
-      else options?.onProgress?.(`Target ${target.name} (${target.endpoint}) serves ${request.platform}`);
-      return this.stamp(await target.provider.lease(sessionId, rest, options), target);
+      fit.push(target);
+      if (capacity === undefined || capacity.leased < capacity.limit || capacity.warm > 0) roomy.push(target);
+    }
+    const chosen = roomy[0] ?? fit[0];
+    if (chosen !== undefined) {
+      if (down.length > 0) options?.onProgress?.(`Leasing ${request.platform} from ${chosen.name} instead`);
+      else options?.onProgress?.(`Target ${chosen.name} (${chosen.endpoint}) serves ${request.platform}${roomy.length === 0 ? " (every slot is taken: the request waits there)" : ""}`);
+      return this.stamp(await chosen.provider.lease(sessionId, rest, options), chosen);
     }
 
     if (down.length > 0) {
@@ -316,13 +340,15 @@ export class RoutingProvider implements DeviceProvider {
     return { ...handle, location: { ...handle.location, target: target.name } };
   }
 
-  status(handle: LeaseHandle) {
+  // Async so a lease whose target is gone rejects (callers `.catch` it) instead of throwing before a
+  // promise exists: `release` must still drop the session's record (review).
+  async status(handle: LeaseHandle) {
     return this.on(handle).status(handle);
   }
-  renew(handle: LeaseHandle, ttlMs?: number) {
+  async renew(handle: LeaseHandle, ttlMs?: number) {
     return this.on(handle).renew(handle, ttlMs);
   }
-  release(handle: LeaseHandle) {
+  async release(handle: LeaseHandle) {
     return this.on(handle).release(handle);
   }
 

@@ -414,7 +414,8 @@ export class SimlockProvider implements DeviceProvider {
       .map((platform) => {
         const c = status.capacity?.[platform];
         const held = status.leases.filter((l) => l.deviceId !== undefined && platformOf.get(l.deviceId) === platform).length;
-        return { platform, running: c?.running ?? 0, limit: c?.limit ?? 0, warm: c?.warm ?? 0, leased: held };
+        const served = !iosNeedsMac(platform, host?.os) && entries.some((e) => e.platform === platform && (e.models.length > 0 || e.osVersions.length > 0));
+        return { platform, running: c?.running ?? 0, limit: c?.limit ?? 0, warm: c?.warm ?? 0, leased: held, served };
       });
     const devices = status.devices
       .map((d) => {
