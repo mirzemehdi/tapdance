@@ -130,7 +130,7 @@ export function scopeRefusal(message: string, token: GuardToken | undefined, hos
 
 export async function startGuard(options: GuardOptions): Promise<{ server: Server; url: string; close: () => Promise<void> }> {
   const { upstream } = options;
-  const policy = options.policy;
+  /** The host owner's policy. Each request checks `scopedPolicy(hostPolicy, token)`, its token's view of it. */
   const hostPolicy = options.policy;
   const env = options.env ?? process.env;
   const doFetch = options.fetchImpl ?? fetch;
@@ -527,7 +527,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
       await decide("deny", { reason: "files route is for iOS simulators", leaseId });
       return send(res, 400, "NOT_SUPPORTED", "This route is for iOS simulators; Android files go through exec");
     }
-    const limit = policy.limits.maxUploadMB * 1024 * 1024;
+    const limit = hostPolicy.limits.maxUploadMB * 1024 * 1024;
     if (file.op === "get" && "area" in file) {
       const root = await filesRoot(leaseId);
       if (!root) return send(res, 404, "DEVICE_ERROR", "The Files app's local storage was not found on this simulator");
@@ -560,7 +560,7 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
     const body = await readBody(req, limit);
     if (body === undefined) {
       await decide("deny", { reason: "file too large", leaseId });
-      return send(res, 413, "TOO_LARGE", `Files are limited to ${policy.limits.maxUploadMB} MB on this worker`);
+      return send(res, 413, "TOO_LARGE", `Files are limited to ${hostPolicy.limits.maxUploadMB} MB on this worker`);
     }
     if (file.destination === "photos") {
       // Staged in the guard's own folder (mode 700) under a random name, handed to simctl, then deleted.
@@ -1132,13 +1132,13 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(policy.listen.port, policy.listen.host, resolve);
+    server.listen(hostPolicy.listen.port, hostPolicy.listen.host, resolve);
   });
   const address = server.address();
-  const port = typeof address === "object" && address ? address.port : policy.listen.port;
+  const port = typeof address === "object" && address ? address.port : hostPolicy.listen.port;
   return {
     server,
-    url: `http://${policy.listen.host}:${port}`,
+    url: `http://${hostPolicy.listen.host}:${port}`,
     close: () => new Promise<void>((resolve) => {
       if (stopTimer) clearInterval(stopTimer);
       wss.close();
