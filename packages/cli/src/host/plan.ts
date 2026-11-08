@@ -656,13 +656,13 @@ export function mcpSnippets(command: string[]): string {
   ].join("\n");
 }
 
-/** Finds an executable on a PATH string without running anything. */
 /** The tailscale CLI: on PATH, else (macOS) the app's or the open-source tailscaled's from MacPorts or Homebrew, which a non-interactive ssh session's PATH does not include. */
 export function findTailscale(pathEnv = process.env["PATH"] ?? "", exists: (p: string) => boolean = existsSync, platform: NodeJS.Platform = process.platform): string | undefined {
   const mac = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/local/bin/tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"];
   return findOnPath("tailscale", pathEnv, exists, platform) ?? (platform === "darwin" ? mac.find((p) => exists(p)) : undefined);
 }
 
+/** Finds an executable on a PATH string without running anything. */
 export function findOnPath(name: string, pathEnv: string, exists: (p: string) => boolean, platform: NodeJS.Platform = process.platform): string | undefined {
   const sep = platform === "win32" ? ";" : ":";
   const names = platform === "win32" ? [name, `${name}.cmd`, `${name}.exe`] : [name];

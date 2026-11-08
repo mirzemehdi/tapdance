@@ -54,8 +54,10 @@ export function buildProgram(): Command {
       };
       try {
         if (o.http) {
+          const port = Number(o.port);
+          if (!/^\d+$/.test(o.port) || port > 65535) throw new TapdanceError("USAGE", `--port must be an integer from 0 to 65535, not "${o.port}"`);
           const token = process.env["TAPDANCE_MCP_TOKEN"];
-          const { url, token: used } = await runHttp({ ...base, host: o.host, port: Number(o.port), ...(token ? { authToken: token } : {}) });
+          const { url, token: used } = await runHttp({ ...base, host: o.host, port, ...(token ? { authToken: token } : {}) });
           process.stderr.write(`tapdance MCP (Streamable HTTP) on ${url}\n`);
           if (!token) process.stderr.write(`Bearer token (set TAPDANCE_MCP_TOKEN to choose your own): ${used}\n`);
         } else {

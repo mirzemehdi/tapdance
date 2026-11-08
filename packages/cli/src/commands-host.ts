@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, hostname, platform as osPlatform, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -271,6 +272,22 @@ interface PausedState {
 }
 
 /** The pairing files `host up` wrote, with what the guard thinks of each token. */
+/**
+ * Writes a secret through a mode-600 temp file renamed into place: `writeFile`'s mode applies only
+ * when it creates the file, so writing over an existing 0644 file would leave the new secret readable.
+ */
+export async function writeSecretFile(path: string, text: string): Promise<void> {
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, text, { mode: 0o600, flag: "wx" });
+    await chmod(tmp, 0o600);
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
 async function pairings(): Promise<Array<{ label: string; path: string; state: "active" | "expired or revoked"; createdAt?: string; expiresAt?: string; scopes?: string[] }>> {
   const dir = guardDir();
   const names = await readdir(dir).catch(() => [] as string[]);
@@ -433,8 +450,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           }
           for (const t of active) await tokens.revoke(t.id);
           const { secret: issued, token } = await issuePairing(label, undefined, parseScopes(o.scope));
-          await writeFile(tokenPath, `${issued}\n`, { mode: 0o600 });
-          await chmod(tokenPath, 0o600);
+          await writeSecretFile(tokenPath, `${issued}\n`);
           out.progress(`Paired "${label}" (${token.id}), expires ${token.expiresAt}; token written to ${tokenPath}`);
           return issued;
         });
@@ -1325,7 +1341,7 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
           [
             `Removed target ${removed.name} (${removed.endpoint}) and its token.`,
             left.length ? `Targets left: ${left.map((t) => t.name).join(", ")}.` : dim("No targets left; add one with `tapdance connect <endpoint>`."),
-            dim(`A lease still held there ends at its time limit on that host; \`tapdance device release\` in its session drops the record here. The host can revoke this machine with \`tapdance worker guard revoke <label>\`.`),
+            dim(`A lease still held there ends at its time limit on that host; \`tapdance device release\` in its session drops the record here. The host can revoke this machine with \`tapdance worker guard revoke <id>\` (ids are listed by \`tapdance worker guard tokens\`).`),
           ].join("\n"),
         );
       } catch (error) {

@@ -260,6 +260,9 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
       const out = output(globals());
       try {
         const n = await new GuardTokens().revoke(id);
+        if (n === 0 && id !== "all") {
+          throw new TapdanceError("USAGE", `No active paired control machine with id ${id}`, { hint: "Revoke takes a token id (gt_…), not a label: list them with `tapdance worker guard tokens`." });
+        }
         out.result({ revoked: n }, () => `Revoked ${n} token(s); requests using them are refused from now on.`);
       } catch (error) {
         process.exitCode = out.error(error);
@@ -286,8 +289,10 @@ export function registerGuardCommands(worker: Command, globals: () => GlobalOpti
     .action(async (o: { lines: string }) => {
       const out = output(globals());
       try {
+        const count = Number(o.lines);
+        if (!/^\d+$/.test(o.lines) || count < 1 || count > 100_000) throw new TapdanceError("USAGE", `--lines must be an integer from 1 to 100000, not "${o.lines}"`);
         const file = join(guardDir(), "audit.log");
-        const lines = existsSync(file) ? (await readFile(file, "utf8")).trim().split("\n").slice(-Number(o.lines)) : [];
+        const lines = existsSync(file) ? (await readFile(file, "utf8")).trim().split("\n").slice(-count) : [];
         out.result({ entries: lines.map((l) => JSON.parse(l) as unknown) }, () => lines.join("\n") || "no entries");
       } catch (error) {
         process.exitCode = out.error(error);

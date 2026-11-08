@@ -1,4 +1,8 @@
+import { mkdtemp, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeSecretFile } from "../commands-host.js";
 import { TapdanceError, type DoctorCheck } from "@tapdance/sdk";
 import {
   assertHostPlatform,
@@ -459,5 +463,19 @@ describe("rendering", () => {
     const exists = (p: string) => p === "/b/tapdance";
     expect(findOnPath("tapdance", "/a:/b", exists, "linux")).toBe("/b/tapdance");
     expect(findOnPath("tapdance", "/a", exists, "linux")).toBeUndefined();
+  });
+});
+
+describe("pairing token file", () => {
+  // Review: writeFile's mode applies only to a new file, so an existing 0644 file stayed readable.
+  it("writeSecretFile leaves the file mode 600 even over an existing 0644 file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "td-secret-"));
+    const path = join(dir, "pairing.token");
+    await writeFile(path, "old\n", { mode: 0o644 });
+    expect((await stat(path)).mode & 0o777).toBe(0o644);
+    await writeSecretFile(path, "tdg_example\n");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+    expect(await readFile(path, "utf8")).toBe("tdg_example\n");
+    expect(await readdir(dir)).toEqual(["pairing.token"]);
   });
 });

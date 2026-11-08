@@ -59,6 +59,14 @@ function numArg(name: string, value: string | undefined): number | undefined {
   return n;
 }
 
+/** A finite number from min to max (coordinates). */
+function rangeArg(name: string, value: string | undefined, min: number, max: number): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (value.trim() === "" || !Number.isFinite(n) || n < min || n > max) throw new TapdanceError("USAGE", `${name} must be a number from ${min} to ${max}, not "${value}"`);
+  return n;
+}
+
 function point(name: string, value: string): { x: number; y: number } {
   const m = /^(\d+(?:\.\d+)?),(\d+(?:\.\d+)?)$/.exec(value);
   if (!m) throw new TapdanceError("USAGE", `${name} must look like 120,640`);
@@ -422,10 +430,12 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     )
     .option("--app <appId>", "the app a permission or locale applies to")
     .option("--permission <permission>", "for `setting permission <grant|deny|reset>`: camera, microphone, photos, notifications, location…")
-    .option("--lat <latitude>", "for `setting location`: move the device here", Number)
-    .option("--lon <longitude>", "for `setting location`", Number)
-    .action(async (name: string, value: string | undefined, o: { app?: string; permission?: string; lat?: number; lon?: number }) =>
+    .option("--lat <latitude>", "for `setting location`: move the device here")
+    .option("--lon <longitude>", "for `setting location`")
+    .action(async (name: string, value: string | undefined, o: { app?: string; permission?: string; lat?: string; lon?: string }) =>
       run(globals(), async (t, out) => {
+        const lat = rangeArg("--lat", o.lat, -90, 90);
+        const lon = rangeArg("--lon", o.lon, -180, 180);
         const instead = SETTING_ALTERNATIVES[name.toLowerCase()];
         if (instead) throw new TapdanceError("NOT_SUPPORTED", instead.why, { hint: instead.instead });
         if (!(DEVICE_SETTINGS as readonly string[]).includes(name)) throw new TapdanceError("USAGE", `Unknown setting "${name}"`, { hint: `One of: ${DEVICE_SETTINGS.join(", ")}` });
@@ -436,8 +446,8 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
             ...(value !== undefined ? { value } : {}),
             ...(o.app ? { appId: o.app } : {}),
             ...(o.permission ? { permission: o.permission } : {}),
-            ...(o.lat !== undefined ? { latitude: o.lat } : {}),
-            ...(o.lon !== undefined ? { longitude: o.lon } : {}),
+            ...(lat !== undefined ? { latitude: lat } : {}),
+            ...(lon !== undefined ? { longitude: lon } : {}),
           },
         });
         out.result(r, () => r.message);
@@ -501,11 +511,12 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
     .command("shell <command...>")
     .description("Android emulators: run a command with `adb shell` inside the leased emulator (not on this machine)")
     .option("--stdin <file>", "pass this text file on stdin (binary: base64 it and decode on the device with `base64 -d`)")
-    .option("--timeout <seconds>", "default 120", Number)
-    .action(async (command: string[], o: { stdin?: string; timeout?: number }) =>
+    .option("--timeout <seconds>", "default 120, at most 600")
+    .action(async (command: string[], o: { stdin?: string; timeout?: string }) =>
       run(globals(), async (t, out) => {
+        const timeout = intArg("--timeout", o.timeout, 1, 600);
         const stdin = o.stdin ? await readFile(o.stdin, "utf8") : undefined;
-        const r = await t.device({ kind: "shell", command: command.join(" "), ...(stdin !== undefined ? { stdin } : {}), ...(o.timeout ? { timeoutMs: o.timeout * 1000 } : {}) });
+        const r = await t.device({ kind: "shell", command: command.join(" "), ...(stdin !== undefined ? { stdin } : {}), ...(timeout ? { timeoutMs: timeout * 1000 } : {}) });
         const d = r.data as { exitCode: number; stdout: string; stderr: string };
         out.result(r, () => [d.stdout.trimEnd(), d.stderr.trim() ? `stderr: ${d.stderr.trim()}` : ""].filter(Boolean).join("\n"));
         if (d.exitCode !== 0) process.exitCode = 1;
@@ -715,10 +726,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
 
   targetOptions(ui.command("tap [ref]").description("Tap one element (a ref from `ui inspect` may be given as the argument: `ui tap @e7`)"))
     .option("--no-settle", "do not wait for the UI to settle")
-    .option("--settle-ms <ms>", "also wait up to this long for the UI to come to rest and report whether the screen changed (a tap that auto-advances)", Number)
+    .option("--settle-ms <ms>", "also wait up to this long (100-30000) for the UI to come to rest and report whether the screen changed (a tap that auto-advances)")
     .option("--inject", "Android: tap with a raw input event (`input tap`) at the element's centre, for system screens that ignore normal taps")
-    .action(async (positional: string | undefined, o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: number; inject?: boolean }) =>
+    .action(async (positional: string | undefined, o: { text?: string; id?: string; ref?: string; selector?: string; x?: string; y?: string; settle: boolean; settleMs?: string; inject?: boolean }) =>
       run(globals(), async (t, out) => {
+        const settleMs = intArg("--settle-ms", o.settleMs, 100, 30_000);
         // `ui inspect` prints refs like @e3~s152203, so agents pass one as the argument (#131).
         if (positional !== undefined) {
           if (/^@?u\d+$/.test(positional)) {
@@ -738,13 +750,13 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           ...(o.x !== undefined ? { x: numArg("--x", o.x)! } : {}),
           ...(o.y !== undefined ? { y: numArg("--y", o.y)! } : {}),
         });
-        const r = await t.tap(target, { settle: o.settle, ...(o.settleMs ? { settleMs: o.settleMs } : {}), ...(o.inject ? { inject: true } : {}) });
+        const r = await t.tap(target, { settle: o.settle, ...(settleMs ? { settleMs } : {}), ...(o.inject ? { inject: true } : {}) });
         out.result(r, () =>
           [
             r.message,
             ...(r.warning ? [yellow(r.warning)] : []),
             ...(r.changes ?? []).map((c) => dim(`  ${c}`)),
-            ...(o.settleMs ? [r.screenChanged ? `screen changed: ${(r.screen ?? []).join(" · ") || "(no labels)"}` : "same screen"] : []),
+            ...(settleMs ? [r.screenChanged ? `screen changed: ${(r.screen ?? []).join(" · ") || "(no labels)"}` : "same screen"] : []),
           ].join("\n"),
         );
       }),

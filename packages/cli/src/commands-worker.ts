@@ -427,8 +427,6 @@ export async function installWorker(
   return { settings: settings.map(([k]) => k), checks, status: safeJson(status) };
 }
 
-/** The local worker daemon's own status, or undefined when it does not answer. */
-/** Applies a warm-spare count per platform to the local worker, restarting it when anything changed. */
 /**
  * Saves the warm-spare counts in Simlock's config. Simlock reads them at start, so the worker restarts
  * (`restart`, default "always"); "if-idle" skips that while a lease runs, since a restart ends leases.
@@ -511,7 +509,6 @@ export async function setWorkerService(on: boolean, out?: Pick<ReturnType<typeof
   if (on) await clearMissingService();
 }
 
-/** Starts the worker after a pause and resets stale device records when nothing is leased. */
 /**
  * Points Simlock at the agent-device this Tapdance ships. `worker install` stores its absolute path,
  * and a `pnpm install` that changes it (a version or a patch: the folder name changes) left the
@@ -535,6 +532,7 @@ export async function syncAgentDeviceCommand(
   return true;
 }
 
+/** Starts the worker after a pause and resets stale device records when nothing is leased. */
 export async function startWorker(out: ReturnType<typeof output>): Promise<void> {
   await ensureSimlockHelpersExecutable(out);
   if (!(await workerRunning())) {
@@ -553,6 +551,7 @@ export async function startWorker(out: ReturnType<typeof output>): Promise<void>
   await warnIfServiceMissing(out);
 }
 
+/** The local worker daemon's own status, or undefined when it does not answer. */
 export async function localWorkerStatus(): Promise<unknown> {
   return simlock(["--local", "status", "--json"], 20_000).then(safeJson, () => undefined);
 }
@@ -785,17 +784,15 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         }
         await restart(true, out);
         const mint = async (role: string, label: string) => {
-          const text = await simlock(["--gateway", "token", "create", "--role", role, "--label", label]);
-          const parsed = safeJson(text) as { secret?: string; token?: { id?: string } } | undefined;
-          if (!parsed?.secret) throw new TapdanceError("PROVIDER_UNAVAILABLE", `Could not create a ${role} token`);
-          return { secret: parsed.secret, id: parsed.token?.id ?? "?" };
+          const { secret, id } = parseMintedToken(await simlock(["--gateway", "token", "create", "--role", role, "--label", label]), role);
+          return { secret, id };
         };
         const workerToken = await mint("worker", o.workerLabel);
         const agentToken = await mint("agent", o.agentLabel);
         const operatorToken = await mint("operator", `${o.agentLabel}-operator`);
         if (o.configureHere) {
           await saveCredentials({ token: agentToken.secret, operatorToken: operatorToken.secret });
-          await writeConfigFile(userConfigPath(), { provider: "self-hosted", endpoint: "http://127.0.0.1:4700" });
+          await writeConfigFile(userConfigPath(), withLocalGateway(await readUserConfig()));
         }
         const publicWs = o.publicUrl ? o.publicUrl.replace(/^http/, "ws") : "wss://<your-gateway-host>";
         // The worker join secret is printed once, to stdout, for the person setting up the worker.
@@ -837,10 +834,9 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
       const out = output(globals());
       try {
         if (!["worker", "agent", "operator"].includes(o.role)) throw new TapdanceError("USAGE", "--role must be worker, agent or operator");
-        const text = await simlock(["--gateway", "token", "create", "--role", o.role, "--label", o.label]);
-        const parsed = safeJson(text) as { secret?: string; token?: unknown } | undefined;
+        const { secret, parsed } = parseMintedToken(await simlock(["--gateway", "token", "create", "--role", o.role, "--label", o.label]), o.role);
         // This one command exists to hand a secret to a person, so it prints it.
-        process.stdout.write(`${globals().json ? JSON.stringify(parsed, null, 2) : `${parsed?.secret}\n${dim("Shown once. Revoke with: tapdance simlock -- --gateway token revoke <id>")}`}\n`);
+        process.stdout.write(`${globals().json ? JSON.stringify(parsed, null, 2) : `${secret}\n${dim("Shown once. Revoke with: tapdance simlock -- --gateway token revoke <id>")}`}\n`);
       } catch (error) {
         process.exitCode = out.error(error);
       }
@@ -858,6 +854,23 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
         process.exitCode = out.error(error);
       }
     });
+}
+
+/**
+ * The secret and id from `simlock --gateway token create` output. Throws PROVIDER_UNAVAILABLE when
+ * the output has no secret, so nothing prints `undefined` as a token.
+ */
+export function parseMintedToken(text: string, role: string): { secret: string; id: string; parsed: Record<string, unknown> } {
+  const parsed = safeJson(text) as { secret?: unknown; token?: { id?: unknown } } | undefined;
+  if (typeof parsed?.secret !== "string" || parsed.secret === "") {
+    throw new TapdanceError("PROVIDER_UNAVAILABLE", `Could not create a ${role} token: Simlock's answer had no secret`, { hint: "Check the gateway with `tapdance gateway status`, then try again." });
+  }
+  return { secret: parsed.secret, id: typeof parsed.token?.id === "string" ? parsed.token.id : "?", parsed: parsed as Record<string, unknown> };
+}
+
+/** The user config pointed at this machine's gateway, keeping every other setting (targets, tools.*). */
+export function withLocalGateway(current: Partial<TapdanceConfig>): Partial<TapdanceConfig> {
+  return { ...current, provider: "self-hosted", endpoint: "http://127.0.0.1:4700" };
 }
 
 function safeJson(text: string): unknown {
