@@ -69,7 +69,7 @@ has run on one Mac only.
 ### Changed
 
 - Docs reorganised for readers: a shorter README, a docs index (`docs/README.md`), a glossary, and
-  merged or renamed pages (old paths keep a short page that links to the new one).
+  merged and renamed pages.
 - `tapdance init --mode local` now names `tapdance worker install` as the first next step (it said
   `worker start`, which skips the first-time setup), and the session-id note `tapdance connect` prints
   points at `docs/agents.md`.

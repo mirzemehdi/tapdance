@@ -79,8 +79,8 @@ on one Mac only, never across machines. Guide: [gateway mode](deployment/gateway
 | Gateway | Anywhere | Workers joined to a gateway | Proven on one Mac only ([evidence](testing/evidence/2026-11-01-gateway-single-host.md)). Across machines: not run. |
 | Managed cloud | Anywhere | Hosted by Tapdance | Not built. `provider: "cloud"` fails with `NOT_SUPPORTED`. |
 
-Windows can be an agent's machine (CLI and MCP server) but not a host: Simlock runs workers on macOS
-and Linux only.
+Windows cannot be a host: Simlock runs workers on macOS and Linux only. As the agent's machine it is
+expected to work (the CLI and MCP server are plain Node.js) but has not been tested.
 
 [STATUS.md](../STATUS.md) has the details for every feature.
 

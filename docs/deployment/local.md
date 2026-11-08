@@ -28,8 +28,8 @@ to an agent.
 | iOS simulators | A Mac with Xcode (tested: Xcode 26.5 on Apple silicon) and at least one iOS runtime. About 8 GiB of free disk per runtime, plus room for simulators. Watching the screen needs macOS 14 or later. |
 | Android emulators | The Android SDK command-line tools (`sdkmanager`, `avdmanager`), `emulator`, `platform-tools`, a JDK with `JAVA_HOME` set, and at least one system image. On Linux also KVM. See [Android](../platforms/android.md). |
 
-Windows cannot host devices: Simlock, which runs them, supports macOS and Linux only. Windows can run
-the CLI and MCP server against a remote host.
+Windows cannot host devices: Simlock, which runs them, supports macOS and Linux only. Windows is expected
+to run the CLI and MCP server against a remote host, but this has not been tested.
 
 ## Steps
 

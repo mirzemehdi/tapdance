@@ -104,6 +104,6 @@ From [STATUS.md](../../STATUS.md):
 | Gateway and worker on two machines; `gateway setup` on a Linux VPS; `worker login` across machines | Not run. |
 | Browser viewer | Stream, input and take-over on one Mac; a browser on the agent's Mac streamed devices on an N2 VM and a rented Mac over Tailscale. From a VPS agent, checked with curl only. |
 | Streamable HTTP MCP (`tapdance mcp --http`) | Partly: 401 without the token, tools listed, `list_devices` and `get_device_status` worked; a full device loop over HTTP not run. |
-| Windows as a host | Not supported: Simlock runs workers on macOS and Linux only. Windows works as an agent's machine. |
+| Windows as a host | Not supported: Simlock runs workers on macOS and Linux only. Windows as an agent's machine is expected to work but has not been tested. |
 
 If you try any of these, please file what happened with `tapdance report`.

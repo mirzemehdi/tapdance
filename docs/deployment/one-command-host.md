@@ -40,7 +40,7 @@ This is the main guide for any host. The provider pages add only what is special
   Tailscale and Tapdance. For iOS, install Xcode yourself (the App Store, or `xcodes`): it cannot be
   scripted.
 - **On the agent's machine,** Node.js 22.13+ and Tapdance ([installation](../installation.md)). It can
-  run macOS, Linux or Windows, and needs no Xcode, Android SDK or KVM.
+  run macOS or Linux (Windows is expected to work but not tested), and needs no Xcode, Android SDK or KVM.
 - **On a Mac, a standard account** to host from is recommended, not an administrator account. See
   [the administrator question](#the-administrator-question).
 
@@ -208,7 +208,8 @@ For a Mac or Mac mini that hosts devices all the time, with nobody at it:
   login window and serves nothing. Run `infrastructure/scripts/macos-auto-login.sh <account>` (it asks
   for the passwords), reboot, and check that `who` lists the account on `console`. The script stores
   the password in `/etc/kcpassword`, which is obfuscation, not encryption: use it only on a Mac that
-  holds nothing personal.
+  holds nothing personal. FileVault must be off: with FileVault on, macOS asks for the password at boot,
+  so automatic login cannot work, and the script refuses.
 - **Keep it awake.** A sleeping Mac takes the guard offline. Agents then get a retryable error, and a
   lease that is not renewed in time expires. `tapdance host up --keep-awake` runs the guard under
   `caffeinate -i`, which prevents idle sleep. On a desktop Mac, also turn off system sleep in System
@@ -519,7 +520,7 @@ run the script again. Details in [troubleshooting](../troubleshooting.md#linux-a
 ## Windows
 
 Windows cannot host devices: Simlock workers run on macOS and Linux only, and `tapdance host up`
-refuses with `NOT_SUPPORTED`. Windows can be the agent's machine (`tapdance connect`).
+refuses with `NOT_SUPPORTED`. Windows as the agent's machine (`tapdance connect`) is expected to work but has not been tested.
 `scripts/host-setup.ps1` prints these options, including Android emulators inside WSL2 or a Linux VM
 with nested virtualization (untested).
 

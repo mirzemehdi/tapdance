@@ -2,8 +2,8 @@
 
 Stage 4 of [docs/hosting-plan.md](../../hosting-plan.md): one agent (a Linux VPS) connected to a Google
 Cloud N2 VM for Android and a rented Scaleway Mac mini for iOS at the same time, through several
-**connect targets** ([guide](../../guides/android-and-ios.md)). Real hosts, run by an agent (Claude Code)
-with the owner approving logins and pairings. Every checklist passed except the first iOS command of
+**connect targets** ([guide](../../guides/android-and-ios.md)). Real hosts; a Claude Code session ran the scripted CLI and MCP drivers (the MCP client was
+`scripts/field-test/mcp-checklist.mjs` over stdio, not Claude Code itself), with the owner approving logins and pairings. Every checklist passed except the first iOS command of
 one MCP run (a cold-runner timeout, [#137](https://github.com/mirzemehdi/tapdance/issues/137)); one
 session leased Android and iOS in turn through the CLI and MCP, `doctor` and `devices` showed both
 hosts, and with the Mac down the agent got a fast, named error while Android kept working.
@@ -225,7 +225,8 @@ the key when the note lands". iOS left, Android right:
 - Tailscale: the owner removed the `tapdance-n2` machine in the admin console (about 18:05 UTC).
 - VPS: `gcloud` auth revoked (accounts and application-default credentials, again after the project
   deletion), pairing token copies, scratch home and keys deleted.
-- Left for the owner: the Scaleway leftovers check (`scaleway-leftovers.sh` with his `scw` login).
+- Left for the owner: the Scaleway leftovers check (`scaleway-leftovers.sh` with his `scw` login). The owner
+  ran it afterwards.
 
 COST: N2 about USD 0.30-0.33 (VM, disk and IP for 1.47 h; estimate, billing page not checked); Mac EUR 0
 extra (existing rental). Total about USD 0.30-0.33.

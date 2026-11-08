@@ -328,6 +328,16 @@ describe("tapdance CLI (built)", () => {
     }
   });
 
+  it("every docs page named in code exists", () => {
+    const missing: string[] = [];
+    for (const file of [...sourceFiles(join(root, "packages")), join(root, "scripts/host-setup.sh")]) {
+      for (const m of readFileSync(file, "utf8").matchAll(/docs\/[A-Za-z0-9_./-]+\.md/g)) {
+        if (!existsSync(join(root, m[0]))) missing.push(`${file.replace(root, "")}: ${m[0]}`);
+      }
+    }
+    expect([...new Set(missing)]).toEqual([]);
+  });
+
   it("only names commands that exist, in code hints and in every doc", () => {
     const help = (args: string[]) => tapdance([...args, "--help"]).stdout;
     const known = new Set<string>();
@@ -416,7 +426,7 @@ describe("repository URL", () => {
       const url = (JSON.parse(readFileSync(join(root, `packages/${pkg}/package.json`), "utf8")) as { repository: { url: string } }).repository.url.replace(/\.git$/, "");
       expect(url, pkg).toBe(declared);
     }
-    for (const file of ["README.md", "docs/installation.md", "docs/deployment/laptop-worker.md", "docs/deployment/local.md", "docs/testing/field-testing.md"]) {
+    for (const file of ["README.md", "docs/installation.md", "docs/deployment/gateway-mode.md", "docs/deployment/local.md", "docs/testing/field-testing.md"]) {
       for (const m of readFileSync(join(root, file), "utf8").matchAll(/git clone (https:\/\/github\.com\/[^\s]+?)(?:\.git)?(?=\s)/g)) {
         expect(m[1], file).toBe(declared);
       }

@@ -91,19 +91,3 @@ fits.
 | Page | What it gives you |
 | --- | --- |
 | [Hosting plan](hosting-plan.md) | The stages in which Tapdance is proven on real infrastructure, with their prompts. |
-
-## Moved pages
-
-These old addresses still work and point to the new page.
-
-| Old page | Now |
-| --- | --- |
-| `agents/claude-code.md`, `agents/codex.md`, `agents/cursor.md` | [Connect your agent](agents.md) |
-| `deployment/laptop-worker.md` | [Gateway mode](deployment/gateway-mode.md) |
-| `deployment/worker-security.md` | [Threat model](security/threat-model.md) and [gateway mode](deployment/gateway-mode.md) |
-| `deployment/ovh-public-cloud.md` | [Linux host with KVM](deployment/dedicated-linux-server.md) |
-| `security/personal-mac.md` | [Device-only mode and the guard](security/device-only-mode.md) |
-| `ios/local-mac-worker.md` | [Local](deployment/local.md), [host devices for a remote agent](deployment/one-command-host.md) |
-| `ios/remote-browser-access.md` | [Browser viewer](deployment/browser-access.md) |
-| `ios/macstadium.md`, `ios/aws-ec2-mac.md` | [Other cloud Macs](ios/other-cloud-macs.md) |
-| `ios/xcode-cloud-integration.md` | [Build in CI, test with Tapdance](guides/ci-builds.md) |

@@ -745,7 +745,7 @@ tapdance connect --list
 tapdance disconnect <name|endpoint>
 ```
 
-On the agent's machine (macOS, Linux or Windows): first checks that `<endpoint>/v1/healthz` answers
+On the agent's machine (macOS or Linux; Windows expected to work, not tested): first checks that `<endpoint>/v1/healthz` answers
 (two tries, 15 s each) and saves nothing if it does not; an `http://` address that the guard now serves
 over HTTPS fails with the `https://` command to use. Then it reads the guard token from stdin (or a hidden
 prompt; never from argv), adds the host as a **connect target** in `~/.tapdance/config.json` (`provider:
@@ -2417,9 +2417,10 @@ Worker, guard service, pairing, Tailscale and a self-test, step by step; prints
 a block to paste to the agent's machine
 
 Options:
-  --label <name>             name for the control machine's pairing (default:
-                             the pairing this host already has, if only one;
-                             else this machine's hostname)
+  --label <name>             name the pairing after the agent's machine that
+                             will use it, e.g. --label my-vps (default: the
+                             pairing this host already has, if only one; else
+                             this machine's hostname)
   --allow-admin-account      run the guard from an administrator account (not
                              recommended)
   --no-tailscale             do not expose the guard with `tailscale serve`; the

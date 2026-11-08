@@ -198,7 +198,8 @@ instances, for any flavor. Treat it as unknown until you have checked the exact 
    own user (not root). With sudo on your user, the script does the root steps itself, asking first.
    It detects OpenStack-based clouds such as OVHcloud Public Cloud as a cloud VM, so it also offers the
    `systemctl poweroff` rule, and `host up` turns on the idle stop (30 minutes without use powers the
-   instance off; `--idle-stop off` turns it off).
+   instance off; `--idle-stop off` turns it off). On OVHcloud, and on any provider that bills stopped
+   instances, the idle stop saves nothing: delete the instance to stop billing.
 3. **Connect** as in [step 4](#4-connect-the-agents-machine).
 
 Firewall: the instance needs no inbound port. Allow only SSH, ideally from your own address, with

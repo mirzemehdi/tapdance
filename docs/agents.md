@@ -99,8 +99,12 @@ The resulting `.mcp.json`, with an optional environment setting:
   `claude-code:`. If it starts with `mcp:`, the variable did not reach the server; use only the MCP tools
   or only the CLI in that conversation, or set the same `TAPDANCE_SESSION_ID` in the server's `env` and
   in the shell.
-- **Timeout.** Claude Code reads `MCP_TOOL_TIMEOUT`, in milliseconds, from its environment. Raise it
-  if it is shorter than a first lease (see [timeouts](#timeouts)).
+- **Timeouts.** Claude Code reads `MCP_TIMEOUT` (server startup) and `MCP_TOOL_TIMEOUT` (each tool call),
+  both in milliseconds, from its environment; a `timeout` field on the server's `.mcp.json` entry sets
+  the tool timeout for that server only
+  ([environment variables](https://code.claude.com/docs/en/env-vars),
+  [MCP](https://code.claude.com/docs/en/mcp)). Make sure the tool timeout is longer than a first lease
+  (see [timeouts](#timeouts)).
 
 Run `/mcp` inside Claude Code to check that the `tapdance` server is connected and its tools are listed.
 
@@ -143,7 +147,9 @@ TAPDANCE_SESSION_ID = "my-app-codex"
 
 ### Cursor
 
-Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for every project):
+Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for every project). Cursor replaces
+`${workspaceFolder}` with the project folder in `command`, `args` and `env`
+([Cursor MCP docs](https://cursor.com/docs/context/mcp)):
 
 ```json
 {
@@ -154,7 +160,7 @@ Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for every pro
       "args": ["mcp"],
       "env": {
         "TAPDANCE_ALLOWED_ROOTS": "${workspaceFolder}",
-        "TAPDANCE_SESSION_ID": "${workspaceFolderBasename}-cursor"
+        "TAPDANCE_SESSION_ID": "my-app-cursor"
       }
     }
   }
@@ -175,8 +181,8 @@ Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for every pro
   Cursor's terminal use your per-user session: two separate leases. Use only the MCP tools, or set the
   same `TAPDANCE_SESSION_ID` in `mcp.json` (as above) and in the terminal
   (`export TAPDANCE_SESSION_ID=my-app-cursor`). Leave it out if you only use the MCP tools.
-- **Timeout.** A long first lease can outlast Cursor's tool timeout. Then ask the agent to call
-  `lease_device` again (see [timeouts](#timeouts)).
+- **Timeout.** Cursor documents no tool-timeout setting; check your client's docs. A long first lease
+  can outlast its timeout. Then ask the agent to call `lease_device` again (see [timeouts](#timeouts)).
 
 Open Cursor's MCP settings to check that `tapdance` is connected and its tools are listed.
 

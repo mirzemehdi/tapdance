@@ -31,7 +31,7 @@ open port. Agents talk to the gateway, and the gateway routes each lease to a wo
 | Network | When the worker is on another machine: TLS in front of the gateway (Caddy and a DNS name), or a private network such as Tailscale. |
 
 Windows cannot be a worker: Simlock runs on macOS and Linux only, and `tapdance worker install`
-refuses on Windows. A Windows machine can still run the CLI and MCP server against a gateway.
+refuses on Windows. A Windows machine is expected to run the CLI and MCP server against a gateway, but this has not been tested.
 
 Install Tapdance from source on every machine ([installation](../installation.md)). It is not on npm
 yet. Use the same Tapdance build everywhere: it pins Simlock 0.5.0, and gateway and worker must run
