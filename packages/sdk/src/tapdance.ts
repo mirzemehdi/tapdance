@@ -48,6 +48,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createProvider } from "./provider-factory.js";
+import { RoutingProvider } from "./routing-provider.js";
 
 export interface TapdanceOptions {
   cwd?: string;
@@ -101,6 +102,8 @@ export interface LeaseOptions {
   onNotice?: (notice: string) => void;
   /** Return the session's current lease instead of failing when it already holds one on this platform. */
   reuse?: boolean;
+  /** The connect target to lease from, by name (`tapdance connect --list`); default: the first that serves the platform. */
+  target?: string;
 }
 
 export interface DeviceSummary {
@@ -265,7 +268,7 @@ export class Tapdance {
         id: "config",
         title: "Configuration",
         status: warnings.length > 0 ? "warn" : "pass",
-        detail: `provider ${config.provider}${config.endpoint ? ` → ${config.endpoint}` : ""}; sources: ${this.resolved.sources.join(", ") || "defaults"}${warnings.length > 0 ? `. ${warnings.join(". ")}` : ""}`,
+        detail: `provider ${config.provider}${this.resolved.targets?.length ? ` → targets ${this.resolved.targets.map((t) => t.name).join(", ")}` : config.endpoint ? ` → ${config.endpoint}` : ""}; sources: ${this.resolved.sources.join(", ") || "defaults"}${warnings.length > 0 ? `. ${warnings.join(". ")}` : ""}`,
         ...(warnings.length > 0 ? { fix: "Set those keys with `tapdance config set --global`, or remove them from tapdance.config.json." } : {}),
       },
       { id: "session", title: "Session identity", status: "pass", detail: `${this.session.id} (from ${this.session.source})` },
@@ -416,6 +419,11 @@ export class Tapdance {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
     }
     const provider = options.profile ? this.profileProvider() : await this.provider();
+    if (options.target !== undefined && !(provider instanceof RoutingProvider)) {
+      throw new TapdanceError("USAGE", options.profile ? "A device profile runs on this machine: it takes no target" : `No connect targets are configured, so there is no target "${options.target}"`, {
+        hint: "Add hosts with `tapdance connect <endpoint>` (one per host), or lease without a target.",
+      });
+    }
     // The whole check-then-lease runs under the session lock, so two processes of one session
     // (parallel sub-agents, CLI + MCP) cannot both lease.
     return this.store.withLock(this.session.id, async () => {
@@ -423,7 +431,9 @@ export class Tapdance {
       if (existing !== undefined) {
         const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch(() => undefined);
         if (status?.state === "active" || status?.state === "unknown" || status === undefined) {
-          if (options.reuse && existing.handle.platform === options.platform && (!options.device || options.device === existing.handle.model)) {
+          // A lease from another target than the one asked for is not "the same device" (review).
+          const sameTarget = !options.target || options.target === existing.handle.location.target || options.target === existing.handle.location.endpoint;
+          if (options.reuse && sameTarget && existing.handle.platform === options.platform && (!options.device || options.device === existing.handle.model)) {
             return { record: existing, summary: summarize(existing, status), reused: true };
           }
           throw new TapdanceError("LEASE_ALREADY_HELD", `This session already holds ${existing.handle.model} (${existing.handle.platform})`, {
@@ -448,6 +458,7 @@ export class Tapdance {
           ttlMs: ttlMinutes * 60_000,
           ...(waitSeconds > 0 ? { waitTimeoutMs: waitSeconds * 1000 } : {}),
           settleMs: settleSeconds * 1000,
+          ...(options.target !== undefined ? { target: options.target } : {}),
         },
         { onProgress: (m) => this.progress(m), ...(options.onNotice ? { onNotice: options.onNotice } : {}) },
       );

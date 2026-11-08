@@ -5,7 +5,7 @@
 # docs/testing/field-test-rented-mac-ios.md); not shipped.
 #
 # Usage:
-#   scripts/field-test/cli-checklist.sh <base|app|build> <out-dir> [--param KEY=VALUE ...]
+#   scripts/field-test/cli-checklist.sh <base|app|build|two-hosts|host-down> <out-dir> [--param KEY=VALUE ...]
 #
 # Suites:
 #   base   the launcher: lease, inspect, swipe, keys, tap, wait, rotate, notifications, recording,
@@ -17,6 +17,16 @@
 #          build is debuggable: push to and pull from its sandbox and compare).
 #   build  a build on the host: app build --git BUILD_REPO --ref BUILD_REF [--dir BUILD_DIR] --launch
 #          APP_ID, then inspect, screenshot, release. The host must allow-list the repository.
+#   two-hosts  Android and iOS from one session, with two hosts connected (`tapdance connect` once per
+#          host, same TAPDANCE_HOME): doctor and devices show both, connect --list; lease Android, check
+#          a second lease (iOS) is refused while it is held, exercise, release; lease iOS, exercise,
+#          release. Optional: ANDROID_TARGET / IOS_TARGET (lease with --target), ANDROID_DEVICE,
+#          ANDROID_OS, IOS_DEVICE, IOS_OS, APK + ANDROID_APP_ID, APP + IOS_APP_ID (install and launch).
+#   host-down  one of two hosts is down (stop its guard, or `tailscale down` there): DOWN_PLATFORM
+#          (required) is the platform it serves, DOWN_TARGET its target name (expected in the error).
+#          doctor still exits 0 (warns), devices still lists the other host, a lease on DOWN_PLATFORM
+#          fails fast with PROVIDER_UNREACHABLE naming DOWN_TARGET, and the other platform still leases,
+#          takes a screenshot and releases.
 # Platform: PLATFORM=android (default) or ios; DEVICE and OS pick the model and version to lease (e.g.
 # DEVICE="iPhone 16" OS=26.1). On iOS: base adds a system alert read, the language setting and crash
 # reports, pushes to the Files app instead of Downloads and skips Android's Back key; app installs APP (a
@@ -59,7 +69,7 @@ while [[ $# -gt 0 ]]; do
       shift ;;
   esac
 done
-[[ "$suite" == base || "$suite" == app || "$suite" == build ]] || { usage >&2; exit 2; }
+[[ "$suite" =~ ^(base|app|build|two-hosts|host-down)$ ]] || { usage >&2; exit 2; }
 [[ -n "$out" ]] || die "give an output directory"
 
 # ------------------------------------------------------------------ safety
@@ -278,10 +288,86 @@ suite_build() {
   always=1 step release - td device release
 }
 
+# expect_error <code> [<text>] -- <command...>: passes when the command fails with that error code in its
+# --json output (and the text, when given). Prints the error so the step's .out file keeps it.
+expect_error() {
+  local code="$1" text="" outp rc
+  shift
+  if [[ "$1" != "--" ]]; then text="$1"; shift; fi
+  shift
+  outp="$("$@" --json 2>&1)"
+  rc=$?
+  printf '%s\n' "$outp"
+  [[ $rc -ne 0 ]] || { echo "expected $code, but the command succeeded" >&2; return 1; }
+  grep -q "\"code\": \"$code\"" <<<"$outp" || { echo "expected $code (exit $rc)" >&2; return 1; }
+  [[ -z "$text" ]] || grep -qF -- "$text" <<<"$outp" || { echo "the error does not name $text" >&2; return 1; }
+}
+
+# lease_for <platform>: the lease command for one platform of a two-host run.
+lease_for() {
+  local pf="$1" up
+  up="$(tr '[:lower:]' '[:upper:]' <<<"$pf")"
+  lease_cmd_pf=(td device lease --platform "$pf")
+  [[ -n "$(p "${up}_DEVICE")" ]] && lease_cmd_pf+=(--device "$(p "${up}_DEVICE")")
+  [[ -n "$(p "${up}_OS")" ]] && lease_cmd_pf+=(--os "$(p "${up}_OS")")
+  [[ -n "$(p "${up}_TARGET")" ]] && lease_cmd_pf+=(--target "$(p "${up}_TARGET")")
+  return 0
+}
+
+# status_is <platform>: the session's lease is on that platform.
+status_is() { td device status --json | grep -q "\"platform\": \"$1\""; }
+
+suite_two_hosts() {
+  step doctor - td doctor --no-host
+  step targets - td connect --list
+  step devices - td devices
+  # Android first.
+  lease_for android
+  step lease_android - "${lease_cmd_pf[@]}"
+  step status_android - status_is android
+  step second_lease_refused - expect_error LEASE_ALREADY_HELD -- td device lease --platform ios --no-keepalive
+  step install_apk APK td app install "$(p APK)"
+  step launch_android ANDROID_APP_ID td app launch "$(p ANDROID_APP_ID)"
+  step key_home_android - td ui key home
+  step inspect_android - td ui inspect
+  step swipe_android - td ui swipe --direction up
+  step screenshot_android - td screenshot -o "$out/android.png" --note "Android, two-host CLI field test"
+  step logs_android - td logs -n 30
+  always=1 step release_android - td device release
+  # Then iOS, in the same session.
+  lease_for ios
+  step lease_ios - "${lease_cmd_pf[@]}"
+  step status_ios - status_is ios
+  step install_app_ios APP td app install "$(p APP)"
+  step launch_ios IOS_APP_ID td app launch "$(p IOS_APP_ID)"
+  step key_home_ios - td ui key home
+  step inspect_ios - td ui inspect --app com.apple.springboard
+  step swipe_ios - td ui swipe --direction left
+  step screenshot_ios - td screenshot -o "$out/ios.png" --note "iOS, two-host CLI field test"
+  step logs_ios - td logs -n 30
+  always=1 step release_ios - td device release
+  step artifacts - td artifacts
+}
+
+suite_host_down() {
+  local down up_pf
+  down="$(p DOWN_PLATFORM)"
+  [[ "$down" == android || "$down" == ios ]] || die "host-down needs --param DOWN_PLATFORM=android|ios (the platform of the host that is down)"
+  if [[ "$down" == android ]]; then up_pf=ios; else up_pf=android; fi
+  step doctor_warns - td doctor --no-host
+  step devices_other_host - td devices
+  step lease_down_platform - expect_error PROVIDER_UNREACHABLE "$(p DOWN_TARGET)" -- td device lease --platform "$down" --no-keepalive
+  lease_for "$up_pf"
+  critical=1 step "lease_$up_pf" - "${lease_cmd_pf[@]}"
+  step "status_$up_pf" - status_is "$up_pf"
+  step "screenshot_$up_pf" - td screenshot -o "$out/$up_pf.png" --note "other host still leasing while one is down"
+  always=1 step "release_$up_pf" - td device release
+}
+
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 t_start="$(now_ms)"
 echo "Tapdance CLI field test, suite $suite ($platform), session $TAPDANCE_SESSION_ID, TAPDANCE_HOME $TAPDANCE_HOME"
-"suite_$suite"
+"suite_${suite//-/_}"
 t_end="$(now_ms)"
 
 cat >"$out/results.json" <<EOF

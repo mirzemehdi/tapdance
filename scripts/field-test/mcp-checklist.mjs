@@ -19,7 +19,9 @@
 //     its folder is added to TAPDANCE_ALLOWED_ROOTS for the server, which otherwise only uploads files
 //     inside its working directory (the output directory).
 //   - A step with "tool": "__list" saves the server's tool list to tools.json.
-//   - "expectText": the step fails unless the reply's text contains it.
+//   - "expectText": the step fails unless the reply's text contains it (${KEY} is replaced).
+//   - "expectError": the step passes only when the tool fails and its reply contains this text (an
+//     error code such as "LEASE_ALREADY_HELD"); "expectText" then also applies to the error's text.
 //   - "stopOnFail": true skips every later step when this one fails, except steps with "always": true
 //     (the release step, so a failed run does not leave the device leased).
 // --check validates a checklist offline against the MCP tool schemas in packages/mcp/dist (no server,
@@ -145,9 +147,13 @@ if (check) {
       console.log(`FAIL ${String(i + 1).padStart(2)} ${label}: no MCP tool named "${step.tool}"`);
       return;
     }
-    // Unset parameters get a sample value that fits the usual shapes (an app id, a repo, a path).
-    const sample = Object.fromEntries([...placeholders(step.args ?? {})].map((k) => [k, params[k] ?? "sample.value"]));
-    const parsed = tool.input.safeParse(substitute(step.args ?? {}, sample));
+    // Unset parameters get a sample value that fits the usual shapes (an app id, a repo, a path, a name).
+    const sampleWith = (value) => Object.fromEntries([...placeholders(step.args ?? {})].map((k) => [k, params[k] ?? value]));
+    let parsed = tool.input.safeParse(substitute(step.args ?? {}, sampleWith("sample.value")));
+    if (!parsed.success) {
+      const plain = tool.input.safeParse(substitute(step.args ?? {}, sampleWith("sample")));
+      if (plain.success) parsed = plain;
+    }
     if (!parsed.success) {
       problems++;
       console.log(`FAIL ${String(i + 1).padStart(2)} ${label}: ${parsed.error.issues.map((x) => `${x.path.join(".") || "(args)"}: ${x.message}`).join("; ")}`);
@@ -174,7 +180,7 @@ if (!existsSync(SDK)) die(`${SDK} is missing: run pnpm install first`);
 
 for (const [i, step] of steps.entries()) {
   if (skipReason(step) || step.tool === "__list") continue;
-  const unset = unsetPlaceholders(step);
+  const unset = [...unsetPlaceholders(step), ...[...placeholders(step.expectText ?? "")].filter((k) => params[k] === undefined)];
   if (unset.length) die(`step ${i + 1} (${step.label ?? step.tool}) uses ${unset.map((k) => "${" + k + "}").join(", ")}: pass --param ${unset[0]}=... or set FIELD_TEST_${unset[0]}`);
 }
 
@@ -235,7 +241,13 @@ try {
     }
     const text = texts.join("\n");
     let ok = !error && !reply?.isError;
-    if (ok && step.expectText && !text.includes(substitute(step.expectText))) {
+    if (step.expectError) {
+      const said = `${text}\n${error ?? ""}`;
+      const failedAsExpected = (Boolean(error) || Boolean(reply?.isError)) && said.includes(step.expectError);
+      ok = failedAsExpected;
+      error = failedAsExpected ? undefined : `expected an error containing "${step.expectError}"${error ? `, got: ${error}` : reply?.isError ? "" : ", but the call succeeded"}`;
+    }
+    if (ok && step.expectText && !`${text}\n${error ?? ""}`.includes(substitute(step.expectText))) {
       ok = false;
       error = `reply does not contain "${substitute(step.expectText)}"`;
     }

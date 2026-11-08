@@ -69,6 +69,7 @@ ignored value never takes effect. In addition, a `tools.paths.<name>` entry must
 | --- | --- | --- | --- |
 | `provider` | `"local"` | `local`, `self-hosted`, `cloud` | `local`: the Simlock worker on this machine. `self-hosted`: a Simlock gateway or worker at `endpoint`. `cloud`: reserved for a future hosted provider; refused today with `NOT_SUPPORTED`. |
 | `endpoint` | none | `http://` or `https://` URL | Base URL of the Simlock gateway or worker for `self-hosted`, e.g. `https://gateway.example.com`. Plain `http://` is refused unless the host is private (loopback, RFC 1918, link-local, Tailscale's 100.64.0.0/10, `*.ts.net`), because the token would travel unencrypted. |
+| `targets` | none | list of `{name, endpoint, platforms?}` | Several self-hosted hosts at once, written by [`tapdance connect`](cli-reference.md#connect): a lease goes to the first target that serves its platform, or to `--target <name>`. `platforms` (`["android"]`, `["ios"]`) limits what is routed to that host. Read only from `~/.tapdance/config.json`: a project file's `targets` is ignored with a warning. When set, `endpoint` in the user file is ignored; `TAPDANCE_ENDPOINT` or a project file's `endpoint` still selects one host. |
 | `platforms.android.enabled` | `true` | boolean | `false` refuses Android leases and skips Android host checks in `doctor`. |
 | `platforms.ios.enabled` | `true` | boolean | Same for iOS. |
 
@@ -130,6 +131,7 @@ refused, and `tapdance config set` refuses keys containing "token" or "secret".
 | Credential | Used for | Where it comes from (later wins) |
 | --- | --- | --- |
 | Agent token | `self-hosted` mode: every device call to the gateway or worker | `~/.tapdance/credentials.json` `"token"` (bound to `"endpoint"`), then `TAPDANCE_TOKEN` |
+| Connect target tokens | `self-hosted` mode with `targets`: calls to each target | `~/.tapdance/credentials.json` `"tokens"`, a map from origin to token written by `tapdance connect`; each goes only to its origin. `TAPDANCE_TOKEN` is not used for targets. |
 | Operator token | `tapdance workers list` and the workers check in `doctor` through a gateway | `~/.tapdance/credentials.json` `"operatorToken"` (bound to `"operatorEndpoint"`), then `TAPDANCE_OPERATOR_TOKEN` |
 
 Store them with:

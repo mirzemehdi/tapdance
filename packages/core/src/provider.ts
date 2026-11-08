@@ -33,6 +33,8 @@ export interface DoctorCheck {
   status: CheckStatus;
   detail: string;
   fix?: string;
+  /** The connect target this check is about, when several are configured (doctor groups by it). */
+  target?: string;
 }
 
 /** Progress for slow calls (queueing, booting, uploading). Printed on stderr by the CLI. */

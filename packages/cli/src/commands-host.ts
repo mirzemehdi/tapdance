@@ -35,9 +35,13 @@ import {
   Tapdance,
   TapdanceError,
   hostChecks,
+  loadConfig,
+  migrateLegacyToken,
   redactSecrets,
   saveCredentials,
+  targetToken,
   toTapdanceError,
+  urlOrigin,
   userConfigPath,
   writeConfigFile,
   type DoctorCheck,
@@ -47,6 +51,7 @@ import { CLI_ENTRY, leaseWithNotices, open, output, type GlobalOptions } from ".
 import { GH_FIX, deployKeyState, describeDeployKeyState, ghNeededFor, removeFromAllowList } from "./host/builds.js";
 import { bold, dim, green, red, renderChecks, table, yellow, type Output } from "./output.js";
 import { readSecret, tokenOrigin } from "./commands-setup.js";
+import { currentTargets, parsePlatforms, removeTarget, upsertTarget } from "./connect-targets.js";
 import { applyWarm, installWorker, localWorkerStatus, readUserConfig, resetWarm, restartWorker, setWorkerService, simlockNuke, startWorker, stopWorkerCompletely, warmReport, warnIfServiceMissing, workerRunning, workerServiceCheck, workerServiceInstalled } from "./commands-worker.js";
 import { hostUpWorkerAction, staleServiceReason } from "./host/worker-service.js";
 import { assertGuardHostSafe, installGuardAsService, isMacAdmin, issuePairing, joinedGateway, parseScopes, servicePlatform } from "./commands-guard.js";
@@ -1239,19 +1244,37 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
   // ------------------------------------------------------------------ the agent's side
 
   program
-    .command("connect <endpoint>")
-    .description("On the agent's machine: use a host's guard (reads the token from stdin), check it, and print MCP setup for Claude Code, Codex and Cursor")
-    .action(async (endpoint: string) => {
+    .command("connect [endpoint]")
+    .description("On the agent's machine: add a host's guard as a connect target (reads the token from stdin), check it, and print MCP setup for Claude Code, Codex and Cursor. Connect each host once; leases go to the host that serves the platform")
+    .option("--name <name>", "the target's name for `--target` and `tapdance disconnect` (default: the host's first DNS label)")
+    .option("--platform <platform...>", "route only these platforms to this host (android, ios; `any` clears an earlier limit); default: whatever it serves")
+    .option("--list", "list the connect targets and whether a token is saved for each; changes nothing")
+    .action(async (endpoint: string | undefined, o: { name?: string; platform?: string[]; list?: boolean }) => {
       const g = globals();
       const out = output(g);
       try {
+        if (o.list) {
+          if (endpoint !== undefined) throw new TapdanceError("USAGE", "--list takes no endpoint");
+          await listTargets(out);
+          return;
+        }
+        if (endpoint === undefined) throw new TapdanceError("USAGE", "Give the host's endpoint", { hint: "tapdance connect https://<host>.<tailnet>.ts.net < pairing-<label>.token (or `tapdance connect --list`)." });
         const origin = tokenOrigin(endpoint);
+        const platforms = parsePlatforms(o.platform);
         await probeEndpoint(endpoint, out);
         const token = await readSecret(`Token for ${origin} (from the host's pairing file; input hidden):`);
         if (!token) throw new TapdanceError("USAGE", "No token given", { hint: `Pipe the token file in: tapdance connect ${endpoint} < pairing-<label>.token` });
-        await writeConfigFile(userConfigPath(), { ...(await readUserConfig()), provider: "self-hosted", endpoint });
-        const saved = await saveCredentials({ token, endpoint: origin });
-        out.progress(`Wrote ${userConfigPath()} (provider self-hosted, endpoint ${endpoint}); token saved to ${saved} (mode 600) for ${origin} only; fingerprint ${tokenFingerprint(token)} (it should match what host up showed)`);
+        const before = await readUserConfig();
+        const { config, target, added, replaced, migrated } = upsertTarget(before, { endpoint, ...(o.name ? { name: o.name } : {}), ...(platforms ? { platforms } : {}) });
+        // An older single-target token moves to the per-origin map first, so it keeps serving its host.
+        const moved = await migrateLegacyToken(migrated ? urlOrigin(migrated) : undefined);
+        await writeConfigFile(userConfigPath(), config);
+        // A target moved to a new address: its old origin's token goes, so it is never sent there again.
+        const replacedOrigin = replaced ? (urlOrigin(replaced) ?? replaced) : undefined;
+        const saved = await saveCredentials({ tokens: { [origin]: token, ...(replacedOrigin ? { [replacedOrigin]: "" } : {}) } });
+        if (migrated) out.progress(`Kept your earlier endpoint as target ${config.targets![0]!.name} (${migrated})${moved ? "; its token now serves only it" : ""}`);
+        if (replaced) out.progress(`Target ${target.name} moved from ${replaced} to ${endpoint}; the token saved for ${replacedOrigin} was removed`);
+        out.progress(`${added ? "Added" : "Updated"} target ${target.name} (${endpoint}${target.platforms ? `, only ${target.platforms.join(", ")}` : ""}) in ${userConfigPath()}; token saved to ${saved} (mode 600) for ${origin} only; fingerprint ${tokenFingerprint(token)} (it should match what host up showed)`);
         const t = await open(g, out, { fleet: false });
         let checks: DoctorCheck[];
         try {
@@ -1265,22 +1288,75 @@ export function registerHostCommands(program: Command, globals: () => GlobalOpti
         const ok = !checks.some((c) => c.status === "fail");
         const onPath = findOnPath("tapdance", process.env["PATH"] ?? "", existsSync);
         const command = onPath ? ["tapdance", "mcp"] : [process.execPath, CLI_ENTRY, "mcp"];
-        out.result({ endpoint, origin, config: userConfigPath(), credentials: saved, ok, checks, mcpCommand: command }, () =>
+        const targets = config.targets ?? [];
+        out.result({ endpoint, origin, target: target.name, targets, config: userConfigPath(), credentials: saved, ok, checks, mcpCommand: command }, () =>
           [
             renderChecks(checks),
             "",
+            targets.length > 1 ? dim(`Targets: ${targets.map((x) => x.name).join(", ")}. A lease goes to the first that serves its platform; \`tapdance device lease --target <name>\` picks one.`) : "",
             bold(ok ? "Connected. Give your agent the device tools:" : "The checks above failed; fix them, then give your agent the device tools:"),
             "",
             mcpSnippets(command),
             "",
             dim("Codex and Cursor do not pass a session id: set the same TAPDANCE_SESSION_ID in the server's env and in the agent's shell if it uses both the CLI and MCP (docs/agents/)."),
-          ].join("\n"),
+          ]
+            .filter((line, i) => line !== "" || i !== 2)
+            .join("\n"),
         );
         if (!ok) process.exitCode = 10;
       } catch (error) {
         process.exitCode = out.error(error);
       }
     });
+
+  program
+    .command("disconnect <target>")
+    .description("On the agent's machine: remove a connect target (by name or endpoint) and its saved token")
+    .action(async (which: string) => {
+      const out = output(globals());
+      try {
+        const { config, removed, migrated } = removeTarget(await readUserConfig(), which);
+        await migrateLegacyToken(migrated ? urlOrigin(migrated) : undefined);
+        const origin = urlOrigin(removed.endpoint) ?? removed.endpoint;
+        await writeConfigFile(userConfigPath(), config);
+        const saved = await saveCredentials({ tokens: { [origin]: "" } });
+        const left = config.targets ?? [];
+        out.result({ removed, targets: left, config: userConfigPath(), credentials: saved }, () =>
+          [
+            `Removed target ${removed.name} (${removed.endpoint}) and its token.`,
+            left.length ? `Targets left: ${left.map((t) => t.name).join(", ")}.` : dim("No targets left; add one with `tapdance connect <endpoint>`."),
+            dim(`A lease still held there ends at its time limit on that host; \`tapdance device release\` in its session drops the record here. The host can revoke this machine with \`tapdance worker guard revoke <label>\`.`),
+          ].join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+}
+
+/** `connect --list`: the targets in routing order, with what each is limited to and whether a token is saved. */
+async function listTargets(out: Output): Promise<void> {
+  const resolved = await loadConfig();
+  const user = await readUserConfig();
+  const { targets, migrated } = currentTargets(user);
+  const rows = targets.map((t) => {
+    const origin = urlOrigin(t.endpoint) ?? t.endpoint;
+    // An older unbound token serves the migrated endpoint; one bound elsewhere does not (review).
+    const legacy = migrated && resolved.credentials.token !== undefined && (resolved.credentials.endpoint === undefined || resolved.credentials.endpoint === origin) ? resolved.credentials.token : undefined;
+    const token = targetToken(resolved.credentials, origin) ?? legacy;
+    return { name: t.name, endpoint: t.endpoint, platforms: t.platforms ?? ["any"], token: token ? tokenFingerprint(token) : undefined };
+  });
+  out.result({ targets: rows, ...(migrated ? { singleEndpoint: migrated } : {}), ...(resolved.endpointSource === "env" || resolved.endpointSource === "project" ? { overriddenBy: resolved.endpointSource } : {}) }, () =>
+    rows.length === 0
+      ? "No connect targets. Add one with `tapdance connect <endpoint> < pairing-<label>.token`."
+      : [
+          table([["NAME", "ENDPOINT", "PLATFORMS", "TOKEN"], ...rows.map((r) => [r.name, r.endpoint, r.platforms.join(","), r.token ? `saved (${r.token})` : red("missing")])]),
+          migrated ? dim("This is an older single-endpoint setup; the next `tapdance connect` keeps it as the first target.") : dim("Leases go to the first target (in this order) that serves the platform; `--target <name>` picks one. `tapdance doctor` checks each."),
+          resolved.endpointSource === "env" || resolved.endpointSource === "project" ? yellow(`${resolved.endpointSource === "env" ? "TAPDANCE_ENDPOINT" : "tapdance.config.json"} names one endpoint here, so these targets are not used in this directory.`) : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+  );
 }
 
 /**

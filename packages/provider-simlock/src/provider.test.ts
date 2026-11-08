@@ -273,6 +273,12 @@ describe("error mapping", () => {
     const slow = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Daemon request timed out" }, "press home");
     expect(slow.code).toBe("PROVIDER_UNREACHABLE");
     expect(slow.retryable).toBe(true);
+    // #137: the XCUITest runner still starting is retryable too; a read is retried by the SDK, an
+    // action goes back to the agent with "read the screen first".
+    const runner = fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Runner command deadline exceeded" }, "press home");
+    expect(runner).toMatchObject({ code: "PROVIDER_UNREACHABLE", retryable: true, hint: expect.stringContaining("read the screen") });
+    expect(runner.details?.["reason"]).toBeUndefined();
+    expect(fromAgentDeviceError({ code: "COMMAND_FAILED", message: "Runner command deadline exceeded" }, "inspect").details?.["reason"]).toBe("DAEMON_UNAVAILABLE");
     // Simlock's INTERNAL (simctl timed out on an overloaded 8 GB Mac) is the host's fault, not the request's.
     const internal = fromAgentDeviceError({ code: "INVALID_ARGS", message: "refused by simlock: Internal error" }, "lease");
     expect(internal.code).toBe("PROVIDER_UNAVAILABLE");
@@ -580,6 +586,8 @@ describe("platform on offer (#39)", () => {
     const inventory = await provider.inventory();
     expect(inventory.notes).toContain("No android on this host: it has no Android SDK.");
     expect(inventory.notes.some((n) => n.startsWith("android is not available"))).toBe(false);
+    // #138: the Android limit is not room on this host.
+    expect(inventory.capacity).toEqual([expect.objectContaining({ platform: "android", served: false }), expect.objectContaining({ platform: "ios", served: true })]);
   });
 });
 
@@ -1500,5 +1508,63 @@ describe("launch right after clear_app_data (#107, MOCKED agent-device client an
     const t = make([{ code: "APP_NOT_INSTALLED", message: "Application com.measify.pianolune not found" }], [inApp]);
     await expect(t.p.launchApp(handle, APP)).rejects.toMatchObject({ code: "APP_NOT_INSTALLED" });
     expect(t.opens()).toBe(1);
+  });
+});
+
+// Mocked transport: a gateway answering an agent token (no operator token), like Simlock 0.5.0's
+// agent-role /v1/status, which lists its workers with capabilities and capacity but without leases.
+describe("doctor on a gateway with an agent token", () => {
+  function gateway(workers: unknown[]) {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      const path = new URL(url).pathname;
+      calls.push(path);
+      const body =
+        path === "/v1/healthz"
+          ? { ok: true }
+          : path === "/v1/identity"
+            ? { principal: "p", role: "agent" }
+            : path === "/v1/status"
+              ? { leases: [], devices: [], daemon: { mode: "gateway", version: "0.5.0" }, capacity: { android: { limit: 2, running: 0 }, ios: { limit: 1, running: 0 } }, workers }
+              : path === "/v1/catalog"
+                ? { platforms: [{ platform: "android", models: ["Pixel 8"], osVersions: ["35"] }, { platform: "ios", models: ["iPhone 17"], runtimes: ["26.1"] }] }
+                : {};
+      return new Response(JSON.stringify(body), { status: path === "/v1/workers" ? 403 : 200, headers: { "Content-Type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const provider = new SimlockProvider({ kind: "remote", baseUrl: "https://gw.tail.ts.net", token: "t", tenant: "x", runId: "r", clientId: "c" } as never, {}, fetchImpl);
+    return { provider, calls };
+  }
+
+  it("reads per-worker capabilities from /v1/status and adds a row per worker", async () => {
+    const { provider, calls } = gateway([
+      { id: "w-n2", label: "n2", connection: "connected", capacity: { android: { limit: 2, running: 1 } }, capabilities: [{ name: "agent-device", state: "available" }, { name: "stream", state: "available" }], host: { os: "linux", arch: "x64" } },
+      { id: "w-mac", label: "mac", connection: "connected", capacity: { ios: { limit: 1, running: 0 } }, capabilities: [{ name: "agent-device", state: "available" }, { name: "input", state: "available" }] },
+    ]);
+    const checks = await provider.doctor();
+    expect(checks.find((c) => c.id === "simlock.agent-device")).toMatchObject({ status: "pass", detail: expect.stringContaining("on n2") });
+    expect(checks.find((c) => c.id === "simlock.stream")?.status).toBe("pass");
+    expect(checks.find((c) => c.id === "simlock.input")?.status).toBe("pass");
+    expect(checks.find((c) => c.id === "simlock.worker.w-n2")).toMatchObject({ title: "Worker n2", status: "pass", detail: expect.stringContaining("android 1/2") });
+    expect(checks.find((c) => c.id === "simlock.worker.w-mac")).toMatchObject({ status: "pass", detail: expect.stringContaining("ios 0/1") });
+    expect(checks.find((c) => c.id === "simlock.workers")).toMatchObject({ status: "pass", detail: "n2: connected, mac: connected" });
+    // The admin-only worker list is not asked for.
+    expect(calls).not.toContain("/v1/workers");
+  });
+
+  it("says unknown, not failed, while the only worker is still starting; a disconnected one warns", async () => {
+    const { provider } = gateway([
+      { id: "w-mac", label: "mac", connection: "connected", health: "starting" },
+      { id: "w-n2", label: "n2", connection: "disconnected", capabilities: [{ name: "agent-device", state: "available" }] },
+    ]);
+    const checks = await provider.doctor();
+    expect(checks.find((c) => c.id === "simlock.agent-device")).toMatchObject({ status: "warn", detail: expect.stringContaining("mac still starting") });
+    expect(checks.find((c) => c.id === "simlock.worker.w-mac")).toMatchObject({ status: "warn", detail: expect.stringContaining("still starting") });
+    expect(checks.find((c) => c.id === "simlock.worker.w-n2")).toMatchObject({ status: "warn", fix: expect.stringContaining("tapdance worker status") });
+  });
+
+  it("still fails when no connected worker serves agent-device", async () => {
+    const { provider } = gateway([{ id: "w1", label: "n2", connection: "connected", capabilities: [{ name: "agent-device", state: "disabled" }] }]);
+    const checks = await provider.doctor();
+    expect(checks.find((c) => c.id === "simlock.agent-device")?.status).toBe("fail");
   });
 });

@@ -77,14 +77,25 @@ connection through `tailscale serve` can be slow; the time is shown, a failure n
 serves HTTPS is named as such), the token's role, whether
 agent-device, streaming and input are available, capacity per platform (a platform with room but no device on offer fails: the worker skipped that
 driver, so leases would be refused), the Simlock version (warns if
-it is not 0.5.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored),
-and this session's lease.
+it is not 0.5.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored,
+or through a gateway, whose status lists its workers for an agent token too), and this session's lease.
+Through a gateway, capabilities come from its workers (from the gateway's status, so an agent token is
+enough), with one row per worker: connection, capacity per platform, capabilities and OS; a worker that
+is still starting shows as unknown, not as a failure.
 
 Host checks run by default in local mode only. `--no-host` skips them. Exit code 10 when any check
 fails, 0 otherwise (warnings do not fail). `doctor` and `workers list` load the operator token when one
 is stored; no other command, and never the MCP server, loads it.
 
 KVM state of *remote* workers is not reported: Simlock does not expose it (STATUS C-05).
+
+With several [connect targets](#connect), `doctor` checks each host and prints one section per target
+(endpoint, reachable, the token's role and label, capabilities, capacity per platform, Simlock version),
+after a `Connect targets` line that says which host each platform's leases go to. Each host gets the same
+quick check as a lease first: one that does not answer within 5 s is reported down at once, without its
+own longer checks. The run is OK when at
+least one target is usable: a host that is down only warns (its checks are shown as warnings), and fails
+only when no target is usable.
 
 ### `config`
 
@@ -118,7 +129,10 @@ tapdance devices install <platform> <version> [--image-tag <tag>]
 ```
 
 `devices` (or `devices list`) shows, per platform, capacity (running, limit, warm, leased), the models
-and OS versions that can be leased, Android image tags, running devices and the queue depth.
+and OS versions that can be leased, Android image tags, running devices and the queue depth. With
+several [connect targets](#connect) it prints one section per host, a host that is down with its reason;
+`--json` keeps the merged lists and adds `hosts` (`target`, `endpoint`, `reachable`, `error?`,
+`inventory?`).
 
 `devices install ios 18.5` or `devices install android 35` installs an iOS runtime or Android system
 image **on this machine's worker** by running the bundled `simlock --local component install`. Downloads
@@ -145,7 +159,7 @@ needs an operator token (`tapdance config set-token --operator`), otherwise it f
 
 ```text
 tapdance device lease -p <android|ios> [-d <model>] [--os <version>] [--image-tag <tag>] [--physical]
-                      [--profile <name>] [--ttl <minutes>] [--wait <seconds>] [--no-keepalive] [--hold]
+                      [--profile <name>] [--target <name>] [--ttl <minutes>] [--wait <seconds>] [--no-keepalive] [--hold]
 tapdance device status
 tapdance device renew [--ttl <minutes>]
 tapdance device release
@@ -165,6 +179,7 @@ tapdance device done
 | `--image-tag <tag>` | Android system image tag, e.g. `google_apis_playstore`. Leave it out for normal testing: on a host that has both a Play image and `google_apis` (a host set up before `host-setup.sh` installed `google_apis`, then set up again), Tapdance asks for `google_apis` and says so; on a host with one kind, Simlock picks it. With a tag (given or chosen) and no `--os`, Tapdance asks for the host's default API level (the one `tapdance devices` shows as default) when that tag is installed there, instead of the newest level that has it. The "a warm spare is ready" line counts only a spare of the requested tag. |
 | `--physical` | Lease an enrolled physical device instead. Untested. |
 | `--profile <name>` | Boot a [device profile](#device-profiles) from this machine instead of a Simlock device. |
+| `--target <name>` | With several [connect targets](#connect): lease from this one (name or endpoint). Without it the lease goes to the first target, in `connect --list` order, that answers, serves the platform (and the `--device` model and plain `--os` version, when given) and has a free slot or a warm spare; when every such target is full, to the first of them, where the request waits. A target with no capacity for the platform is skipped. A target that does not answer within 5 s is skipped for another host of the same platform; when none is left, the lease fails at once with `PROVIDER_UNREACHABLE` (retryable) naming that host and the targets that are up. Another platform is never leased instead. `USAGE` when no targets are configured. |
 | `--ttl <minutes>` | Lease TTL, 1–240. Default `session.defaultTtlMinutes` (30). |
 | `--wait <seconds>` | How long to wait in the queue, 0–3600. Default `session.leaseWaitSeconds` (330). The Simlock provider waits at most 330 s. |
 | `--settle <seconds>` | Android emulators: how long to check the guest's CPU after it has booted with no dialog in front, 0–300. Default `session.settleSeconds` (15). `0` skips the CPU check. |
@@ -643,18 +658,45 @@ over ssh `host up` does not offer the clipboard: copy the token file with `scp`)
 ### `connect`
 
 ```text
-tapdance connect <endpoint> < pairing-<label>.token
+tapdance connect <endpoint> [--name <name>] [--platform <android|ios>...] < pairing-<label>.token
+tapdance connect --list
+tapdance disconnect <name|endpoint>
 ```
 
 On the agent's machine (macOS, Linux or Windows): first checks that `<endpoint>/v1/healthz` answers
 (two tries, 15 s each) and saves nothing if it does not; an `http://` address that the guard now serves
 over HTTPS fails with the `https://` command to use. Then it reads the guard token from stdin (or a hidden
-prompt; never from argv), sets `provider: "self-hosted"` and the endpoint in `~/.tapdance/config.json`
-(other keys kept), saves the token to `~/.tapdance/credentials.json` (mode 600) bound to the endpoint's
-origin, runs `doctor` without host checks, and prints MCP setup for Claude Code, Codex and Cursor
-(`tapdance mcp`, or absolute Node.js and CLI paths when `tapdance` is not on `PATH`). Warns when the
-current directory's `tapdance.config.json` or `TAPDANCE_ENDPOINT` overrides the endpoint. Exit 10 when a
-check fails. Plain `http://` is accepted only for private addresses.
+prompt; never from argv), adds the host as a **connect target** in `~/.tapdance/config.json` (`provider:
+"self-hosted"`, `targets`; other keys kept), saves the token to `~/.tapdance/credentials.json` (mode 600)
+under the endpoint's origin, runs `doctor` without host checks, and prints MCP setup for Claude Code, Codex
+and Cursor (`tapdance mcp`, or absolute Node.js and CLI paths when `tapdance` is not on `PATH`). Warns when
+the current directory's `tapdance.config.json` or `TAPDANCE_ENDPOINT` overrides the endpoint. Exit 10 when
+a check fails. Plain `http://` is accepted only for private addresses.
+
+Run it once per host, for example an Android host and a Mac: each becomes a target, and a lease goes to
+the first target (in the order they were added) that serves its platform; `device lease --target <name>`
+(MCP: `lease_device` `target`) picks one. Every later call about a lease (install, UI, screenshots, logs,
+release …) goes to the host that granted it, with that host's token only. See
+[Android and iOS from one agent](guides/android-and-ios.md).
+
+| Option | Meaning |
+| --- | --- |
+| `--name <name>` | The target's name (lower-case letters, digits, dashes; at most 32). Default: the host's first DNS label (`n2-host` for `https://n2-host.tail1234.ts.net`), with `-2`, `-3` … when taken. |
+| `--platform <platform...>` | Route only these platforms to this host (`--platform android`, or `android,ios`). Default: whatever the host serves, read from it at lease time. |
+| `--list` | Print the targets in routing order with their platforms and whether a token is saved (its fingerprint, never the token). Changes nothing. |
+
+Connecting an endpoint that is already a target (same origin) updates it: its address, its token, and
+its name or platforms when given. `--name` with the name of an existing target and a new endpoint moves
+that target to the new address (for example from an SSH tunnel to its tailnet name): it keeps its place in
+the routing order and its platforms, gets the new token, and the token saved for its old address is
+removed. When the endpoint is already a different target, `connect` refuses and names
+`tapdance disconnect` for the one to remove. An older configuration with a single `endpoint` keeps working as it
+is; the next `connect` turns it into the first target and moves its token to the per-origin map.
+
+`tapdance disconnect <name|endpoint>` removes a target and its saved token. A lease still held on that
+host ends there at its time limit; `tapdance device release` in that session drops the record on this
+machine (the release cannot reach the host any more). The host revokes this machine with
+`tapdance worker guard revoke <label>`.
 
 ## External tools
 
@@ -1071,6 +1113,9 @@ Options:
   --physical                 lease an enrolled physical device instead
   --profile <name>           boot a device profile from this machine (read-only:
                              the lease's changes are discarded)
+  --target <name>            with several hosts connected: lease from this
+                             connect target (`tapdance connect --list`) instead
+                             of the first that serves the platform
   --ttl <minutes>            lease time to live in minutes
   --wait <seconds>           how long to wait in the queue
   --settle <seconds>         Android emulator: how long to check the guest's CPU
@@ -2609,10 +2654,30 @@ Options:
 ### `tapdance connect`
 
 ```text
-Usage: tapdance connect [options] <endpoint>
+Usage: tapdance connect [options] [endpoint]
 
-On the agent's machine: use a host's guard (reads the token from stdin), check
-it, and print MCP setup for Claude Code, Codex and Cursor
+On the agent's machine: add a host's guard as a connect target (reads the token
+from stdin), check it, and print MCP setup for Claude Code, Codex and Cursor.
+Connect each host once; leases go to the host that serves the platform
+
+Options:
+  --name <name>             the target's name for `--target` and `tapdance
+                            disconnect` (default: the host's first DNS label)
+  --platform <platform...>  route only these platforms to this host (android,
+                            ios; `any` clears an earlier limit); default:
+                            whatever it serves
+  --list                    list the connect targets and whether a token is
+                            saved for each; changes nothing
+  -h, --help                display help for command
+```
+
+### `tapdance disconnect`
+
+```text
+Usage: tapdance disconnect [options] <target>
+
+On the agent's machine: remove a connect target (by name or endpoint) and its
+saved token
 
 Options:
   -h, --help  display help for command

@@ -22,6 +22,8 @@ export interface LeaseRequest {
    * wait ignore it.
    */
   settleMs?: number;
+  /** The connect target to lease from (`--target`); unset = the first target that serves the platform. */
+  target?: string;
 }
 
 /** Where a device runs, so humans and agents can tell a laptop from a cloud VM. */
@@ -31,6 +33,8 @@ export interface DeviceLocation {
   workerId?: string;
   workerLabel?: string;
   endpoint: string;
+  /** The connect target's name, when several are configured. */
+  target?: string;
 }
 
 /**
@@ -86,6 +90,11 @@ export interface CapacitySummary {
   limit: number;
   warm: number;
   leased: number;
+  /**
+   * False when the host cannot run this platform at all (iOS on Linux, Android without an SDK): Simlock
+   * still reports a limit for it, which is not free room (#138). Absent from older providers: served.
+   */
+  served?: boolean;
 }
 
 export interface DeviceInventory {
@@ -102,6 +111,17 @@ export interface DeviceInventory {
   }>;
   queueDepth: number;
   notes: string[];
+  /** One entry per connect target when several are configured; the lists above merge them. */
+  hosts?: HostInventory[];
+}
+
+/** What one connect target serves, or why it could not be asked. */
+export interface HostInventory {
+  target: string;
+  endpoint: string;
+  reachable: boolean;
+  error?: string;
+  inventory?: Omit<DeviceInventory, "hosts">;
 }
 
 export interface WorkerInfo {

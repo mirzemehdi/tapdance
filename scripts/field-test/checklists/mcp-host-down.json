@@ -1,0 +1,8 @@
+[
+  { "tool": "list_devices", "label": "list_devices", "expectText": "\"reachable\": false" },
+  { "tool": "lease_device", "args": { "platform": "${DOWN_PLATFORM}" }, "label": "lease_down_platform", "expectError": "PROVIDER_UNREACHABLE", "expectText": "${DOWN_TARGET}", "timeoutSec": 120 },
+  { "tool": "lease_device", "args": { "platform": "${UP_PLATFORM}" }, "label": "lease_up_platform", "stopOnFail": true, "timeoutSec": 900 },
+  { "tool": "get_device_status", "label": "status_up", "expectText": "\"platform\": \"${UP_PLATFORM}\"" },
+  { "tool": "take_screenshot", "args": { "note": "other host still leasing while one is down" }, "label": "screenshot_up" },
+  { "tool": "release_device", "label": "release_up", "always": true }
+]

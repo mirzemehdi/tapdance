@@ -62,6 +62,49 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
+### Stage 4: one agent, several hosts
+
+Proven on 2026-11-07 from a Linux VPS with a Google Cloud N2 host (Android) and a rented Mac mini (iOS)
+([evidence](docs/testing/evidence/2026-11-07-two-hosts-android-ios.md), [guide](docs/guides/android-and-ios.md)).
+
+
+- `tapdance connect <endpoint>` adds the host as a named connect target (`--name`, `--platform`)
+  instead of replacing the endpoint; its token is saved per origin in `credentials.json` (`tokens`,
+  mode 600) and sent only there. An older single `endpoint` and its token keep working and become the
+  first target on the next `connect`. `tapdance connect --list` and `tapdance disconnect <name|endpoint>`.
+- New user-only config key `targets`. A project file's `targets` is ignored with a warning;
+  `TAPDANCE_ENDPOINT` or a project `endpoint` still selects one host.
+- Leases go to the first target that answers and serves the platform (and model or OS version);
+  `device lease --target <name>` and `lease_device` `target` pick one. Every later call about a lease
+  goes to the host that granted it. A host that does not answer fails its platform's leases within
+  seconds with retryable `PROVIDER_UNREACHABLE` naming it and the targets that are up; another platform
+  is never used instead. One lease per session, as before.
+- `doctor` prints one section per host and is OK while one host is usable; `devices` prints one
+  section per host and `--json` / `list_devices` add `hosts`.
+- `doctor` on a gateway with only an agent token reads each worker's capabilities and capacity from the
+  gateway's `/v1/status`, with a row per worker, instead of failing "capability not reported".
+- Field-test drivers: `cli-checklist.sh` suites `two-hosts` and `host-down`; MCP checklists
+  `mcp-two-hosts.json` and `mcp-host-down.json`, and `expectError` steps.
+- From the field run: `connect <endpoint> --name <existing>` moves that target to the new endpoint (keeps
+  its place and platforms, drops the old address's token) instead of refusing; `doctor` reports a target
+  that does not answer within the 5 s lease probe as down at once, instead of after its own two 15 s tries
+  (about 30 s with a hung host).
+- After the run (#137, #138): iOS "Runner command deadline exceeded" (agent-device's test runner still
+  starting, the first command after a cold lease on a slow host) is retryable `PROVIDER_UNREACHABLE`; a
+  read is retried once at once, an action goes back to the agent with "read the screen first". `devices`
+  no longer prints capacity for a platform a host cannot run (iOS on Linux, Android without an SDK);
+  `--json` / `list_devices` mark it `served: false`, and the merged capacity counts only hosts that can
+  run the platform. Unit-tested.
+- After a review of the stage 4 change: a session whose lease sits on a target that was removed or
+  re-pointed could neither release nor lease again (the router threw before the SDK could catch it); it
+  now releases the record. `connect` with a wrong token for a second host failed only as a warning and
+  reported "Connected" (exit 0); a refused token now fails. Leases prefer a target with a free slot or a
+  warm spare, and skip one with no capacity for the platform, instead of queueing on the first that
+  lists it. The 5 s target probe also bounds the device list, not only healthz. `config.json` and
+  `credentials.json` are written to a temp file and renamed. `lease_device` `reuse` with another
+  `target` no longer returns the lease from the first. `connect --platform any` clears a limit. The
+  saved per-origin token wins over an older token bound elsewhere. Unit-tested.
+
 ### Added in the field-test round (issues #1–#19)
 
 - Device-state tools through one allowlisted device-command channel that also works through the worker

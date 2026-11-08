@@ -69,9 +69,15 @@ export function kv(pairs: Array<[string, string | undefined]>): string {
 const MARK: Record<DoctorCheck["status"], string> = { pass: green("✓"), warn: yellow("!"), fail: red("✗"), skip: dim("–") };
 
 export function renderChecks(checks: DoctorCheck[]): string {
+  // With several connect targets, each host's checks form one section under its "Target <name>" line.
+  let section: string | undefined;
   const lines = checks.map((c) => {
-    const head = `${MARK[c.status]} ${c.title}${dim(` — ${c.detail}`)}`;
-    return c.fix && c.status !== "pass" ? `${head}\n    ${bold("fix:")} ${c.fix}` : head;
+    const opens = c.target !== undefined && c.target !== section;
+    const closes = c.target === undefined && section !== undefined;
+    section = c.target;
+    const indent = c.target !== undefined && !opens ? "  " : "";
+    const head = `${opens || closes ? "\n" : ""}${indent}${MARK[c.status]} ${opens ? bold(c.title) : c.title}${dim(` — ${c.detail}`)}`;
+    return c.fix && c.status !== "pass" ? `${head}\n${indent}    ${bold("fix:")} ${c.fix}` : head;
   });
   const fails = checks.filter((c) => c.status === "fail").length;
   const warns = checks.filter((c) => c.status === "warn").length;

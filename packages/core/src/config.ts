@@ -1,4 +1,5 @@
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -17,12 +18,31 @@ const httpUrl = z
   .url()
   .refine((value) => /^https?:\/\//.test(value), "must start with http:// or https://");
 
+/** A target's name: what `--target` and `tapdance disconnect` take. */
+export const TARGET_NAME = /^[a-z0-9][a-z0-9-]{0,31}$/;
+
+export const TargetSchema = z
+  .object({
+    name: z.string().regex(TARGET_NAME, "use lower-case letters, digits and dashes (at most 32)"),
+    endpoint: httpUrl,
+    /** Only route these platforms here (`connect --platform`); unset = whatever the host serves. */
+    platforms: z.array(z.enum(["android", "ios"])).min(1).optional(),
+  })
+  .strict();
+
+export type TargetConfig = z.infer<typeof TargetSchema>;
+
 export const ConfigSchema = z
   .object({
     $schema: z.string().optional(),
     provider: z.enum(PROVIDER_KINDS).default("local"),
     /** Base URL of a Simlock worker or gateway, e.g. https://gateway.example.com. Local mode defaults it. */
     endpoint: httpUrl.optional(),
+    /**
+     * Several hosts at once (`tapdance connect`): a lease goes to the first one, in this order, that
+     * serves the platform. Read only from ~/.tapdance/config.json: it decides where tokens are sent.
+     */
+    targets: z.array(TargetSchema).optional(),
     platforms: z
       .object({
         android: z.object({ enabled: z.boolean().default(true) }).default({ enabled: true }),
@@ -94,6 +114,13 @@ export interface Credentials {
   endpoint?: string;
   /** The URL origin `operatorToken` was saved for. */
   operatorEndpoint?: string;
+  /** Agent tokens of `tapdance connect` targets, keyed by URL origin: each goes only to its origin. */
+  tokens?: Record<string, string>;
+}
+
+/** A configured connect target, resolved: its token is looked up by `origin`. */
+export interface ResolvedTarget extends TargetConfig {
+  origin: string;
 }
 
 /** Where the resolved `endpoint` came from: a repository's file is not trusted with an unbound token. */
@@ -112,6 +139,11 @@ export interface ResolvedConfig {
   endpointSource?: EndpointSource;
   /** Settings Tapdance ignored, for `config show` and doctor. */
   warnings: string[];
+  /**
+   * The connect targets leases are routed across (self-hosted only). Empty when a single endpoint is
+   * in use: an older config with `endpoint`, or TAPDANCE_ENDPOINT / a project file naming one.
+   */
+  targets: ResolvedTarget[];
 }
 
 /**
@@ -272,6 +304,13 @@ export async function loadCredentials(
     if (endpoint && credentials.token) credentials.endpoint = endpoint;
     const operatorEndpoint = typeof data["operatorEndpoint"] === "string" ? urlOrigin(data["operatorEndpoint"]) : undefined;
     if (operatorEndpoint && credentials.operatorToken) credentials.operatorEndpoint = operatorEndpoint;
+    const tokens = data["tokens"];
+    if (tokens !== null && typeof tokens === "object" && !Array.isArray(tokens)) {
+      for (const [key, value] of Object.entries(tokens as Record<string, unknown>)) {
+        const origin = urlOrigin(key);
+        if (origin && typeof value === "string" && value) (credentials.tokens ??= {})[origin] = value;
+      }
+    }
     sources.push(file);
   }
   // A token from the environment is bound to no origin.
@@ -300,6 +339,7 @@ export async function loadConfig(
   let endpointSource: EndpointSource | undefined;
   let ignored: Array<{ key: string; path: readonly [string, string]; value: unknown }> = [];
   let userEndpoint: string | undefined;
+  let projectTargetsIgnored: string | undefined;
 
   const userPath = userConfigPath(env);
   if (existsSync(userPath)) {
@@ -316,6 +356,10 @@ export async function loadConfig(
     }
     const { kept, removed } = stripUserOnly(await readJson(projectPath));
     ignored = removed;
+    if ("targets" in kept) {
+      delete kept["targets"];
+      projectTargetsIgnored = projectPath;
+    }
     merged = deepMerge(merged, kept);
     // Repeating the user's own endpoint does not make it the project's.
     const projectEndpoint = kept["endpoint"];
@@ -349,6 +393,12 @@ export async function loadConfig(
       warnings.push(`Ignored ${key} from ${projectPath}: security settings are read only from ~/.tapdance/config.json (\`tapdance config set --global\`) or the environment`);
     }
   }
+  if (projectTargetsIgnored) warnings.push(`Ignored targets from ${projectTargetsIgnored}: connect targets are read only from ~/.tapdance/config.json (\`tapdance connect\`)`);
+  // A single endpoint from the environment or a project file wins: it names one host on purpose.
+  const single = endpointSource === "env" || endpointSource === "project";
+  const targets: ResolvedTarget[] =
+    config.provider === "self-hosted" && !single ? (config.targets ?? []).map((t) => ({ ...t, origin: urlOrigin(t.endpoint) ?? t.endpoint })) : [];
+  if (targets.length > 0 && config.endpoint !== undefined) warnings.push(`endpoint ${config.endpoint} is ignored: targets are set (\`tapdance connect --list\`)`);
   return {
     config,
     sources,
@@ -358,13 +408,52 @@ export async function loadConfig(
     artifactsDir,
     ...(config.endpoint !== undefined && endpointSource !== undefined ? { endpointSource } : {}),
     warnings,
+    targets,
   };
+}
+
+/** The saved agent token for a connect target's origin, never one saved for another origin. */
+export function targetToken(credentials: Credentials, origin: string): string | undefined {
+  const saved = credentials.tokens?.[origin];
+  if (saved !== undefined) return saved;
+  // An older single-target file: its token goes to the origin it was saved for.
+  if (credentials.token !== undefined && credentials.endpoint === origin) return credentials.token;
+  return undefined;
+}
+
+/**
+ * A target name from an endpoint's host: `https://n2-host.tail1234.ts.net` → `n2-host`, an IP address
+ * → its digits with dashes. `taken` names are avoided with a numeric suffix.
+ */
+export function targetNameFor(endpoint: string, taken: readonly string[] = []): string {
+  let host = "";
+  try {
+    host = new URL(endpoint).hostname;
+  } catch {
+    host = endpoint;
+  }
+  const ip = /^[\d.]+$/.test(host) || host.includes(":");
+  const raw = (ip ? host : host.split(".")[0] ?? host).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const base = (TARGET_NAME.test(raw) ? raw : `host-${raw}`.replace(/-+$/, "")).slice(0, 28) || "host";
+  let name = base;
+  for (let i = 2; taken.includes(name); i++) name = `${base}-${i}`;
+  return name;
 }
 
 export async function writeJsonFile(path: string, data: unknown, mode?: number): Promise<void> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-  await writeFile(path, `${JSON.stringify(data, null, 2)}\n`, mode === undefined ? {} : { mode });
-  if (mode !== undefined) await chmod(path, mode);
+  // A temp file renamed into place: a process reading the file meanwhile (an MCP server starting, a
+  // second `connect`) sees the old or the new content, never a half-written one, and a token file is
+  // mode 600 from its first byte (review).
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(data, null, 2)}\n`, { mode: mode ?? 0o644 });
+    if (mode !== undefined) await chmod(tmp, mode);
+    await rename(tmp, path);
+  } catch (error) {
+    await rm(tmp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 /**
@@ -376,6 +465,18 @@ export async function saveCredentials(update: Credentials, env: NodeJS.ProcessEn
   const file = credentialsPath(env);
   const current: Credentials = existsSync(file) ? ((await readJson(file)) as Credentials) : {};
   const next: Credentials = { ...current, ...update };
+  if (update.tokens !== undefined) {
+    // Merged per origin; an empty string removes that origin's token.
+    const tokens: Record<string, string> = { ...(current.tokens ?? {}) };
+    for (const [key, value] of Object.entries(update.tokens)) {
+      const origin = urlOrigin(key);
+      if (origin === undefined || !/^https?:/.test(origin)) throw new TapdanceError("USAGE", `${key} is not an http(s) URL`);
+      if (value) tokens[origin] = value;
+      else delete tokens[origin];
+    }
+    if (Object.keys(tokens).length > 0) next.tokens = tokens;
+    else delete next.tokens;
+  }
   for (const [tokenKey, endpointKey] of [["token", "endpoint"], ["operatorToken", "operatorEndpoint"]] as const) {
     if (update[tokenKey] !== undefined && update[endpointKey] === undefined) delete next[endpointKey];
     const endpoint = next[endpointKey];
@@ -395,4 +496,22 @@ export async function saveCredentials(update: Credentials, env: NodeJS.ProcessEn
 export async function writeConfigFile(path: string, config: Partial<TapdanceConfig>): Promise<void> {
   parseConfig(config, path);
   await writeJsonFile(path, config);
+}
+
+/**
+ * Moves an older single-target token (`token` + `endpoint`) into the per-origin `tokens` map, for the
+ * endpoint it served: its bound origin, or `origin` (the user config's endpoint) when it is unbound.
+ * Returns the origin it moved to, or undefined when there was nothing to move.
+ */
+export async function migrateLegacyToken(origin: string | undefined, env: NodeJS.ProcessEnv = process.env): Promise<string | undefined> {
+  const file = credentialsPath(env);
+  if (!existsSync(file)) return undefined;
+  const current = (await readJson(file)) as Credentials;
+  if (typeof current.token !== "string") return undefined;
+  const to = (typeof current.endpoint === "string" ? urlOrigin(current.endpoint) : undefined) ?? origin;
+  if (to === undefined) return undefined;
+  const { token, endpoint: _endpoint, ...rest } = current;
+  const next: Credentials = { ...rest, tokens: { ...(current.tokens ?? {}), ...(current.tokens?.[to] ? {} : { [to]: token }) } };
+  await writeJsonFile(file, next, 0o600);
+  return to;
 }

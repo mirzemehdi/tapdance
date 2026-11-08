@@ -51,6 +51,8 @@ export interface SimlockStatus {
   capacity?: Record<string, { running?: number; limit?: number; warm?: number; used?: number } | undefined>;
   capabilities?: Array<{ name: string; state: string; reason?: string }>;
   daemon?: { health?: string; mode?: string; version?: string };
+  /** A gateway's workers, also for an agent token (without their leases): capabilities and capacity per worker. */
+  workers?: SimlockWorker[];
   host?: { os?: string; osVersion?: string; arch?: string; tools?: Array<{ platform: string; name: string; version?: string }> };
   queueDepth?: number;
   /** Requests still waiting for a device; `requesterId` is the lease id Tapdance chose. */
@@ -100,9 +102,12 @@ export interface SimlockWorker {
   connection?: string;
   state?: string;
   capacity?: Record<string, { running?: number; limit?: number } | undefined>;
-  leases?: number;
+  /** A count from `/v1/workers`; a gateway's status may carry the list itself (or drop it for agents). */
+  leases?: number | unknown[];
+  /** `starting`: the worker has checked nothing yet, so it reports no capabilities or capacity. */
+  health?: string;
   host?: { os?: string; osVersion?: string; arch?: string };
-  capabilities?: Array<{ name: string; state: string }>;
+  capabilities?: Array<{ name: string; state: string; reason?: string }>;
   lastSeenAt?: string | number;
 }
 

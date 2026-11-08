@@ -192,6 +192,16 @@ export function fromAgentDeviceError(error: unknown, action: string): TapdanceEr
     hint = `The host's device daemon did not answer this call; ${acted ? "it may still have acted, so read the screen (`ui inspect`) before running it again" : "run it again"}. If it keeps happening, the worker on the host restarted or is overloaded: check \`tapdance doctor\`.`;
     noBackendHint = true;
     daemonBusy = true;
+  } else if (/Runner command deadline exceeded/i.test(message)) {
+    // iOS: agent-device's XCUITest runner was still starting, the first command after a cold lease on
+    // a slow host (an 8 GB Mac); the next try answers (#137). A read is retried here at once; an action
+    // goes back to the agent, which looks first, since it may have reached the device.
+    code = "PROVIDER_UNREACHABLE";
+    retryable = true;
+    const acted = /^(tap|type|swipe|install|press|key|launch|start recording|stop recording)\b/.test(action);
+    hint = `The device's test runner was still starting (the first command after a cold lease on a busy host); ${acted ? "it may still have acted, so read the screen (`ui inspect`) before running it again" : "run it again"}.`;
+    noBackendHint = true;
+    daemonBusy = !acted;
   } else if (/ECONNREFUSED|ENOTFOUND|fetch failed|socket hang up|ETIMEDOUT/i.test(message)) code = "PROVIDER_UNREACHABLE";
   else if (/timed out waiting for a device/i.test(message)) code = "NO_CAPACITY";
   else if (/^refused by simlock:/i.test(message)) {
