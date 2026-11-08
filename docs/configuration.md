@@ -54,6 +54,10 @@ These keys decide which programs run as you and where Simlock is reached, so Tap
 | `tools.allowMutation` | Could lift the read-only switches on tools. |
 | `ios.axePath` | Could point the AXe backend at any program. |
 | `simlock.profilePath` | Could redirect the local worker profile, and with it where device calls and the local token go. |
+| `viewer.host` | Could make `tapdance view` listen on every network interface. `tapdance view --host` still sets it. |
+
+A config or credentials file that contains a `__proto__`, `constructor` or `prototype` key, at any
+depth, is refused with `CONFIG_INVALID`: such keys could otherwise smuggle user-only settings in.
 
 When a project file sets one of them, the value is ignored and a warning names the file:
 "Ignored tools.paths from …/tapdance.config.json: security settings are read only from
@@ -101,7 +105,7 @@ ignored value never takes effect. In addition, a `tools.paths.<name>` entry must
 
 | Key | Default | Range | Meaning |
 | --- | --- | --- | --- |
-| `viewer.host` | `"127.0.0.1"` | | Address `tapdance view` listens on. Public addresses are refused. |
+| `viewer.host` | `"127.0.0.1"` | | Address `tapdance view` listens on. Public addresses are refused. User config or `--host` only. |
 | `viewer.port` | `4710` | 0–65535 | Port for `tapdance view`. |
 | `viewer.humanHoldMs` | `15000` | 0–600000 | How long a person's touch blocks agent input (`HUMAN_HELD`). |
 

@@ -417,6 +417,11 @@ export function registerDeviceCommands(program: Command, globals: () => GlobalOp
           process.exitCode = 4;
           return;
         }
+        if (r.orphaned && r.message) {
+          // The lease's connect target was removed: forgotten here, still held on that host (review).
+          out.result(r, () => yellow(r.message!));
+          return;
+        }
         out.result(r, () =>
           r.device ? (r.released ? `Released ${r.device.model} (${r.device.leaseId})` : `${r.device.model} (${r.device.leaseId}) had already ended on the worker`) : "This session held no device",
         );
