@@ -62,6 +62,12 @@ First slice. Tested end to end on one Mac: iOS simulators against the local work
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
+### Worker guard (2026-11-08)
+
+- Screenshot and recording outputs are accepted only in the temporary-file form agent-device's own
+  client sends a remote daemon, and options that name files on the host are refused for every
+  command.
+
 ### Stage 4: one agent, several hosts
 
 Proven on 2026-11-07 from a Linux VPS with a Google Cloud N2 host (Android) and a rented Mac mini (iOS)
