@@ -55,6 +55,9 @@ with a `tapdance patch` comment. They are Tapdance's own fixes, not upstream rel
 
 | Patch | Package (license, copyright) | What it changes and why |
 | --- | --- | --- |
+The npm package `tapdance-cli` bundles these two patched copies, with their own dependencies and
+license files, so an npm install runs the same code as the workspace ([releasing](docs/releasing.md)).
+
 | `patches/agent-device@0.21.35.patch` | agent-device 0.21.35 (MIT, Callstack) | The iOS runner rotates landscape taps against the app's window instead of its own legacy-size screen (#56). |
 | `patches/simlock@0.5.0.patch` | Simlock 0.5.0 (MIT, Szymon Chmal) | `core/doctor.js`: every reconcile, including the daemon's startup pass, moves a `ready` Android record whose emulator is gone to `shutdown`, so a restarted host does not grant a dead emulator (#94). `drivers/android/index.js` and a new `drivers/android/baseline-cpu.js`: when capturing an Android device's clean baseline snapshot, logs one info line with the guest CPU at that moment (one `/proc/stat` sample pair), without waiting for it (#103). An earlier settle wait and dexopt step before the capture (#79, #101) were removed after measurements on a Google Cloud N2 host showed no benefit. |
 

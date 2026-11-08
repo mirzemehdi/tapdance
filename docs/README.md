@@ -91,3 +91,4 @@ fits.
 | Page | What it gives you |
 | --- | --- |
 | [Hosting plan](hosting-plan.md) | The stages in which Tapdance is proven on real infrastructure, with their prompts. |
+| [Releasing](releasing.md) | How the npm package `tapdance-cli` is built and published. |

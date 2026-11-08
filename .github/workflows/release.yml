@@ -1,0 +1,85 @@
+# Publishes the npm package `tapdance-cli` when a version tag (v0.1.0, v0.2.0, …) is pushed.
+# See docs/releasing.md. Run it by hand ("Run workflow") to build and pack without publishing.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm (otherwise build, test and pack only)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # macOS: the unit tests have only ever run on macOS, and the package is tested there.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and provenance; no npm token is stored
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
+      - run: npm install -g npm@11
+
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+
+      - name: Tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match packages/cli/package.json version $version" >&2
+            exit 1
+          fi
+
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm docs:check
+
+      - name: Pack tapdance-cli
+        id: pack
+        run: echo "tarball=$(node scripts/pack-npm.mjs | tail -n 1)" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke-test the packed package
+        run: |
+          prefix="$RUNNER_TEMP/tapdance-prefix"
+          npm install -g --prefix "$prefix" --no-audit --no-fund "${{ steps.pack.outputs.tarball }}"
+          export TAPDANCE_HOME="$RUNNER_TEMP/tapdance-home" TAPDANCE_SESSION_ID=release-check
+          "$prefix/bin/tapdance" --version
+          "$prefix/bin/tapdance" simlock -- --version
+          set +e
+          "$prefix/bin/tapdance" --json device status
+          code=$?
+          set -e
+          test "$code" = 3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tapdance-cli-tarball
+          path: ${{ steps.pack.outputs.tarball }}
+
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+        env:
+          # Empty unless the NPM_TOKEN secret is set (only needed for the very first publish, before the
+          # package has a trusted publisher on npmjs.com). Without it, npm uses trusted publishing.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance

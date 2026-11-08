@@ -66,6 +66,13 @@ has run on one Mac only.
 - One-command host setup: `host up` / `status` / `down` on the device machine, `connect` on the
   agent's machine, and `scripts/host-setup.sh` / `scripts/host-setup.ps1`.
 
+### npm package (2026-11-08)
+
+- `scripts/pack-npm.mjs` builds one npm package, `tapdance-cli` (command `tapdance`), with the workspace
+  packages and the patched Simlock and agent-device bundled. `.github/workflows/release.yml` tests,
+  packs, smoke-tests and publishes it on a version tag through npm trusted publishing
+  ([releasing](docs/releasing.md)). Not published yet.
+
 ### Worker guard (2026-11-08)
 
 - Screenshot and recording outputs are accepted only in the temporary-file form agent-device's own
