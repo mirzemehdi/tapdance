@@ -257,6 +257,20 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
       if (!DEVICE_SETTINGS.has(pos[0] ?? "")) return `setting "${pos[0] ?? ""}" is not allowed`;
       if (pos[0] === "permission" && pos.some((x) => HOST_PERMISSIONS.has(x))) return "macOS host permissions cannot be changed remotely";
       return pos.every((x) => /^[A-Za-z0-9_.:+-]{1,128}$/.test(x)) ? undefined : "setting arguments not allowed";
+    case "install":
+    case "reinstall": {
+      // agent-device installs meta.uploadedArtifactId when it is set and otherwise the positional path,
+      // resolved on this host. Only an app uploaded through the guard may be installed (the server
+      // also checks the upload is this client's).
+      const meta = params["meta"] && typeof params["meta"] === "object" ? (params["meta"] as Record<string, unknown>) : {};
+      const id = meta["uploadedArtifactId"];
+      if (typeof id !== "string" || !UPLOAD_ID.test(id)) return `${command} needs an app uploaded through this host's guard: paths on the host are not installed`;
+      if (meta["installSource"] !== undefined) return `${command}: install sources are not allowed`;
+      return undefined;
+    }
+    case "diff":
+      // `diff screenshot` reads and writes image files on the worker; `diff snapshot` reads the screen.
+      return pos[0] === "snapshot" && pos.length === 1 ? undefined : "only `diff snapshot` is allowed: diff screenshot reads files on the host";
     case "push":
       // A JSON payload only: a path would make agent-device read a file on the worker.
       return pos.length === 2 && APP_ID.test(pos[0]!) && pos[1]!.trim().startsWith("{") && pathFlag === undefined ? undefined : "push needs an app id and an inline JSON payload";
@@ -279,6 +293,8 @@ const HOST_FLAGS = [
 ];
 
 const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
+/** An agent-device upload id (a UUID in 0.21.36), the same shape the guard learns from upload replies. */
+export const UPLOAD_ID = /^[A-Za-z0-9_.-]{1,200}$/;
 /** A logcat `-t` line count: 1 to MAX_LOG_LINES (20,000), digits only. */
 const isLines = (v: string | undefined) => v !== undefined && /^[1-9][0-9]{0,4}$/.test(v) && Number(v) <= deviceCommands.MAX_LOG_LINES;
 const DURATION = /^[1-9][0-9]?[ms]$/;

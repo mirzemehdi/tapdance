@@ -8,6 +8,14 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
+## [Unreleased]
+
+### Changed
+
+- Worker guard: an app install or reinstall must name an upload this client made through the guard;
+  requests without one, or with an install source, are refused. Only `diff snapshot` passes the guard.
+  The guard also remembers the upload id a finalize reply names. Unit-tested only.
+
 ## [0.2.0] - 2026-11-08
 
 **Upgrade every machine together.** Tapdance 0.2.0 runs Simlock 0.6.0, which cannot talk to the
