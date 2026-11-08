@@ -180,6 +180,11 @@ Build the apps first with `examples/ios-demo/build.sh` or `examples/android-demo
 Scenario files are plain text in your repository. Do not put real passwords in them; use a test
 account.
 
+
+Scenario files have no variables or `${…}` substitution: what is in the file is what is typed. Use a
+test-only account, or have your script write the file just before it runs. To start signed out, begin
+with `clear_app_data` (and on iOS a `set_device_setting` step with `reset-keychain`).
+
 ## The report and evidence
 
 Each run writes an evidence folder in the session's artifacts folder (`artifacts.directory`, by default

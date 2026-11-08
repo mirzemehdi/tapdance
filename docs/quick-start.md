@@ -2,9 +2,10 @@
 
 ## What you get
 
-One full loop on a single computer: start the worker, check the setup, lease a device, install and
-launch an app, drive its UI, collect evidence, watch it live, release it, and hand it to your agent.
-The agent, Tapdance and the device all run on this computer (`provider: "local"`).
+One full loop on a single computer. You start the part of Tapdance that runs the phones (the
+**worker**), check the setup, borrow a phone (a **lease**), install and open an app, tap through it,
+take screenshots and a video, watch it live, give the phone back, and hand the whole thing to your
+agent. Everything runs on this computer (`provider: "local"`).
 
 ## What you need
 

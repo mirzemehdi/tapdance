@@ -34,7 +34,7 @@ Terms (host, worker, guard, connect target) are in the [glossary](glossary.md).
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `npm install -g tapdance` installs a "Test Anything Protocol" harness | The npm name `tapdance` belongs to an unrelated package; Tapdance is not published yet. | `npm uninstall -g tapdance`, then [install from source](installation.md#from-source-the-supported-way-today). |
+| `npm install -g tapdance` installs a "Test Anything Protocol" harness | The npm name `tapdance` belongs to an unrelated package; Tapdance is not published yet. | `npm uninstall -g tapdance`, then [install from source](installation.md#from-source). |
 | Your agent cannot start `tapdance` | `tapdance` is not on the `PATH` the agent sees. | In the MCP config use `"command": "node"` and the absolute path to `packages/cli/dist/main.js`. |
 | `doctor`: Node.js fails | Node older than 22.13. | Install Node.js 22.13 or later. |
 

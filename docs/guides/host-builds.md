@@ -30,7 +30,8 @@ Builds are **off by default**. A build runs the repository's own scripts on the 
   connected to it.
 - On the host, the tools the app's build needs: git; Xcode for iOS; a JDK and the Android SDK
   components the app uses for Android (Gradle does not download every SDK component). A Kotlin
-  Multiplatform app also needs a JDK on the guard's `PATH` or `JAVA_HOME` for its iOS build.
+  Multiplatform app also needs a JDK for its iOS build, on the `PATH` or in `JAVA_HOME` of the
+  guard (the Tapdance service on the host that runs the builds). `host-setup.sh` sets this up.
   `host builds enable` checks git, Xcode, Java and `gh`.
 - For a private repository, a way for the host to read it: see
   [private repositories](private-repositories.md).

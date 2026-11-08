@@ -7,6 +7,7 @@ what has really been tested? [STATUS.md](../STATUS.md) is the source of truth.
 
 | Page | What it gives you |
 | --- | --- |
+| [Use cases](use-cases.md) | What you can ask your agent: what to say, the tools it calls, the same by hand, and what you get back. |
 | [Installation](installation.md) | Install Tapdance from source, and the SDKs your setup needs. |
 | [Quick start](quick-start.md) | One full loop on your Mac: lease, launch, tap, screenshot, release. |
 | [Local](deployment/local.md) | Run the agent and the devices on the same computer. |
@@ -20,6 +21,7 @@ fits.
 
 | Page | What it gives you |
 | --- | --- |
+| [Start without a Mac](guides/start-without-a-mac.md) | From zero to your agent testing on Android (Google Cloud) and iOS (a rented Scaleway Mac), and how to stop paying. |
 | [Host devices for a remote agent](deployment/one-command-host.md) | Your own Mac, Mac mini or Linux machine as a host, with `host up` and `connect`. Proven. |
 | [Linux host with KVM](deployment/dedicated-linux-server.md) | A dedicated Linux server or another cloud VM for Android. Not run on bare metal. |
 | [Google Cloud N2](deployment/google-cloud-n2.md) | Android emulators on a VM in your Google Cloud project. Proven. Terraform: [module README](../infrastructure/terraform/google-cloud-n2/README.md). |

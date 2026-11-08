@@ -40,7 +40,21 @@ rented Mac mini as hosts, with a Mac or a Linux VPS as the agent's machine
 
 ## Install the CLI
 
-### From source (the supported way today)
+### From npm
+
+```bash
+npm install -g tapdance-cli
+tapdance --version
+```
+
+The package is `tapdance-cli`; the command it installs is `tapdance`. Do not run `npm install -g
+tapdance`: that name belongs to an unrelated package (a Test Anything Protocol harness). The npm package
+carries the same patched Simlock and agent-device as a source build, so both run the same code.
+
+If npm says `tapdance-cli` is not found, the first release is not published yet. Install from source
+until it is.
+
+### From source
 
 You need Node.js 22.13+ and pnpm 10. The repository pins `pnpm@10.20.0`, and Corepack provides it.
 
@@ -83,14 +97,15 @@ You need Node.js 22.13+ and pnpm 10. The repository pins `pnpm@10.20.0`, and Cor
    `node /absolute/path/to/packages/cli/dist/main.js` wherever these docs say `tapdance`, including in
    MCP configurations.
 
-### Not on npm yet
-
-Tapdance is **not published to npm yet**. Be careful: the npm name `tapdance` belongs to an unrelated
-package (a Test Anything Protocol harness, checked on 2026-11-01), so `npm install -g tapdance`
-installs the wrong program. The CLI package will be `@tapdance/cli` (the command stays `tapdance`).
-Until then, install from source.
-
 ### Update
+
+From npm:
+
+```bash
+npm install -g tapdance-cli@latest
+```
+
+From source:
 
 ```bash
 git pull

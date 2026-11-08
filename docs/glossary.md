@@ -2,6 +2,21 @@
 
 The words these docs use, and what each one means. Every page uses them the same way.
 
+## In plain words
+
+| You might say | These docs say |
+| --- | --- |
+| the phone, the device | an Android **emulator** or an iOS **simulator** |
+| borrow a phone, give it back | **lease** it, **release** it |
+| the machine that runs the phones | the **host** |
+| the computer your agent runs on | the **agent's machine** |
+| the private network between your machines | your **tailnet**, made by [Tailscale](https://tailscale.com) (free for personal use) |
+| the key to your phones | the **pairing token** file |
+| the lock on the machine that runs the phones | the **guard** |
+| letting a remote agent use only the phones | **device-only mode** |
+| the hardware feature emulators need on Linux | **KVM** |
+| the Google Cloud machine type used for Android | **N2** (`n2-standard-4`) |
+
 ## Machines
 
 **Agent's machine.** The computer where your AI agent runs, and where Tapdance's CLI or MCP server

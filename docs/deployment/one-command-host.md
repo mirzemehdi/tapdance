@@ -1,9 +1,12 @@
-# Host devices for a remote agent
+# Run the phones on another machine
 
-Your agent runs on one machine, the [agent's machine](../glossary.md#machines): a laptop, or a Linux
-VPS. A **host** runs the emulators and simulators: your own Mac or Mac mini (iOS and Android), or a
-Linux machine with KVM (Android). One command sets up the host, and one command connects the agent's
-machine to it.
+Your agent runs on one computer: a laptop, or a server. Another machine runs the phones: your own Mac
+or Mac mini (iPhones and Android), or a Linux machine (Android). One command sets up the machine that
+runs the phones, and one command connects your agent's computer to it. The two talk over a private
+network between your machines, Tailscale, which is free.
+
+These docs call the machine that runs the phones the **host**, and the computer your agent runs on the
+**agent's machine**. The [glossary](../glossary.md) has the other terms.
 
 This is the main guide for any host. The provider pages add only what is special about their machine:
 [Google Cloud N2](google-cloud-n2.md), [dedicated Linux server](dedicated-linux-server.md),
@@ -20,7 +23,7 @@ This is the main guide for any host. The provider pages add only what is special
 
 ## What you get
 
-- The host runs in [device-only mode](../security/device-only-mode.md). The agent's machine reaches
+- The host runs in what these docs call [device-only mode](../security/device-only-mode.md). The agent's machine reaches
   only the **guard**, a small server that allows a fixed list of device actions. It never gets a shell
   on the host.
 - Nothing is opened to the internet. The guard is reachable only inside your Tailscale network.
