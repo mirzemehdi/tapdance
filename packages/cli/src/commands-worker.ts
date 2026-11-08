@@ -487,7 +487,7 @@ export async function warmReport(): Promise<{ text: string; config?: Record<stri
   return { text: describeWarm(config, pool), ...(warmConfig ? { config: warmConfig } : {}), ...(pool ? { warmPool: pool } : {}) };
 }
 
-/** Ends every lease on the local worker (Simlock's nuke without --delete-devices: deletes nothing). */
+/** Ends every lease on the local worker (Simlock's nuke without --delete-devices: keeps the seeds and saved baselines; since Simlock 0.6 each ended lease's device is deleted, as at any release). */
 export async function simlockNuke(): Promise<void> {
   await simlock(["--local", "nuke", "--yes"]).catch(() => "");
 }
@@ -696,7 +696,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
     .command("logs")
     .description(`Print the worker daemon log (the last ${DEFAULT_WORKER_LOG_LINES} lines unless -n says otherwise), optionally filtered`)
     .option("-n, --lines <n>", `how many lines (at most ${MAX_WORKER_LOG_LINES}); with a filter, how many matching lines`, String(DEFAULT_WORKER_LOG_LINES))
-    .option("--contains <text>", 'only lines containing this text (case-insensitive), e.g. "clean baseline"')
+    .option("--contains <text>", 'only lines containing this text (case-insensitive), e.g. "boot snapshot"')
     .option("--since <when>", "only lines from the last 30s, 10m, 2h or 1d, or since an ISO time such as 2026-11-04T21:54:00Z")
     .action(async (o: { lines: string; contains?: string; since?: string }) => {
       const out = output(globals());

@@ -18,8 +18,8 @@ These are installed with Tapdance. Versions are the exact pins in `packages/*/pa
 
 | Package | Version | License | Copyright | Used for |
 | --- | --- | --- | --- | --- |
-| [simlock](https://github.com/callstackincubator/simlock) | 0.5.0 (patched, see below) | MIT | Szymon Chmal | Device leasing, queue, workers, gateway, simulator/emulator lifecycle, screen stream and input sockets. Bundled with the CLI and run as its own daemon. |
-| [agent-device](https://github.com/callstack/agent-device) | 0.21.35 (patched, see below) | MIT | Callstack | UI snapshots, selectors, gestures, typing, app upload, screenshots, MP4 recordings, app logs. |
+| [simlock](https://github.com/callstackincubator/simlock) | 0.6.0 (patched, see below) | MIT | Szymon Chmal | Device leasing, queue, workers, gateway, simulator/emulator lifecycle, screen stream and input sockets. Bundled with the CLI and run as its own daemon. |
+| [agent-device](https://github.com/callstack/agent-device) | 0.21.36 (patched, see below) | MIT | Callstack | UI snapshots, selectors, gestures, typing, app upload, screenshots, MP4 recordings, app logs. |
 | [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk) | 1.32.2 | MIT | Anthropic, PBC | The MCP server (stdio and Streamable HTTP). |
 | [zod](https://github.com/colinhacks/zod) | 4.6.7 | MIT | Colin McDonnell | Config, MCP input and scenario validation. |
 | [commander](https://github.com/tj/commander.js) | 15.0.0 | MIT | TJ Holowaychuk | CLI parsing. |
@@ -27,7 +27,9 @@ These are installed with Tapdance. Versions are the exact pins in `packages/*/pa
 | [yaml](https://github.com/eemeli/yaml) | 2.9.1 | ISC | Eemeli Aro | Reading scenario files (`tapdance run`). |
 
 Transitive dependencies (for example Simlock's `hono`, `jose` and `@agent-device/proxy`) carry
-their own licenses in their packages. `pnpm licenses list` prints the full set for your install.
+their own licenses in their packages. Simlock 0.6.0 pins `@agent-device/proxy` 0.21.35 (MIT,
+Callstack), one release behind the agent-device Tapdance pins; 0.21.36 of the proxy changes only how
+it serializes diagnostics, so Tapdance does not override it. `pnpm licenses list` prints the full set for your install.
 
 ### Third-party components shipped inside those packages
 
@@ -58,8 +60,8 @@ with a `tapdance patch` comment. They are Tapdance's own fixes, not upstream rel
 The npm package `tapdance-cli` bundles these two patched copies, with their own dependencies and
 license files, so an npm install runs the same code as the workspace ([releasing](docs/releasing.md)).
 
-| `patches/agent-device@0.21.35.patch` | agent-device 0.21.35 (MIT, Callstack) | The iOS runner rotates landscape taps against the app's window instead of its own legacy-size screen (#56). |
-| `patches/simlock@0.5.0.patch` | Simlock 0.5.0 (MIT, Szymon Chmal) | `core/doctor.js`: every reconcile, including the daemon's startup pass, moves a `ready` Android record whose emulator is gone to `shutdown`, so a restarted host does not grant a dead emulator (#94). `drivers/android/index.js` and a new `drivers/android/baseline-cpu.js`: when capturing an Android device's clean baseline snapshot, logs one info line with the guest CPU at that moment (one `/proc/stat` sample pair), without waiting for it (#103). An earlier settle wait and dexopt step before the capture (#79, #101) were removed after measurements on a Google Cloud N2 host showed no benefit. |
+| `patches/agent-device@0.21.36.patch` | agent-device 0.21.36 (MIT, Callstack) | The iOS runner rotates landscape taps against the app's window instead of its own legacy-size screen (#56). 0.21.36 still has the unpatched code; the patch moved by five lines. |
+| `patches/simlock@0.6.0.patch` | Simlock 0.6.0 (MIT, Szymon Chmal) | `core/doctor.js`: every reconcile, including the daemon's startup pass, moves a `ready` Android record whose emulator is gone to `shutdown`, so a restarted host does not grant a dead emulator (#94; 0.6.0 still applies that fix only under `doctor --fix` and still grants a `ready` record without checking its emulator). `drivers/android/seeds.js`, `drivers/android/index.js` and a new `drivers/android/baseline-cpu.js`: when Simlock saves an Android boot snapshot (a device kind's seed, made once, or a saved baseline), logs one info line, "Saving the Android boot snapshot", with the guest CPU at that moment (one `/proc/stat` sample pair), without waiting for it (#103). In 0.6.0 every Android device is a copy booted from that snapshot, so the line tells whether copies start busy (#139). On 0.5.0 the line was logged at each device's clean baseline capture; an earlier settle wait and dexopt step before it (#79, #101) were removed after measurements on a Google Cloud N2 host showed no benefit. |
 
 ## Formats and designs Tapdance follows
 

@@ -83,7 +83,7 @@ connection through `tailscale serve` can be slow; the time is shown, a failure n
 serves HTTPS is named as such), the token's role, whether
 agent-device, streaming and input are available, capacity per platform (a platform with room but no device on offer fails: the worker skipped that
 driver, so leases would be refused), the Simlock version (warns if
-it is not 0.5.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored,
+it is not 0.6.0), AXe when `ios.uiBackend` is `axe`, workers online (when an operator token is stored,
 or through a gateway, whose status lists its workers for an agent token too), and this session's lease.
 Through a gateway, capabilities come from its workers (from the gateway's status, so an agent token is
 enough), with one row per worker: connection, capacity per platform, capabilities and OS; a worker that
@@ -606,7 +606,7 @@ machines ([gateway mode](deployment/gateway-mode.md)).
 | `worker guard install [--allow-admin-account] [--keep-awake]` / `worker guard uninstall` | Keep the guard running as a login service of this account: a LaunchAgent `dev.tapdance.guard` (`~/Library/LaunchAgents/dev.tapdance.guard.plist`, RunAtLoad + KeepAlive, log `~/Library/Logs/tapdance-guard.log`) on macOS, or `~/.config/systemd/user/tapdance-guard.service` (`Restart=on-failure`, log `~/.tapdance/worker/guard.log`, moved to `guard.log.1` at 5 MB when the service is installed; the user journal is not always kept on cloud VMs) on Linux. Same refusals as `guard start`, and refused while a `guard start` in a terminal holds the port; an unchanged running service is left alone. `--allow-admin-account` is passed on to `guard start`; `--keep-awake` runs it under `caffeinate -i` on macOS (no effect on Linux). Exit 4 if the guard does not answer within 20 s. `uninstall` stops it and removes the file; tokens and policy stay. Refused on Windows (`NOT_SUPPORTED`). `host up` installs the guard this way: it ran on a Google Cloud N2 VM (systemd) and a rented Mac mini (LaunchAgent), and the guard came back after a restart of each. See [device-only mode](security/device-only-mode.md#keep-the-guard-running). |
 | `worker cleanup` | Release device claims left behind by agent-device processes that have gone (a worker restart, the machine going offline mid-lease). Such a claim blocks the next lease of that emulator with "owned by session …". Only claims whose owner process is provably dead are touched; an unfinished screen recording of such a session is set aside (renamed `*.abandoned-<time>`) so its claim can go. `worker start`/`restart` and the worker guard (before each lease) do this on their own. |
 | `worker start` / `stop` / `status` / `restart` | Start, stop, show, or restart the worker daemon. `status --json` returns Simlock's JSON. `restart` ends agent-device sessions on the worker. `start` and `restart` check the worker's login service first: when it starts another Simlock than this Tapdance ships (after `git pull && pnpm install` with a new Simlock patch, pnpm puts it in a new `simlock@…_patch_hash=…` folder, and the unit or plist still names the old one) or a Node or Simlock that is gone, they install it again (Simlock's `daemon install`: rewrites `~/.config/systemd/user/com.callstack.simlock.worker.service` or `~/Library/LaunchAgents/com.callstack.simlock.worker.plist` and reloads systemd/launchd) instead of starting the old one, and say so. Simlock's config, including the warm-spare settings, is not touched, and its device records are checked with `doctor --fix`, never reset, so learned spares are kept. On Linux, before that install, they set up the user manager (linger, its bus; this works over a non-interactive `ssh … --command`) and check that `systemctl --user` answers; when it does not they stop with exit 10 and change nothing. If the install still fails, the worker is started without the service, the error says the login service is now missing and to run `tapdance worker install --service`, and the exit code is 10 (`HOST_CHECK_FAILED`); `start`, `restart` and `host status` then warn until a login service is installed again. |
-| `worker logs [-n, --lines <n>] [--contains <text>] [--since <when>]` | Print the worker daemon's log, read from Simlock's `daemon.log` (and `daemon.log.1`, where Simlock moves it at 5 MB): the last 100 lines by default, up to 5000 with `-n`; with a filter, the last `n` matching lines. `--contains` keeps lines containing the text (case-insensitive, like `tapdance logs`); `--since` keeps lines from the last `30s`, `10m`, `2h` or `1d`, or since an ISO time. For example `tapdance worker logs --contains "clean baseline"` finds the line Simlock logs when it saves a device's clean snapshot, however many lines came after it. `--json` returns `{ path, lines }`. |
+| `worker logs [-n, --lines <n>] [--contains <text>] [--since <when>]` | Print the worker daemon's log, read from Simlock's `daemon.log` (and `daemon.log.1`, where Simlock moves it at 5 MB): the last 100 lines by default, up to 5000 with `-n`; with a filter, the last `n` matching lines. `--contains` keeps lines containing the text (case-insensitive, like `tapdance logs`); `--since` keeps lines from the last `30s`, `10m`, `2h` or `1d`, or since an ISO time. For example `tapdance worker logs --contains "boot snapshot"` finds the line Simlock logs, with Tapdance's patch, when it saves an Android boot snapshot (with the guest CPU then), however many lines came after it. `--json` returns `{ path, lines }`. |
 
 **Security.** Joining gives the gateway operator rights on this machine's devices: whoever controls the
 gateway or holds an operator token for it can lease any device here, install runtimes and read the
@@ -632,7 +632,7 @@ it or keep it on a private network such as Tailscale. Never commit tokens.
 tapdance simlock -- <simlock arguments>
 ```
 
-Runs the Simlock 0.5.0 CLI bundled with Tapdance (with Tapdance's patch), for operators. Put `--` before Simlock's own options
+Runs the Simlock 0.6.0 CLI bundled with Tapdance (with Tapdance's patch), for operators. Put `--` before Simlock's own options
 (`tapdance simlock -- --version`), or Tapdance parses them itself. Agents should not need it.
 
 ## Hosting
@@ -2259,7 +2259,7 @@ Options:
   -n, --lines <n>    how many lines (at most 5000); with a filter, how many
                      matching lines (default: "100")
   --contains <text>  only lines containing this text (case-insensitive), e.g.
-                     "clean baseline"
+                     "boot snapshot"
   --since <when>     only lines from the last 30s, 10m, 2h or 1d, or since an
                      ISO time such as 2026-11-04T21:54:00Z
   -h, --help         display help for command

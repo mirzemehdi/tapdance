@@ -1,8 +1,8 @@
 diff --git a/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift b/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift
-index 53f4fc18fe0fe961c2d1e871ab67bfa89224a11b..f4922641cfe063f627d5a223a2e37f41cc5c889b 100644
+index 685d5452f6252f167e92dfea93237a147b80f0f7..08eb7b3ca1c9d3388b33742578f192a7d7048596 100644
 --- a/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift
 +++ b/dist/apple/runner/AgentDeviceRunner/AgentDeviceRunnerUITests/RunnerTests+SynthesizedInteraction.swift
-@@ -510,7 +510,14 @@ extension RunnerTests {
+@@ -505,7 +505,14 @@ extension RunnerTests {
  
  
    func synthesizedRotationFrame(fallback: CGRect, interfaceOrientation: Int) -> CGRect {

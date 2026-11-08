@@ -62,7 +62,7 @@ import { AxeBackend } from "./axe.js";
 export const PROVIDER_NAME = "simlock";
 
 /** The Simlock release Tapdance is tested against. Each release accepts exactly one protocol version. */
-export const TESTED_SIMLOCK_VERSION = "0.5.0";
+export const TESTED_SIMLOCK_VERSION = "0.6.0";
 
 /** Simlock's agent-device front waits at most this long in the queue (src/agent-device, "Allocate queue wait"). */
 const MAX_ALLOCATE_WAIT_MS = 330_000;
@@ -84,8 +84,8 @@ export function isStaleDeviceRecord(error: unknown): error is TapdanceError {
 
 /**
  * The part of the request line that says what the request will wait for, from Simlock's status
- * (#92, #117): a ready spare, a released device being restored from its snapshot (seconds), a
- * stopped device that only needs to start, or no device of this kind at all (a first boot: minutes).
+ * (#92, #117): a ready spare, a released device being removed while a fresh copy of its kind starts,
+ * a stopped device that only needs to start, or no device of this kind at all (a first boot: minutes).
  */
 export function spareNote(status: SimlockStatus | undefined, request: Pick<LeaseRequest, "platform" | "device" | "osVersion" | "imageTag" | "physical">): string {
   if (status === undefined) return "queues if busy; starting a device usually takes under a minute, longer on a first boot";
@@ -107,15 +107,18 @@ export function spareNote(status: SimlockStatus | undefined, request: Pick<Lease
   const inState = (state: string) => devices.some((d) => d.state === state);
   const ready = targets.some((t) => (t.ready ?? 0) > 0) || (anyKind && (status.capacity?.[request.platform]?.warm ?? 0) > 0) || inState("ready");
   if (ready) return "a warm spare is ready";
-  // A released device is reclaimed before it is granted again: an Android emulator is restored
-  // from its clean snapshot in seconds; an iOS simulator is erased and booted again.
+  // Simlock 0.6 never hands a released emulator or simulator out again: it shuts it down and deletes
+  // it (`reclaiming`), and the next lease gets a fresh copy of the kind's seed, booted from the
+  // seed's boot snapshot. The request may wait for the running slot the released device frees.
   if (inState("reclaiming")) {
-    return request.platform === "android" ? "a released device is being restored from its snapshot: usually ready in seconds" : "a released device is being reset: usually ready in under a minute";
+    return "a released device is being removed and a fresh copy of this kind starts from its snapshot: usually under a minute";
   }
   if (targets.some((t) => (t.booting ?? 0) > 0) || inState("provisioning")) return "a spare is booting; this can take a minute or two";
   if (inState("shutdown")) return "a stopped device of this kind will start: usually under a minute, longer on a first boot";
   if (listed === undefined) return "no spare is ready, so a device has to start: usually under a minute, longer on a first boot";
-  if (devices.length === 0) return "no device of this kind exists yet, so one has to be created and booted: a first boot can take a few minutes";
+  // Simlock 0.6 deletes a device at its release, so "none listed" no longer means the kind is new:
+  // a kind the host made before is copied from its seed in seconds. Status does not list seeds.
+  if (devices.length === 0) return "no device of this kind exists yet, so one is copied from the host's saved one (seconds) or, the first time, made and booted: a first boot can take a few minutes";
   return "every device of this kind is busy: the request waits for one, or a new device starts (a first boot can take a few minutes)";
 }
 
@@ -127,8 +130,8 @@ export function describeWaiting(waiting: NonNullable<SimlockStatus["waiting"]>[n
     const reason = waiting.reason ? why[waiting.reason] ?? waiting.reason : undefined;
     return `Queued for a device${waiting.queuePosition ? ` (position ${waiting.queuePosition}${reason ? `, ${reason}` : ""})` : reason ? ` (${reason})` : ""}`;
   }
-  if (waiting.stage === "starting") return "Starting a device for this lease (restoring or booting an emulator or simulator)";
-  if (waiting.stage === "reclaiming") return "Waiting for a released device of this kind to be restored (usually seconds on Android)";
+  if (waiting.stage === "starting") return "Starting a device for this lease (copying and booting an emulator or simulator)";
+  if (waiting.stage === "reclaiming") return "Waiting for a released device of this kind to be removed, then a fresh copy starts (usually under a minute)";
   return undefined;
 }
 

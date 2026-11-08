@@ -4,5 +4,5 @@ packages:
 onlyBuiltDependencies: []
 
 patchedDependencies:
-  agent-device@0.21.35: patches/agent-device@0.21.35.patch
-  simlock@0.5.0: patches/simlock@0.5.0.patch
+  agent-device@0.21.36: patches/agent-device@0.21.36.patch
+  simlock@0.6.0: patches/simlock@0.6.0.patch

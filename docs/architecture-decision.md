@@ -148,7 +148,8 @@ does the setup on macOS/Linux. Differences from the wording of the spec, stated 
 
 - Tapdance stays small: five packages, most of the code is mapping, validation, output and safety.
 - Tapdance inherits Simlock's and agent-device's release cadence. We pin exact versions
-  (`simlock@0.4.0` at this decision, `simlock@0.5.0` since 2026-11-04; `agent-device@0.21.35`) and test
+  (`simlock@0.4.0` at this decision, `simlock@0.5.0` since 2026-11-04, `simlock@0.6.0` since 2026-11-08;
+  `agent-device@0.21.35`, `agent-device@0.21.36` since 2026-11-08) and test
   against them. A fix that belongs in Simlock or agent-device but cannot wait for a release ships as a
   pnpm patch in `patches/` (applied by `pnpm install`, listed in NOTICE.md) rather than a fork: today
   one for agent-device (#56) and one for Simlock (#94, #79).

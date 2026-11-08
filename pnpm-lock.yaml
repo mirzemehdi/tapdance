@@ -5,12 +5,12 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  agent-device@0.21.35:
-    hash: 6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f
-    path: patches/agent-device@0.21.35.patch
-  simlock@0.5.0:
-    hash: 4857eade3631163499a9fb00caae5f9b2d0c49464f543fa450968abf80aa3e01
-    path: patches/simlock@0.5.0.patch
+  agent-device@0.21.36:
+    hash: 4a362bdb2cb656f2fd31919047dbc9a7537be027557c793d7af5c45533a53ea0
+    path: patches/agent-device@0.21.36.patch
+  simlock@0.6.0:
+    hash: c48937d717e0f2185abc9dc470c65b20ea222d029f58e90222b1875ac31ee0b5
+    path: patches/simlock@0.6.0.patch
 
 importers:
 
@@ -41,14 +41,14 @@ importers:
         specifier: workspace:*
         version: link:../sdk
       agent-device:
-        specifier: 0.21.35
-        version: 0.21.35(patch_hash=6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f)
+        specifier: 0.21.36
+        version: 0.21.36(patch_hash=4a362bdb2cb656f2fd31919047dbc9a7537be027557c793d7af5c45533a53ea0)
       commander:
         specifier: 15.0.0
         version: 15.0.0
       simlock:
-        specifier: 0.5.0
-        version: 0.5.0(patch_hash=4857eade3631163499a9fb00caae5f9b2d0c49464f543fa450968abf80aa3e01)
+        specifier: 0.6.0
+        version: 0.6.0(patch_hash=c48937d717e0f2185abc9dc470c65b20ea222d029f58e90222b1875ac31ee0b5)
       ws:
         specifier: 8.22.1
         version: 8.22.1
@@ -87,8 +87,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       agent-device:
-        specifier: 0.21.35
-        version: 0.21.35(patch_hash=6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f)
+        specifier: 0.21.36
+        version: 0.21.36(patch_hash=4a362bdb2cb656f2fd31919047dbc9a7537be027557c793d7af5c45533a53ea0)
       ws:
         specifier: 8.22.1
         version: 8.22.1
@@ -414,8 +414,8 @@ packages:
     resolution: {integrity: sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng==}
     engines: {node: '>= 0.6'}
 
-  agent-device@0.21.35:
-    resolution: {integrity: sha512-opESFEhZPCPzCKMOPsxNhlOvqb2+YMyL5ZmTKS/SlN9OfCCvUB9jX905QwkiEn1lUMO1Ua0RnggpdpVyOJi4KA==}
+  agent-device@0.21.36:
+    resolution: {integrity: sha512-aG88WlEHjFc/OEBQC7AJg+2LfNoVT/ogxnnzIUYUEgafdiTvBaA+X6uQ2wNmpp2ZrHLy8QIXoEOyc3NEZgJCpQ==}
     engines: {node: '>=22.12'}
     hasBin: true
     peerDependencies:
@@ -882,8 +882,8 @@ packages:
     resolution: {integrity: sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==}
     engines: {node: '>= 0.4'}
 
-  simlock@0.5.0:
-    resolution: {integrity: sha512-vNA9twkLsqwLkakZO1AL2bXRp4UQsi/8BwPBkr5Z6IwwRrxW/LgBm7iETwi/o8qOHbzqg48BD5Q3i1ZaY2kfJw==}
+  simlock@0.6.0:
+    resolution: {integrity: sha512-wBOwDScStWrGH8QoS5kiHEWhjTqDJo4dfu8jQzbAGecZTc0Y3y3KMH1z3TRlKsmoGFZgDtKkgO0vX7WFNfJhJw==}
     engines: {node: '>=22.13'}
     hasBin: true
 
@@ -1267,7 +1267,7 @@ snapshots:
       mime-types: 3.0.2
       negotiator: 1.1.0
 
-  agent-device@0.21.35(patch_hash=6ad90369b756d9b1f9889e6ce69eaf9d04938824d50346c8cdea8ac63fbf468f): {}
+  agent-device@0.21.36(patch_hash=4a362bdb2cb656f2fd31919047dbc9a7537be027557c793d7af5c45533a53ea0): {}
 
   ajv-formats@3.0.1(ajv@8.20.0):
     optionalDependencies:
@@ -1728,7 +1728,7 @@ snapshots:
       side-channel-map: 1.0.1
       side-channel-weakmap: 1.0.2
 
-  simlock@0.5.0(patch_hash=4857eade3631163499a9fb00caae5f9b2d0c49464f543fa450968abf80aa3e01):
+  simlock@0.6.0(patch_hash=c48937d717e0f2185abc9dc470c65b20ea222d029f58e90222b1875ac31ee0b5):
     dependencies:
       '@agent-device/proxy': 0.21.35
       '@hono/node-server': 2.1.5(hono@4.13.16)

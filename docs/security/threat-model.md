@@ -119,7 +119,7 @@ redirect a saved token to another server ([token binding](../configuration.md#to
 | Keep cloud credentials, signing keys and personal secrets off hosts. | Anything the hosting account can read, an installed iOS app or a build script can read. |
 | On a Mac host, keep Apple signing certificates and App Store Connect keys off it unless it must sign builds; prefer a separate keychain and account. | Same reason. Tapdance gives guidance only; it does not manage them. |
 | Keep Simlock's `capabilities.tunnel` off (the default; Tapdance never turns it on). | It reverses device ports to a lease holder's machine. |
-| Keep Tapdance up to date on the host and the agent's machine. | Old versions miss fixes. Tapdance pins Simlock 0.5.0. |
+| Keep Tapdance up to date on the host and the agent's machine. | Old versions miss fixes. Tapdance pins Simlock 0.6.0. |
 
 ## Tokens and where they live
 

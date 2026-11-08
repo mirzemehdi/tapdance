@@ -8,6 +8,24 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
+## [Unreleased]
+
+### Changed
+
+- Simlock 0.6.0 (was 0.5.0) and agent-device 0.21.36 (was 0.21.35), exact pins (#143). Unit-tested
+  only: no real device has run on these versions yet. Simlock 0.6.0 makes every emulator and
+  simulator a copy of a seed that serves one lease and is deleted at its release, takes a per-user
+  lock for a worker, and speaks protocol 75, so a gateway and its workers must all move to 0.6.0
+  together. Simlock 0.6.0 still pins `@agent-device/proxy` 0.21.35; it is not overridden.
+- Tapdance's patches are re-keyed: `patches/agent-device@0.21.36.patch` (landscape taps on iOS, #56)
+  and `patches/simlock@0.6.0.patch` (stale `ready` Android records fixed on every reconcile, #94; the
+  guest CPU logged when an Android boot snapshot is saved, #103). The #103 line is now "Saving the
+  Android boot snapshot" with `sourceId` and `busy`, logged once per device kind when Simlock makes its
+  seed, instead of "Capturing the Android clean baseline" per device;
+  `tapdance worker logs --contains "boot snapshot"` finds it.
+- `doctor` expects Simlock 0.6.0. The lease request line no longer says a released device "is being
+  restored from its snapshot": it is removed, and a fresh copy of its kind starts.
+
 ## [0.1.1] - 2026-11-08
 
 ### Fixed
