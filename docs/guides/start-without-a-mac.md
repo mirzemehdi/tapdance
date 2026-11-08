@@ -11,15 +11,17 @@ iPhone, with only a laptop. The phones are emulators and simulators that run on 
   └──────────────────────┘             └──────────────────────────────────────┘
 ```
 
-Only need Android? Do steps 1, 2, 4, 5, 7, 8, 9 and 10, and skip everything about Scaleway and iOS.
+Only need Android? Skip step 3 and step 6, and every part marked **iOS only**. Then it takes about 30
+minutes and costs only the Google Cloud machine.
 
 ## Before you start
 
 **What it costs.**
 
-- **Google Cloud:** about USD 0.20 an hour while the machine runs. Its 64 GB disk costs about USD 7 a
+- **[Google Cloud](https://cloud.google.com/compute):** about USD 0.20 an hour while the machine runs, an `n2-standard-4`
+  ([N2 machine types](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)). Its 64 GB disk costs about USD 7 a
   month, even while the machine is stopped, until you delete it. Step 10 deletes it.
-- **Scaleway:** EUR 2.64 a day before VAT for the smallest Mac mini, about EUR 3 with VAT. Apple's
+- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/):** EUR 2.64 a day before VAT for the smallest Mac mini, about EUR 3 with VAT. Apple's
   licence makes Scaleway bill at least 24 hours. It bills until you delete the Mac, even when it is
   switched off.
 - **Tailscale:** free for personal use.
@@ -57,7 +59,7 @@ before you can rent a Mac, and that can take a while.
    your Google account. Set up billing when it asks. Create a new project, for example
    `tapdance-test`, and note its **project ID**: the project picker shows it, often with a number at
    the end. A project of its own makes cleaning up easy, because you can delete the whole project.
-2. **Scaleway.** Sign up at [console.scaleway.com](https://console.scaleway.com) and add a payment
+2. **Scaleway (iOS only).** Sign up at [console.scaleway.com](https://console.scaleway.com) and add a payment
    method.
 3. **Tailscale.** Sign up at [login.tailscale.com](https://login.tailscale.com) with the same Google
    account. Tailscale makes a private network between your machines, so the phones are never open to
@@ -68,7 +70,7 @@ over `https://`, and you can watch the phones live in your browser.
 
 By default, every machine in your Tailscale network can reach every other. The rented machines build
 and run your app, so it is safer if they cannot reach your laptop. Once all three machines are in the
-network (after step 6), change the **Access controls** so that only your laptop can reach the other
+network (after step 6, or step 5 if you only need Android), change the **Access controls** so that only your laptop can reach the other
 two, on port 4720. The [threat model](../security/threat-model.md) has the rule to paste.
 
 **You should see:** a Google Cloud project with billing on, a Scaleway console, and a Tailscale admin
@@ -110,6 +112,9 @@ npm install -g tapdance-cli
 tapdance --version
 ```
 
+If npm says `tapdance-cli` is not found, the first release is not published yet. Install from source
+for now, as the [installation guide](../installation.md#from-source) shows.
+
 **You should see** a version such as `0.1.0`. The npm package called just `tapdance` is a different
 project, so install `tapdance-cli`.
 
@@ -125,7 +130,7 @@ gcloud services enable compute.googleapis.com
 `gcloud init` opens a browser to log you in, then asks which project to use: pick `tapdance-test`.
 **You should see** your project ID when you run `gcloud config get-value project`.
 
-**An SSH key for the rented Mac,** if you do not have one:
+**An SSH key for the rented Mac (iOS only),** if you do not have one:
 
 ```bash
 ssh-keygen -t ed25519
@@ -159,8 +164,8 @@ Mac longer: it keeps billing about EUR 3 a day.
 
 ## 4. Start the Android machine on Google Cloud
 
-While the Mac installs, create the machine that runs the Android phones. It needs nested
-virtualization, which lets an emulator run inside a cloud machine:
+While the Mac installs, create the machine that runs the Android phones. It needs
+[nested virtualization](https://cloud.google.com/compute/docs/instances/nested-virtualization/overview), which lets an emulator run inside a cloud machine:
 
 ```bash
 gcloud compute instances create tapdance-n2 \
@@ -199,8 +204,8 @@ reach SSH. If this project is only for Tapdance, delete it:
 ```bash
 gcloud compute firewall-rules delete default-allow-ssh
 ```
- The full details are in the
-[Google Cloud guide](../deployment/google-cloud-n2.md).
+
+The full details are in the [Google Cloud guide](../deployment/google-cloud-n2.md).
 
 ## 5. Set up the Android machine
 
@@ -356,12 +361,15 @@ tapdance screenshot
 tapdance device release
 ```
 
+The last three lines are iOS only.
+
 **You should see:** `devices` lists both machines. Each lease prints the phone it got, and each
 screenshot is saved under `./tapdance-artifacts/`. The first iPhone takes about two minutes to start
 on the small Mac mini; later ones are faster.
 
 **If Android is unreachable**, the Google Cloud machine has probably switched itself off after 30
-minutes without use. Start it again and wait about a minute:
+minutes without use, or after 8 hours. Your agent then reports that it cannot reach `android`. Start the
+machine again and wait about a minute. You can also tell your agent it may run this command itself:
 
 ```bash
 gcloud compute instances start tapdance-n2 --zone=us-central1-a
@@ -390,7 +398,10 @@ Start Claude Code in that folder and run `/mcp`.
 - a native Android app: `./gradlew assembleDebug`, which writes `app/build/outputs/apk/debug/app-debug.apk`;
 - a Kotlin Multiplatform app: `./gradlew :composeApp:assembleDebug`, which writes
   `composeApp/build/outputs/apk/debug/composeApp-debug.apk`;
-- a Flutter app: `flutter build apk --debug`, which writes `build/app/outputs/flutter-apk/app-debug.apk`.
+- a Flutter app: `flutter build apk --debug`, which writes `build/app/outputs/flutter-apk/app-debug.apk`;
+- a React Native app: `cd android && ./gradlew assembleRelease`, which writes
+  `android/app/build/outputs/apk/release/app-release.apk`. Use a release build: a debug build loads its
+  JavaScript from Metro on your laptop, which the cloud machine cannot reach.
 
 The agent uploads the APK to the Android machine itself.
 

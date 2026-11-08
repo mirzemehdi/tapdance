@@ -7,6 +7,7 @@ what has really been tested? [STATUS.md](../STATUS.md) is the source of truth.
 
 | Page | What it gives you |
 | --- | --- |
+| [Use cases](use-cases.md) | What you can ask your agent: what to say, the tools it calls, the same by hand, and what you get back. |
 | [Installation](installation.md) | Install Tapdance from source, and the SDKs your setup needs. |
 | [Quick start](quick-start.md) | One full loop on your Mac: lease, launch, tap, screenshot, release. |
 | [Local](deployment/local.md) | Run the agent and the devices on the same computer. |
