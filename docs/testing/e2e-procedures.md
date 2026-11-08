@@ -10,7 +10,13 @@ written. Where a step is likely to need adjusting, it says so. If you run one, w
 [evidence/README.md](evidence/README.md)) and update [STATUS.md](../../STATUS.md). If a step is
 wrong, file an issue (see [field-testing.md](field-testing.md)).
 
-| # | Procedure | Machines | Proves | State on 2026-11-07 |
+Every real run across machines used device-only mode, through the runbooks listed in
+[field-testing.md](field-testing.md#runbooks): an N2 VM ([field-test-cloud-android.md](field-test-cloud-android.md)),
+a rented Mac ([field-test-rented-mac-ios.md](field-test-rented-mac-ios.md)) and both at once. The gateway
+procedures below (4, and 5 and 6 as written) are kept for the gateway route, which has run on one Mac
+only.
+
+| # | Procedure | Machines | Proves | State on 2026-11-08 |
 | --- | --- | --- | --- | --- |
 | 1 | [iOS simulator on macOS](#1-ios-simulator-on-macos) | 1 Mac | Q-03, M-01, D-03, V-01, V-03 | Run. [Evidence](evidence/2026-11-01-local-ios.md) |
 | 2 | [Android emulator on macOS](#2-android-emulator-on-macos) | 1 Mac | Q-03, D-01 | Run. [Evidence](evidence/2026-11-01-android.md) |
@@ -62,9 +68,13 @@ export PATH="$HOME/.local/bin:$PATH"     # add this line to ~/.profile or ~/.zsh
 tapdance --version                       # prints 0.1.0
 ```
 
+Linking the package globally with pnpm (after `pnpm setup`) may also work, but the wrapper above runs
+exactly the build in your clone.
+
 > **Do not run `npm install -g tapdance`.** On 2026-11-01 the npm package named `tapdance` is an
 > unrelated project (a Test Anything Protocol harness, version 5.1.1). Tapdance is not published to
-> npm yet (its package will be `@tapdance/cli`); install from the repository as above.
+> npm yet (its package will be `@tapdance/cli`); install from the repository as above. No Tapdance
+> hint prints a global npm install (`cli.test.ts` checks this).
 
 ### Habits for every run
 
@@ -155,7 +165,9 @@ tapdance device release
 tapdance --json device status; echo "exit: $?"   # expect NO_ACTIVE_LEASE, exit 3
 ```
 
-Optional: install your own simulator build (this has **not** been exercised yet, STATUS.md F-01):
+Optional: install your own simulator build. This ran with the demo app in `examples/ios-demo`
+([evidence](evidence/2026-11-01-local-ios.md)), and through the guard from another machine
+([evidence](evidence/2026-11-07-vps-rented-mac-ios.md)); STATUS.md F-01:
 
 ```bash
 xcodebuild -project MyApp.xcodeproj -scheme MyApp -sdk iphonesimulator -configuration Debug -derivedDataPath build
@@ -184,9 +196,9 @@ tapdance worker install      # once
 TAPDANCE_IT_PLATFORM=ios TAPDANCE_IT_DEVICE="iPhone 16" TAPDANCE_IT_OS=18.5 pnpm test:integration
 ```
 
-To include a custom app, add `TAPDANCE_IT_APP=/abs/path/MyApp.app TAPDANCE_IT_APP_ID=com.example.MyApp
-TAPDANCE_ALLOWED_ROOTS=/abs/path` (the test runs in a temporary folder, so the app's folder must be
-allowed explicitly).
+To include a custom app, add `TAPDANCE_IT_APP=/abs/path/MyApp.app TAPDANCE_IT_APP_ID=com.example.MyApp`.
+The test runs in a temporary folder and allows the app's folder itself (it sets
+`TAPDANCE_ALLOWED_ROOTS` to it).
 
 ### Expected results
 
@@ -310,8 +322,9 @@ Simlock's "Runtimes and images" page for `downloads.acceptAndroidLicenses`), the
   tools and system images. On Apple silicon the image ABI is `arm64-v8a`.
 - The lease block shows Platform Android, API 35, Worker "this machine".
 - `logs` returns logcat lines; `logs --crash` reads the crash buffer (often empty).
-- `app install` with an `.aab` must be refused with `APP_PATH_INVALID` (exit 2) and a hint to build
-  an APK.
+- `app install` with an `.aab` converts it to a universal APK with bundletool on this machine and
+  installs that (STATUS.md D-09). Without bundletool it fails with `APP_PATH_INVALID` (exit 2) and a
+  hint to install bundletool or build an APK.
 - The integration test reports 1 passed.
 
 Simlock creates its own emulators from installed images. It does **not** lease your existing AVDs;
@@ -324,7 +337,7 @@ block, screenshot, MP4 size, logcat excerpt (no personal data), integration test
 
 ### Record
 
-`docs/testing/evidence/YYYY-MM-DD-local-android-macos.md`. Update STATUS.md D-01 and P-01.
+`docs/testing/evidence/YYYY-MM-DD-android.md`. Update STATUS.md D-01 and P-01.
 
 ---
 
@@ -415,6 +428,10 @@ The KVM check output (`tapdance --json worker check --android-only`), `uname -a`
 ## 4. Two-machine laptop worker (Q-06)
 
 **State:** not run. Proves Q-06, M-02, P-07, and exercises W-01, W-03, W-04, F-01, S-07, C-06.
+
+> Gateway route, never run across machines. To reach a host from another machine today, use
+> device-only mode: [one-command-host.md](../deployment/one-command-host.md), the route the 2026-11-02
+> run used ([evidence](evidence/2026-11-02-vps-field-runs.md)).
 
 ### Topology
 
@@ -575,6 +592,10 @@ S-07 and F-01 (only if a custom APK was installed).
 
 ## 5. Google Cloud N2 worker (Q-05, Q-07)
 
+> **Use the device-only runbook instead:** [field-test-cloud-android.md](field-test-cloud-android.md)
+> is what ran (from a Mac and from a Linux VPS). The gateway route below has never run across
+> machines.
+
 **State:** not run as written (through a gateway). The device-only variant ran: an N2 VM made with the
 Terraform module and set up with `scripts/host-setup.sh` and `host up`, driven over Tailscale from a
 Mac and from a Linux VPS ([evidence](evidence/2026-11-03-gcp-n2-android.md),
@@ -672,12 +693,17 @@ the link contains a login key), the hourly cost you were billed if known.
 
 ### Record
 
-`docs/testing/evidence/YYYY-MM-DD-gcp-n2.md` (and `-gcp-n2-byoi.md` for the Q-07 run). Update STATUS.md
-Q-05, Q-07, G-01, G-02, M-03.
+`docs/testing/evidence/YYYY-MM-DD-gateway-n2-android.md` (the device-only runs are named
+`gcp-n2-android` from a Mac and `vps-n2-android` from a VPS; see [evidence/README.md](evidence/README.md)).
+Update STATUS.md Q-05, Q-07, G-01, G-02, M-03.
 
 ---
 
 ## 6. Mac worker from a Linux VPS (Q-08)
+
+> **Use the device-only runbook instead:** [field-test-rented-mac-ios.md](field-test-rented-mac-ios.md)
+> is what ran (from a Mac and from a Linux VPS). The gateway route below has never run across
+> machines.
 
 **State:** not run as written (through a gateway). The device-only variant ran: a Linux VPS drove a
 rented Scaleway Mac mini through the worker guard over Tailscale, CLI and MCP, a host build and a
@@ -778,7 +804,8 @@ rented, the provider, machine type and start/end times (the 24-hour minimum matt
 
 ### Record
 
-`docs/testing/evidence/YYYY-MM-DD-mac-worker-from-vps.md`. Update STATUS.md Q-08, F-01, D-04.
+`docs/testing/evidence/YYYY-MM-DD-gateway-mac-ios.md` (the device-only runs are named `rented-mac-ios`
+and `vps-rented-mac-ios`). Update STATUS.md Q-08, F-01, D-04.
 
 ---
 

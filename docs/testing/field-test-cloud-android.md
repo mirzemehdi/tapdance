@@ -293,39 +293,23 @@ run does not leave a lease behind.
 
 ## 8. Evidence record
 
-Write `docs/testing/evidence/YYYY-MM-DD-gcp-n2-field-test.md` in the format of
-[evidence/README.md](evidence/README.md). A skeleton:
+Write `docs/testing/evidence/YYYY-MM-DD-vps-n2-android.md` (a Linux VPS as the agent's machine) or
+`YYYY-MM-DD-gcp-n2-android.md` (a Mac as the agent's machine); add `-rerun` or a run letter for a
+repeat. Use the sections and checks in [evidence/README.md](evidence/README.md), including its
+optional sections: **Measurements** (section 7 above), **What failed and why**, and **Cost** (the
+resource log, running time and estimate).
 
-```markdown
-# Evidence: Android on a Google Cloud N2 VM with the field-test kit — YYYY-MM-DD
+For this runbook, the record also gives:
 
-Real VM, real emulator, no mocks. <agent's machine> drove an n2-standard-4 VM over Tailscale. Run by
-<who>. Result: <one line>.
-
-## Environment
-| Item | Value |
-| --- | --- |
-| Agent's machine | <machine, OS>; Tapdance <commit>; scratch TAPDANCE_HOME; sessions field-test-cli, field-test-mcp |
-| Device host | n2-standard-4, <zone>, Ubuntu <version>, 64 GB pd-balanced, external IP |
-| Terraform | <version>; on_run_limit = "DELETE", max_run_hours = <n>, budget USD <n> |
-| Simlock, agent-device, emulator, system image | <versions> |
-| Network | Tailscale with HTTPS Certificates |
-
-## What ran
-1. Provision — PASS/FAIL, times.
-2. Host setup — …
-3. CLI base / app / build — <passed>/<ran>, the table.
-4. MCP base / app / build — <passed>/<ran>, the table.
-5. Teardown — terraform destroy, gcp-leftovers.sh exit code, what the owner removed.
-
-## Measurements
-## What failed and why
-## Results by requirement
-## Cost (resource log, running time, estimate)
-## Re-run
-## Not covered
-## Issues filed
-```
+- **Summary line:** real VM, real emulator, no mocks; which machine drove the n2-standard-4 VM over
+  Tailscale; who ran it; the result in one line.
+- **Environment rows:** the agent's machine (machine, OS, Tapdance commit, scratch `TAPDANCE_HOME`,
+  the session ids); the device host (`n2-standard-4`, zone, Ubuntu version, 64 GB `pd-balanced`,
+  external IP); Terraform (version, `on_run_limit = "DELETE"`, `max_run_hours`, budget); Simlock,
+  agent-device, emulator and system image versions; the network (Tailscale with HTTPS Certificates).
+- **What ran:** provision (times), host setup, the CLI checklists (base, app, build: passed out of
+  ran, with the table), the MCP checklists (the same), and teardown (`terraform destroy`, the
+  `gcp-leftovers.sh` exit code, what the owner removed).
 
 ## 9. Teardown (mandatory)
 

@@ -225,6 +225,27 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
   const pos = Array.isArray(params["positionals"]) ? (params["positionals"] as unknown[]).map(String) : [];
   const flags = params["flags"] && typeof params["flags"] === "object" ? (params["flags"] as Record<string, unknown>) : {};
   const pathFlag = PATH_FLAGS.find((f) => flags[f] !== undefined || params[f] !== undefined);
+  const has = (f: string) => flags[f] !== undefined || params[f] !== undefined;
+  if (command === "screenshot" || command === "record") {
+    const kind = command === "screenshot" ? "screenshot" : "recording";
+    const first = command === "screenshot" ? 0 : 1;
+    if (command === "record") {
+      const action = (pos[0] ?? "").toLowerCase();
+      if (action !== "start" && action !== "stop") return "record needs start or stop";
+      if (action === "stop" && (pos.length > 1 || has("out"))) return "record stop takes no path";
+    }
+    if (pos.length > first + 1) return `${command}: too many arguments`;
+    const named = [pos[first], flags["out"], params["out"]].filter((v) => v !== undefined);
+    if (named.length > 1) return `${command}: give one output, not several`;
+    if (named.length === 1 && !(typeof named[0] === "string" && REMOTE_OUTPUT(kind).test(named[0]))) {
+      return `${command} output must be agent-device's own temporary file: paths on the host are not allowed`;
+    }
+    const other = HOST_FLAGS.find((f) => f !== "out" && has(f));
+    if (other) return `--${other} is not allowed: it names a file on the host`;
+    return undefined;
+  }
+  const hostFlag = command === "perf" || command === "push" ? undefined : HOST_FLAGS.find(has);
+  if (hostFlag) return `--${hostFlag} is not allowed: it names a file on the host`;
   switch (command) {
     case "perf":
       if (pathFlag) return `perf --${pathFlag} is not allowed: profiles write files on the worker`;
@@ -244,10 +265,18 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
   }
 }
 
-// Output paths in screenshot/record requests are the *client's* paths: agent-device's daemon treats a
-// remote request's outputs as downloadable artifacts written to its own temp directory and refuses
-// local output paths "by command policy" (agent-device 0.21.35, runtime-factory). The guard relies on
-// that rather than parsing every command's path flags.
+// Output paths in screenshot/record requests reach agent-device's daemon on this host, which writes
+// the file there (its capture handlers use the permissive command policy in agent-device 0.21.35).
+// agent-device's own client, talking to a remote daemon, always replaces the caller's path with a
+// fresh name in /tmp (transport.js: /tmp/agent-device-<kind>-<ms>-<random><ext>) and downloads the
+// artifact afterwards; the guard accepts exactly that shape and nothing else.
+const REMOTE_OUTPUT = (kind: "screenshot" | "recording") => new RegExp(`^/tmp/agent-device-${kind}-[0-9]{10,16}-[a-z0-9]{1,8}\\.[A-Za-z0-9]{1,8}$`);
+/** Flags that make agent-device's daemon read, write or run something on this host, for any command. */
+const HOST_FLAGS = [
+  "out", "outPath", "path", "file", "payloadFile", "tracePath", "template", "saveScript", "artifactsDir", "baseline",
+  "iosXctestDerivedDataPath", "iosXctestEnvDir", "iosXctestrunFile",
+  "replayScriptSource", "replayScriptSources", "replayFrom", "replayEnv", "replayShellEnv",
+];
 
 const APP_ID = /^[A-Za-z][A-Za-z0-9_.-]{0,254}$/;
 /** A logcat `-t` line count: 1 to MAX_LOG_LINES (20,000), digits only. */

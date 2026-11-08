@@ -587,7 +587,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
       try {
         const { settings, checks, status } = await installWorker(o, out);
         out.result({ configured: settings, checks, status }, () =>
-          [renderChecks(checks), "", bold("Worker is running."), dim("This machine now serves devices to agents on it (provider: local)."), "To serve a remote agent from a personal Mac, use device-only mode: tapdance worker guard start (see docs/security/personal-mac.md).", "On a dedicated worker machine: tapdance worker login --accept-gateway-exec --gateway wss://<gateway> --label <name>"].join("\n"),
+          [renderChecks(checks), "", bold("Worker is running."), dim("This machine now serves devices to agents on it (provider: local)."), "To serve a remote agent from a personal Mac, use device-only mode: tapdance worker guard start (see docs/security/device-only-mode.md).", "On a dedicated worker machine: tapdance worker login --accept-gateway-exec --gateway wss://<gateway> --label <name>"].join("\n"),
         );
       } catch (error) {
         process.exitCode = out.error(error);
@@ -607,7 +607,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
       try {
         if (!o.acceptGatewayExec) {
           throw new TapdanceError("FORBIDDEN", "Joining a gateway gives it, and every agent token it issues, command execution on this machine (Simlock's exec: `simctl spawn` starts any program)", {
-            hint: "On a personal Mac use device-only mode instead: `tapdance worker guard start` (see docs/security/personal-mac.md). For a dedicated worker machine, re-run with --accept-gateway-exec.",
+            hint: "On a personal Mac use device-only mode instead: `tapdance worker guard start` (see docs/security/device-only-mode.md). For a dedicated worker machine, re-run with --accept-gateway-exec.",
           });
         }
         const url = checkGatewayUrl(o.gateway);
@@ -810,7 +810,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
               bold("2. On the worker machine (laptop, Mac, KVM server):"),
               "   install Tapdance from source (docs/installation.md), then: tapdance worker install",
               `   echo '<join token>' | tapdance worker login --gateway ${publicWs} --label ${o.workerLabel} --accept-gateway-exec`,
-              "   (a joined worker gives this gateway command execution on it; for a personal Mac prefer device-only mode: docs/security/personal-mac.md)",
+              "   (a joined worker gives this gateway command execution on it; for a personal Mac prefer device-only mode: docs/security/device-only-mode.md)",
               "",
               bold("Worker join token (shown once; give it only to that worker):"),
               `   ${workerToken.secret}`,

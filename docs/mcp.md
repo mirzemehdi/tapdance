@@ -7,22 +7,28 @@ agent on the same machine, and Streamable HTTP for a remote agent.
 The server never exposes a raw shell, `adb` or `simctl`. Every device tool acts on the device this
 session leased; no tool takes a device id.
 
-What has been verified ([STATUS.md](../STATUS.md), S-01, S-07):
+What has been verified:
 
-- The stdio server with a local iOS worker, through every tool in the
-  [workflow](#recommended-agent-workflow) below ([evidence](testing/evidence/2026-11-01-local-ios.md)).
-- The same stdio loop through a real Simlock gateway, with the gateway and the joined worker on the
-  same Mac ([evidence](testing/evidence/2026-11-01-gateway-single-host.md)). A gateway and worker on
-  two machines over a real network have not been tested.
-- Streamable HTTP, partly: a request without the bearer token got 401, the tool list came back, and
-  real `list_devices` and `get_device_status` calls worked. A full device loop over HTTP has not been
-  run yet.
-- The verified runs used a scripted MCP client. The server has not yet been run from inside Claude
-  Code, Codex or Cursor (STATUS P-01).
+- **stdio, proven.** The full [workflow](#recommended-agent-workflow) below on a local iOS worker
+  ([evidence](testing/evidence/2026-11-01-local-ios.md)) and a local Android worker
+  ([evidence](testing/evidence/2026-11-01-android.md)). In device-only mode from another machine: a Google
+  Cloud N2 host for Android ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)), a rented Mac
+  for iOS ([evidence](testing/evidence/2026-11-07-vps-rented-mac-ios.md)), and both at once as two
+  [connect targets](glossary.md#device-only-mode)
+  ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). Through a Simlock gateway with the
+  gateway and the worker on the same Mac ([evidence](testing/evidence/2026-11-01-gateway-single-host.md));
+  a gateway across machines was not run.
+- **Streamable HTTP, partly.** Tried by hand and not recorded: a request without the bearer token got
+  401, the tool list came back, and `list_devices` and `get_device_status` worked. A full device loop
+  over HTTP has not been run.
+- Every run used a scripted MCP client. Claude Code, Codex and Cursor themselves have not driven the
+  server in a recorded run.
 
 ## stdio (an agent on this machine)
 
-The agent starts the server as a child process:
+The agent starts the server as a child process. This is also the setup when the devices are on a remote
+host: the server runs on the agent's machine and reaches the host through the connect targets that
+`tapdance connect` saved ([connect your agent](agents.md)).
 
 ```bash
 tapdance mcp
@@ -44,8 +50,8 @@ A generic MCP client configuration:
 If `tapdance` is not on the agent's `PATH`, use `"command": "node"` and
 `"args": ["/absolute/path/to/tapdance/packages/cli/dist/main.js", "mcp"]`.
 
-Agent-specific steps: [Claude Code](agents/claude-code.md), [Codex](agents/codex.md),
-[Cursor](agents/cursor.md).
+Agent-specific steps: [Claude Code](agents.md#claude-code), [Codex](agents.md#codex),
+[Cursor](agents.md#cursor).
 
 Things to know about stdio:
 
@@ -54,9 +60,8 @@ Things to know about stdio:
   `install_app` paths and `execute_tool` `cwd` values **inside the working directory** or a directory
   listed in `TAPDANCE_ALLOWED_ROOTS` (colon-separated; semicolon on Windows). Start it in the project
   directory, or pass `--config /path/to/tapdance.config.json` (`"args": ["--config", "…", "mcp"]`).
-- **Session.** The server uses the agent's session when it can see it (`TAPDANCE_SESSION_ID`, then
-  `CLAUDE_CODE_SESSION_ID`, `CODEX_SESSION_ID`, `PI_SESSION_ID`), otherwise one session per server
-  process. Global `--session <id>` also works. See [session identity](cli-reference.md#session-identity).
+- **Session.** The server acts for the agent's session when it can see it, otherwise one session per
+  server process. See [session identity](cli-reference.md#session-identity).
 - **Lease lifetime.** While the server runs it checks every 15 s and renews the lease when a third of
   its TTL has passed, unless another live process (the CLI keepalive) renewed it recently. A failed
   renewal check is logged and never stops the server. A lease unused for `session.idleReleaseMinutes`
@@ -91,6 +96,45 @@ holder's configuration. Never commit the token.
 Remember that the paths an agent gives to `install_app` are on the machine running the server, not on
 the agent's machine.
 
+### Client configuration for HTTP
+
+None of these has been tried. Read the token from the environment rather than writing it into the file.
+
+Claude Code (`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "tapdance": {
+      "type": "http",
+      "url": "https://tapdance.example.ts.net/mcp",
+      "headers": { "Authorization": "Bearer ${TAPDANCE_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
+Codex (`~/.codex/config.toml`), which sends the value of `TAPDANCE_MCP_TOKEN` as the bearer token:
+
+```toml
+[mcp_servers.tapdance]
+url = "https://tapdance.example.ts.net/mcp"
+bearer_token_env_var = "TAPDANCE_MCP_TOKEN"
+```
+
+Cursor (`.cursor/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "tapdance": {
+      "url": "https://tapdance.example.ts.net/mcp",
+      "headers": { "Authorization": "Bearer ${env:TAPDANCE_MCP_TOKEN}" }
+    }
+  }
+}
+```
+
 ## Tools
 
 All inputs are strict: an unknown key is refused, so a typo fails loudly. Results are JSON text
@@ -112,19 +156,47 @@ clients read as possibly destructive, because an authorized `asc` mutation can d
 | --- | --- | --- |
 | `list_workers` | none | `{workers: [{id, label, connection, platforms, leases, host, capabilities}]}`. In local mode, this machine. Through a gateway it fails with `FORBIDDEN`: listing workers needs an operator token, and the MCP server never loads one. Use `tapdance workers list` as an operator instead. |
 | `list_devices` | `platform?` (`android`/`ios`) | `{catalog, capacity, devices, queueDepth, notes, hosts?}`: leasable models (first 40 per platform, `modelsTruncated` when cut) and OS versions, capacity, running devices. With several connect targets, `hosts` has one entry per host (`target`, `endpoint`, `reachable`, `error?`, `inventory?`). |
-| `lease_device` | `platform` (required), `device?` (model, ≤100 chars), `os_version?`, `image_tag?` (Android; leave it out for normal testing, which gets the lighter `google_apis` image; `google_apis_playstore` only for tests that need the Play Store, such as billing), `profile?` (a device profile on the server's machine, booted read-only; see [cli-reference.md](cli-reference.md#device-profiles)), `ttl_minutes?` (1–240), `settle_seconds?` (0–300; Android emulators: how long to check the guest's CPU after it has booted with no dialog in front, default `session.settleSeconds` 15, `0` skips the check), `target?` (with several [connect targets](cli-reference.md#connect): the host to lease from; default the first that serves the platform) | `{device, reused, next, notices?, ttlCappedMinutes?}`. `notices` says when the device went out still busy (commands work, 2-10 s each for a few minutes) or a system dialog covers it; with `settle_seconds` 15 or less, a device busy from the start (first 3 CPU readings at 80 % or more, not falling) goes out after about 5 s with that notice. `ttlCappedMinutes` appears when the worker granted less time than asked (a worker guard caps leases at its `maxLeaseMinutes`); the server keeps renewing it. Booting a new device can take minutes. If the session already holds a device on the same platform (and the same model, when one is named), it returns that device with `reused: true`. A lease on another platform fails with `LEASE_ALREADY_HELD`. If the client's call times out, call `lease_device` again: the first request keeps running, and once the device is granted the new call returns it with `reused: true`. While it waits, the server sends MCP progress notifications when the client passed a `progressToken`. |
+| `lease_device` | `platform` (required), `device?` (model, ≤100 chars), `os_version?`, `image_tag?` (Android), `profile?`, `ttl_minutes?` (1–240), `settle_seconds?` (0–300, Android), `target?` (a connect target's name) | `{device, reused, next, notices?, ttlCappedMinutes?}`. Details below the table. |
 | `get_device_status` | none | `{device}`: session and lease ids, platform, model, OS, device id, provider, location (local/remote, worker, endpoint), `expiresAt`, state, running recording, `humanHoldUntil`. `LEASE_LOST` if the lease ended. |
 | `release_device` | none | `{released, device?, artifacts?}`. The device is wiped. Safe to call when nothing is held. A recording that is still running is stopped first and kept as a `recording` artifact, returned in `artifacts` (`get_test_artifacts` lists it too). |
 
 The `device` object is the same summary in all of these.
 
+**`lease_device` inputs.**
+
+- `image_tag`: leave it out for normal testing, which gets the lighter `google_apis` image. Ask for
+  `google_apis_playstore` only for tests that need the Play Store, such as billing.
+- `profile`: a [device profile](cli-reference.md#device-profiles) on the server's machine, booted
+  read-only.
+- `settle_seconds`: Android emulators only. How long to check the guest's CPU after it has booted with
+  no dialog in front. Default `session.settleSeconds` (15); `0` skips the check.
+- `target`: with several [connect targets](cli-reference.md#connect), the host to lease from. By default
+  a lease goes to the first connect target, in the order they were added, that serves the platform and
+  answers; a host that is down is skipped fast with `PROVIDER_UNREACHABLE`.
+
+**`lease_device` replies.**
+
+- `notices` says when the device went out still busy (commands work, 2-10 s each for a few minutes) or a
+  system dialog covers it. With `settle_seconds` 15 or less, a device busy from the start (first 3 CPU
+  readings at 80 % or more, not falling) goes out after about 5 s with that notice.
+- `ttlCappedMinutes` appears when the worker granted less time than asked (a worker guard caps leases at
+  its `maxLeaseMinutes`). The server keeps renewing the lease.
+- If the session already holds a device on the same platform (and the same model, when one is named),
+  the call returns that device with `reused: true`. A lease on another platform fails with
+  `LEASE_ALREADY_HELD`.
+
+Booting a new device can take minutes. If the client's call times out, call `lease_device` again: the
+first request keeps running, and once the device is granted the new call returns it with
+`reused: true`. While it waits, the server sends MCP progress notifications when the client passed a
+`progressToken`.
+
 ### Apps
 
 | Tool | Inputs | Returns | Viewer |
 | --- | --- | --- | --- |
-| `install_app` | `path` (on the server's machine; inside its working directory or `TAPDANCE_ALLOWED_ROOTS`), `app_id?`; or instead of `path`, `from_ci: {repo, artifact, run?, branch?}`; `launch?` (an app id to relaunch once installed, like the CLI's `--launch`) | `{installed: {appId?, path}, launched?, next}`; `next` names `launch_app` with the real `app_id` when it is known. `.apk` or `.aab` for Android (an `.aab` becomes a universal APK with [bundletool](https://github.com/google/bundletool) on the server's machine, signed with the Android debug keystore; without bundletool it is refused with an install hint), simulator `.app` (or a `.zip`/`.tar` holding one) for iOS; `.ipa` refused with `APP_PATH_INVALID`; a path outside the allowed roots fails with `FORBIDDEN`, with a hint to rebuild into the project. Pass `appId` to `launch_app`; when it is missing, call `list_apps`. With `from_ci` (an Android APK, or an iOS simulator `.app` from the artifact, #121; exactly one of `path` and `from_ci`): the device's host downloads the GitHub Actions artifact with its own `gh` login and installs the app; returns `{installed: {repo, runId, sha, branch, artifact, apkSha256, cached, installed, appId?, versionCode?}}`: `appId` is the package the host read from the APK's manifest, and `cached` says the host reused an earlier download. A refused install (`INSTALL_FAILED_VERSION_DOWNGRADE`, another signing key) has a hint that names the package and the MCP call, e.g. `uninstall_app {app_id: "com.acme.app"}`; an upload from `path` names it too (from `app_id`, adb's message or the APK's manifest), with the package in `details.appId`. Needs a worker guard whose owner ran `host artifacts enable`. Example: `{"from_ci": {"repo": "acme/app", "artifact": "app-debug"}}`. Ran for Android on a Google Cloud N2 host ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); iOS is unit-tested only (STATUS F-05). | blocked |
+| `install_app` | exactly one of `path` (on the server's machine, inside its working directory or `TAPDANCE_ALLOWED_ROOTS`) or `from_ci: {repo, artifact, run?, branch?}`; `app_id?` (with `path`); `launch?` (an app id to relaunch once installed, like the CLI's `--launch`) | `{installed: {appId?, path}, launched?, next}`; `next` names `launch_app` with the real `app_id` when it is known. Details below the table. | blocked |
 | `list_apps` | none | `{apps}`: the apps installed on the leased device. Read-only. Use it to find the `app_id` for `launch_app`. | allowed |
-| `launch_app` | `app_id`, `relaunch?`, `url?` (deep link), `console?` (iOS: capture stdout/stderr for get_logs), `args?` (launch arguments, implies relaunch; iOS language: `["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]`), `intent?` (Android: `action?`, `data?`, `component?`, `categories?`, `flags?`, `extras?`) | `{ok, message, changes?, next}` | blocked |
+| `launch_app` | `app_id`, `relaunch?`, `url?` (deep link), `console?` (iOS: capture stdout/stderr for get_logs), `args?` (launch arguments, implies relaunch; iOS language: `["-AppleLanguages", "(de)", "-AppleLocale", "de_DE"]`), `locale?` (run the app in this language, e.g. `de-DE`; Android 13+ sets the app's own locale, then relaunches), `intent?` (Android: `action?`, `data?`, `component?`, `categories?`, `flags?`, `extras?`) | `{ok, message, changes?, next}` | blocked |
 | `stop_app` | `app_id` | `{ok, message}`: a force-stop (on Android it also cancels the app's alarms and jobs). | blocked |
 | `build_app` | `repo`, `ref`, `project?`, `scheme?`, `configuration?`, `xcode_settings?`, `gradle_task?`, `dir?`, `launch?` (an app id to relaunch once installed) | `{sha, ref, seconds, artifact, installed, reused, builtAt?, appId?, versionCode?, launched?, next}`: builds on the device's host from an allow-listed git repository (iOS: xcodebuild for the host's simulator arch; Android: Gradle) and installs it on the lease; steps and errors arrive as progress, and a failure names its cause. `reused: true` means the host installed its earlier build of the same commit and settings (`builtAt` says when) instead of building again; a build from the CLI's `tapdance app build` counts too (an option left out and its default are the same setting). `appId` (Android) is the installed package. When the host cannot sign in to the repository the error is `AUTH_FAILED` with `details.reason: "GIT_AUTH"`: only the host's owner can fix it, so ask them (`request_human`) rather than retrying. Needs a worker guard with builds turned on (`host builds enable`). | blocked |
 | `clipboard` | `action` (`get`/`set`), `text?` | `get`: `{data: {text}}`. `set` puts text on the device clipboard. | `get` allowed, `set` blocked |
@@ -136,6 +208,28 @@ The `device` object is the same summary in all of these.
 | `run_scenario` | exactly one of `path` (a .yaml/.yml/.json file inside the project) or `scenario` (inline object); `continue_on_failure?`, `keep_lease?` | The scenario report: `{scenario, status, startedAt, durationMs, device, app?, leased, released, environment, summary, steps: [{index, name, action, status, durationMs, error?, evidence?}], evidenceDir, reportPath, summaryPath}`. A failed step is reported, not raised. Format: [scenarios.md](scenarios.md). The same SDK replay passed on a real iOS simulator and Android emulator through `tapdance run` ([evidence](testing/evidence/2026-11-01-device-state-and-profiles.md)); the MCP tool itself has run only against FakeProvider. | blocked |
 
 `app_id` is an Android package or iOS bundle id (`^[A-Za-z][A-Za-z0-9_.-]{0,254}$`).
+
+**`install_app` files.** Android takes `.apk` or `.aab`. An `.aab` becomes a universal APK with
+[bundletool](https://github.com/google/bundletool) on the server's machine, signed with the Android
+debug keystore; without bundletool it is refused with an install hint. iOS takes a simulator `.app`, or a
+`.zip`/`.tar` holding one. An `.ipa` is refused with `APP_PATH_INVALID`. A path outside the allowed roots
+fails with `FORBIDDEN`, with a hint to rebuild into the project. Pass the returned `appId` to
+`launch_app`; when it is missing, call `list_apps`.
+
+**`install_app` with `from_ci`.** The device's host downloads a GitHub Actions artifact with its own
+`gh` login and installs the app: an Android APK, or an iOS simulator `.app` from the artifact. It needs a
+worker guard whose owner ran `host artifacts enable`. Example:
+`{"from_ci": {"repo": "acme/app", "artifact": "app-debug"}}`. The reply is
+`{installed: {repo, runId, sha, branch, artifact, apkSha256, cached, installed, appId?, versionCode?}}`:
+`appId` is the package the host read from the APK's manifest, and `cached` says the host reused an
+earlier download. Proven for Android on a Google Cloud N2 host
+([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); iOS is unit-tested only. See
+[CI builds](guides/ci-builds.md).
+
+**Refused installs.** A refused install (`INSTALL_FAILED_VERSION_DOWNGRADE`, another signing key) has a
+hint that names the package and the MCP call, e.g. `uninstall_app {app_id: "com.acme.app"}`. An upload
+from `path` names it too (from `app_id`, adb's message or the APK's manifest), with the package in
+`details.appId`.
 
 The path must be inside the project the server runs in, so build there:
 
@@ -153,8 +247,8 @@ the server's environment and restarts the server. When the backend reports no ap
 | Tool | Inputs | Returns | Viewer |
 | --- | --- | --- | --- |
 | `audit_screen` | `app_id?` | `{checked, findings: [{rule, severity, ref, role, label?, detail}], counts, partlyHidden}`: unlabelled controls (error), small touch targets (44 pt iOS, 48 dp Android), controls announced alike, unlabelled images. From the accessibility tree: what VoiceOver or TalkBack would trip over (the iOS simulator has no VoiceOver); no contrast or clipping checks. Controls cut off by a screen or list edge or under a tab/navigation bar are not judged; their refs are in `partlyHidden` (scroll them into view and audit again). | allowed |
-| `inspect_screen` | `all?` (include non-interactive elements), `compact?` (leave out unlabelled containers), `system?` (Android: every window from `uiautomator dump`, e.g. a Chrome Custom Tab, whose URL appears in `warnings` as `browser: …`; its `@u` refs are not tappable) | `{app?, viewport?, elements: [{ref, role, label?, value?, identifier?, placeholder?, enabled?, editable?, states?, rect?, depth?}], truncated, warnings}`. `states` lists `checked`, `unchecked`, `mixed`, `selected`, `focused`, `expanded`, `collapsed` when the platform reports them. A ref may carry a `~sN` suffix (`@e7~s3`), naming the snapshot it came from; pass it unchanged. On Android, `app` is the app whose elements are on screen: when none belong to the session's app (the launcher after Back), it names that app and a warning says the session's app is not in front. | allowed When Android's automation helper cannot read the screen (it is starting or the guest is busy), the read is retried after 0.5, 1 and 2 s and then taken from a plain uiautomator dump: the reply has `source: "uiautomator"` and a warning, and its refs cannot be tapped (target by text or x/y). |
-| `tap` | exactly one of `ref` (`@e7`), `text`, `id`, `selector`, or `x`+`y`; `settle_ms?` (100–30000); `inject?` (Android) | `{ok, message, changes?, point?, screenChanged?, screen?, warning?}`: waits for the UI to settle and lists what changed. With `settle_ms`, also waits up to that long for the UI to come to rest (a tap that auto-advances) and returns `screenChanged` and the new screen's first labels. On Android system screens that ignore normal taps (the file picker, the share sheet), a tap that changed nothing is repeated once as a raw `input tap` (`warning` says so); `inject: true` taps that way from the start, at the element's centre. | blocked A target that is not found fails with `ELEMENT_NOT_FOUND` naming what is on screen (`On screen: "…", …`, the full list in `details.visible`), so a second `inspect_screen` is usually not needed; `type_text` with a target does the same. |
+| `inspect_screen` | `all?` (include non-interactive elements), `compact?` (leave out unlabelled containers), `system?` (Android: every window from `uiautomator dump`), `app_id?` (switch to this app as it is, without a relaunch, and read it) | `{app?, viewport?, elements: [{ref, role, label?, value?, identifier?, placeholder?, enabled?, editable?, states?, rect?, depth?}], truncated, warnings}`. Details below the table. | allowed |
+| `tap` | exactly one of `ref` (`@e7`), `text`, `id`, `selector`, or `x`+`y`; `settle_ms?` (100–30000); `inject?` (Android) | `{ok, message, changes?, point?, screenChanged?, screen?, warning?}`: waits for the UI to settle and lists what changed. With `settle_ms`, also waits up to that long for the UI to come to rest (a tap that auto-advances) and returns `screenChanged` and the new screen's first labels. On Android system screens that ignore normal taps (the file picker, the share sheet), a tap that changed nothing is repeated once as a raw `input tap` (`warning` says so); `inject: true` taps that way from the start, at the element's centre. | blocked |
 | `swipe` | `direction` (`up`/`down`/`left`/`right`, the finger's direction) with `amount?` (0.1–0.8) and `until_text?` (up to 10 passes); or all of `from_x`, `from_y`, `to_x`, `to_y` | `{ok, message}` | blocked |
 | `type_text` | `text` (≤5000), optional field `into_ref` / `into_text` / `into_id`, `delay_ms?` (0–1000) | `{ok, message, typed?, fieldNow?}`. With a field, its content is replaced; without, text is appended to the focused field. On Android, typing without a field fails with `ELEMENT_NOT_FOUND` when the screen shows a text field but no focused element and the keyboard is down; pass `into_text`, `into_ref` or `into_id`. `delay_ms` spaces the keystrokes for fields that drop fast input; a fill that drops characters is retried once at 80 ms on its own. | blocked |
 | `tap_sequence` | `steps` (1–500 of `{t, x, y, hold?}`, `t` in ms from the start, ascending), `start_on_text?`, `offset_ms?`, `orientation?` (iOS landscape: `landscape-left` default, `landscape-right`) | `{ok, message, data: {steps: [{…, actualMs, driftMs}], maxDriftMs}, startedAfterMs?}`. Android: one script inside the emulator. iOS: touches through the simulator's input channel, scheduled on the Mac (worker guard or local), a few ms of drift; x/y in the points inspect_screen gives. Either way the network adds no delay between taps. | blocked |
@@ -163,6 +257,27 @@ the server's environment and restarts the server. When the backend reports no ap
 | `handle_alert` | `action`: `get`, `accept`, `dismiss` | `{present, title?, message?, buttons?, acted?}` | `get` allowed, others blocked |
 
 Coordinates are screen points, as in `inspect_screen` rects.
+
+**`inspect_screen` details.**
+
+- `states` lists `checked`, `unchecked`, `mixed`, `selected`, `focused`, `expanded`, `collapsed` when the
+  platform reports them.
+- A ref may carry a `~sN` suffix (`@e7~s3`), naming the snapshot it came from; pass it unchanged.
+- `system: true` (Android) reads windows the normal view misses, such as a Chrome Custom Tab, whose URL
+  appears in `warnings` as `browser: …`, or a system picker. Its `@u` refs are not tappable: tap x/y at
+  the centre of `rect`, or `text` with `inject`.
+- `app_id` reads another app, for example `com.apple.mobilesafari` after a link-out opened Safari. A read
+  without it brings the session's app to the front again; later reads stay on the named app until you
+  `launch_app` yours. On iOS, read the Home Screen with `app_id: "com.apple.springboard"`.
+- On Android, `app` is the app whose elements are on screen. When none belong to the session's app (the
+  launcher after Back), it names that app and a warning says the session's app is not in front.
+- When Android's automation helper cannot read the screen (it is starting or the guest is busy), the read
+  is retried after 0.5, 1 and 2 s and then taken from a plain uiautomator dump. The reply then has
+  `source: "uiautomator"` and a warning, and its refs cannot be tapped (target by text or x/y).
+
+**Target not found.** A `tap` target that is not found fails with `ELEMENT_NOT_FOUND` naming what is on
+screen (`On screen: "…", …`, the full list in `details.visible`), so a second `inspect_screen` is usually
+not needed. `type_text` with a target does the same.
 
 **Refs go stale when the screen changes.** A ref from an older `inspect_screen` is refused with
 `ELEMENT_NOT_FOUND` (the hint says the screen changed); inspect again and use the new ref.
@@ -190,7 +305,7 @@ instead of repeating the action. If the target is behind the keyboard, `press_ke
 | `take_screenshot` | `note?` (≤200), `include_image?` (default true) | `{artifact}` plus the PNG inline unless `include_image: false`. |
 | `start_recording` | none | `{path}` of the MP4 being written. |
 | `stop_recording` | none | `{artifact}` with `path`, `bytes`, `extra` (continuation chunks) and `durationMs?`. The MP4 is downloaded to the server's machine. |
-| `get_logs` | `lines?` (1–2000), `app_id?`, `contains?` (1–200 chars, case-insensitive), `level?` (`error` or `fault`) | `{source, lines, omittedLines, artifact}`: Android logcat or iOS simulator log. The last 50 lines inline by default (or `lines`, when passed), never more than 12 000 characters; `omittedLines` says how many were left out. The full log is saved as an artifact. |
+| `get_logs` | `lines?` (1–2000), `app_id?`, `contains?` (1–200 chars, case-insensitive), `level?` (`error` or `fault`) | `{source, lines, omittedLines, artifact}`: Android logcat or iOS simulator log. The last 50 lines inline by default (or `lines`, when passed), never more than about 10 000 characters; `omittedLines` says how many were left out. The full log is saved as an artifact. |
 | `get_crash_logs` | same as `get_logs` | Same shape: Android crash buffer, or iOS faults and crash messages from the last 10 minutes. |
 | `get_test_artifacts` | none | `{artifacts: [{id, kind, path, bytes, createdAt, sessionId, leaseId?, note?}]}` for this session. |
 
@@ -220,9 +335,9 @@ allowed (`allow.settings`, `allow.files`, `allow.inspection` (reading an emulato
 
 | Tool | Inputs | Returns | Viewer |
 | --- | --- | --- | --- |
-| `set_device_setting` | `name`, `value?` (omit to read where readable), `app_id?`, `permission?`, `latitude?`, `longitude?` | `{ok, message, data?}`. Names: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`; iOS simulator: status bar only for wifi/airplane), `location` (`on`/`off`, or `latitude`+`longitude`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid` (iOS), `fingerprint` (Android), `permission` (`grant`/`deny`/`reset` + `permission` + `app_id`), `reset-keychain` (iOS), `orientation`, `status-bar-time` (iOS `HH:MM` or `clear`). Other Android settings (density, locale, time zone, …) go through `device_shell`. Unsupported combinations answer `NOT_SUPPORTED` with what to do instead. | blocked |
-| `push_file` | `path` (inside the project), `destination` (`downloads`, `pictures`, `documents`, `app_sandbox`), `app_id?`, `name?` | `{ok, message, devicePath}`. Android: shared storage (media-scanned, so the system picker and gallery see it) or a debuggable app's sandbox (`files/…`, `cache/…`, `databases/…`, `shared_prefs/…`), up to 24 MB. iOS: `pictures` → Photos, `documents` → the app's Documents folder; on a remote simulator this needs a worker in device-only mode, which writes only there and never to a path the caller names. | blocked |
-| `pull_file` | `device_path` (Android shared storage) or `app_id` + `relative_path` | `{ok, message, path, artifact}`: the file, saved as a session artifact. | allowed |
+| `set_device_setting` | `name`, `value?` (omit to read where readable), `app_id?`, `permission?`, `latitude?`, `longitude?` | `{ok, message, data?}`. Names: `wifi`, `bluetooth`, `airplane`, `mobile-data`, `animations` (`on`/`off`; iOS simulator: status bar only for wifi/airplane), `location` (`on`/`off`, or `latitude`+`longitude`), `appearance` (`light`/`dark`/`toggle`), `text-size`, `faceid`/`touchid` (iOS), `fingerprint` (Android), `permission` (`grant`/`deny`/`reset` + `permission` + `app_id`), `reset-keychain` (iOS), `orientation`, `status-bar-time` (iOS `HH:MM` or `clear`), `browser-first-run` (Android, `off`: Chrome opens links without its first-run screens; set it before a test that opens links), `language` (iOS: the device language, e.g. `de`; apps take it when they relaunch; on Android use `launch_app` `locale`). Other Android settings (density, locale, time zone, …) go through `device_shell`. Unsupported combinations answer `NOT_SUPPORTED` with what to do instead. | blocked |
+| `push_file` | `path` (inside the project), `destination` (`downloads`, `pictures`, `documents`, `app_sandbox`, `files`), `app_id?`, `name?` | `{ok, message, devicePath}`. Android: shared storage (media-scanned, so the system picker and gallery see it) or a debuggable app's sandbox (`files/…`, `cache/…`, `databases/…`, `shared_prefs/…`), up to 24 MB. iOS: `pictures` → Photos, `files` → the Files app's On My iPhone (every document picker sees it: use it for import tests), `documents` → the app's Documents folder; on a remote simulator this needs a worker in device-only mode, which writes only there and never to a path the caller names. | blocked |
+| `pull_file` | `device_path` (Android shared storage), or `app_id` + `relative_path` (inside the app's container or a debuggable Android app's sandbox), or `files_name` (iOS: a file in the Files app's On My iPhone) | `{ok, message, path, artifact}`: the file, saved as a session artifact. | allowed |
 | `notifications` | `action` (`list`, `open`, `close`, `post`, `tap` with `text`: opens that notification the way a person does), `app_id?`, `title?`, `text?`, `payload?` | `list` (Android): `{data: {notifications: [{package, title?, text?, key?, postedAt?}]}}`. `open`/`close` (Android) pull the shade down or up; then `inspect_screen` (with `all: true`) and `tap`. `post`: an Android shell notification, or with `app_id` + `payload` a push payload delivered to that app (the way to test pushes on the iOS simulator; through a worker guard, posting to a simulator or emulator is part of `interaction`). On iOS `open`/`close` swipe Notification Center in and out (untested). | blocked (except `list`) |
 | `device_shell` | `command` (≤8192 chars, one string for the emulator's own shell), `stdin?`, `timeout_seconds?` (1–600, default 120) | `{ok, message, data: {exitCode, stdout, stderr, truncated}}`. **Android emulators only:** `adb shell` inside the leased emulator, which is its own Android VM and is wiped at release; it never runs on the host. For whatever the other tools do not cover: `dumpsys` (e.g. `dumpsys media.audio_flinger` to see which app plays sound), `am broadcast` to a helper app you installed, `pm`, `settings`, `cmd`, `wm density`. Refused on iOS (a simulator shell would be a Mac shell) and on physical phones; a worker in device-only mode can turn it off (`allow.deviceShell`). | blocked |
 | `measure_performance` | `metric` (`frames` or `memory`), `app_id?` | `{data}`: frame health of the foreground app since the last reading (dropped/janky frames, worst windows) or a memory sample. Launch the app with `launch_app` first. Emulator and simulator numbers are not device-representative. | allowed |
@@ -296,55 +411,23 @@ lists up to 5 matching labels.
 `HUMAN_HELD` and `TIMEOUT`, on `DEVICE_UNAVAILABLE` when the device is in use, and on
 `PROVIDER_UNAVAILABLE` for a host-side lease failure. On iOS the first call after a cold lease can take
 over a minute on a small Mac while agent-device starts its runner; a "Daemon request timed out" then is
-`PROVIDER_UNREACHABLE` and the next call usually answers. On iOS, read the Home Screen with
-`inspect_screen` `app_id: "com.apple.springboard"` (there is no app in front after a lease). A retryable error
+`PROVIDER_UNREACHABLE` and the next call usually answers. On iOS there is no app in front after a
+lease: read the Home Screen with `inspect_screen` `app_id: "com.apple.springboard"`. A retryable error
 may be retried unchanged. All codes are listed in [cli-reference.md](cli-reference.md#exit-codes);
 fixes are in [troubleshooting.md](troubleshooting.md).
 
 ## execute_tool policy
 
-`execute_tool` runs an installed external CLI with an argument array. The arguments go directly to
-the program, never through a shell.
+`execute_tool` runs an installed external CLI with an argument array, never through a shell. For agents
+it is read-only by default: a tool must be enabled for agents (`tools.mcpEnabled`), and a call may
+change things only when the user lists the tool in `tools.allowMutation` and the call passes
+`allow_mutation: true`. Otherwise `asc` runs with `ASC_READ_ONLY=1`, and `fastlane` and `xcodebuild` are
+refused. Device tools (`android`, `axe`, `maestro`) act only on the leased device, and only in local mode.
+`target` must be `control` (this machine). These keys are read only from the user
+config or the environment, never from a project file.
 
-`tools.mcpEnabled`, `tools.allowMutation` and `tools.paths` are read only from the user config
-(`~/.tapdance/config.json`, set with `tapdance config set --global …`) or the environment. A project
-`tapdance.config.json` cannot change them (they are ignored there, with a warning): a repository you
-open must not be able to enable tools for agents or point a tool name at another program. A
-`tools.paths` entry must point to a program with the tool's own name, or the call fails with
-`FORBIDDEN`. See [configuration.md](configuration.md#security-settings-are-user-only).
-
-For agent calls these rules apply, in this order:
-
-1. **`target`** must be `control` (this machine); remote targets are `NOT_SUPPORTED` today
-   (STATUS E-04).
-2. **`tools.mcpEnabled`** must list the tool. Default: `["asc", "android", "axe", "maestro"]`.
-   `fastlane` and `xcodebuild` are not enabled for agents by default. Otherwise `FORBIDDEN`.
-3. **Read-only by default.** Unless the user lists the tool in **`tools.allowMutation`** *and* the call
-   passes `allow_mutation: true`, the call is treated as read-only:
-   - `asc` runs with **`ASC_READ_ONLY=1`**, asc's own guard, which refuses every mutating App Store
-     Connect request before it is sent ([asc](https://github.com/rorkai/App-Store-Connect-CLI)).
-   - Some `asc` commands print credentials or run shell steps, which `ASC_READ_ONLY` does not stop.
-     Unless mutation is authorized as above, Tapdance refuses them for agents with `FORBIDDEN`:
-     `asc auth …` (except `asc auth status`), `asc workflow …` and `asc install-skills`. `--help` /
-     `-h` is always allowed. The user can run them in a terminal.
-   - A tool that runs on this machine and has no read-only mode (`fastlane`, `xcodebuild`) is refused with
-     `FORBIDDEN` until the user lists it in `tools.allowMutation`.
-   - Device tools (`android`, `axe`, `maestro`) are not made read-only; they are limited to the leased
-     device instead.
-4. **Lease scoping.** `axe` and `maestro` get the leased device appended (`--udid` / `--device`) and refuse
-   a caller-supplied `--udid` or `--device`. `android` gets `--device=<leased serial>` on subcommands whose
-   `--help` lists `--device` (the CLI ignores `ANDROID_SERIAL`), refuses a caller-supplied `--device`, and
-   gets Simlock's adb server port; with no lease, the serial is set to an invalid id so device commands
-   fail. Lease-scoped tools work only when the device is on this machine (local mode); a remote device
-   gives `NOT_SUPPORTED`.
-5. **Environment.** The tool gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TMPDIR`,
-   `TERM`, `TZ` and its own prefixes (for example `ASC_*` for asc). Other variables of the server's
-   environment are not passed on. Known secret shapes in the output are redacted.
-
-To let an agent upload a build with asc, the user adds asc to `tools.allowMutation` in
-`~/.tapdance/config.json` (`tapdance config set --global tools.allowMutation '["asc"]'`) and the agent
-then passes `allow_mutation: true`. Tapdance has no allowlist of asc
-commands: new upstream commands work as soon as the installed `asc` has them.
+The full rules, in order, are in [external tools](tools.md#read-only-and-mutation-policy); the keys are
+in [configuration](configuration.md#security-settings-are-user-only).
 
 ## Security notes
 

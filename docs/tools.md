@@ -52,8 +52,9 @@ tapdance --json tool fastlane -- action supply
   files in the session's artifact folder.
 - `--timeout <seconds>` stops the tool after that long (default 600 s): SIGTERM, then SIGKILL 5 s later.
 - `tools.paths` in the user config (`~/.tapdance/config.json`) gives an absolute executable path when a
-  tool is not on `PATH`. The file name must match the tool (`…/asc` for `asc`); a project
-  `tapdance.config.json` cannot set it ([why](configuration.md#security-settings-are-user-only)).
+  tool is not on `PATH`. The file name must match the tool (`…/asc` for `asc`), or the call fails with
+  `FORBIDDEN`; a project `tapdance.config.json` cannot set it
+  ([why](configuration.md#security-settings-are-user-only)).
 - The tool gets a reduced environment: `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `TMPDIR`,
   `TERM`, `TZ`, plus its own variables (`ASC_*` for asc; `ANDROID_*`, `JAVA_HOME`, `GRADLE_*` for the
   Android CLI; `MAESTRO_*`, `JAVA_HOME`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` for Maestro; `FASTLANE_*`,
@@ -62,8 +63,9 @@ tapdance --json tool fastlane -- action supply
   PEM private keys, `token=`/`password=` values) are redacted in captured output and in the output
   files saved as artifacts.
 
-Agents use the same mechanism through the MCP tools `list_tools` and `execute_tool`; see
-[mcp.md](mcp.md#execute_tool-policy).
+Agents use the same mechanism through the MCP tools `list_tools` and `execute_tool`
+([inputs and replies](mcp.md#external-tools)), under the rules in
+[read-only and mutation policy](#read-only-and-mutation-policy).
 
 ## Discovering commands
 
@@ -85,23 +87,41 @@ Through MCP an agent calls, for example, `execute_tool` with `{"tool": "asc", "a
 
 From the CLI, you are in charge: Tapdance does not force read-only mode.
 
-For agents (MCP `execute_tool`). These keys are read only from `~/.tapdance/config.json` or the
-environment, never from a project `tapdance.config.json`:
+For agents (MCP `execute_tool`), the keys below are read only from `~/.tapdance/config.json` or the
+environment, never from a project `tapdance.config.json`. A repository you open must not be able to
+enable tools for agents or point a tool name at another program
+([the user-only keys](configuration.md#security-settings-are-user-only)). These rules apply, in this
+order:
 
-1. The tool must be in `tools.mcpEnabled` (default `asc`, `android`, `axe`, `maestro`). Otherwise
-   `FORBIDDEN`.
-2. Calls are read-only unless the tool is in `tools.allowMutation` **and** the agent passes
-   `allow_mutation: true`.
-   - Without that authorization, `asc` runs with `ASC_READ_ONLY=1`. That is asc's own guard: it refuses every mutating App
-     Store Connect request (POST, PATCH, PUT, DELETE) before sending it. asc's other safety flags
+1. **Target.** `target` must be `control` (this machine). Remote targets are `NOT_SUPPORTED` today (see
+   [execution targets](#execution-targets)).
+2. **Enabled for agents.** The tool must be in `tools.mcpEnabled` (default `asc`, `android`, `axe`,
+   `maestro`). Otherwise `FORBIDDEN`. `fastlane` and `xcodebuild` are not enabled by default.
+3. **Read-only by default.** Calls are read-only unless the tool is in `tools.allowMutation` **and** the
+   agent passes `allow_mutation: true`. Without that authorization:
+   - `asc` runs with `ASC_READ_ONLY=1`. That is asc's own guard: it refuses every mutating App Store
+     Connect request (POST, PATCH, PUT, DELETE) before sending it. asc's other safety flags
      (`--read-only`, `--confirm`, `--strict-auth`) are passed through untouched if the agent uses them.
-   - Without that authorization, `asc auth …` (except `asc auth status`), `asc workflow …` and
-     `asc install-skills` are refused with `FORBIDDEN`, because they print credentials or run shell
-     steps, which `ASC_READ_ONLY` does not stop. `--help` is always allowed.
+   - `asc auth …` (except `asc auth status`), `asc workflow …` and `asc install-skills` are refused with
+     `FORBIDDEN`, because they print credentials or run shell steps, which `ASC_READ_ONLY` does not stop.
+     `--help` / `-h` is always allowed. The user can run them in a terminal.
    - `fastlane` and `xcodebuild` have no read-only mode, so agents cannot run them at all until the user
      lists them in `tools.allowMutation` (and enables them in `tools.mcpEnabled`).
-   - Device tools (`android`, `axe`, `maestro`) are not read-only; they are confined to the leased
+   - Device tools (`android`, `axe`, `maestro`) are not made read-only; they are confined to the leased
      device instead.
+4. **Lease scoping.** Device tools get the leased device and refuse one the caller names (see
+   [lease scoping](#lease-scoping)). They work only in local mode.
+5. **Environment.** The tool gets the reduced environment described in
+   [how pass-through works](#how-pass-through-works). Known secret shapes in the output are redacted.
+
+To let an agent upload a build with asc, add asc to `tools.allowMutation` in the user config:
+
+```bash
+tapdance config set --global tools.allowMutation '["asc"]'
+```
+
+The agent then passes `allow_mutation: true`. Tapdance has no allowlist of asc commands: new upstream
+commands work as soon as the installed `asc` has them.
 
 Example `~/.tapdance/config.json`: let agents upload TestFlight builds with asc, and run fastlane for
 Play uploads:
@@ -136,7 +156,8 @@ tools `set_device_setting`, `push_file`/`pull_file`, `notifications`, `uninstall
 through Simlock's lease exec with a fixed allowlist (`packages/provider-simlock/src/device-commands.ts`).
 
 `bundletool` is registered too: `install_app` uses it to turn an `.aab` into a universal APK on the
-control machine.
+agent's machine. Point Tapdance at it with `tools.paths.bundletool` or `TAPDANCE_BUNDLETOOL` (an
+executable or a `.jar`) when it is not on `PATH`.
 
 A person holding the device in the viewer blocks agent calls to these tools with `HUMAN_HELD`.
 
@@ -164,6 +185,10 @@ Tapdance does not install them. Install hints from the registry:
 | `maestro` | `curl -fsSL https://get.maestro.mobile.dev \| bash` |
 | `fastlane` | `brew install fastlane` or `gem install fastlane` |
 | `xcodebuild` | Install Xcode, then `sudo xcode-select -s /Applications/Xcode.app` |
+
+Tapdance does not install Google's Android CLI or the agent skills it offers (`android init`) for you
+yet. The Android CLI ran through Tapdance on a leased emulator on a Mac (`tapdance android -- layout
+--flat`), not from inside an agent.
 
 Tapdance detects installed versions (`tapdance tools versions`) but has no update command: upgrading or
 pinning a tool is up to you. Supported versions are in [compatibility.md](compatibility.md).

@@ -30,6 +30,8 @@ Read these before changing anything, in this order:
 | `packages/cli/src` | The `tapdance` commands (`commands-*.ts`), the browser viewer, `tapdance report`, and the worker guard for device-only mode (`guard/`: `policy.ts`, `rules.ts`, `server.ts`, `guard.test.ts`). |
 | `scripts/gen-cli-index.mjs` | Generates the command index at the end of `docs/cli-reference.md` from `--help`. |
 | `scripts/field-test/` | Dev tooling for field tests: the CLI and MCP checklist drivers and their JSON checklists. Not shipped. |
+| `scripts/host-setup.sh`, `scripts/host-setup.ps1` | One-command host setup, ending in `tapdance host up`. |
+| `patches/` | pnpm patches to upstream packages (Simlock 0.5.0, agent-device 0.21.35), listed in `NOTICE.md`. |
 | `examples/` | Small demo apps used for real-device runs (`ios-demo`, `android-demo`). |
 | `docs/` | User docs, ADR, test procedures, `docs/testing/evidence/`. |
 | `infrastructure/` | Reference Terraform and scripts. Nothing in `packages/` may depend on it. |
@@ -116,6 +118,7 @@ generated index is stale, or when any doc or hint names a `tapdance` command tha
   Optional: `TAPDANCE_IT_APP` (an `.apk` or simulator `.app`) and `TAPDANCE_IT_APP_ID`;
   `TAPDANCE_IT_ENDPOINT` and `TAPDANCE_IT_TOKEN` run the same loop through a gateway. Use
   `TAPDANCE_IT_PLATFORM=android` for Android (run on a Mac with Android 34 emulators, STATUS Q-02).
+  The full list is in `docs/testing/unit-tests.md`.
 
 ## Keep PRODUCT.md, STATUS.md and docs in sync
 
@@ -126,9 +129,12 @@ Change them **in the same change** as the code:
 - Behaviour change: update the `STATUS.md` row and its "Last updated" date, and every doc that shows
   the affected command, flag, config key, environment variable or MCP tool.
 - Docs must never claim more than `STATUS.md`. Proven for real: Android (macOS and a Google Cloud N2
-  VM), AXe, the Android CLI on a local lease, a rented Scaleway Mac, and two machines over Tailscale
-  in device-only mode (worker guard). **Not** proven yet: a gateway with a joined worker across two
-  machines (it has run on one Mac only), MacStadium and AWS EC2 Mac, the full device loop over
+  VM), AXe, the Android CLI on a local lease, two machines over Tailscale in device-only mode (worker
+  guard), a rented Scaleway Mac driven from a Mac and from a Linux VPS, and one agent with several
+  connect targets (a Linux VPS with an N2 host for Android and a rented Mac for iOS at once, one host
+  down; stage 4). **Not** proven yet: a gateway with a joined worker across two machines (it has run
+  on one Mac only), MacStadium and AWS EC2 Mac, a 16 GB rented Mac, the Android CLI on a remote host,
+  an iOS install from CI on a Mac host, a host build through a deploy key, the full device loop over
   Streamable HTTP MCP, and a real agent (Claude Code, Codex, Cursor) as the MCP client; say so
   wherever you describe them.
 - Credit upstream projects with links when you describe or follow their behaviour, and update

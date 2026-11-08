@@ -301,6 +301,45 @@ describe("worker guard vs a malicious remote client", () => {
     expect(GuardPolicySchema.safeParse({ profile: "approved-build" }).success).toBe(false);
   });
 
+  it("11b. screenshot and record outputs: only agent-device's own /tmp names, never a host path (malicious client, MOCKED Simlock)", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    const rpc = (command: string, positionals: string[], extra: Record<string, unknown> = {}) => t.rpc(t.alice.secret, "agent_device.command", { command, leaseId: A, positionals, ...extra });
+    const forwarded = () => t.upstream.seen.filter((s) => s.path.endsWith("/v1/agent-device/rpc")).length;
+    const shot = "/tmp/agent-device-screenshot-1731062400000-k3x9qa.png";
+    const video = "/tmp/agent-device-recording-1731062400000-z81mpq.mp4";
+    // What agent-device's own client sends to a remote daemon passes.
+    expect((await rpc("screenshot", [shot])).status).toBe(200);
+    expect((await rpc("screenshot", [], { flags: { leaseId: A, out: shot } })).status).toBe(200);
+    expect((await rpc("screenshot", [])).status).toBe(200);
+    expect((await rpc("record", ["start", video])).status).toBe(200);
+    expect((await rpc("record", ["stop"])).status).toBe(200);
+    const before = forwarded();
+    for (const [command, positionals, extra] of [
+      ["screenshot", ["/Users/owner/.ssh/authorized_keys"], {}],
+      ["screenshot", [], { flags: { leaseId: A, out: "/Users/owner/.zshrc" } }],
+      ["screenshot", ["authorized_keys"], { meta: { leaseId: A, cwd: "/Users/owner/.ssh" } }],
+      ["screenshot", ["/tmp/agent-device-screenshot-1731062400000-k3x9qa.png/../../Users/owner/x"], {}],
+      ["screenshot", ["/tmp/agent-device-screenshot-1-a.png"], {}],
+      ["screenshot", [shot], { flags: { leaseId: A, out: "/Users/owner/x.png" } }],
+      ["screenshot", [shot, "/Users/owner/x"], {}],
+      ["screenshot", [shot], { flags: { leaseId: A, saveScript: "/Users/owner/x.sh" } }],
+      ["record", ["start", "/Users/owner/Library/LaunchAgents/x.plist"], {}],
+      ["record", ["start"], { flags: { leaseId: A, out: "/Users/owner/x.mp4" } }],
+      ["record", ["start", "/tmp/agent-device-screenshot-1731062400000-k3x9qa.png"], {}],
+      ["record", ["stop", "/Users/owner/x.mp4"], {}],
+      ["record", ["delete", video], {}],
+      ["open", ["com.example.app"], { flags: { leaseId: A, saveScript: "/Users/owner/x.ad" } }],
+      ["open", ["com.example.app"], { flags: { leaseId: A, iosXctestDerivedDataPath: "/Users/owner/DerivedData" } }],
+      ["snapshot", [], { flags: { leaseId: A, out: "/Users/owner/x.json" } }],
+      ["logs", [], { flags: { leaseId: A, path: "/Users/owner/x.log" } }],
+    ] as Array<[string, string[], Record<string, unknown>]>) {
+      expect((await rpc(command, positionals, extra)).status, `${command} ${JSON.stringify([positionals, extra])}`).toBe(403);
+    }
+    // No refused request reached Simlock.
+    expect(forwarded()).toBe(before);
+  });
+
   it("12. limits stop runaway sessions, oversized uploads and long leases", async () => {
     const t = await setup({ limits: { maxSessions: 1, maxLeaseMinutes: 30, maxUploadMB: 1, tokenDays: 7 } });
     expect((await t.allocate(t.alice.secret, A, { ttlMs: 24 * 3_600_000 })).status).toBe(200);
