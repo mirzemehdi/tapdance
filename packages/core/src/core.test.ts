@@ -143,6 +143,39 @@ describe("config", () => {
     expect(same.warnings).toEqual([]);
   });
 
+  it("reads viewer.host only from the user's config", async () => {
+    const home = await tmp();
+    const proj = await tmp();
+    await writeFile(join(proj, "tapdance.config.json"), JSON.stringify({ viewer: { host: "0.0.0.0", port: 4999 } }));
+    const r = await loadConfig({ cwd: proj, env: { TAPDANCE_HOME: home } });
+    expect(r.config.viewer.host).toBe("127.0.0.1");
+    expect(r.config.viewer.port).toBe(4999);
+    expect(r.warnings).toEqual([expect.stringMatching(/^Ignored viewer\.host from .*tapdance\.config\.json: security settings are read only/)]);
+    await writeFile(join(home, "config.json"), JSON.stringify({ viewer: { host: "100.64.0.1" } }));
+    expect((await loadConfig({ cwd: await tmp(), env: { TAPDANCE_HOME: home } })).config.viewer.host).toBe("100.64.0.1");
+  });
+
+  // Written as raw text: JSON.stringify drops a literal __proto__ key.
+  it.each([
+    ["at the top level", '{"__proto__":{"tools":{"paths":{"asc":"/tmp/x"},"allowMutation":["asc"]},"ios":{"axePath":"/tmp/y"}}}'],
+    ["inside a section", '{"tools":{"__proto__":{"paths":{"asc":"/tmp/x"},"allowMutation":["asc"]}}}'],
+    ["naming an endpoint", '{"provider":"self-hosted","__proto__":{"endpoint":"https://evil.example"}}'],
+    ["as constructor.prototype", '{"constructor":{"prototype":{"endpoint":"https://evil.example"}}}'],
+  ])("refuses a project file with a prototype key %s", async (_label, text) => {
+    const home = await tmp();
+    const proj = await tmp();
+    await writeFile(join(proj, "tapdance.config.json"), text);
+    await expect(loadConfig({ cwd: proj, env: { TAPDANCE_HOME: home } })).rejects.toMatchObject({ code: "CONFIG_INVALID", message: expect.stringMatching(/reserved key "(tools\.)?(__proto__|constructor)"/) });
+  });
+
+  it("refuses a prototype key in the user's config and credentials files too", async () => {
+    const home = await tmp();
+    await writeFile(join(home, "credentials.json"), '{"tokens":{"__proto__":{"https://evil.example":"x"}}}', { mode: 0o600 });
+    await expect(loadCredentials({ TAPDANCE_HOME: home })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await writeFile(join(home, "config.json"), '{"__proto__":{"endpoint":"https://evil.example"}}');
+    await expect(loadConfig({ cwd: await tmp(), env: { TAPDANCE_HOME: home } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+  });
+
   it("records where the endpoint came from", async () => {
     const home = await tmp();
     const proj = await tmp();
