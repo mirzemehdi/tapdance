@@ -60,13 +60,12 @@ The workflow publishes through npm's trusted publishing: GitHub Actions proves w
 token is stored in the repository.
 
 1. Create an npm account with two-factor authentication, if you have none.
-2. **First publish.** If npm lets you add a trusted publisher for a package that does not exist yet,
-   do that (step 3) and skip this step. Otherwise, create a granular access token on npmjs.com that can
-   publish new packages, save it as the repository secret `NPM_TOKEN`, and push the first tag. The
-   workflow uses the token when the secret is set.
-3. **Trusted publisher.** On npmjs.com, open `tapdance-cli` › Settings › Trusted publishing and add
-   GitHub Actions: repository `mirzemehdi/tapdance`, workflow `release.yml`.
-4. Delete the `NPM_TOKEN` secret and revoke the token. Later releases need only the tag.
+2. **Trusted publisher.** On npmjs.com, open `tapdance-cli` › Settings › Trusted publishing and add
+   GitHub Actions: user `mirzemehdi`, repository `tapdance`, workflow `release.yml`, no environment.
+   Allow `npm publish`; leave `npm dist-tag` off. Later releases need only the tag.
+
+The workflow passes no npm token. `setup-node` runs without `registry-url` on purpose: with it, the
+generated `.npmrc` names an auth token, and npm then does not try trusted publishing.
 
 ## Not covered yet
 

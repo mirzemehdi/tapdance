@@ -30,10 +30,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No registry-url: setup-node would write an .npmrc with an auth-token placeholder, and npm then
+      # skips trusted publishing (the publish failed with ENEEDAUTH in the first v0.1.1 run).
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
       # Trusted publishing needs npm 11.5.1 or later; Node 22 ships npm 10.
       - run: npm install -g npm@11
@@ -76,10 +77,10 @@ jobs:
           name: tapdance-cli-tarball
           path: ${{ steps.pack.outputs.tarball }}
 
+      # Trusted publishing: npm exchanges this job's GitHub OIDC token for a short-lived publish token.
+      # No npm token is stored or passed.
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
-        env:
-          # Empty unless the NPM_TOKEN secret is set (only needed for the very first publish, before the
-          # package has a trusted publisher on npmjs.com). Without it, npm uses trusted publishing.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance
+        run: |
+          npm --version
+          npm publish "${{ steps.pack.outputs.tarball }}" --access public --provenance --registry https://registry.npmjs.org/
