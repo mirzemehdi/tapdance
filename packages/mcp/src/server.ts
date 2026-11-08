@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -9,6 +10,8 @@ import { Tapdance, TapdanceError, processSessionIdentity, renewIfDue, type Tapda
 import { SERVER_INSTRUCTIONS, TOOLS, errorResult, type ToolExtra } from "./tools.js";
 
 export const SERVER_NAME = "tapdance";
+/** This package's version, which the MCP server reports to clients (it was a fixed "0.1.0"). */
+export const SERVER_VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
 /**
  * Routes Tapdance's progress messages to the MCP call they come from. Create it before the Tapdance
@@ -38,7 +41,7 @@ function progressSink(extra: ToolExtra | undefined): ((message: string) => void)
 }
 
 /** Builds an MCP server whose tools act for one Tapdance session. */
-export function createMcpServer(tapdance: Tapdance, version = "0.1.0", progress?: ProgressRouter): McpServer {
+export function createMcpServer(tapdance: Tapdance, version = SERVER_VERSION, progress?: ProgressRouter): McpServer {
   const server = new McpServer({ name: SERVER_NAME, version }, { instructions: SERVER_INSTRUCTIONS });
   for (const tool of TOOLS) {
     server.registerTool(
