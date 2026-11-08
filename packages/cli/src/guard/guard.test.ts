@@ -154,7 +154,11 @@ async function setup(overrides: Partial<GuardPolicy> = {}, fake: FakeOptions = {
       headers: { ...(secret ? { authorization: `Bearer ${secret}` } : {}), ...(body !== undefined ? { "content-type": "application/json" } : {}), ...headers },
       ...(body !== undefined ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
     });
-  const rpc = (secret: string, method: string, params: Record<string, unknown>) => call(secret, "POST", "/v1/agent-device/rpc", { jsonrpc: "2.0", id: 1, method, params });
+  // agent-device names a command's lease in meta (and flags), the copies Simlock reads; a test that
+  // gives only `leaseId` gets the meta copy too, as the real client sends it.
+  const withMeta = (method: string, params: Record<string, unknown>) =>
+    method === "agent_device.command" && typeof params["leaseId"] === "string" && params["meta"] === undefined ? { ...params, meta: { leaseId: params["leaseId"] } } : params;
+  const rpc = (secret: string, method: string, params: Record<string, unknown>) => call(secret, "POST", "/v1/agent-device/rpc", { jsonrpc: "2.0", id: 1, method, params: withMeta(method, params) });
   const allocate = (secret: string, leaseId: string, extra: Record<string, unknown> = {}) => rpc(secret, "agent_device.lease.allocate", { leaseId, platform: "ios", ...extra });
   const exec = (secret: string, leaseId: string, tool: string, args: string[]) => call(secret, "POST", `/v1/leases/${leaseId}/exec`, { tool, args });
   const forwardedExecs = () => upstream.seen.filter((s) => s.path.endsWith("/exec"));
@@ -347,6 +351,27 @@ describe("worker guard: lease ids in real agent-device requests", () => {
     expect((await t.rpc(t.mallory.secret, "agent_device.command", real({ meta: A, flags: A }))).status).toBe(403);
     const forwarded = t.upstream.seen.filter((s) => s.path === "/v1/agent-device/rpc").map((s) => s.body);
     expect(forwarded.some((b) => b.includes("tdg_client_side"))).toBe(false);
+  });
+
+  it("refuses a lease id only in a field Simlock does not read (mocked Simlock)", async () => {
+    const t = await setup();
+    await t.allocate(t.alice.secret, A);
+    const before = t.upstream.seen.length;
+    const raw = (method: string, params: Record<string, unknown>) => t.call(t.alice.secret, "POST", "/v1/agent-device/rpc", { jsonrpc: "2.0", id: 1, method, params });
+    // Simlock reads a command's lease from meta.leaseId ?? flags.leaseId; params.leaseId alone (even the
+    // client's own lease) would reach it as an unleased command.
+    expect((await raw("agent_device.command", { command: "snapshot", leaseId: A })).status).toBe(403);
+    // A non-string copy in the field Simlock reads first does not let a string in another field stand in.
+    expect((await raw("agent_device.command", { command: "snapshot", meta: { leaseId: 5 }, flags: { leaseId: A } })).status).toBe(403);
+    expect((await raw("agent_device.command", { command: "snapshot", leaseId: A, meta: { leaseId: false } })).status).toBe(403);
+    // Lease calls: Simlock reads params.leaseId only.
+    expect((await raw("agent_device.lease.release", { flags: { leaseId: A } })).status).toBe(403);
+    expect((await raw("agent_device.lease.heartbeat", { meta: { leaseId: A } })).status).toBe(403);
+    expect(t.upstream.seen.length).toBe(before);
+    // The shapes agent-device sends still pass.
+    expect((await raw("agent_device.command", { command: "snapshot", flags: { leaseId: A } })).status).toBe(200);
+    expect((await raw("agent_device.command", { command: "snapshot", meta: { leaseId: A }, flags: { leaseId: A } })).status).toBe(200);
+    expect((await raw("agent_device.lease.heartbeat", { leaseId: A, ttlMs: 1000 })).status).toBe(200);
   });
 });
 
@@ -1082,7 +1107,7 @@ describe("worker guard: hardening", () => {
       fetch(`${again.url}/v1/agent-device/rpc`, {
         method: "POST",
         headers: { authorization: `Bearer ${secret}`, "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "agent_device.command", params: { leaseId: A, command: "screenshot" } }),
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "agent_device.command", params: { leaseId: A, meta: { leaseId: A }, command: "screenshot" } }),
       });
     expect((await shot(t.alice.secret)).status).toBe(200);
     expect((await shot(t.mallory.secret)).status).toBe(403);
