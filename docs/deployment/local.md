@@ -35,8 +35,13 @@ to run the CLI and MCP server against a remote host, but this has not been teste
 
 ### 1. Install Tapdance
 
-Tapdance is not on npm yet. Install it from source as in [installation](../installation.md), so that
-`tapdance --version` works. Do not run `npm install -g tapdance`: that name belongs to another package.
+```bash
+npm install -g tapdance-cli
+tapdance --version
+```
+
+Do not run `npm install -g tapdance`: that name belongs to another package. To work on Tapdance itself,
+install from source as in [installation](../installation.md#from-source).
 
 ### 2. Set up Xcode (iOS only)
 

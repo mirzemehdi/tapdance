@@ -420,9 +420,13 @@ Field runs 2d and 2e used `google_apis` Pixel 8 / API 34. In run 2d the guest st
 after a release, so the CPU check almost never ended calm, and the snapshot helper's first start failed
 on every restore (the retry worked).
 
-When Simlock saves a device's clean snapshot (on the device's first boot; every spare restores it), it
-logs the guest CPU at that moment. `tapdance worker logs --contains "clean baseline"` on the VM shows
-"Capturing the Android clean baseline" with `busy` (0 to 1). An earlier patch waited up to 120 s for a
+Those runs used Simlock 0.5.0, which saved a clean snapshot per device and restored it at each
+release. Simlock 0.6.0, which Tapdance now pins (not yet run on an N2 host), makes one seed per device
+kind instead, saves its boot snapshot once, and boots every device as a copy of it; a released device is
+deleted. With Tapdance's patch it logs the guest CPU when it saves a boot snapshot:
+`tapdance worker logs --contains "boot snapshot"` on the VM shows "Saving the Android boot snapshot"
+with `sourceId` and `busy` (0 to 1). On 0.5.0 the same reading, at each clean baseline capture, was
+0.91-0.97 on the N2 host. An earlier patch waited up to 120 s for a
 calm guest and ran Android's background dexopt job before that snapshot; on the 2026-11-04 run both
 gave up every time at about 95 % guest CPU and pushed cold leases to 269-348 s, so they were removed.
 

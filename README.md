@@ -87,7 +87,7 @@ When the guide is done, ask your agent something from the table above.
 
 ## Project status
 
-Tapdance 0.1.0 is not released yet. What has run for real:
+Tapdance is an early release, 0.1.x on npm. What has run for real:
 
 - The whole test loop on a Mac, with iPhone simulators and Android emulators.
 - An agent on one machine testing a real app on phones on another machine: the owner's Mac, Google

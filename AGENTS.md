@@ -32,7 +32,7 @@ Read these before changing anything, in this order:
 | `scripts/pack-npm.mjs`, `.github/workflows/release.yml` | Build the npm package `tapdance-cli` (workspace packages and the patched Simlock and agent-device bundled) and publish it on a version tag ([releasing](docs/releasing.md)). |
 | `scripts/field-test/` | Dev tooling for field tests: the CLI and MCP checklist drivers and their JSON checklists. Not shipped. |
 | `scripts/host-setup.sh`, `scripts/host-setup.ps1` | One-command host setup, ending in `tapdance host up`. |
-| `patches/` | pnpm patches to upstream packages (Simlock 0.5.0, agent-device 0.21.35), listed in `NOTICE.md`. |
+| `patches/` | pnpm patches to upstream packages (Simlock 0.6.0, agent-device 0.21.36), listed in `NOTICE.md`. |
 | `examples/` | Small demo apps used for real-device runs (`ios-demo`, `android-demo`). |
 | `docs/` | User docs, ADR, test procedures, `docs/testing/evidence/`. |
 | `infrastructure/` | Reference Terraform and scripts. Nothing in `packages/` may depend on it. |

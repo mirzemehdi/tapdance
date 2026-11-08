@@ -1,5 +1,5 @@
 /**
- * Tapdance's patch to Simlock 0.5.0 (`patches/simlock@0.5.0.patch`), tested against the installed,
+ * Tapdance's patch to Simlock 0.6.0 (`patches/simlock@0.6.0.patch`), tested against the installed,
  * patched Simlock modules. MOCKED: the registry, the drivers' view of the host, adb, the emulator
  * process, the filesystem and the clock are all fakes. Nothing here starts Simlock, adb or an
  * emulator, so none of it proves the behaviour on a real host.
@@ -7,11 +7,13 @@
  * #94: a `ready` Android record whose emulator is gone becomes `shutdown` on reconcile (the daemon's
  *      startup pass and `doctor` without `--fix`), so the warm pool boots it again and no lease is
  *      granted a dead serial.
- * #103: when Simlock captures an Android device's clean baseline snapshot (once, on its first boot),
- *      it logs one info line with the guest CPU at that moment (one /proc/stat sample pair, 1 s).
- *      The capture itself is upstream's: the #79 settle wait and the #101 dexopt step were removed
- *      after the N2 field run measured no benefit and cold leases past Tapdance's 330 s lease wait.
+ * #103: when Simlock saves an Android boot snapshot (a seed's, made once per device kind, or a saved
+ *      baseline's), it logs one info line with the guest CPU at that moment (one /proc/stat sample
+ *      pair, 1 s). In 0.6.0 every Android device is a copy booted from that snapshot. The save
+ *      itself is upstream's: the #79 settle wait and the #101 dexopt step (patched into 0.5.0's
+ *      baseline capture) were removed after the N2 field run measured no benefit.
  */
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -184,152 +186,144 @@ describe("simlock patch #103 (fake clock and CPU reads): the baseline CPU sample
   });
 });
 
+
 // ---------------------------------------------------------------------------------------------------
-// #103: the patched AndroidDriver's baseline capture, with a scripted adb and emulator
-
-/** A clock whose timers fire on the next turn of the event loop, moving time forward to their deadline. */
-function autoClock() {
-  let t = 0;
-  const cancelled = new Set<object>();
-  return {
-    now: () => t,
-    setTimer: (ms: number, callback: () => void) => {
-      const handle = {};
-      setImmediate(() => {
-        if (cancelled.has(handle)) return;
-        t += ms;
-        callback();
-      });
-      return handle;
-    },
-    cancel: (handle: object) => void cancelled.add(handle),
-  };
-}
-
-function memoryFs() {
-  const files = new Map<string, string>();
-  const enoent = (path: string) => Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
-  return {
-    files,
-    exists: async (path: string) => files.has(path),
-    readFile: async (path: string) => {
-      if (!files.has(path)) throw enoent(path);
-      return files.get(path)!;
-    },
-    writeFileAtomic: async (path: string, contents: string) => void files.set(path, contents),
-    rm: async (path: string) => void files.delete(path),
-    realpath: async (path: string) => path,
-    readdir: async () => [],
-  };
-}
+// #103: the patched Seeds part saves each boot snapshot, with a scripted adb and emulator
 
 /**
- * A process runner standing in for adb and the emulator: the guest boots at once, and
- * `head -n 1 /proc/stat` answers from `busyShares` (one share per read, the last one repeated).
+ * Simlock 0.6.0's Seeds part with fakes for every port: adb and the emulator answer from a script,
+ * the filesystem is a no-op, the clock moves only when something waits. The sources table is
+ * Simlock's own, on an in-memory SQLite database (its `memoryAndroidSourceDatabase` helper).
+ * `head -n 1 /proc/stat` answers from `busyShares` (one share per read, the last one repeated;
+ * NaN makes the read fail).
  */
-function scriptedRunner(busyShares: number[], deviceRoot: string, avdName: string) {
+async function seedsFor(busyShares: number[]) {
+  const { Seeds } = await load("drivers/android/seeds.js");
+  const { memoryAndroidSourceDatabase } = await load("drivers/android/testing.js");
   const log: string[] = [];
-  let reads = 0;
+  const infos: Array<{ message: string; detail: Record<string, unknown> }> = [];
+  let t = 0;
+  let cpuReads = 0;
   let total = 0;
   let idle = 0;
   const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
   const run = async (_command: string, args: string[]) => {
     const line = args.join(" ");
     if (line.endsWith("head -n 1 /proc/stat")) {
-      const busy = busyShares[Math.min(reads++, busyShares.length - 1)]!;
+      const busy = busyShares[Math.min(cpuReads++, busyShares.length - 1)]!;
+      if (Number.isNaN(busy)) return { code: 1, stdout: "", stderr: "error: device offline" };
       total += 400;
       idle += Math.round(400 * (1 - busy));
       log.push(`cpu ${Math.round(busy * 100)}%`);
       return ok(`cpu  ${total - idle} 0 0 ${idle} 0 0 0 0 0 0\n`);
     }
     log.push(line);
-    if (line.endsWith("getprop sys.boot_completed")) return ok("1\n");
-    if (line.endsWith("getprop init.svc.bootanim")) return ok("stopped\n");
-    if (line.endsWith("emu avd path")) return ok(`${deviceRoot}/${avdName}.avd\nOK\n`);
-    if (line.endsWith("pm path android")) return ok("package:/system/framework/framework-res.apk\n");
-    if (line.endsWith("emu avd snapshot list")) return ok("simlock_clean_baseline\n");
+    if (line.endsWith("emu avd snapshot list")) return ok("simlock_boot\n");
     return ok();
   };
-  const spawn = (command: string, args: string[]) => {
-    log.push(`spawn ${command} ${args.join(" ")}`);
-    const result = ok(args.includes("load") ? "OK\n" : "");
-    return { unref: () => undefined, kill: () => undefined, wait: async () => result };
-  };
-  return { log, processRunner: { run, spawn }, cpuReads: () => reads };
-}
-
-async function androidDriver(busyShares: number[]) {
-  const { AndroidDriver } = await load("drivers/android/index.js");
-  const deviceRoot = "/simlock/android";
-  const avdName = "avd1";
-  const clock = autoClock();
-  const runner = scriptedRunner(busyShares, deviceRoot, avdName);
-  const warnings: Array<{ message: string; detail: Record<string, unknown> }> = [];
-  const infos: Array<{ message: string; detail: Record<string, unknown> }> = [];
+  const handle = () => ({ kill: () => undefined, wait: async () => ok(), unref: () => undefined });
+  const image = { apiLevel: "34", tag: "google_apis", abi: "arm64-v8a", path: "/sdk/system-images/android-34/google_apis/arm64-v8a", version: "1" };
   const logger = {
-    warn: (message: string, detail: Record<string, unknown>) => void warnings.push({ message, detail }),
     info: (message: string, detail: Record<string, unknown>) => void infos.push({ message, detail }),
+    warn: () => undefined,
     error: () => undefined,
     debug: () => undefined,
-    child: () => logger,
   };
-  const options = {
-    clock,
-    env: {},
-    filesystem: memoryFs(),
-    homeDirectory: "/home/test",
+  let ids = 0;
+  const seeds = new Seeds({
+    adb: "adb",
+    adbTools: {
+      env: () => ({}),
+      delay: async (ms: number) => void (t += ms),
+      emulatorVersion: async () => "37.2.13",
+      runOrThrow: async (command: string, args: string[]) => {
+        const result = await run(command, args);
+        if (result.code !== 0) throw new Error(`${command} ${args.join(" ")} failed`);
+        return result;
+      },
+    },
+    avdConfig: { currentConfigHash: async () => "hash" },
+    avdmanager: "avdmanager",
+    catalog: { profileFor: async () => ({ kind: "builtin", avdmanagerId: "pixel_8" }) },
+    clock: { now: () => t },
+    consolePorts: {
+      withReservedPort: async (seed: object, state: { port?: number }) => {
+        state.port = 5554;
+        return { ...seed, port: 5554, serial: "emulator-5554" };
+      },
+      release: () => undefined,
+    },
+    database: await memoryAndroidSourceDatabase(),
+    deviceRoot: "/simlock/android",
+    deviceTable: { withLock: async (_key: string, fn: () => Promise<unknown>) => fn(), set: () => undefined },
+    emulator: {
+      start: async (_device: unknown, args: string[]) => {
+        log.push(`start ${args.join(" ")}`);
+        return handle();
+      },
+      shutdown: async () => void log.push("shutdown"),
+      waitForExit: async () => true,
+      stopUnowned: async () => undefined,
+    },
+    filesystem: {
+      mkdirp: async () => undefined,
+      rm: async () => undefined,
+      copyTree: async () => undefined,
+      directorySize: async () => 1,
+      readFile: async () => "path=/somewhere\n",
+      writeFileAtomic: async () => undefined,
+      readdir: async () => [],
+    },
+    idGenerator: { generate: () => String(++ids) },
     logger,
-    processRunner: runner.processRunner,
-    tcpProbe: { isListening: async () => false },
-  };
-  const sdk = { adb: "adb", avdmanager: "avdmanager", emulator: "emulator", root: "/sdk" };
-  const driver = new AndroidDriver(options, sdk, deviceRoot, {}, {}, 5038);
-  const device = { address: "", deviceId: avdName, driverData: { avdName, configHash: "x", imageIdentity: "img", port: 0, serial: "" } };
-  return { clock, device, driver, runner, warnings, infos };
+    ownership: { serialIsOwn: async () => true },
+    processRunner: { run },
+    systemImages: { requireImage: async () => image, installedImages: async () => [image] },
+  });
+  const spec = { platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis" };
+  return { seeds, spec, log, infos, now: () => t, cpuReads: () => cpuReads };
 }
 
-describe("simlock patch #103 (scripted adb and emulator, fake clock): AndroidDriver logs the guest CPU at the baseline capture and does not wait for it", () => {
-  it("first boot on a busy guest: one sample pair, one info line, then the capture at once (no settle wait, no dexopt)", async () => {
-    const { clock, device, driver, runner, infos, warnings } = await androidDriver([0.97]);
-    const ready = await driver.makeReady(device, { purpose: "prepare" });
-    expect(ready.address).toBe("emulator-5586");
-    const save = runner.log.indexOf("-s emulator-5586 emu avd snapshot save simlock_clean_baseline");
+const SAVE = "-s emulator-5554 emu avd snapshot save simlock_boot";
+
+describe("simlock patch #103 (scripted adb and emulator, fake clock, in-memory sources table): Seeds logs the guest CPU when it saves a boot snapshot and does not wait for it", () => {
+  it("making a seed on a busy guest: one sample pair on the snapshot boot, one info line, then the save at once", async () => {
+    const { seeds, spec, log, infos, now } = await seedsFor([0.97]);
+    await seeds.provision(spec);
+    const save = log.indexOf(SAVE);
     expect(save).toBeGreaterThan(0);
-    expect(runner.log.slice(0, save).filter((l) => l.startsWith("cpu "))).toEqual(["cpu 97%", "cpu 97%"]);
-    expect(runner.log.some((l) => l.includes("bg-dexopt-job"))).toBe(false);
-    expect(infos).toEqual([{ message: "Capturing the Android clean baseline", detail: { avdName: "avd1", busy: 0.97 } }]);
-    expect(warnings.filter((w) => w.message.includes("baseline"))).toEqual([]);
-    // Nothing near the old 120 s bound: the sample pair is the only extra time.
-    expect(clock.now()).toBeLessThan(30_000);
+    // Two cold boots (the second from a cleanly powered-off disk); the CPU is read on the second only.
+    expect(log.filter((l) => l.startsWith("start "))).toEqual(["start -no-snapshot-load", "start -no-snapshot-load"]);
+    const secondBoot = log.lastIndexOf("start -no-snapshot-load");
+    expect(log.slice(0, secondBoot).some((l) => l.startsWith("cpu "))).toBe(false);
+    expect(log.slice(secondBoot, save)).toEqual(["start -no-snapshot-load", "cpu 97%", "cpu 97%"]);
+    expect(infos).toEqual([{ message: "Saving the Android boot snapshot", detail: { sourceId: "seed_2", busy: 0.97 } }]);
+    expect(log.some((l) => l.includes("bg-dexopt-job"))).toBe(false);
+    // Nothing near the old 120 s bound: the sample pair is the only wait.
+    expect(now()).toBe(1_000);
   });
 
-  it("logs busy null when /proc/stat cannot be read, and still captures the baseline", async () => {
-    const { device, driver, runner, infos } = await androidDriver([Number.NaN]);
-    await driver.makeReady(device, { purpose: "prepare" });
-    expect(runner.log).toContain("-s emulator-5586 emu avd snapshot save simlock_clean_baseline");
-    expect(infos[0]).toEqual({ message: "Capturing the Android clean baseline", detail: { avdName: "avd1", busy: null } });
+  it("logs busy null when /proc/stat cannot be read, and still saves the snapshot", async () => {
+    const { seeds, spec, log, infos } = await seedsFor([Number.NaN]);
+    await seeds.provision(spec);
+    expect(log).toContain(SAVE);
+    expect(infos).toEqual([{ message: "Saving the Android boot snapshot", detail: { sourceId: "seed_2", busy: null } }]);
   });
 
-  it("a boot from an existing baseline reads no CPU and logs nothing about it", async () => {
-    const { device, driver, runner, infos } = await androidDriver([0.05]);
-    const ready = await driver.makeReady(device, { purpose: "prepare" });
-    await driver.shutdown({ ...device, address: ready.address, driverData: ready.driverData });
-    const readsBefore = runner.cpuReads();
-    const logBefore = runner.log.length;
-    await driver.makeReady({ ...device, driverData: ready.driverData }, { purpose: "prepare" });
-    expect(runner.log.slice(logBefore).some((l) => l.includes("-snapshot simlock_clean_baseline"))).toBe(true);
-    expect(runner.log.slice(logBefore).some((l) => l.includes("snapshot save"))).toBe(false);
-    expect(runner.cpuReads()).toBe(readsBefore);
-    expect(infos.filter((i) => i.message.includes("clean baseline"))).toHaveLength(1);
+  it("a device copied from a ready seed reads no CPU, saves nothing and logs nothing", async () => {
+    const { seeds, spec, log, infos, cpuReads } = await seedsFor([0.05]);
+    await seeds.provision(spec);
+    const readsBefore = cpuReads();
+    const logBefore = log.length;
+    await seeds.provision(spec);
+    expect(log.slice(logBefore).some((l) => l.startsWith("start ") || l.includes("snapshot save"))).toBe(false);
+    expect(cpuReads()).toBe(readsBefore);
+    expect(infos).toHaveLength(1);
   });
 
-  it("a reclaim's snapshot load reads no CPU", async () => {
-    const { device, driver, runner } = await androidDriver([0.05]);
-    const ready = await driver.makeReady(device, { purpose: "prepare" });
-    const readsBefore = runner.cpuReads();
-    const result = await driver.reclaim({ ...device, address: ready.address, driverData: ready.driverData }, { clean: "standard" });
-    expect(result).toEqual({ state: "ready", strategy: "snapshot" });
-    expect(runner.log.some((l) => l.includes("emu avd snapshot load simlock_clean_baseline"))).toBe(true);
-    expect(runner.cpuReads()).toBe(readsBefore);
+  it("the patched AndroidDriver hands its logger to Seeds", async () => {
+    const source = await readFile(join(simlockDist, "drivers/android/index.js"), "utf8");
+    const seedsCall = source.slice(source.indexOf("this.#seeds = new Seeds({"));
+    expect(seedsCall.slice(0, seedsCall.indexOf("});"))).toContain("{ logger: options.logger }");
   });
 });

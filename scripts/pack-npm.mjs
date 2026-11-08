@@ -21,7 +21,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const out = join(root, "dist-npm");
 const stage = join(out, "tapdance-cli");
 const WORKSPACE = ["core", "provider-simlock", "sdk", "mcp"];
-const PATCHED = { simlock: "simlock@0.5.0.patch", "agent-device": "agent-device@0.21.35.patch" };
+const PATCHED = { simlock: "simlock@0.6.0.patch", "agent-device": "agent-device@0.21.36.patch" };
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
 const run = (cmd, args, cwd) => execFileSync(cmd, args, { cwd, stdio: ["ignore", "inherit", "inherit"] });

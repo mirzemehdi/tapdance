@@ -1,8 +1,10 @@
 /**
- * Waits for a just-leased Android emulator to settle (#79). A warm spare restored from Simlock's
- * baseline snapshot, or a guest rebooted by the previous release, can be handed out while it is still
- * starting: boot not complete, the CPU near 100 % for minutes (dexopt, Play services), and System UI
- * showing an "isn't responding" dialog over everything. Commands then take 10-25 s each.
+ * Waits for a just-leased Android emulator to settle (#79). Simlock 0.6 boots every emulator as a
+ * copy of its kind's seed, from the seed's boot snapshot (0.5 restored a per-device baseline
+ * snapshot), and a spare booted shortly before the lease can be handed out while the guest is still
+ * busy with the work that snapshot froze (#139): the CPU near 100 % for minutes (dexopt, Play
+ * services), and System UI showing an "isn't responding" dialog over everything. Commands then take
+ * 10-25 s each.
  *
  * The probe is `deviceCommands.android.guestState()`: `sys.boot_completed`, the first line of
  * /proc/stat (two reads give the guest's CPU load) and the focused window. The wait has two parts:

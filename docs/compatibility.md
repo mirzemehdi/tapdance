@@ -18,8 +18,8 @@ below.
 | Component | Version | Status with Tapdance 0.1.0 | Notes |
 | --- | --- | --- | --- |
 | Node.js | 22.22.0 | Tested | Minimum 22.13 (Tapdance's and Simlock's `engines`). `doctor` fails below it. |
-| [Simlock](https://github.com/callstackincubator/simlock) | 0.5.0, patched | Tested (see notes for which runs) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.5.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when the clean baseline is captured, #103). Runs up to 2026-11-03 used Simlock 0.4.0: the local Mac, the gateway with its worker on one Mac, the first VPS runs and the first Google Cloud N2 runs. Runs from 2026-11-04 used 0.5.0 with the patch: the N2 reruns ([evidence](testing/evidence/2026-11-04-vps-n2-android-rerun.md)), the rented Scaleway Mac ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md)) and the two-host run ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). Gateway and worker on two machines not tested. |
-| [agent-device](https://github.com/callstack/agent-device) | 0.21.35 | Tested | Bundled, exact pin. Simlock runs it through `capabilities.agent-device.command`. |
+| [Simlock](https://github.com/callstackincubator/simlock) | 0.6.0, patched | **Unit-tested only** (no real device yet) | Bundled, exact pin, with Tapdance's patch (`patches/simlock@0.6.0.patch`: stale Android records after a restart, #94; the guest CPU is logged when an Android boot snapshot is saved, #103). 0.6.0 has not run on a real device with Tapdance: it changes how devices are made (every emulator and simulator is a copy of a seed, serves one lease and is deleted at its release) and a worker takes a per-user lock. Every "Tested" run on this page used Simlock 0.4.0 or 0.5.0. Runs up to 2026-11-03 used Simlock 0.4.0: the local Mac, the gateway with its worker on one Mac, the first VPS runs and the first Google Cloud N2 runs. Runs from 2026-11-04 used 0.5.0 with the patch: the N2 reruns ([evidence](testing/evidence/2026-11-04-vps-n2-android-rerun.md)), the rented Scaleway Mac ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md)) and the two-host run ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md)). Gateway and worker on two machines not tested. |
+| [agent-device](https://github.com/callstack/agent-device) | 0.21.36, patched | **Unit-tested only** (no real device yet) | Bundled, exact pin, with Tapdance's patch (`patches/agent-device@0.21.36.patch`: landscape taps on iOS, #56). Simlock runs it through `capabilities.agent-device.command`. The recorded runs used 0.21.35. Simlock 0.6.0 itself pins `@agent-device/proxy` 0.21.35. |
 | Xcode | 26.5 (17F42) | Tested | iOS 18.5 runtime used; iOS 26.5 runtime installed but not leased in the recorded run. |
 | [asc](https://github.com/rorkai/App-Store-Connect-CLI) | 5.17.1 (Homebrew) | Tested | `--version` and `apps list` through the CLI and `execute_tool`. |
 | MCP TypeScript SDK | 1.32.2 | Tested (stdio) | Streamable HTTP partly verified: 401 without the token, tools listed, `list_devices` and `get_device_status` worked; a full device loop over HTTP not run. |
@@ -49,16 +49,17 @@ that can talk to each other; a worker on an incompatible version connects but is
 `incompatible` and gets no requests. A CLI and a running daemon of different versions can also refuse
 each other with `PROTOCOL_VERSION_UNSUPPORTED` (restart the daemon after an upgrade).
 
-Practical rule: run **Simlock 0.5.0 on the gateway and on every worker**, which is what Tapdance 0.1.0
-bundles (with its patch, which does not change the protocol). Installing Tapdance from the same commit on every machine and using `tapdance worker …` /
+Practical rule: run **Simlock 0.6.0 on the gateway and on every worker**, which is what this
+Tapdance bundles (with its patch, which does not change the protocol). Simlock 0.5.0 (protocol 69) and
+0.6.0 (protocol 75) cannot talk to each other, so upgrade every machine together. Installing Tapdance from the same commit on every machine and using `tapdance worker …` /
 `tapdance gateway …` gives you that. `tapdance doctor` warns when the endpoint reports another Simlock
-version ("Tapdance is tested with 0.5.0").
+version ("Tapdance is tested with 0.6.0").
 
 ## agent-device on workers
 
 Tapdance talks to agent-device through Simlock's `/v1/agent-device` proxy, so the agent-device on each
 **worker** matters. `tapdance worker install` and `worker login` point Simlock at the agent-device bundled
-with Tapdance (0.21.35). If you configure a worker by hand, use the same version.
+with Tapdance (0.21.36). If you configure a worker by hand, use the same version.
 
 ## Upgrades
 
@@ -68,5 +69,13 @@ or external tools by itself. To upgrade, update every machine to the same Tapdan
 service that still names the old Simlock folder again) and, on the gateway,
 `tapdance simlock -- --gateway daemon stop` followed by `tapdance simlock -- --gateway daemon start`, so
 the new Simlock runs everywhere. `tapdance tools versions` shows external tool versions.
+
+From Simlock 0.5.0 to 0.6.0 (read from Simlock's code, not yet seen on a real host): a device 0.5.0
+made has no boot snapshot, so 0.6.0 boots it once with a wipe and deletes it at its release. The first
+lease of each device kind then makes that kind's seed (an Android seed is two cold boots and a snapshot
+save, about 150 s by Simlock's own estimate, longer on a nested-virtualization host); later leases are
+copies booted from the seed's snapshot. A second Simlock worker for the same user, under another
+`SIMLOCK_HOME`, now refuses to start while one runs (Simlock's per-user worker lock); a gateway is not
+affected.
 
 When you run a combination not listed as tested, `tapdance report` collects the versions for an issue.

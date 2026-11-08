@@ -102,6 +102,14 @@ describe("worker login service after an update (#110; MOCKED service files)", ()
     expect((await checkWorkerService(mac, fakeFs({ [PLIST]: plist(NEW) }))).state).toBe("current");
   });
 
+  it("calls a service that still starts Simlock 0.5.0 stale after the upgrade to 0.6.0", async () => {
+    const upgraded = `${store}/simlock@0.6.0_patch_hash=c48937d7cccccccccccccccccccccccccccccccccccccccccccccccccccccccc/node_modules/simlock/dist/daemon/main.js`;
+    const facts = { ...linux, wanted: { node: NODE, main: upgraded } };
+    const stale = await checkWorkerService(facts, fakeFs({ [UNIT]: unit(OLD) }, [NODE, OLD, upgraded]));
+    expect(stale.reasons).toEqual(["it starts simlock 0.5.0 (patch 52e37d12), this Tapdance ships simlock 0.6.0 (patch c48937d7)"]);
+    expect((await checkWorkerService(facts, fakeFs({ [UNIT]: unit(upgraded) }, [NODE, upgraded]))).state).toBe("current");
+  });
+
   it("calls a service stale when its Node or Simlock is gone, but not for another Node that still exists", async () => {
     expect((await checkWorkerService(linux, fakeFs({ [UNIT]: unit(NEW, "/old/node") }, [NODE, NEW]))).reasons).toEqual(["its Node (/old/node) is gone"]);
     expect((await checkWorkerService(linux, fakeFs({ [UNIT]: unit(NEW) }, [NODE]))).reasons).toEqual([`its Simlock (${NEW}) is gone`]);

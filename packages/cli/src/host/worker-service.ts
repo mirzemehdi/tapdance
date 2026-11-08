@@ -3,7 +3,7 @@
  *
  * Simlock's `daemon install` writes the absolute paths of Node and of Simlock's daemon into the
  * systemd unit (`ExecStart=`) or the launchd plist (`ProgramArguments`). pnpm puts a new Simlock
- * patch in a new folder (`simlock@0.5.0_patch_hash=…`), so after `git pull && pnpm install` the
+ * patch in a new folder (`simlock@0.6.0_patch_hash=…`), so after `git pull && pnpm install` the
  * service, and every `daemon start` that goes through it, still runs the old copy until the service
  * is installed again; once pnpm prunes the old folder the worker does not start at all.
  *
@@ -56,7 +56,7 @@ export function installedServicePaths(text: string, manager: ServiceManagerKind)
   return { ...(parts[0] ? { node: parts[0] } : {}), ...(parts[1] ? { main: parts[1] } : {}) };
 }
 
-/** "simlock 0.5.0 (patch c76b69d8)" for a path inside pnpm's store, else the path itself. */
+/** "simlock 0.6.0 (patch c48937d7)" for a path inside pnpm's store, else the path itself. */
 export function describeSimlockPath(path: string): string {
   const m = /simlock@([^/_]+)(?:_patch_hash=([0-9a-f]{8}))?/.exec(path);
   if (!m) return path;

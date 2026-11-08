@@ -48,7 +48,7 @@ export TAPDANCE_HOME="$(mktemp -d)"
 | `scripts/gen-cli-index.mjs` | Generates the command index in `docs/cli-reference.md` (`pnpm docs:cli`; `pnpm docs:check` fails when it is stale). |
 | `scripts/host-setup.sh`, `scripts/host-setup.ps1` | One-command host setup: checks and installs prerequisites, then runs `tapdance host up`. |
 | `scripts/field-test/` | Field-test tooling: the CLI and MCP checklist drivers and their JSON checklists. Not shipped. |
-| `patches/` | pnpm patches applied to upstream packages at install: `simlock@0.5.0.patch` and `agent-device@0.21.35.patch` (listed in [NOTICE.md](NOTICE.md)). |
+| `patches/` | pnpm patches applied to upstream packages at install: `simlock@0.6.0.patch` and `agent-device@0.21.36.patch` (listed in [NOTICE.md](NOTICE.md)). |
 | `examples/` | Small demo apps for real-device runs (`ios-demo`, `android-demo`). |
 | `docs/` | User documentation, the ADR, test procedures and evidence. |
 | `infrastructure/` | Reference Terraform and install scripts. Nothing in `packages/` depends on it. |
@@ -191,7 +191,7 @@ Behaviour, requirements, status and docs change in the **same pull request**.
 If a change belongs in Simlock, agent-device, AXe or another upstream project, open an issue or pull
 request there and link it from STATUS.md. Tapdance does not fork upstream projects, and removes its own
 code when an upstream tool gains the capability. Where a fix cannot wait, a small pnpm patch in
-`patches/` changes the upstream package in place (today Simlock 0.5.0 and agent-device 0.21.35); list
+`patches/` changes the upstream package in place (today Simlock 0.6.0 and agent-device 0.21.36); list
 it in [NOTICE.md](NOTICE.md) and propose the change upstream.
 
 ## Pull requests and issues

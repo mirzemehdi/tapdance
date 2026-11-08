@@ -268,7 +268,7 @@ function narrow(command: string, params: Record<string, unknown>): string | unde
 // Output paths in screenshot/record requests reach agent-device's daemon on this host, which writes
 // the file there (its capture handlers use the permissive command policy in agent-device 0.21.35).
 // agent-device's own client, talking to a remote daemon, always replaces the caller's path with a
-// fresh name in /tmp (transport.js: /tmp/agent-device-<kind>-<ms>-<random><ext>) and downloads the
+// fresh name in /tmp (0.21.36 daemon-http.js, 0.21.35 transport.js: /tmp/agent-device-<kind>-<ms>-<random><ext>) and downloads the
 // artifact afterwards; the guard accepts exactly that shape and nothing else.
 const REMOTE_OUTPUT = (kind: "screenshot" | "recording") => new RegExp(`^/tmp/agent-device-${kind}-[0-9]{10,16}-[a-z0-9]{1,8}\\.[A-Za-z0-9]{1,8}$`);
 /** Flags that make agent-device's daemon read, write or run something on this host, for any command. */

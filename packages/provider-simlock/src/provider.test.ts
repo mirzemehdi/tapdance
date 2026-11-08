@@ -1165,7 +1165,7 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     });
     const progress: string[] = [];
     await p.lease("s", request, { onProgress: (m) => progress.push(m) });
-    expect(progress[0]).toMatch(/no device of this kind exists yet, so one has to be created and booted: a first boot can take a few minutes/);
+    expect(progress[0]).toMatch(/no device of this kind exists yet, so one is copied from the host.s saved one \(seconds\) or, the first time, made and booted: a first boot can take a few minutes/);
     expect(progress.some((m) => /^Starting a device for this lease .*\(\d+ s\)$/.test(m))).toBe(true);
     // Said once per stage, not on every poll.
     expect(progress.filter((m) => m.startsWith("Starting a device")).length).toBe(1);
@@ -1191,16 +1191,17 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     expect(spareNote({ devices: [], leases: [], capacity: { android: { warm: 1 } } }, { platform: "android", imageTag: "google_apis" })).toMatch(/no device of this kind exists yet/);
     expect(describeWaiting({ stage: "queued", queuePosition: 2, reason: "full" })).toBe("Queued for a device (position 2, every slot is busy)");
     expect(describeWaiting(undefined)).toBeUndefined();
-    expect(describeWaiting({ stage: "reclaiming" })).toMatch(/released device of this kind to be restored/);
+    expect(describeWaiting({ stage: "reclaiming" })).toMatch(/released device of this kind to be removed, then a fresh copy starts/);
   });
 
-  it("says a released device is restored in seconds instead of warning about minutes (#117; fake status)", async () => {
+  it("says a released device is replaced by a fresh copy instead of warning about minutes (#117, Simlock 0.6; fake status)", async () => {
     const { spareNote } = await import("./provider.js");
     const empty = { leases: [], capacity: { android: { warm: 0 } }, warmPool: { enabled: true, targets: [{ platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis", ready: 0 }] } };
     const device = (state: string, spec: Record<string, unknown> = {}) => ({ id: "d1", state, spec: { platform: "android", model: "Pixel 8", osVersion: "34", imageTag: "google_apis", physical: false, ...spec } });
     const req = { platform: "android" as const, osVersion: "34", imageTag: "google_apis" };
-    // Right after a release the emulator is reclaimed from its clean snapshot (N2 field run: Granted in about 4 s).
-    expect(spareNote({ ...empty, devices: [device("reclaiming")] }, req)).toBe("a released device is being restored from its snapshot: usually ready in seconds");
+    // Right after a release Simlock 0.6 removes the emulator; the next lease gets a fresh copy of the
+    // kind's seed, booted from its snapshot.
+    expect(spareNote({ ...empty, devices: [device("reclaiming")] }, req)).toBe("a released device is being removed and a fresh copy of this kind starts from its snapshot: usually under a minute");
     expect(spareNote({ ...empty, devices: [device("reclaiming")] }, req)).not.toMatch(/few minutes/);
     // A free device of that kind is a ready spare even when the warm pool counts none.
     expect(spareNote({ ...empty, devices: [device("ready")] }, req)).toBe("a warm spare is ready");
@@ -1211,9 +1212,11 @@ describe("leases on a slow or just-started host (#79, #92, #94, #101, #102; MOCK
     expect(spareNote({ ...empty, devices: [device("reclaiming", { imageTag: undefined })] }, req)).toMatch(/no device of this kind exists yet/);
     expect(spareNote({ ...empty, devices: [device("reclaiming", { model: "Pixel 9" })] }, { ...req, device: "Pixel 8" })).toMatch(/no device of this kind exists yet/);
     expect(spareNote({ ...empty, devices: [device("leased")] }, req)).toMatch(/^every device of this kind is busy/);
-    // iOS: a released simulator is erased and booted again.
+    // iOS is the same in Simlock 0.6: a released simulator is deleted and a fresh copy is cloned.
     const ios = { id: "s1", state: "reclaiming", spec: { platform: "ios", model: "iPhone 16", osVersion: "18.5", physical: false } };
-    expect(spareNote({ devices: [ios], leases: [] }, { platform: "ios" })).toBe("a released device is being reset: usually ready in under a minute");
+    expect(spareNote({ devices: [ios], leases: [] }, { platform: "ios" })).toBe("a released device is being removed and a fresh copy of this kind starts from its snapshot: usually under a minute");
+    // With no device listed, the kind may still have a seed (Simlock deletes devices at release).
+    expect(spareNote({ ...empty, devices: [] }, req)).toMatch(/copied from the host's saved one \(seconds\)/);
     // Through a worker guard the list holds only the client's own devices: no claim about the host.
     expect(spareNote({ ...empty, devices: [], devicesScope: "held" }, req)).toBe("no spare is ready, so a device has to start: usually under a minute, longer on a first boot");
   });
@@ -1617,6 +1620,15 @@ describe("doctor on a gateway with an agent token", () => {
     expect(checks.find((c) => c.id === "simlock.workers")).toMatchObject({ status: "pass", detail: "n2: connected, mac: connected" });
     // The admin-only worker list is not asked for.
     expect(calls).not.toContain("/v1/workers");
+  });
+
+  it("warns about a gateway still on Simlock 0.5.0 and names 0.6.0, the release Tapdance pins (protocol 69 vs 75)", async () => {
+    const { TESTED_SIMLOCK_VERSION } = await import("./provider.js");
+    expect(TESTED_SIMLOCK_VERSION).toBe("0.6.0");
+    const { provider } = gateway([]);
+    const version = (await provider.doctor()).find((c) => c.id === "simlock.version");
+    expect(version).toMatchObject({ status: "warn", detail: "0.5.0 (gateway mode); Tapdance is tested with 0.6.0" });
+    expect(version?.fix).toMatch(/Run Simlock 0\.6\.0 on the gateway and every worker/);
   });
 
   it("says unknown, not failed, while the only worker is still starting; a disconnected one warns", async () => {

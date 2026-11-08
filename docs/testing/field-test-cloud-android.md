@@ -280,7 +280,7 @@ run does not leave a lease behind.
 | `connect` → `doctor` passing | your clock |
 | Cold lease (first) and warm lease | `lease` step in both drivers |
 | Settle on lease: the "Waiting for the device to settle" / "Settled" lines and any "still busy" notice | the lease's stderr (CLI) or `notices` (MCP) |
-| Guest CPU when the clean baseline was captured (first boot of each device) | on the VM: `tapdance worker logs --contains "clean baseline" --lines 5000` |
+| Guest CPU when the boot snapshot was saved (once per device kind, when Simlock 0.6.0 makes its seed) | on the VM: `tapdance worker logs --contains "boot snapshot" --lines 5000` |
 | First `inspect` after a warm lease: time, and whether the daemon log shows `INSTRUMENTATION_FAILED` for it | the drivers' tables; on the VM `grep INSTRUMENTATION_FAILED ~/.simlock/daemon.log` |
 | Key press, tap, `inspect`, screenshot, recording start and stop | the drivers' tables (CLI and MCP separately) |
 | Install: APK upload and from CI | `install_apk`, `install_from_ci` steps; the APK's size |

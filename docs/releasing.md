@@ -10,7 +10,7 @@ Tapdance is published as one npm package, **`tapdance-cli`**, whose command is `
 - the CLI's `dist/`;
 - the four other workspace packages (`@tapdance/core`, `@tapdance/provider-simlock`, `@tapdance/sdk`,
   `@tapdance/mcp`), which are not published on their own;
-- Simlock 0.5.0 and agent-device 0.21.35 with the same patches pnpm applies in the workspace
+- Simlock 0.6.0 and agent-device 0.21.36 with the same patches pnpm applies in the workspace
   (`patches/`). A plain npm install of those packages would get the unpatched releases, so they travel
   inside the package as bundled dependencies, together with their own dependencies. Each patched copy's
   `package.json` names its patch in a `tapdancePatch` field.

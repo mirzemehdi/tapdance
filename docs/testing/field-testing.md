@@ -308,7 +308,7 @@ anything. Include these parts:
 - **Minimal reproduction.** The shortest list of steps from a known state that shows the problem.
   Say which machine each step runs on. Example: 1. VPS: lease Android. 2. VPS: install a 150 MB APK.
 - **Environment.** From `tapdance report`: versions, OS, provider. Add the machines involved, the
-  network (Tailscale, Caddy) and the tested commit. Example: `tapdance 0.1.0 @ a1b2c3d, simlock 0.5.0,
+  network (Tailscale, Caddy) and the tested commit. Example: `tapdance 0.1.0 @ a1b2c3d, simlock 0.6.0,
   Ubuntu 24.04 VPS + macOS 26.5 Mac, Tailscale`.
 - **Evidence.** Log excerpts, screenshots, the evidence record, timings.
 - **How often.** Every time, sometimes (how many out of how many tries), once.
