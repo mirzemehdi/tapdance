@@ -58,6 +58,36 @@ describe("errors and redaction", () => {
     expect(out).not.toContain(secret.replace(/^#k=/, ""));
   });
 
+  it("redacts every token in a per-origin tokens map, keeping the origins and the guard's token list", () => {
+    expect(redactObject({ credentials: { tokens: { "https://a.example": "plain-token-value", "https://b.example": "x" } } })).toEqual({
+      credentials: { tokens: { "https://a.example": "[REDACTED]", "https://b.example": "[REDACTED]" } },
+    });
+    expect(redactObject({ tokens: "loose-token-value" })).toEqual({ tokens: "[REDACTED]" });
+    expect(redactObject({ tokens: [{ id: "t1", label: "ci" }] })).toEqual({ tokens: [{ id: "t1", label: "ci" }] });
+  });
+
+  it.each([
+    ["a URL password", "fatal: could not read https://deploy:hunter2secret@git.example.com/repo.git", "fatal: could not read https://deploy:[REDACTED]@git.example.com/repo.git"],
+    ["a URL password with a port", "remote: ssh://ci:pa55w0rd@host.example:2222/x", "remote: ssh://ci:[REDACTED]@host.example:2222/x"],
+    ["a URL whose user part is a token", "clone https://x0a1b2c3d4e5f6a7b8c9d0e1f@github.com/o/r", "clone https://[REDACTED]@github.com/o/r"],
+    ["a Basic header", "Authorization: Basic dXNlcjpwYXNzd29yZA==", "Authorization: Basic [REDACTED]"],
+    ["a quoted Basic header", '{"authorization":"Basic dXNlcjpwYXNz"}', '{"authorization":"Basic [REDACTED]"}'],
+    ["a bare Basic credential", "curl -H 'Basic dXNlcjpwYXNz' x", "curl -H 'Basic [REDACTED]' x"],
+  ])("redacts %s", (_label, text, expected) => {
+    expect(redactSecrets(text)).toBe(expected);
+  });
+
+  it.each([
+    ["ssh remote syntax", "git@github.com:owner/repo.git"],
+    ["a plain user@host", "ssh admin@mac-mini.local"],
+    ["a URL with a short user name", "ssh://git@github.com/owner/repo.git"],
+    ["a URL with a port and an @ in the path", "https://host.example:8443/users/@me"],
+    ["prose after Basic", "Basic configuration lives in tapdance.config.json"],
+    ["a capitalised word after Basic", "Basic Instructions"],
+  ])("leaves %s alone", (_label, text) => {
+    expect(redactSecrets(text)).toBe(text);
+  });
+
   it("leaves ordinary key-ish words and ids alone", () => {
     expect(redactSecrets("key=value1234 and ASC_KEY_ID=ABC123DEF")).toBe("key=value1234 and ASC_KEY_ID=ABC123DEF");
     expect(redactObject({ key: "visible", apiKey: "hidden", joinUrl: "wss://gw/join?t=x" })).toEqual({ key: "visible", apiKey: "[REDACTED]", joinUrl: "[REDACTED]" });
