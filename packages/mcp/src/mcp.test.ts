@@ -7,7 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Tapdance, TapdanceError, type LeaseHandle, type LeaseRequest } from "@tapdance/sdk";
 import { FakeProvider } from "@tapdance/sdk/testing";
 import { createServer } from "node:http";
-import { TOOLS, createMcpServer, createProgressRouter, runHttp, startRenewal } from "./index.js";
+import { readFileSync } from "node:fs";
+import { SERVER_VERSION, TOOLS, createMcpServer, createProgressRouter, runHttp, startRenewal } from "./index.js";
 
 const REQUIRED = [
   "list_workers", "list_devices", "lease_device", "get_device_status", "release_device", "install_app", "launch_app", "stop_app",
@@ -91,6 +92,13 @@ async function connect(provider: FakeProvider = new FakeProvider()) {
 }
 
 describe("MCP tool surface", () => {
+  it("reports this package's version to clients, not a fixed one (MOCKED provider)", async () => {
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
+    expect(SERVER_VERSION).toBe(pkg.version);
+    const { client } = await connect();
+    expect(client.getServerVersion()?.version).toBe(pkg.version);
+  });
+
   it("exposes every required tool and no host shell", () => {
     const names = TOOLS.map((t) => t.name);
     for (const n of REQUIRED) expect(names).toContain(n);

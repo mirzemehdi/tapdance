@@ -8,7 +8,22 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
-## [0.1.0] - Unreleased
+## [0.1.1] - 2026-11-08
+
+### Fixed
+
+- The MCP server reports this package's version to clients; it always said `0.1.0`.
+- Unit tests allow 60 s each on CI (30 s locally), so the release workflow's slower macOS runner no
+  longer fails them on time limits.
+
+### Changed
+
+- The README, installation guide and walkthrough install from npm: `npm install -g tapdance-cli`.
+
+## [0.1.0] - 2026-11-08
+
+First release on npm, as `tapdance-cli`.
+
 
 First slice. Tested end to end on one Mac: iOS simulators against the local worker
 ([evidence](docs/testing/evidence/2026-11-01-local-ios.md)), through a gateway with a joined worker
