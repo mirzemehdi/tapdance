@@ -33,9 +33,9 @@ open port. Agents talk to the gateway, and the gateway routes each lease to a wo
 Windows cannot be a worker: Simlock runs on macOS and Linux only, and `tapdance worker install`
 refuses on Windows. A Windows machine is expected to run the CLI and MCP server against a gateway, but this has not been tested.
 
-Install Tapdance from source on every machine ([installation](../installation.md)). It is not on npm
-yet. Use the same Tapdance build everywhere: it pins Simlock 0.6.0, and gateway and worker must run
-versions that can talk to each other.
+Install Tapdance on every machine with `npm install -g tapdance-cli`, or from source
+([installation](../installation.md)). Use the same Tapdance version everywhere: it pins Simlock 0.6.0, and
+gateway and worker must run versions that can talk to each other.
 
 ## Steps
 
