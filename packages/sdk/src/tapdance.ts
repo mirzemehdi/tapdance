@@ -48,7 +48,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join } from "node:path";
 import { readFileSync } from "node:fs";
 import { createProvider } from "./provider-factory.js";
-import { RoutingProvider } from "./routing-provider.js";
+import { RoutingProvider, removedTargetOf } from "./routing-provider.js";
 
 export interface TapdanceOptions {
   cwd?: string;
@@ -461,7 +461,19 @@ export class Tapdance {
     return this.store.withLock(this.session.id, async () => {
       const existing = await this.store.get(this.session.id);
       if (existing !== undefined) {
-        const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch(() => undefined);
+        let removedTarget: string | undefined;
+        const status = await (await this.providerFor(existing.handle)).status(existing.handle).catch((error: unknown) => {
+          removedTarget = removedTargetOf(error);
+          return undefined;
+        });
+        // Its host is no longer a connect target: nothing here can use the lease or end it, so it is
+        // neither reused nor silently replaced.
+        if (removedTarget !== undefined) {
+          throw new TapdanceError("LEASE_ALREADY_HELD", `This session's lease on ${existing.handle.model} is on ${removedTarget}, which is not a connect target any more`, {
+            hint: `Run \`tapdance device release\` (MCP: release_device) to forget it (that host frees the device when its time limit runs out), then lease again; or connect the host again (\`tapdance connect ${removedTarget}\`) to keep using it.`,
+            details: { orphaned: removedTarget, leaseId: existing.handle.leaseId, expiresAt: existing.handle.expiresAt },
+          });
+        }
         if (status?.state === "active" || status?.state === "unknown" || status === undefined) {
           // A lease from another target than the one asked for is not "the same device" (review).
           const sameTarget = !options.target || options.target === existing.handle.location.target || options.target === existing.handle.location.endpoint;
@@ -562,7 +574,7 @@ export class Tapdance {
    * Releases this session's lease. Only ever this session's: there is no id to pass. With
    * `onlyOwnedBy`, releases only a lease that process created (the MCP server's shutdown uses it).
    */
-  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; unreachable?: boolean; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
+  async release(options: { onlyOwnedBy?: LeaseOwner } = {}): Promise<{ released: boolean; unreachable?: boolean; orphaned?: string; message?: string; device?: DeviceSummary; skipped?: string; artifacts?: ArtifactRef[] }> {
     const record = await this.store.get(this.session.id);
     if (record === undefined) return { released: false };
     if (options.onlyOwnedBy && (record.owner?.kind !== options.onlyOwnedBy.kind || record.owner.pid !== options.onlyOwnedBy.pid)) {
@@ -581,7 +593,11 @@ export class Tapdance {
         this.progress(`Could not stop the recording before release: ${(error as Error).message}`);
       }
     }
-    const result: { released: boolean; unreachable?: boolean } = await provider.release(record.handle).catch(() => ({ released: false }));
+    let orphaned: string | undefined;
+    const result: { released: boolean; unreachable?: boolean } = await provider.release(record.handle).catch((error: unknown) => {
+      orphaned = removedTargetOf(error);
+      return { released: false };
+    });
     // An unreachable worker still holds the lease: keep the record so release can be run again.
     if (!result.unreachable) {
       await this.store.delete(this.session.id, record.handle.leaseId);
@@ -597,6 +613,13 @@ export class Tapdance {
     return {
       released: result.released,
       ...(result.unreachable ? { unreachable: true } : {}),
+      // Forgotten here, but not ended: the removed target's host keeps the device until the time limit.
+      ...(orphaned !== undefined
+        ? {
+            orphaned,
+            message: `${orphaned} is not a connect target any more, so the lease was not released there: this session forgot it, and that host keeps ${record.handle.model} until the lease's time limit (${record.handle.expiresAt}).`,
+          }
+        : {}),
       device: summarize(record, { state: "ended", handle: record.handle }),
       ...(artifacts.length > 0 ? { artifacts } : {}),
     };
