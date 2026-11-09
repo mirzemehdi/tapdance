@@ -29,6 +29,7 @@ the runbooks link here instead of repeating it.
 | 2026-11-06 | [rented-mac-ios](2026-11-06-rented-mac-ios.md) | iOS on a rented Scaleway Mac mini, set up over ssh and driven from a Mac. |
 | 2026-11-07 | [vps-rented-mac-ios](2026-11-07-vps-rented-mac-ios.md) | The same Mac mini driven from a Linux VPS: all six checklists, a host build, a `.app` upload. |
 | 2026-11-07 | [two-hosts-android-ios](2026-11-07-two-hosts-android-ios.md) | One Linux VPS agent with two connect targets: an N2 host for Android and a rented Mac for iOS, with one host down. |
+| 2026-11-09 | [byoc-self-run](2026-11-09-byoc-self-run.md) | `tapdance machine` on a real Google Cloud account: create, destroy, auto mode; the Android part of #153 on 0.2.1; the guard fix against forged installs. |
 
 ## File names
 

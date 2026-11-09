@@ -8,10 +8,7 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
-## [0.2.1] - 2026-11-09
-
-A fix for the worker guard; update every host (`npm install -g tapdance-cli@latest`, then `tapdance
-host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machines on 0.2.0 and 0.2.1 work together.
+## [Unreleased]
 
 ### Added
 
@@ -23,12 +20,14 @@ host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machine
   that nothing billable is left. Resumable create steps, idle stop for Google Cloud by default,
   Scaleway's 24-hour minimum confirmed before renting and automatic deletion at the 24-hour mark
   (`--keep` turns it off), cost estimates in `list`. Tapdance never asks for, reads, prints or stores
-  cloud credentials. Unit-tested with mocked cloud tools only; not yet run on a real account.
+  cloud credentials. `--cloud gcp` ran for real (docs/testing/evidence/2026-11-09-byoc-self-run.md);
+  `--cloud scaleway` is unit-tested only.
 - `tapdance machine auto on|off` (auto mode): a lease (CLI or MCP) that finds no host for the platform
   starts the stopped machine, or creates one in the background and answers with a retryable error that
   carries the Tailscale approval link; `--delete-after-days` destroys a long-stopped Android machine;
   Macs only with `--accept-mac-day`. The SDK gains a generic `machineAuto` option for it
-  (`TapdanceOptions`); it holds no cloud code. Unit-tested only.
+  (`TapdanceOptions`); it holds no cloud code. Ran for real on Google Cloud (create on a lease, idle
+  stop, start on a lease).
 - `machine create` checks that billing is on for the Google Cloud project, and connects with
   `--platform`, so leases route to the right machine.
 - `host-setup.sh --tapdance-version X.Y.Z` installs `tapdance-cli` from npm instead of building from
@@ -38,6 +37,18 @@ host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machine
 - `macos-auto-login.sh --password-stdin`.
 - The npm package carries `host-setup.sh` and `macos-auto-login.sh` in `dist/assets`, so `machine
   create` copies the scripts that match the CLI.
+
+### Fixed
+
+- `host-setup.sh` on Ubuntu 24.04's cloud image (found by `machine create` on Google Cloud): the
+  emulator needs `libnss3` (also named by `doctor`); the systemd user manager is restarted after the
+  user joins `kvm` when `setfacl` is missing, so the worker can open `/dev/kvm`; and `host up` runs under
+  `sg kvm` when the setup's own login predates the group.
+
+## [0.2.1] - 2026-11-09
+
+A fix for the worker guard; update every host (`npm install -g tapdance-cli@latest`, then `tapdance
+host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machines on 0.2.0 and 0.2.1 work together.
 
 ### Changed
 

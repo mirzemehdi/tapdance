@@ -53,7 +53,8 @@ All on your laptop:
    ```
 
    Each one prints a **Tailscale link** a few minutes in: open it and approve the machine. Each ends
-   with `Machine … is ready and connected.` Android takes about 10 minutes, the Mac about an hour.
+   with `Machine … is ready and connected.` Android took about 6 minutes plus your click in the measured
+   run, the Mac about an hour.
 
 5. **Give Claude Code the Tapdance tools,** in your app's project folder. Start Claude Code and type
    `/mcp`: you should see `tapdance`.
@@ -89,7 +90,8 @@ tapdance machine auto on --platform android
 From then on, when your agent asks for an Android phone and the machine is off, Tapdance starts it; if
 there is no machine, it creates one in the background and tells the agent to try again in a few
 minutes (the agent passes on the Tailscale link for you to approve). The machine switches itself off
-after 30 minutes without use. `--delete-after-days 7` also deletes it once it has been off a week, so
+after 30 minutes without use. Each new machine still needs you to approve it in Tailscale: the agent
+passes the link on, so keep an eye on what it tells you. `--delete-after-days 7` also deletes it once it has been off a week, so
 its disk stops billing. For iPhones, `tapdance machine auto on --platform ios --accept-mac-day` lets it
 rent a Mac when needed; each new Mac costs at least one day. `tapdance machine auto` shows the setting,
 `tapdance machine auto off` turns it off.
@@ -104,11 +106,13 @@ Ask before anything that costs money, give me each Tailscale link to approve, an
 files or passwords.
 ```
 
-**How sure this is.** These commands are new. They have been tested with stand-ins for Google Cloud and
-Scaleway, not yet on a real account. Each step they automate has run for real by hand (the
-[do it by hand](#under-the-hood-do-it-by-hand) section at the end): from a Linux server, Android on
-Google Cloud and iOS on a Scaleway Mac mini were tested in one session. The agent in those runs was a
-test script, not Claude Code itself. Report what trips you up with `tapdance report`.
+**How sure this is.** The Android part ran for real on a Google Cloud account: `machine create` took
+about 6 minutes of work plus the Tailscale click, the agent's checklists passed, auto mode created,
+stopped and started the machine by itself, and `destroy` left nothing that bills
+([evidence](../testing/evidence/2026-11-09-byoc-self-run.md)). The iPhone part (`--cloud scaleway`) has been tested only with a stand-in for
+Scaleway so far. Each step it automates has run for real by hand (the
+[do it by hand](#under-the-hood-do-it-by-hand) section at the end). The agent in these runs was a test
+script, not Claude Code itself. Report what trips you up with `tapdance report`.
 
 The sections below are the same steps in detail: what to type, and what you should see.
 
@@ -439,6 +443,9 @@ gcloud out with `gcloud auth revoke --all`: its login can reach your whole accou
   organization that forbids it. Use a personal Google account and a new project.
 - **Scaleway has no Mac in stock:** try `--type M2-M`, or later.
 - **The Tailscale link timed out:** run the same `create` command again and open the new link.
+- **Old machines stay listed in Tailscale:** `destroy` logs the machine out, but Tailscale keeps it as
+  offline, and a new machine then gets a name like `tapdance-android-1`. Delete the old entries under
+  **Machines** in the Tailscale admin console.
 - **A step failed:** fix what it names and run the same command again; it continues at that step. To
   give up instead, `tapdance machine destroy <name>` removes what was made.
 - **Android is unreachable later:** the machine switched itself off. `tapdance machine start android`.

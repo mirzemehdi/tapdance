@@ -941,8 +941,12 @@ computer. The setting is in `~/.tapdance/machines/auto.json` (mode 600), never i
 machine auto off` turns it off and leaves the machines (remove them with `tapdance machine destroy`).
 A lease that names a `--target`, and device profiles, never trigger auto mode.
 
-Status: unit-tested with mocked `gcloud`, `scw` and ssh (`machine.test.ts`) and a mocked provider for
-the lease hook (`tapdance.test.ts`); not yet run on a real cloud account (STATUS M-07).
+Status: `--cloud gcp` ran for real: create, stop, destroy, the leftovers check and auto mode (create on a
+lease, idle stop, start on a lease) ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)).
+`--cloud scaleway`, `--tailscale-key` and `--delete-after-days` are unit-tested only, with mocked
+`gcloud`, `scw` and ssh (`machine.test.ts`); the lease hook with a mocked provider (`tapdance.test.ts`).
+`destroy` logs the machine out of Tailscale, but Tailscale keeps listing it as offline until you delete
+it in the admin console (STATUS M-07).
 
 ## External tools
 

@@ -80,7 +80,7 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The computer your agent runs on** (a Mac, or Linux with KVM), with [Android Studio](https://developer.android.com/studio) | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another computer you own:** a Mac, a Mac mini, or a Linux PC or server with KVM | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | About USD 0.20 an hour while it runs (it switches itself off when idle), plus its disk until you delete it, paid to Google | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes |
+| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | About USD 0.20 an hour while it runs (it switches itself off when idle), plus its disk until you delete it, paid to Google | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes (6 measured, plus one approval click) |
 
 **iPhones** run only on a Mac, with [Xcode](https://developer.apple.com/xcode/):
 
@@ -101,8 +101,9 @@ tapdance machine destroy android           # when you are done (and: tapdance ma
 ```
 
 `tapdance machine auto on --platform android` goes one step further: your agent's first lease creates
-or starts the machine by itself. These commands are new: they have been tested with stand-ins for the
-cloud tools, not yet on a real account.
+or starts the machine by itself. These commands are new. The Android part ran for real on a Google
+Cloud account ([evidence](docs/testing/evidence/2026-11-09-byoc-self-run.md)); the iPhone part has not
+run on a Scaleway account yet.
 
 **Coming later: Tapdance Cloud.** No machine of your own: sign up and your agent gets Android phones
 and iPhones on machines we run, one customer per machine, paid per hour or per Mac day. Not available
