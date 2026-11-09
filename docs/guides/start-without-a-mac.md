@@ -416,7 +416,7 @@ tapdance machine destroy ios
 Each `destroy` asks first, then logs the machine out of Tailscale, removes it from your laptop, deletes
 it with everything made for it (its disk, network and firewall rule on Google Cloud; its ssh key on
 Scaleway), and checks your account. **You should see** `Nothing billable left from this machine.` It
-also lists other things in your project that cost money and that Tapdance did not make; it leaves those
+also lists other things in your project that cost money, such as your other machine; it leaves those
 alone.
 
 The Mac is different in its first 24 hours: Scaleway does not delete it sooner. `destroy` then sets it

@@ -361,7 +361,7 @@ export function renderDestroy(d: DestroyReport & { record: MachineRecord; clean:
     lines.push(`Run \`tapdance machine destroy ${d.record.name}\` again, or delete them in the cloud console.`);
   }
   if (l.others.length) {
-    lines.push("", dim(`Other billable resources in this ${d.record.cloud === "gcp" ? "project" : "account"}, not made by Tapdance (left alone):`), ...l.others.map((x) => dim(`  ${x}`)));
+    lines.push("", dim(`Other billable resources in this ${d.record.cloud === "gcp" ? "project" : "account"}, not part of this machine (left alone):`), ...l.others.map((x) => dim(`  ${x}`)));
   }
   return lines.join("\n");
 }

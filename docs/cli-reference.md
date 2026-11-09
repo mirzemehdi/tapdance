@@ -903,7 +903,7 @@ console), removes the connect target and its token, deletes the VM with its disk
 subnet and network (gcp) or the Mac mini and its ssh key (scaleway), and then checks for leftovers:
 the same kinds as `infrastructure/scripts/gcp-leftovers.sh` and `scaleway-leftovers.sh`, split into
 **this machine's** (must be none: it says "Nothing billable left from this machine") and **other billable
-resources** in the project or account, not made by Tapdance, which it lists and never touches. Exit 1
+resources** in the project or account (another machine, or things Tapdance did not make), which it lists and never touches. Exit 1
 when something of the machine is left or could not be checked. A Scaleway Mac in its first 24 hours
 cannot be deleted: `destroy` schedules its deletion, says when, and keeps the record so `list` shows
 it until it is gone.
