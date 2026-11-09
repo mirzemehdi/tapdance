@@ -1,24 +1,90 @@
-# Quick start: local mode
+# Test your app on your Mac
 
-## What you get
-
-One full loop on a single computer. You start the part of Tapdance that runs the phones (the
-**worker**), check the setup, borrow a phone (a **lease**), install and open an app, tap through it,
-take screenshots and a video, watch it live, give the phone back, and hand the whole thing to your
-agent. Everything runs on this computer (`provider: "local"`).
+Your agent and the phones run on the same Mac. Tapdance starts clean iPhone simulators and Android
+emulators for your agent, and gives them back wiped when it is done. Free, about 15 minutes if Xcode
+is already installed.
 
 ## What you need
 
-- Tapdance installed ([installation](installation.md)).
-- For iOS: a Mac with Xcode and an iOS runtime. For Android: the Android SDK with its command-line
-  tools, and KVM on Linux. See [platform tools](installation.md#platform-tools-local-mode-only).
+- A Mac. For iPhones, [Xcode](https://developer.apple.com/xcode/) with an iOS simulator installed.
+  For Android, [Android Studio](https://developer.android.com/studio) with its command-line tools.
+- [Node.js](https://nodejs.org) 22.13 or newer.
+- An agent: Claude Code here. Codex and Cursor work too ([connect your agent](agents.md)).
 
-Proven: the iOS steps below on a MacBook Pro M1 Pro with Xcode 26.5 and an iPhone 16 / iOS 18.5
-simulator ([evidence](testing/evidence/2026-11-01-local-ios.md)). Android uses the same commands and ran
-on the same Mac with Android 34 emulators, a custom APK and a Google Play image
-([evidence](testing/evidence/2026-11-01-android.md)).
+An 8 GB Mac runs one phone at a time; 16 GB or more runs several.
 
-## Steps
+## Set it up once
+
+1. **Install Tapdance.**
+
+   ```bash
+   npm install -g tapdance-cli
+   ```
+
+2. **Only testing iPhones?** Turn Android off, so the check in step 4 does not ask for the Android
+   tools. (Only Android? Use `platforms.ios.enabled false` instead.)
+
+   ```bash
+   tapdance config set --global platforms.android.enabled false
+   ```
+
+3. **Start the phone service.** It runs in the background and creates the phones your agent borrows.
+   Add `--service` to start it again every time you log in.
+
+   ```bash
+   tapdance worker install
+   ```
+
+4. **Check everything.** The last line should say `All checks passed`. Anything else prints a `fix:`
+   line telling you what to do.
+
+   ```bash
+   tapdance doctor
+   ```
+
+5. **Give Claude Code the Tapdance tools.** Run this in your app's project folder, then start Claude
+   Code and type `/mcp`: you should see `tapdance`.
+
+   ```bash
+   claude mcp add tapdance -- tapdance mcp
+   ```
+
+## Ask your agent
+
+In your app's folder, tell Claude Code what you want, in plain words. For example:
+
+- **iOS, end to end:** "Build this iOS app for the simulator into ./build, install it on an iPhone
+  simulator with Tapdance, sign up with a new account, go through onboarding and checkout, take a
+  screenshot of each step and record a video. Tell me what broke."
+- **Android:** "Build the debug APK, install it on an Android emulator, log in with the test account
+  and check that the home screen loads."
+- **One screen:** "Send me a screenshot of the settings screen in dark mode."
+- **A crash:** "The app crashes after login. Reproduce it and get me the crash log."
+- **Again next time:** "Turn what you just did into a Tapdance scenario file." Later, `tapdance run
+  <file>` replays it and says PASS or FAIL.
+
+More ideas, and what the agent does behind the scenes: [use cases](use-cases.md).
+
+**Tip:** ask the agent to build into a folder inside your project, such as `./build`. For safety,
+Tapdance installs only apps from inside the project folder.
+
+## What you'll see
+
+- The first phone takes about a minute to start; later ones come back in seconds.
+- Screenshots, videos and logs land in `./tapdance-artifacts/` in your project. `tapdance artifacts`
+  lists them.
+- **Watch live, or take over:** run `tapdance view` in a second terminal and open the link it prints.
+  While you touch the screen, the agent waits; **Hand back** gives it control again.
+
+## If something fails
+
+Run `tapdance doctor` and do what its `fix:` lines say. Every error has a code; look it up in
+[troubleshooting](troubleshooting.md).
+
+## Every step by hand
+
+This is what your agent does for you, one command at a time. Use it to try Tapdance yourself, to script
+it, or to see what went wrong. Each step builds on the one before it.
 
 ### 1. Create a project config (optional)
 
@@ -259,10 +325,12 @@ Not run: from inside Claude Code, Codex or Cursor themselves.
 - `tapdance device status` showed your device while it was leased.
 - `tapdance artifacts` lists the screenshot, the recording and the logs.
 
-## If it fails
+## What has been tested
 
-Each error prints a code and a `fix:` line. Look the code up in
-[troubleshooting](troubleshooting.md), and run `tapdance doctor` again after each fix.
+Proven: the iOS steps below on a MacBook Pro M1 Pro with Xcode 26.5 and an iPhone 16 / iOS 18.5
+simulator ([evidence](testing/evidence/2026-11-01-local-ios.md)). Android uses the same commands and ran
+on the same Mac with Android 34 emulators, a custom APK and a Google Play image
+([evidence](testing/evidence/2026-11-01-android.md)).
 
 ## Next
 

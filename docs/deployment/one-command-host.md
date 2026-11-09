@@ -1,53 +1,100 @@
 # Run the phones on another machine
 
-Your agent runs on one computer: a laptop, or a server. Another machine runs the phones: your own Mac
-or Mac mini (iPhones and Android), or a Linux machine (Android). One command sets up the machine that
-runs the phones, and one command connects your agent's computer to it. The two talk over a private
-network between your machines, Tailscale, which is free.
+Your agent runs on your laptop or a server. The phones run on a Mac or Mac mini you own (iPhones and
+Android), or on a Linux machine (Android only). One command sets up the machine with the phones, one
+command connects your laptop to it, and then you talk to your agent as usual. Free, about 30 minutes.
 
-These docs call the machine that runs the phones the **host**, and the computer your agent runs on the
-**agent's machine**. The [glossary](../glossary.md) has the other terms.
-
-This is the main guide for any host. The provider pages add only what is special about their machine:
-[Google Cloud N2](google-cloud-n2.md), [dedicated Linux server](dedicated-linux-server.md),
-[rented Scaleway Mac mini](../ios/scaleway-mac.md) and [other cloud Macs](../ios/other-cloud-macs.md).
-
-> Proven: an agent on a Linux VPS tested a real app on the owner's Mac, Android and iOS
-> ([field runs](../testing/evidence/2026-11-02-vps-field-runs.md),
-> [self-test through the guard](../testing/evidence/2026-11-03-selftest-through-guard.md)); a fresh
-> Google Cloud N2 VM ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)) and a fresh rented
-> Mac mini ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)) set up with `host-setup.sh`,
-> each driven from a Mac and from a Linux VPS; one agent using two hosts at once
-> ([evidence](../testing/evidence/2026-11-07-two-hosts-android-ios.md)). Unit-tested only: `host pause`,
-> `host resume` and `host down --all`. Please report what you find with `tapdance report`.
-
-## What you get
-
-- The host runs in what these docs call [device-only mode](../security/device-only-mode.md). The agent's machine reaches
-  only the **guard**, a small server that allows a fixed list of device actions. It never gets a shell
-  on the host.
-- Nothing is opened to the internet. The guard is reachable only inside your Tailscale network.
-- The agent leases devices, installs apps, taps and takes screenshots as if the devices were local.
-- You can watch the device live in a browser and take over (`tapdance view --tailscale`).
+The two machines talk over [Tailscale](https://tailscale.com), a free private network between your own
+machines. Nothing is opened to the internet.
 
 ## What you need
 
-- **A host.** A Mac runs iOS simulators and Android emulators. A Linux machine needs KVM and runs
-  Android emulators only. An 8 GB Mac holds one iOS simulator at a time.
-- **Tailscale on both machines,** logged in to the same tailnet.
-- **HTTPS Certificates turned on** for the tailnet, in the
-  [Tailscale admin console](https://login.tailscale.com/admin/dns). The guard then gets an `https://`
-  address and the viewer shows live video. Without them the viewer falls back to about two screenshots
-  a second.
-- **On the host,** nothing else up front. `host-setup.sh` installs Node.js, a JDK, the Android SDK,
-  Tailscale and Tapdance. For iOS, install Xcode yourself (the App Store, or `xcodes`): it cannot be
-  scripted.
-- **On the agent's machine,** Node.js 22.13+ and Tapdance ([installation](../installation.md)). It can
-  run macOS or Linux (Windows is expected to work but not tested), and needs no Xcode, Android SDK or KVM.
-- **On a Mac, a standard account** to host from is recommended, not an administrator account. See
-  [the administrator question](#the-administrator-question).
+- **The machine with the phones.** A Mac with [Xcode](https://developer.apple.com/xcode/) for
+  iPhones (install Xcode yourself: it cannot be scripted). Or a Linux machine with KVM for Android.
+  The setup installs everything else.
+- **Tailscale** on both machines, logged in to the same account, with **HTTPS Certificates** turned on
+  in the [Tailscale admin console](https://login.tailscale.com/admin/dns) (one switch; it gives you
+  live video in the viewer).
+- **On your laptop:** [Node.js](https://nodejs.org) 22.13 or newer, and your agent (Claude Code here).
 
-## Steps
+## Set it up once
+
+**On the Mac (or Linux machine) with the phones:**
+
+1. **Run the setup.** `--label` is a name for your laptop, so you can tell connections apart later.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/host-setup.sh | bash -s -- --label my-laptop
+   ```
+
+   It lists what is missing, asks once, installs it, and starts the phones. Already have Tapdance on
+   that machine? Run `tapdance host up --label my-laptop` instead. Either way it ends with
+   `TAPDANCE HOST READY` and a line to run on your laptop.
+
+2. **Copy the key file to your laptop.** The setup saved a file that lets your laptop in. Copy it
+   privately, for example with `scp` run on the laptop (never through a chat or a repository):
+
+   ```bash
+   scp me@my-mac:~/.tapdance/worker/pairing-my-laptop.token .
+   ```
+
+**On your laptop:**
+
+3. **Install Tapdance.**
+
+   ```bash
+   npm install -g tapdance-cli
+   ```
+
+4. **Connect.** Paste the line the setup printed. It looks like this:
+
+   ```bash
+   tapdance connect https://my-mac.tail1234.ts.net:4720 < pairing-my-laptop.token
+   ```
+
+   Then delete the copied key file; Tapdance keeps its own copy.
+
+5. **Give Claude Code the Tapdance tools,** in your app's project folder. Start Claude Code and type
+   `/mcp`: you should see `tapdance`.
+
+   ```bash
+   claude mcp add tapdance -- tapdance mcp
+   ```
+
+## Ask your agent
+
+Tell it what you want, in plain words, in your app's folder. For example: "Build this iOS app for the
+simulator into ./build, install it on an iPhone simulator with Tapdance, go through sign-up and
+checkout, take a screenshot of each step and record a video. Tell me what broke."
+
+The agent builds on your laptop and sends the app to the other machine. iPhone apps must be built on
+a Mac: if your laptop is not a Mac, see [builds on the host](#builds-on-the-host). More ideas:
+[use cases](../use-cases.md).
+
+## What you'll see
+
+- The first phone can take a few minutes to start; later ones are much faster.
+- Screenshots, videos and logs land on your laptop, in `./tapdance-artifacts/` in your project.
+- **Watch live, or take over:** `tapdance view --tailscale` on your laptop prints a link to open.
+
+## If something fails
+
+On your laptop, run `tapdance doctor --no-host` and do what its `fix:` lines say. On the phone
+machine, `tapdance host status` shows which setup step is not done. More in
+[if it fails](#if-it-fails) below and in [troubleshooting](../troubleshooting.md).
+
+**Keep that machine safe:** use a Mac that holds nothing personal, or a separate user account on it.
+[How it stays safe](#how-it-stays-safe) explains why.
+
+---
+
+The rest of this page is reference: every option, day-to-day commands, and what each step does. The
+[glossary](../glossary.md) explains the terms. These docs call the machine with the phones the
+**host**, and your laptop the **agent's machine**. Provider pages add only what is special about
+their machine: [Google Cloud N2](google-cloud-n2.md), [dedicated Linux server](dedicated-linux-server.md),
+[rented Scaleway Mac mini](../ios/scaleway-mac.md) and [other cloud Macs](../ios/other-cloud-macs.md).
+
+## The same steps, in detail
 
 1. **On the host, run the setup.** Give `--label` the name of the agent's machine: the pairing is
    named after the machine that will use it.
@@ -115,6 +162,32 @@ tapdance device release
 
 `doctor` should end with "All checks passed". On a Mac host you can lease `--platform ios` the same
 way. The first boot of a device can take minutes.
+
+## Requirements in detail
+
+- **A host.** A Mac runs iOS simulators and Android emulators. A Linux machine needs KVM and runs
+  Android emulators only. An 8 GB Mac holds one iOS simulator at a time.
+- **Tailscale on both machines,** logged in to the same tailnet.
+- **HTTPS Certificates turned on** for the tailnet, in the
+  [Tailscale admin console](https://login.tailscale.com/admin/dns). The guard then gets an `https://`
+  address and the viewer shows live video. Without them the viewer falls back to about two screenshots
+  a second.
+- **On the host,** nothing else up front. `host-setup.sh` installs Node.js, a JDK, the Android SDK,
+  Tailscale and Tapdance. For iOS, install Xcode yourself (the App Store, or `xcodes`): it cannot be
+  scripted.
+- **On the agent's machine,** Node.js 22.13+ and Tapdance ([installation](../installation.md)). It can
+  run macOS or Linux (Windows is expected to work but not tested), and needs no Xcode, Android SDK or KVM.
+- **On a Mac, a standard account** to host from is recommended, not an administrator account. See
+  [the administrator question](#the-administrator-question).
+
+## How it stays safe
+
+- The host runs in what these docs call [device-only mode](../security/device-only-mode.md). The agent's machine reaches
+  only the **guard**, a small server that allows a fixed list of device actions. It never gets a shell
+  on the host.
+- Nothing is opened to the internet. The guard is reachable only inside your Tailscale network.
+- The agent leases devices, installs apps, taps and takes screenshots as if the devices were local.
+- You can watch the device live in a browser and take over (`tapdance view --tailscale`).
 
 ## Add a second host
 
@@ -538,6 +611,17 @@ agent's machine and host the devices elsewhere.
 
 When you are done with a rented machine, delete it and its disks: see
 [when you are done with a rented machine](self-hosted-overview.md#when-you-are-done-with-a-rented-machine).
+
+## What has been tested
+
+Proven: an agent on a Linux VPS tested a real app on the owner's Mac, Android and iOS
+([field runs](../testing/evidence/2026-11-02-vps-field-runs.md),
+[self-test through the guard](../testing/evidence/2026-11-03-selftest-through-guard.md)); a fresh
+Google Cloud N2 VM ([evidence](../testing/evidence/2026-11-03-gcp-n2-android.md)) and a fresh rented
+Mac mini ([evidence](../testing/evidence/2026-11-06-rented-mac-ios.md)) set up with `host-setup.sh`,
+each driven from a Mac and from a Linux VPS; one agent using two hosts at once
+([evidence](../testing/evidence/2026-11-07-two-hosts-android-ios.md)). Unit-tested only: `host pause`,
+`host resume` and `host down --all`. Please report what you find with `tapdance report`.
 
 ## Related
 
