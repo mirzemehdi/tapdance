@@ -326,7 +326,7 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
     },
     {
       id: "install",
-      title: "Wait for Scaleway to install macOS (often 20-60 min; nothing to do meanwhile)",
+      title: record.adopted ? "Wait until the Mac answers over ssh" : "Wait for Scaleway to install macOS (often 20-60 min; nothing to do meanwhile)",
       run: async () => {
         const s = await waitReady("macOS install", 150);
         record.ip = s.ip;
