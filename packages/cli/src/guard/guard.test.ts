@@ -557,6 +557,40 @@ describe("worker guard: hardening", () => {
     expect(execOf({ tool: "adb", args: ["logcat", "-t", "50"] }, policy)).toMatchObject({ ok: false });
   });
 
+  it("13a. installs take only this client's uploads, never a path on the host; diff reads no files (malicious client, MOCKED Simlock)", async () => {
+    const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 1, tokenDays: 7 } });
+    await t.allocate(t.alice.secret, A);
+    const forwarded = () => t.upstream.seen.filter((s) => s.path.endsWith("/v1/agent-device/rpc")).length;
+    const pre = await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/preflight", { sha256: "x" }, { "x-agent-device-lease-id": A });
+    const { uploadId } = (await pre.json()) as { uploadId: string };
+    const cmd = (command: string, positionals: string[], meta: Record<string, unknown> = {}) =>
+      t.rpc(t.alice.secret, "agent_device.command", { command, leaseId: A, positionals, meta: { leaseId: A, ...meta } });
+    // What agent-device's own client sends after uploading passes.
+    expect((await cmd("install", ["/Users/someone/app.apk"], { uploadedArtifactId: uploadId })).status).toBe(200);
+    expect((await cmd("reinstall", ["com.example.app", "./app.apk"], { uploadedArtifactId: uploadId })).status).toBe(200);
+    expect((await cmd("diff", ["snapshot"])).status).toBe(200);
+    const before = forwarded();
+    for (const [command, positionals, meta] of [
+      // No upload id: agent-device would install the path from this host's own disk.
+      ["install", ["/Users/owner/Library/Developer/Some.app"], {}],
+      ["install", ["remote:/Users/owner/x.apk"], {}],
+      ["reinstall", ["com.example.app", "/Users/owner/x.ipa"], {}],
+      // An upload id this client never made, or not a string.
+      ["install", ["x.apk"], { uploadedArtifactId: "00000000-0000-4000-8000-000000000000" }],
+      ["install", ["x.apk"], { uploadedArtifactId: { path: "/Users/owner/x.apk" } }],
+      ["install", ["x.apk"], { uploadedArtifactId: "../../Users/owner/x.apk" }],
+      // An install source would make the host fetch a URL or read a path.
+      ["install", ["x.apk"], { uploadedArtifactId: uploadId, installSource: { kind: "url", url: "http://169.254.169.254/" } }],
+      // diff screenshot reads image files on the host.
+      ["diff", ["screenshot", "/Users/owner/x.png"], {}],
+      ["diff", ["snapshot", "/Users/owner/x.json"], {}],
+    ] as Array<[string, string[], Record<string, unknown>]>) {
+      expect((await cmd(command, positionals, meta)).status, `${command} ${JSON.stringify([positionals, meta])}`).toBe(403);
+    }
+    // No refused request reached Simlock.
+    expect(forwarded()).toBe(before);
+  });
+
   it("13. uploads and artifacts belong to the client that created them (H-06)", async () => {
     const t = await setup({ limits: { maxSessions: 2, maxLeaseMinutes: 60, maxUploadMB: 1, tokenDays: 7 } });
     await t.allocate(t.alice.secret, A);
@@ -575,10 +609,10 @@ describe("worker guard: hardening", () => {
     // Mallory cannot push bytes into, finalize or install Alice's upload.
     expect((await t.call(t.mallory.secret, "PUT", `/v1/agent-device/upload/direct/${uploadId}`, "bytes", { "x-agent-device-lease-id": B })).status).toBe(403);
     expect((await t.call(t.mallory.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, { "x-agent-device-lease-id": B })).status).toBe(403);
-    expect((await t.rpc(t.mallory.secret, "agent_device.command", { command: "install", leaseId: B, positionals: [uploadId] })).status).toBe(403);
+    expect((await t.rpc(t.mallory.secret, "agent_device.command", { command: "install", leaseId: B, positionals: ["app.apk"], meta: { leaseId: B, uploadedArtifactId: uploadId } })).status).toBe(403);
     // Alice can.
     expect((await t.call(t.alice.secret, "POST", "/v1/agent-device/upload/finalize", { uploadId }, { "x-agent-device-lease-id": A })).status).toBe(200);
-    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "install", leaseId: A, positionals: [uploadId] })).status).toBe(200);
+    expect((await t.rpc(t.alice.secret, "agent_device.command", { command: "install", leaseId: A, positionals: ["app.apk"], meta: { leaseId: A, uploadedArtifactId: uploadId } })).status).toBe(200);
     // Artifacts: only the client whose command produced one can download it; unknown ids are refused.
     const shot = await t.rpc(t.alice.secret, "agent_device.command", { command: "screenshot", leaseId: A });
     expect(JSON.stringify(await shot.json())).toContain("art-aaaa");

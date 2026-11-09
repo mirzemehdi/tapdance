@@ -1026,6 +1026,16 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             await decide("deny", { reason: "upload belongs to another client", ...(call.command ? { command: call.command } : {}), leaseId: call.leaseId! });
             return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours");
           }
+          if (call.command === "install" || call.command === "reinstall") {
+            // rpcOf checked the shape; the upload must also be one this client made and the guard saw.
+            const meta = params["meta"] as Record<string, unknown>;
+            const uploadId = meta["uploadedArtifactId"] as string;
+            if (ownerOf(uploads, uploadId) !== token.id) {
+              await decide("deny", { reason: "install of an upload this client did not make", command: call.command, leaseId: call.leaseId! });
+              return send(res, 403, "FORBIDDEN", "refused: that upload is not one of yours, or it expired; upload the app again");
+            }
+            refresh(uploads, uploadId, token.id);
+          }
           await decide("allow", { command: call.command ?? call.method, ...(call.leaseId ? { leaseId: call.leaseId } : {}) });
           const owner_ = token.id;
           await forward(req, res, Buffer.from(JSON.stringify(parsed)), undefined, (text) => learnIds(text, "artifactId", artifacts, owner_));
@@ -1071,7 +1081,11 @@ export async function startGuard(options: GuardOptions): Promise<{ server: Serve
             }
             refresh(uploads, named, token.id);
             await decide("allow", { command: "upload finalize", leaseId: uploadLease });
-            await forward(req, res, body, undefined, (t) => learnIds(t, "artifactId", artifacts, owner_));
+            // The finalize reply names the installable upload id, which is not the one the upload started with.
+            await forward(req, res, body, undefined, (t) => {
+              learnIds(t, "artifactId", artifacts, owner_);
+              learnIds(t, "uploadId", uploads, owner_);
+            });
             return;
           }
           let seen = 0;
