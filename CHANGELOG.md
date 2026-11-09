@@ -8,7 +8,10 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
-## [Unreleased]
+## [0.2.1] - 2026-11-09
+
+A fix for the worker guard; update every host (`npm install -g tapdance-cli@latest`, then `tapdance
+host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machines on 0.2.0 and 0.2.1 work together.
 
 ### Changed
 
