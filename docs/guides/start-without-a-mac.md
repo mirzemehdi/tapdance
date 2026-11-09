@@ -14,6 +14,30 @@ iPhone, with only a laptop. The phones are emulators and simulators that run on 
 Only need Android? Skip step 3 and step 6, and every part marked **iOS only**. Then it takes about 30
 minutes and costs only the Google Cloud machine.
 
+## The short version
+
+| Step | What you do | Time |
+| --- | --- | --- |
+| 1 | Create three accounts: Google Cloud, Scaleway (iOS only) and Tailscale | 15 min, plus Scaleway's identity check |
+| 2 | Install Tapdance, Tailscale and `gcloud` on your laptop | 10 min |
+| 3 | Rent a Mac mini on Scaleway's website (iOS only) | 5 min, then about an hour of waiting |
+| 4–5 | Create the Android machine and run one setup command on it | 20 min |
+| 6 | Run one setup command on the Mac (iOS only) | 15 min |
+| 7–8 | Try a phone yourself, then add Tapdance to Claude Code | 5 min |
+| 9 | Ask your agent to test your app | – |
+| 10 | Delete the machines so they stop billing | 5 min |
+
+Each step below says exactly what to type and what you should see.
+
+**Want help along the way?** Paste this into Claude Code on your laptop:
+
+```text
+Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
+one step at a time. Run the commands meant for my laptop yourself, tell me exactly what to click in
+the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to. Ask before
+anything that costs money, and never print token files or passwords.
+```
+
 ## Before you start
 
 **What it costs.**
