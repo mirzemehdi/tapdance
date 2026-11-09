@@ -845,7 +845,18 @@ linux_user_manager
 
 # exec replaces this shell, so the EXIT trap never runs: remove the scratch folder first.
 rm -rf "$TMP"; trap - EXIT
+# Linux: a kvm group added above applies to new logins only. When this user is in it but this shell is
+# not (this login started before), run host up under `sg kvm`, so its /dev/kvm check and self-test pass
+# without logging out. Seen on a fresh Google Cloud VM made by `tapdance machine create`, 2026-11-09.
+RUN_HOST_UP=("${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}")
+if [[ "$OS" == Linux ]] && command -v sg >/dev/null 2>&1; then
+  in_db=" $(id -nG "$(id -un)" 2>/dev/null) "; in_shell=" $(id -nG 2>/dev/null) "
+  if [[ "$in_db" == *" kvm "* && "$in_shell" != *" kvm "* ]]; then
+    say "running host up with the kvm group (sg kvm): this login started before the group was added"
+    RUN_HOST_UP=(sg kvm -c "$(printf '%q ' "${RUN_HOST_UP[@]}")")
+  fi
+fi
 # Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
-if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
-exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"
+if [[ ! -t 0 ]] && have_tty; then exec "${RUN_HOST_UP[@]}" < /dev/tty; fi
+exec "${RUN_HOST_UP[@]}"
 }
