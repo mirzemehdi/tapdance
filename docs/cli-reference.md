@@ -856,8 +856,9 @@ destroy <name>` removes whatever was created so far. The machine's setup output 
 | `--cloud <gcp\|scaleway>` | Required. `gcp`: Android on a Google Cloud N2 VM. `scaleway`: iOS on a Scaleway Mac mini. |
 | `--name <name>` | The machine's name (1-20 lower-case letters, digits, dashes), also its connect target. Default `android` for gcp, `ios` for scaleway. Refused when this computer already has a connect target of that name that `machine` did not make. |
 | `--project <id>` | The Google Cloud project (default: `gcloud config get-value project`) or Scaleway project id (default: scw's). Use a project of its own for Tapdance if you can. |
-| `--zone <zone>` | gcp: default gcloud's `compute/zone`, else `us-central1-a`. scaleway: `fr-par-3`, where Scaleway's Macs are. |
-| `--type <type>` | gcp: the machine type (default `n2-standard-4`; N2 only, since nested virtualization needs Intel). scaleway: the Mac mini offer (default `M1-M`, 8 GB, one simulator at a time; `M2-M` has 16 GB). |
+| `--zone <zone>` | gcp: default gcloud's `compute/zone`, else `us-central1-a`. scaleway: default the first Mac zone (`fr-par-1`, `fr-par-3`) with the offer in stock. Every Mac zone is asked by name: `scw`'s `zone=all` does not list Macs in `fr-par-1`. |
+| `--type <type>` | gcp: the machine type (default `n2-standard-4`; N2 only, since nested virtualization needs Intel). scaleway: the Mac mini offer; default the cheapest offer in stock in any Mac zone (M1-M has 8 GB and holds one simulator at a time; M2-M and up have 16 GB or more). Out of stock everywhere: `NO_CAPACITY`, naming what is in stock. |
+| `--server-id <id>` | scaleway: set up a Mac mini you already rented (its id from the console, any Mac zone) instead of renting one. Nothing is rented, no key is added to your project and the deletion schedule is left as it is; if the Mac does not accept Tapdance's ssh key, it is added with one password login (the password from Scaleway's API reaches ssh through a throwaway `SSH_ASKPASS` helper, never on a command line or in a file). `destroy` later deletes that Mac, or schedules its deletion inside its first 24 hours. |
 | `--disk-gb <gb>` | gcp: boot disk size, 32-500 (default 64). |
 | `--idle-stop <minutes\|off>` | gcp: the host powers the VM off after this many minutes without a lease, request or build (default 30). Passed to `host up --idle-stop`. |
 | `--max-hours <hours\|off>` | gcp: Compute Engine stops the VM at the latest this many hours after each start, even if Tapdance cannot (default 8; `--max-run-duration` with `STOP`). |
@@ -942,8 +943,10 @@ machine auto off` turns it off and leaves the machines (remove them with `tapdan
 A lease that names a `--target`, and device profiles, never trigger auto mode.
 
 Status: `--cloud gcp` ran for real: create, stop, destroy, the leftovers check and auto mode (create on a
-lease, idle stop, start on a lease) ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)).
-`--cloud scaleway`, `--tailscale-key` and `--delete-after-days` are unit-tested only, with mocked
+lease, idle stop, start on a lease). `--cloud scaleway --server-id` ran for real on a Mac mini M2-L in
+`fr-par-1`: set up and connected in 8 min 37 s, the iOS checklists passed
+([evidence](testing/evidence/2026-11-09-byoc-self-run.md)). Renting a Mac with `create` (no
+`--server-id`), Scaleway's `destroy`, `--tailscale-key` and `--delete-after-days` are unit-tested only, with mocked
 `gcloud`, `scw` and ssh (`machine.test.ts`); the lease hook with a mocked provider (`tapdance.test.ts`).
 `destroy` logs the machine out of Tailscale, but Tailscale keeps listing it as offline until you delete
 it in the admin console (STATUS M-07).

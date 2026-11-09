@@ -1,4 +1,4 @@
-# Evidence: bring your own cloud, self-run (Google Cloud part) — 2026-11-09
+# Evidence: bring your own cloud, self-run — 2026-11-09
 
 Step 5.1 of [docs/hosting-plan.md](../../hosting-plan.md): `tapdance machine create / list / stop /
 start / destroy` and auto mode (`tapdance machine auto`), run for real against the owner's Google Cloud
@@ -8,9 +8,12 @@ linked billing on request and approved each machine in Tailscale. The same run c
 of [#153](https://github.com/mirzemehdi/tapdance/issues/153) (0.2.x on a real host) and checked the
 0.2.1 worker guard fix with a real install.
 
-**Not run:** the Scaleway (iOS) half of `machine create`, the iOS items of #153, and the fresh-reader
-check of the guide. The owner chose "Google Cloud only for now"; the Mac day waits for their go-ahead.
-Step 5.1 stays open in the hosting plan until it has run.
+Later that day (14:39–15:35 UTC) the iOS half ran on a Scaleway Mac mini the owner had rented in the
+console: `machine create --cloud scaleway --server-id` set it up and connected it, and the iOS checklists
+and the iOS items of #153 ran on it ([Scaleway](#scaleway-ios)). **Not run:** renting a Mac with `create`
+itself (the rent step, Scaleway's macOS install wait, the project ssh key, scheduled deletion) and
+Scaleway's `destroy`: the owner kept the Mac for the rest of its paid day. Step 5.1 stays open in the
+hosting plan until the rent path has run.
 
 ## Environment
 
@@ -94,6 +97,58 @@ answered **403** and none reached Simlock's `install`:
 | Idle stop | Last activity 02:15:40 UTC; the host powered the VM off at **02:27:08** (11 min 28 s, limit 10 min) |
 | A lease after the idle stop | Started the VM; guard answered in **39 s**; lease 97 s in all |
 
+## Scaleway (iOS)
+
+| | |
+| --- | --- |
+| Mac | The owner's Mac mini **M2-L** (M2 Pro, 16 GB), `apple-silicon-wizardly-shirley`, zone **`fr-par-1`**, rented in the console at 14:39 UTC (24-hour commitment, automatic deletion off). macOS 27.2, Xcode 27.0, iOS 27.0 runtime, iPhone 17 |
+| Agent's machine | The owner's Mac, `scw` 2.65.2 (Homebrew; logged in by the owner with `scw init`), scratch `TAPDANCE_HOME` |
+| Tapdance on the Mac | `tapdance-cli@0.2.1` from npm, Simlock 0.6.0, agent-device 0.21.36 |
+
+**Finding first:** `scw apple-silicon server list zone=all` returned nothing while this Mac ran in
+`fr-par-1`; `zone=fr-par-1` listed it. `scaleway-leftovers.sh` and `machine destroy`'s check used
+`zone=all`, so they would have reported "nothing left" while it billed. Fixed: every Mac zone is asked by
+name (the script then listed the Mac, `exit 1`). Stock on 2026-11-09: in `fr-par-1` only M4-S (low); in
+`fr-par-3` M2-M; M1-M out of stock in both. `create` now rents the cheapest offer in stock unless
+`--type`/`--zone` say otherwise.
+
+`tapdance machine create --cloud scaleway --server-id 55b6b4f7-… --label byoc-mac --yes` (new option):
+
+| Step | Time |
+| --- | --- |
+| ssh key for the Mac (not added to the project: an already rented Mac does not take project keys) | 0 s |
+| Use the Mac (nothing rented, deletion schedule unchanged) | 0 s |
+| Reach it: the owner's own keys were refused, so Tapdance's key was added with **one password login** (the password from Scaleway's API, handed to ssh through a throwaway `SSH_ASKPASS` helper; never printed or stored); then key login | 3 s |
+| Automatic login (`macos-auto-login.sh --password-stdin`), a temporary sudo rule, a restart through `scw`, the console login checked | 2 min 40 s |
+| `host-setup.sh --ios-only`: Xcode first launch, the iOS runtime, Tailscale (owner approved the link), `tapdance-cli@0.2.1`, `host up` with the self-test (first iOS lease about 60 s) | 5 min 48 s |
+| `connect` | 5 s |
+| **In all** | **8 min 37 s** |
+
+Checklists, through the guard on that Mac:
+
+| Driver | Result | Notes |
+| --- | --- | --- |
+| MCP `mcp-ios-base.json` | **29/30**, re-run **30/30** | The first run's `tap "Settings"` on the Home Screen got `ELEMENT_NOT_FOUND`: right after a fresh boot the accessibility tree held only status-bar items. The CLI tapped it 3 min later, and the re-run passed (5.9 s) |
+| MCP `mcp-ios-app.json` (`TapdanceDemo.app`, `dev.tapdance.demo`) | **28/28**, 3 skipped | upload and install 32.7 s; recording, launch with console, launch in de-DE |
+| CLI `base` (`PLATFORM=ios`) | **31/31** | |
+| CLI `app` | **32/32**, 3 skipped | install 12.7 s; uninstall |
+
+Leases: 1.4–6 s from a warm spare (the 16 GB Mac keeps one), 60–86 s when none was ready (clone and boot).
+
+**#153, iOS:**
+
+| Item | Result |
+| --- | --- |
+| Simulators | Simlock does not log the clone time on its own; a lease without a ready spare (clone + boot) took 60–86 s, the first lease of the kind about 60 s |
+| Landscape taps (#56 patch) | The demo's sign-in in landscape-left: typing into both fields and tapping "Sign in" landed, "Welcome, ada@example.com" in 0.5 s. **Partial**: the demo is a SwiftUI app, not one on the legacy compatibility screen the patch is for |
+| agent-device 0.21.36 | `handle_alert get` works (no alert was shown, so handling one was not exercised). A snapshot deeper than 64 levels: **not run** (no such app in the repository) |
+| Through the worker guard | A recording, screenshots and an app upload and install: PASS |
+| `host warm` / `doctor` | `host warm` read the default spare (`iPhone 17 / 27.0 (learned)`); `doctor` from the agent's machine: target `ios` up, guard answered in 54 ms, agent-device served |
+
+The Mac was kept for the rest of its paid day at the owner's request, so its `destroy` and the
+Scaleway leftovers check after it are not in this record. `scaleway-leftovers.sh` lists it (exit 1)
+until it is deleted.
+
 ## Tailscale
 
 `tailscale logout` on the machine (run by `destroy`) worked each time, but the tailnet kept every machine
@@ -117,7 +172,8 @@ name Tailscale really gave the machine. The three entries are the owner's to del
 
 ## Cost
 
-About 106 VM-minutes in all (run 1 ≈ 5, A ≈ 17, B ≈ 32, upgrade ≈ 4, auto ≈ 48) at about USD 0.21 an
+Scaleway: the owner's Mac mini M2-L, rented by them, EUR 0.21 an hour before VAT, at least EUR 5.04.
+Google Cloud: about 106 VM-minutes in all (run 1 ≈ 5, A ≈ 17, B ≈ 32, upgrade ≈ 4, auto ≈ 48) at about USD 0.21 an
 hour for an `n2-standard-4` in europe-west1, plus disks and IPs for the same time: **about USD 0.40**.
 An estimate from list prices; the billing page was not read. The project remains, empty (no cost).
 
@@ -133,8 +189,16 @@ An estimate from list prices; the billing page was not read. The project remains
 6. `machine destroy` claimed to remove the Tailscale node; it says "logged out" and what to delete.
 7. `machine destroy` listed another machine of Tapdance's as "not made by Tapdance".
 8. The auto-start notice said "it had stopped itself" when the owner had stopped it.
+9. Scaleway: `zone=all` hides Macs in `fr-par-1` from `scw` lists; `machine` and `scaleway-leftovers.sh`
+   now ask each Mac zone by name, and `create` picks the cheapest offer in stock.
+10. `machine create` could not set up a Mac the person had rented: `--server-id` (with a one-time password
+    login to add the key).
+11. `host warm` read back Simlock's held-back slots; it now shows the spares it set.
 
 ## Open, not fixed here
+
+- After `tapdance worker restart --force` mid-lease, Simlock still listed the lease (so `device status`
+  said Ready) while agent-device had dropped its session (so `release` said it had already ended).
 
 - The Tailscale node stays listed after `destroy` (above).
 - Auto mode needs a person to approve each new machine's Tailscale link, so an unattended agent waits

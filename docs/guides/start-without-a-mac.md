@@ -26,7 +26,7 @@ Skip everything marked **iOS only**.
   in, [gcloud](https://cloud.google.com/sdk/docs/install) and (iOS only)
   [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/), and your agent (Claude Code here).
 - **Cost:** about USD 0.20 an hour for the Android machine while it runs (it switches itself off when
-  idle), and EUR 3 a day for the Mac, at least one day.
+  idle), and EUR 3-6 a day for the Mac (the cheapest Mac mini in stock), at least one day.
 
 ## Set it up once
 
@@ -44,8 +44,8 @@ All on your laptop. Sections 1 and 2 below have the details for the first two st
 
 3. **Create the iPhone machine (iOS only).** It shows the cost and asks first. Start it first: Scaleway
    takes a while to install macOS. Kotlin Multiplatform app, or a private repository? See
-   [section 3](#3-create-the-iphone-machine-ios-only) for the options to add now. This part has been
-   tested with a stand-in for Scaleway only, not yet on a real account.
+   [section 3](#3-create-the-iphone-machine-ios-only) for the options to add now. Already rented a Mac in
+   the Scaleway console? Add `--server-id <its id>` to set that one up instead of renting another.
 
    ```bash
    tapdance machine create --cloud scaleway
@@ -130,8 +130,9 @@ files or passwords.
 **How sure this is.** The Android part ran for real on a Google Cloud account: `machine create` took
 about 6 minutes of work plus the Tailscale click, the agent's checklists passed, auto mode created,
 stopped and started the machine by itself, and `destroy` left nothing that bills
-([evidence](../testing/evidence/2026-11-09-byoc-self-run.md)). The iPhone part (`--cloud scaleway`) has been tested only with a stand-in for
-Scaleway so far. Each step it automates has run for real by hand (the
+([evidence](../testing/evidence/2026-11-09-byoc-self-run.md)). The iPhone part ran for real on a Scaleway Mac mini the owner had rented
+(`--server-id`): set up and connected in under 9 minutes, and the iOS checklists passed. Renting the
+Mac with `create` itself has been tested only with a stand-in for Scaleway so far. Each step it automates has run for real by hand (the
 [do it by hand](#under-the-hood-do-it-by-hand) section at the end). The agent in these runs was a test
 script, not Claude Code itself. Report what trips you up with `tapdance report`.
 
@@ -145,13 +146,17 @@ The sections below are the same steps in detail: what to type, and what you shou
   runs, an `n2-standard-4` ([N2 machine types](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)).
   It switches itself off after 30 minutes without use. Its 64 GB disk costs about USD 7 a month, even
   while the machine is off, until you destroy it.
-- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) (iOS only):** EUR 2.64 a day before
-  VAT for the smallest Mac mini, about EUR 3 with VAT. Apple's licence makes Scaleway bill at least 24
+- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) (iOS only):** from EUR 2.64 a day before
+  VAT for the smallest Mac mini (M1-M, often out of stock) to EUR 4.08 for an M2-M; `create` rents the
+  cheapest one in stock and tells you which and what it costs before you say yes. Apple's licence makes Scaleway bill at least 24
   hours, and the Mac cannot be deleted sooner. It bills until it is deleted, even when switched off.
   `create` asks before renting it, and sets it to be deleted by itself at the 24-hour mark.
 - **Tailscale:** free for personal use.
 
-A test day costs roughly EUR 3 for the Mac plus one or two dollars for Google Cloud.
+A test day costs roughly EUR 3-6 for the Mac plus one or two dollars for Google Cloud.
+
+These prices are approximate, read on 2026-11-09. Google and Scaleway change them: check
+[Google Cloud's N2 prices](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types) and [Scaleway's Mac mini prices](https://www.scaleway.com/en/pricing/apple-silicon/) before you start.
 
 **How long it takes.** About 10 minutes for the Android machine. About an hour for the Mac, most of it
 Scaleway installing macOS, when there is nothing for you to do; start it first and set up Android
@@ -253,9 +258,10 @@ Add options for the Mac's setup after `--`, now rather than after the Mac day ha
 It checks that `scw` is logged in, shows what it will rent and what it costs, and asks:
 
 ```text
-› Rent an iOS machine "ios" from Scaleway: a Mac mini M1-M in fr-par-3.
+› cheapest Mac mini in stock: M2-M in fr-par-3 (available)
+› Rent an iOS machine "ios" from Scaleway: a Mac mini M2-M in fr-par-3.
 ›   Scaleway bills a Mac mini for at least 24 hours, and you cannot delete it sooner (Apple's macOS licence).
-›   It bills until it is deleted, also while switched off: EUR 0.11 an hour before VAT (M1-M), ...
+›   It bills until it is deleted, also while switched off: EUR 0.17 an hour before VAT (M2-M), ...
 ›   It is scheduled for automatic deletion at the 24-hour mark, so a forgotten Mac costs one day (--keep turns that off).
 Rent it? You pay Scaleway for at least 24 hours. [y/N]
 ```
@@ -275,8 +281,9 @@ Machine ios is ready and connected.
   endpoint: https://tapdance-ios.tail1234.ts.net:4720
 ```
 
-The smallest Mac mini has room for one iPhone at a time, so it keeps no spare one running and each new
-iPhone takes one to two minutes to start. `--type M2-M` rents the 16 GB one (EUR 4.08 a day before VAT) instead.
+On a 16 GB Mac mini (M2-M and up) Tapdance keeps one iPhone booted as a spare, so the next one starts in
+seconds. The 8 GB M1-M has room for one iPhone at a time: there it keeps no spare, and each new iPhone
+takes one to two minutes to start. `--type` and `--zone` pick an offer yourself.
 
 ## 4. Create the Android machine
 

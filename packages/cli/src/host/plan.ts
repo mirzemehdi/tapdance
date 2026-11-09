@@ -517,13 +517,19 @@ export function withoutWarmSettings(config: Record<string, unknown>): { config: 
 export function describeWarm(
   config: Record<string, unknown> | undefined,
   pool: { enabled?: boolean; targets?: Array<{ platform?: string; model?: string; osVersion?: string; imageTag?: string; origin?: string; ready?: number; booting?: number }> } | undefined,
+  limits?: { android?: number; ios?: number },
 ): string {
   const warm = (config?.["warmPool"] ?? {}) as { enabled?: unknown; reserveRunning?: Record<string, unknown> };
   const set = WARM_KEYS.filter((k) => withoutWarmSettings(config ?? {}).removed.includes(k));
   const lines: string[] = [];
   if (warm.enabled === false) lines.push("Warm spares: off (tapdance host warm android=0,ios=0); idle devices shut down.");
   else if (set.length === 0) lines.push("Warm spares: Simlock's default: one booted spare of each device kind a lease used (learned from leases).");
-  else lines.push(`Warm spares: set by tapdance host warm (reserved running slots: android ${String(warm.reserveRunning?.["android"] ?? 0)}, ios ${String(warm.reserveRunning?.["ios"] ?? 0)}); spares are still the device kinds leases used.`);
+  else {
+    // Simlock stores slots held back from spares (limit - spares); show the spares that leaves (#153 run).
+    const held = { android: Number(warm.reserveRunning?.["android"] ?? 0), ios: Number(warm.reserveRunning?.["ios"] ?? 0) };
+    const spares = (p: "android" | "ios") => (limits?.[p] === undefined ? "?" : String(Math.max(0, limits[p]! - held[p])));
+    lines.push(`Warm spares: set by tapdance host warm: android ${spares("android")}, ios ${spares("ios")} (Simlock holds back android ${held.android} and ios ${held.ios} of its running slots); spares are the device kinds leases used.`);
+  }
   const targets = pool?.targets ?? [];
   if (pool === undefined) lines.push("The worker is not running, so there is no spare right now.");
   else if (targets.length === 0) lines.push(pool.enabled === false ? "No spares." : "No spare yet: the next lease boots a device, and the worker keeps one of that kind ready afterwards.");

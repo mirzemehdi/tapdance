@@ -496,5 +496,5 @@ export function scalewayPriceLine(type: string): string {
   const rate = SCALEWAY_HOURLY_EUR[type];
   return rate === undefined
     ? `${type}: see https://www.scaleway.com/en/pricing/apple-silicon/`
-    : `EUR ${rate.toFixed(2)} an hour before VAT (${type}), billed for at least 24 hours: EUR ${(rate * 24).toFixed(2)} at least`;
+    : `EUR ${rate.toFixed(2)} an hour before VAT (${type}, list price read 2026-11-09), billed for at least 24 hours: EUR ${(rate * 24).toFixed(2)} at least. Current prices: https://www.scaleway.com/en/pricing/apple-silicon/`;
 }

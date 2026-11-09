@@ -419,7 +419,9 @@ describe("rendering", () => {
     // Two kinds of one model are told apart by their image tag (#112).
     const both = { enabled: true, targets: [learned.targets[0]!, { ...learned.targets[0]!, imageTag: "google_apis", ready: 0 }] };
     expect(describeWarm({}, both)).toMatch(/android Pixel 8 \/ 34 \(no image tag\) \(learned\): ready 1\n {2}android Pixel 8 \/ 34 google_apis \(learned\): ready 0/);
-    expect(describeWarm({ warmPool: { enabled: true, reserveRunning: { android: 0, ios: 4 } } }, learned)).toMatch(/set by tapdance host warm \(reserved running slots: android 0, ios 4\)/);
+    expect(describeWarm({ warmPool: { enabled: true, reserveRunning: { android: 0, ios: 4 } } }, learned)).toMatch(/set by tapdance host warm: android \?, ios \? \(Simlock holds back android 0 and ios 4/);
+    // With the worker's limits it shows the spares the person asked for (android=1,ios=0 on a 1/2 host: #153 run).
+    expect(describeWarm({ warmPool: { enabled: true, reserveRunning: { android: 0, ios: 2 } } }, learned, { android: 1, ios: 2 })).toMatch(/set by tapdance host warm: android 1, ios 0 /);
     expect(describeWarm({ warmPool: { enabled: false } }, { enabled: false, targets: [] })).toMatch(/off[\s\S]*No spares\./);
     // Before the first lease, or after a reset that forgot the learned kind.
     expect(describeWarm({}, { enabled: true, targets: [] })).toMatch(/No spare yet: the next lease boots a device/);

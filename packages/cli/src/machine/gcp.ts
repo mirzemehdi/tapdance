@@ -373,5 +373,5 @@ export function gcpPriceLine(machineType: string, diskGb: number): string {
   const disk = gcpDiskHourly(diskGb) * 730;
   return run === undefined
     ? `${machineType}: see https://cloud.google.com/compute/vm-instance-pricing; disk about USD ${disk.toFixed(2)} a month until destroyed`
-    : `about USD ${run.toFixed(2)} an hour while it runs (${machineType}, us-central1 list price; Europe about 10 % more), plus about USD ${disk.toFixed(2)} a month for its ${diskGb} GB disk until you destroy it`;
+    : `about USD ${run.toFixed(2)} an hour while it runs (${machineType}, us-central1 list price read 2026-11-09; Europe about 10 % more), plus about USD ${disk.toFixed(2)} a month for its ${diskGb} GB disk until you destroy it. Current prices: https://cloud.google.com/compute/vm-instance-pricing`;
 }

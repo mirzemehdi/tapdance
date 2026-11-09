@@ -481,10 +481,11 @@ export async function resetWarm(
 export async function warmReport(): Promise<{ text: string; config?: Record<string, unknown>; warmPool?: unknown }> {
   const file = join(simlockHome(), "config.json");
   const config = existsSync(file) ? (safeJson(await readFile(file, "utf8").catch(() => "")) as Record<string, unknown> | undefined) : undefined;
-  const status = (await localWorkerStatus()) as { warmPool?: Parameters<typeof describeWarm>[1] } | undefined;
+  const status = (await localWorkerStatus()) as { warmPool?: Parameters<typeof describeWarm>[1]; capacity?: Record<string, { limit?: number }> } | undefined;
   const pool = status ? (status.warmPool ?? { targets: [] }) : undefined;
   const warmConfig = config?.["warmPool"] as Record<string, unknown> | undefined;
-  return { text: describeWarm(config, pool), ...(warmConfig ? { config: warmConfig } : {}), ...(pool ? { warmPool: pool } : {}) };
+  const limits = { ...(status?.capacity?.["android"]?.limit !== undefined ? { android: status.capacity["android"].limit } : {}), ...(status?.capacity?.["ios"]?.limit !== undefined ? { ios: status.capacity["ios"].limit } : {}) };
+  return { text: describeWarm(config, pool, limits), ...(warmConfig ? { config: warmConfig } : {}), ...(pool ? { warmPool: pool } : {}) };
 }
 
 /** Ends every lease on the local worker (Simlock's nuke without --delete-devices: keeps the seeds and saved baselines; since Simlock 0.6 each ended lease's device is deleted, as at any release). */
