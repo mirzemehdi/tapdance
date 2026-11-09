@@ -152,7 +152,7 @@ export async function ensureMachine(io: MachineIo, platform: Platform, progress:
       vm = await gcp.instance(rec);
     }
     if (vm && STOPPED.has(vm.status)) {
-      progress(`Auto mode: starting machine ${p.name} (it had stopped itself)…`);
+      progress(`Auto mode: starting machine ${p.name} (it was stopped)…`);
       await gcpStart(gcp, rec);
       if (!(await waitHealthy(io, rec.endpoint!, 240))) throw unreachable(p, rec, "started", shell);
       return { notice: `Started machine ${p.name} for this lease in ${secs()} s; it stops itself again when idle.` };

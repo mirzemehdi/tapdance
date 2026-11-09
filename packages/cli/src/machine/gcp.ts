@@ -252,6 +252,8 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       run: async () => {
         const remote = (c: string) => gcp.ssh(record, c, { timeoutMs: 90_000 });
         record.endpoint = await remoteEndpoint(remote);
+        // Tailscale may have named it tapdance-<name>-1 (an older node of that name is still listed).
+        record.tailscaleHostname = new URL(record.endpoint).hostname.split(".")[0] ?? record.tailscaleHostname;
         const c = await connectMachine(io, { endpoint: record.endpoint, target: record.target, label: record.label, platform: "android" }, remote);
         if (!c.ok) io.out.warn(`connect saved the machine, but some checks failed: ${c.checks.filter((x) => x.status === "fail").map((x) => `${x.name}: ${x.message ?? ""}`).join("; ")}`);
       },
