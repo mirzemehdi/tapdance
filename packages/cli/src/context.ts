@@ -16,14 +16,22 @@ export function output(opts: GlobalOptions): Output {
   return new Output(Boolean(opts.json), Boolean(opts.quiet));
 }
 
-export async function open(opts: GlobalOptions, out: Output, extra: { fleet?: boolean; owner?: "cli" | "cli-hold" } = {}): Promise<Tapdance> {
+export async function open(opts: GlobalOptions, out: Output, extra: { fleet?: boolean; owner?: "cli" | "cli-hold"; auto?: boolean } = {}): Promise<Tapdance> {
   return Tapdance.create({
     owner: extra.owner ?? "cli",
     ...(extra.fleet ? { fleet: true } : {}),
     ...(opts.config ? { configPath: opts.config } : {}),
     ...(opts.session ? { session: { id: sanitizeSessionId(opts.session), source: "--session" } } : {}),
     onProgress: (m) => out.progress(m),
+    ...(extra.auto === false ? {} : await autoOption(out)),
   });
+}
+
+/** Auto mode's lease hook (`tapdance machine auto`), loaded lazily so commands without it pay nothing. */
+async function autoOption(out: Output): Promise<{ machineAuto?: import("@tapdance/sdk").MachineAutoHook }> {
+  const { machineAutoOption } = await import("./commands-machine.js");
+  const hook = await machineAutoOption(out).catch(() => undefined);
+  return hook ? { machineAuto: hook } : {};
 }
 
 /**
@@ -50,7 +58,7 @@ export async function leaseWithNotices(t: Pick<Tapdance, "lease">, options: Omit
 export async function run(
   opts: GlobalOptions,
   body: (t: Tapdance, out: Output) => Promise<void>,
-  extra: { fleet?: boolean; owner?: "cli" | "cli-hold" } = {},
+  extra: { fleet?: boolean; owner?: "cli" | "cli-hold"; auto?: boolean } = {},
 ): Promise<void> {
   const out = output(opts);
   let tapdance: Tapdance | undefined;

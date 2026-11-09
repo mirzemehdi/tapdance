@@ -300,7 +300,7 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
       run: async () => {
         const remote = (c: string) => macSsh(io, record, c, { timeoutMs: 90_000 });
         record.endpoint = await remoteEndpoint(remote);
-        const c = await connectMachine(io, { endpoint: record.endpoint, target: record.target, label: record.label }, remote);
+        const c = await connectMachine(io, { endpoint: record.endpoint, target: record.target, label: record.label, platform: "ios" }, remote);
         if (!c.ok) io.out.warn(`connect saved the Mac, but some checks failed: ${c.checks.filter((x) => x.status === "fail").map((x) => `${x.name}: ${x.message ?? ""}`).join("; ")}`);
       },
     },

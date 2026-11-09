@@ -24,6 +24,13 @@ host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machine
   Scaleway's 24-hour minimum confirmed before renting and automatic deletion at the 24-hour mark
   (`--keep` turns it off), cost estimates in `list`. Tapdance never asks for, reads, prints or stores
   cloud credentials. Unit-tested with mocked cloud tools only; not yet run on a real account.
+- `tapdance machine auto on|off` (auto mode): a lease (CLI or MCP) that finds no host for the platform
+  starts the stopped machine, or creates one in the background and answers with a retryable error that
+  carries the Tailscale approval link; `--delete-after-days` destroys a long-stopped Android machine;
+  Macs only with `--accept-mac-day`. The SDK gains a generic `machineAuto` option for it
+  (`TapdanceOptions`); it holds no cloud code. Unit-tested only.
+- `machine create` checks that billing is on for the Google Cloud project, and connects with
+  `--platform`, so leases route to the right machine.
 - `host-setup.sh --tailscale-auth-key-stdin` (a pre-approved Tailscale auth key on stdin, handed to
   `tailscale up` through a mode-600 file deleted right after) and `--tailscale-hostname`.
 - `macos-auto-login.sh --password-stdin`.

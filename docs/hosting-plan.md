@@ -311,8 +311,9 @@ Ask me the decisions you need; commit only the docs, with my identity and no AI 
 run on the agent's machine (not on the host, so not under `tapdance host`). A create command with
 `--cloud gcp` (Android) or `--cloud scaleway` (iOS) creates the machine in the customer's own
 account with their own logged-in cloud CLI, sets it up, runs `host up`, and connects this machine's
-agent. A destroy command removes everything and checks that nothing billable is left. The 5.1
-session proposes the command names.
+agent. A destroy command removes everything and checks that nothing billable is left. The commands are
+`tapdance machine create --cloud gcp|scaleway`, `machine list`, `machine stop|start`, `machine destroy`,
+and for auto mode `machine auto on|off`.
 
 **Then, auto mode.** The same code runs on demand: when the agent asks for a phone and no machine
 for that platform is up, the CLI creates or starts one; after a set idle time it stops or deletes

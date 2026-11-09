@@ -38,7 +38,7 @@ Global flags for every command: `--json`, `-c, --config <path>`, `--session <id>
 | Scenarios | [`run`](#run) |
 | Hosting (on the host) | [`host up`](#host-up), [`host status / pause / resume / warm / builds / artifacts / token / gh-login / down`](#host) |
 | Hosting (on the agent's machine) | [`connect`](#connect), [`connect --list`](#connect), [`disconnect`](#connect) |
-| Machines in your own cloud (on the agent's machine) | [`machine create / list / stop / start / destroy`](#machine) |
+| Machines in your own cloud (on the agent's machine) | [`machine create / list / stop / start / destroy`](#machine), [`machine auto / auto on / auto off`](#machine-auto) |
 | Self-hosting | [`worker …`](#worker), [`worker guard …`](#worker), [`gateway …`](#gateway), [`simlock`](#simlock) |
 | External tools | [`tools`](#tools), [`tool`](#tool-asc-android), [`asc`](#tool-asc-android), [`android`](#tool-asc-android) |
 | Agents | [`mcp`](#mcp) (stdio), [`mcp --http`](#mcp) (Streamable HTTP) |
@@ -817,6 +817,11 @@ tapdance machine list [--project <id>]
 tapdance machine stop <name>
 tapdance machine start <name>
 tapdance machine destroy <name> [-y, --yes]
+tapdance machine auto
+tapdance machine auto on --platform android [--name <name>] [--project <id>] [--zone <zone>] [--type <type>]
+                         [--idle-stop <minutes|off>] [--max-hours <hours|off>] [--delete-after-days <days>] [-y, --yes]
+tapdance machine auto on --platform ios --accept-mac-day [--name <name>] [--project <id>] [--type <type>] [-y, --yes]
+tapdance machine auto off [--platform android|ios]
 ```
 
 On the agent's machine: makes a host in **your own** cloud account, with your own logged-in cloud CLI,
@@ -827,7 +832,8 @@ There is no Tapdance account and no server of ours: you pay Google or Scaleway d
 asks for, reads, prints or stores your cloud credentials; it runs `gcloud` and `scw` as you. This
 computer must already be in a [Tailscale](https://tailscale.com) network (tailnet).
 
-**`create`** checks that the cloud CLI is installed and logged in (and says how to log in if not), shows
+**`create`** checks that the cloud CLI is installed and logged in (and says how to log in if not), on Google Cloud
+that billing is on for the project (and how to link a billing account if not), shows
 what it will create and what it costs, and asks for confirmation (`--yes` skips it, for scripts). Then it
 runs these steps, printing each one and the time it took:
 
@@ -838,7 +844,7 @@ runs these steps, printing each one and the time it took:
 | 3. The VM `tapdance-<name>`: `n2-standard-4`, nested virtualization, Ubuntu 24.04, 64 GB `pd-balanced`, no service account, OS Login, Shielded VM, a stop after `--max-hours` per start | 3. Wait for Scaleway to install macOS |
 | 4. Wait until it answers over IAP SSH | 4. Automatic login (`macos-auto-login.sh --password-stdin`), a restart, and a check that the login session is there |
 | 5. Copy `host-setup.sh` to it and run it with `--yes`: Android SDK, emulator, image, Tailscale, Tapdance, `host up` (pairing, `tailscale serve`, self-test) | 5. Copy `host-setup.sh` to it and run it with `--ios-only --yes --allow-admin-account`: Xcode's first launch, an iOS runtime, Tailscale, Tapdance, `host up`; on the 8 GB M1-M also `--warm android=0,ios=0` |
-| 6. Read the endpoint (`host status --json`) and the pairing token over ssh, and run `tapdance connect --name <name>` with the token on stdin | 6. The same over ssh |
+| 6. Read the endpoint (`host status --json`) and the pairing token over ssh, and run `tapdance connect --name <name> --platform android` with the token on stdin | 6. The same over ssh, with `--platform ios` |
 
 If a step fails, it says which one and why, and the same command run again continues at that step
 (the record in `~/.tapdance/machines/<name>/machine.json` says which steps are done). `tapdance machine
@@ -902,8 +908,41 @@ when something of the machine is left or could not be checked. A Scaleway Mac in
 cannot be deleted: `destroy` schedules its deletion, says when, and keeps the record so `list` shows
 it until it is gone.
 
-Status: unit-tested with mocked `gcloud`, `scw` and ssh (`machine.test.ts`); not yet run on a real cloud
-account (STATUS M-07).
+#### `machine auto`
+
+Auto mode: when your agent asks for a phone (`device lease`, MCP `lease_device`) and no machine for
+that platform answers, this computer brings one up with your own `gcloud` or `scw`, the same code as
+`create` and `start`. Nothing of ours runs anywhere: it happens in the CLI or MCP server on this
+computer. The setting is in `~/.tapdance/machines/auto.json` (mode 600), never in a project's
+`tapdance.config.json`, so a repository cannot make you spend money.
+
+- **No connect target serves the platform, or its machine was never created:** it starts `tapdance
+  machine create … --yes` in the background (output in `~/.tapdance/machines/<name>/auto-create.log`)
+  and the lease fails at once with `PROVIDER_UNAVAILABLE`, retryable, saying how far the create got and,
+  once the setup prints it, the Tailscale link a person must open to approve the machine. A lease while
+  it runs gets the same answer; a second create never starts. Lease again when it is done.
+- **The machine is stopped** (it stopped itself when idle): it runs `gcloud compute instances start`,
+  waits until the guard answers (up to 4 minutes), and leases; the lease carries a notice such as
+  "Started machine android for this lease in 58 s".
+- **The machine runs but does not answer yet:** it waits up to 3 minutes, then fails with
+  `PROVIDER_UNREACHABLE` and how to check the host.
+- **The VM is gone from Google Cloud:** it removes what is left of it and creates a new one.
+- **iOS:** only with `--accept-mac-day`, since each new Mac bills at least 24 hours. A Mac is kept for
+  its paid day and deleted by Scaleway at the 24-hour mark (create schedules that); the next iOS lease
+  after that rents a new Mac. At most one Mac per auto setting.
+- **Idle:** the Android machine stops itself after `--idle-stop` minutes (default 30) and at the latest
+  `--max-hours` after each start, as with `create`. `--delete-after-days <days>` also destroys it once
+  it has been stopped that long (its disk bills about USD 7 a month while stopped). That check runs on
+  this computer when Tapdance does: `tapdance machine auto`, `tapdance machine list` and the start of
+  `tapdance mcp`.
+
+`tapdance machine auto on` checks the cloud CLI, shows what it will do and what it costs, and asks
+(`--yes` skips it). `tapdance machine auto` shows the setting and each machine's state; `tapdance
+machine auto off` turns it off and leaves the machines (remove them with `tapdance machine destroy`).
+A lease that names a `--target`, and device profiles, never trigger auto mode.
+
+Status: unit-tested with mocked `gcloud`, `scw` and ssh (`machine.test.ts`) and a mocked provider for
+the lease hook (`tapdance.test.ts`); not yet run on a real cloud account (STATUS M-07).
 
 ## External tools
 
@@ -2908,6 +2947,7 @@ Commands:
   list [options]                         List the machines this computer created, with cloud, type, state, age and an estimated cost so far
   stop <name>                            gcp: stop the VM (it then bills only its disk). Scaleway Macs cannot be stopped to save money
   start <name>                           gcp: start a stopped VM; Tailscale and the host come back by themselves
+  auto                                   Auto mode: when the agent asks for a phone and no machine for that platform is up, this computer starts the stopped machine or creates one in your cloud; it stops itself when idle. `machine auto` shows the setting
   destroy [options] <name>               Remove the machine and everything created for it (disk, network, firewall rule, ssh key, Tailscale node, connect target), then check that nothing billable is left
   help [command]                         display help for command
 ```
@@ -2991,6 +3031,67 @@ gcp: start a stopped VM; Tailscale and the host come back by themselves
 
 Options:
   -h, --help  display help for command
+```
+
+### `tapdance machine auto`
+
+```text
+Usage: tapdance machine auto [options] [command]
+
+Auto mode: when the agent asks for a phone and no machine for that platform is
+up, this computer starts the stopped machine or creates one in your cloud; it
+stops itself when idle. `machine auto` shows the setting
+
+Options:
+  -h, --help     display help for command
+
+Commands:
+  on [options]   Turn auto mode on for a platform: android (a Google Cloud N2
+                 VM) or ios (a Scaleway Mac mini, only with --accept-mac-day)
+  off [options]  Turn auto mode off (for one platform with --platform); existing
+                 machines stay, remove them with `tapdance machine destroy`
+```
+
+### `tapdance machine auto on`
+
+```text
+Usage: tapdance machine auto on [options]
+
+Turn auto mode on for a platform: android (a Google Cloud N2 VM) or ios (a
+Scaleway Mac mini, only with --accept-mac-day)
+
+Options:
+  --platform <platform>       android or ios
+  --cloud <cloud>             gcp for android, scaleway for ios (the default for
+                              each)
+  --name <name>               the machine's name (default: the platform)
+  --project <id>              Google Cloud or Scaleway project id (default: the
+                              CLI's)
+  --zone <zone>               as for machine create
+  --type <type>               as for machine create
+  --idle-stop <minutes|off>   android: stop the VM after this many idle minutes
+                              (default 30)
+  --max-hours <hours|off>     android: stop the VM at the latest this many hours
+                              after each start (default 8)
+  --delete-after-days <days>  android: destroy the machine once it has been
+                              stopped this many days (default: never)
+  --accept-mac-day            ios: agree that each new Mac auto mode rents bills
+                              at least 24 hours
+  -y, --yes                   do not ask for confirmation
+  -h, --help                  display help for command
+```
+
+### `tapdance machine auto off`
+
+```text
+Usage: tapdance machine auto off [options]
+
+Turn auto mode off (for one platform with --platform); existing machines stay,
+remove them with `tapdance machine destroy`
+
+Options:
+  --platform <platform>  android or ios (default: both)
+  -h, --help             display help for command
 ```
 
 ### `tapdance machine destroy`

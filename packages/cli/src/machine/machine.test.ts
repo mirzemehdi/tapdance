@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { TapdanceError } from "@tapdance/sdk";
 import { createSummary, machineCreate, machineDestroy, machineList, machineStop, parseCloud, parseIdleStop, parseMaxHours, renderDestroy } from "../commands-machine.js";
 import type { MachineIo } from "./common.js";
+import { autoHousekeeping, autoPolicyFrom, createArgs, ensureMachine, writeAuto } from "./auto.js";
 import { gcpCost, gcpRunningHourly, scalewayCost } from "./cost.js";
 import type { ExecOptions, ExecResult } from "./exec.js";
 import { shJoin } from "./exec.js";
@@ -27,9 +28,10 @@ interface Call {
 
 type Handler = (call: Call) => Partial<ExecResult> | undefined;
 
-async function fakeIo(handler: Handler, opts: { targets?: string[] } = {}) {
+async function fakeIo(handler: Handler, opts: { targets?: string[]; createRunning?: boolean; healthy?: () => boolean } = {}) {
   const home = await mkdtemp(join(tmpdir(), "td-machine-"));
   const calls: Call[] = [];
+  const spawned: string[][] = [];
   const progress: string[] = [];
   let clock = Date.parse("2026-11-09T10:00:00Z");
   const io: MachineIo = {
@@ -55,8 +57,14 @@ async function fakeIo(handler: Handler, opts: { targets?: string[] } = {}) {
     tailscaleBin: "/usr/bin/tailscale",
     targetNames: async () => opts.targets ?? [],
     readSecret: async () => TS_KEY,
+    spawnCreate: async (args: string[]) => {
+      spawned.push(args);
+      return 4242;
+    },
+    alive: (pid: number) => pid === 4242 && opts.createRunning === true,
+    healthz: async () => opts.healthy?.() ?? true,
   };
-  return { io, calls, progress, home };
+  return { io, calls, progress, home, spawned };
 }
 
 const has = (call: Call, ...parts: string[]) => parts.every((p) => call.args.includes(p));
@@ -151,7 +159,7 @@ describe("machine create --cloud gcp (mocked gcloud)", () => {
     expect(fw.args).toEqual(expect.arrayContaining(["--source-ranges=35.235.240.0/20", "--rules=tcp:22", "--target-tags=tapdance-android", "--description=tapdance-machine=android"]));
     expect(calls.some((c) => has(c, "services", "enable", "iap.googleapis.com"))).toBe(true);
     const connect = calls.find((c) => c.file === "node" && c.args.includes("connect"))!;
-    expect(connect.args).toEqual(["/cli/main.js", "--json", "connect", ENDPOINT, "--name", "android"]);
+    expect(connect.args).toEqual(["/cli/main.js", "--json", "connect", ENDPOINT, "--name", "android", "--platform", "android"]);
     expect(connect.input).toBe(`${TOKEN}\n`);
     expect(flat(calls)).not.toContain(TOKEN);
     expect(progress.join("\n")).toContain("https://login.tailscale.com/a/abc123");
@@ -386,5 +394,81 @@ describe("host-setup.sh --tailscale-auth-key-stdin (runs the real script, which 
     const r = await run("", ["--tailscale-hostname", "bad name;rm", "--check"]);
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("is not a host name");
+  });
+});
+
+describe("machine auto (mocked gcloud and scw)", () => {
+  const parsers = { idleStop: parseIdleStop, maxHours: parseMaxHours };
+
+  it("needs --accept-mac-day before it may rent Macs, and builds the create command from the policy", () => {
+    expect(() => autoPolicyFrom({ platform: "ios" }, parsers, new Date())).toThrow(/at least 24 hours/);
+    const { policy } = autoPolicyFrom({ platform: "android", project: "my-project", deleteAfterDays: "7" }, parsers, new Date());
+    expect(createArgs(policy)).toEqual(["machine", "create", "--cloud", "gcp", "--name", "android", "--yes", "--project", "my-project", "--idle-stop", "30", "--max-hours", "8"]);
+    expect(() => autoPolicyFrom({ platform: "ios", acceptMacDay: true, deleteAfterDays: "2" }, parsers, new Date())).toThrow(/for Android/);
+    expect(() => autoPolicyFrom({ platform: "android", cloud: "scaleway" }, parsers, new Date())).toThrow(/--cloud gcp/);
+  });
+
+  it("creates a missing machine in the background and answers with a retryable error", async () => {
+    const { io, spawned } = await fakeIo(gcloudOk());
+    await writeAuto(io, { android: autoPolicyFrom({ platform: "android", project: "my-project" }, parsers, io.now()).policy });
+    const err = await ensureMachine(io, "android", () => undefined).catch((e: unknown) => e as TapdanceError);
+    expect(err).toMatchObject({ code: "PROVIDER_UNAVAILABLE", retryable: true });
+    expect(err.message).toMatch(/Creating machine android for android/);
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]).toContain("--yes");
+  });
+
+  it("does not start a second create while one runs, and shows the Tailscale link from the setup log", async () => {
+    const { io, spawned } = await fakeIo(gcloudOk(), { createRunning: true });
+    await writeAuto(io, { android: autoPolicyFrom({ platform: "android", project: "my-project" }, parsers, io.now()).policy });
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    await mkdir(io.store.dir("android"), { recursive: true });
+    await writeFile(join(io.store.dir("android"), "auto-create.pid"), "4242\n");
+    await writeFile(join(io.store.dir("android"), "setup.log"), "To authenticate, visit:\n\thttps://login.tailscale.com/a/xyz789\n");
+    const err = await ensureMachine(io, "android", () => undefined).catch((e: unknown) => e as TapdanceError);
+    expect(err.message).toMatch(/Still creating/);
+    expect(err.hint).toContain("https://login.tailscale.com/a/xyz789");
+    expect(spawned).toHaveLength(0);
+  });
+
+  it("starts a stopped machine and waits for its guard", async () => {
+    const stopped = gcloudOk({ vm: true });
+    let started = false;
+    const handler: Handler = (c) => {
+      if (c.file === "gcloud" && has(c, "instances", "describe")) return { stdout: JSON.stringify({ name: "tapdance-android", zone: "z/us-central1-a", status: started ? "RUNNING" : "TERMINATED", machineType: "m/n2-standard-4", creationTimestamp: "2026-11-01T10:00:00Z", labels: { "tapdance-machine": "android" } }) };
+      if (c.file === "gcloud" && has(c, "instances", "start")) started = true;
+      return stopped(c);
+    };
+    const { io, calls } = await fakeIo(handler, { healthy: () => started });
+    await io.store.save({ version: 1, name: "android", cloud: "gcp", createdAt: "2026-11-01T10:00:00Z", project: "my-project", zone: "us-central1-a", machineType: "n2-standard-4", resourceName: "tapdance-android", label: "l", target: "android", tailscaleHostname: "tapdance-android", setupRef: "v0.2.0", endpoint: ENDPOINT, done: ["apis", "network", "vm", "ssh", "setup", "connect"], timings: {} });
+    await writeAuto(io, { android: autoPolicyFrom({ platform: "android", project: "my-project" }, parsers, io.now()).policy });
+    const r = await ensureMachine(io, "android", () => undefined);
+    expect(r.notice).toMatch(/Started machine android for this lease/);
+    expect(calls.some((c) => has(c, "instances", "start", "tapdance-android"))).toBe(true);
+  });
+
+  it("destroys an Android machine stopped longer than --delete-after-days, and nothing sooner", async () => {
+    const make = (stoppedAt: string) => (c: Call) => {
+      if (c.file === "gcloud" && has(c, "instances", "describe")) return { stdout: JSON.stringify({ name: "tapdance-android", zone: "z", status: "TERMINATED", machineType: "m/n2-standard-4", creationTimestamp: "2026-10-01T10:00:00Z", lastStopTimestamp: stoppedAt, labels: { "tapdance-machine": "android" } }) };
+      return gcloudOk({ vm: true })(c);
+    };
+    for (const [stoppedAt, destroyed] of [["2026-11-08T10:00:00Z", false], ["2026-10-20T10:00:00Z", true]] as const) {
+      const { io, calls } = await fakeIo(make(stoppedAt));
+      await io.store.save({ version: 1, name: "android", cloud: "gcp", createdAt: "2026-10-01T10:00:00Z", project: "my-project", zone: "us-central1-a", machineType: "n2-standard-4", resourceName: "tapdance-android", label: "l", target: "android", tailscaleHostname: "tapdance-android", setupRef: "v0.2.0", done: ["vm", "connect"], timings: {} });
+      await writeAuto(io, { android: autoPolicyFrom({ platform: "android", project: "my-project", deleteAfterDays: "7" }, parsers, io.now()).policy });
+      const msgs = await autoHousekeeping(io);
+      expect(calls.some((c) => has(c, "instances", "delete"))).toBe(destroyed);
+      expect(msgs.length > 0).toBe(destroyed);
+    }
+  });
+
+  it("refuses to rent a new Mac after the old one is gone unless the day was accepted", async () => {
+    const { io, spawned } = await fakeIo((c) => (c.file === "scw" && has(c, "server", "get") ? { code: 1, stderr: "404 not found" } : scwOk()(c)));
+    await io.store.save({ version: 1, name: "ios", cloud: "scaleway", createdAt: "2026-11-08T10:00:00Z", zone: "fr-par-3", machineType: "M1-M", resourceName: "tapdance-ios", label: "l", target: "ios", tailscaleHostname: "tapdance-ios", setupRef: "v0.2.0", serverId: "srv-1", done: ["connect"], timings: {} });
+    await writeAuto(io, { ios: { cloud: "scaleway", name: "ios", enabledAt: "x" } });
+    await expect(ensureMachine(io, "ios", () => undefined)).rejects.toThrow(/may not rent a new one/);
+    await writeAuto(io, { ios: { cloud: "scaleway", name: "ios", acceptMacDay: true, enabledAt: "x" } });
+    await expect(ensureMachine(io, "ios", () => undefined)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
+    expect(spawned).toHaveLength(1);
   });
 });

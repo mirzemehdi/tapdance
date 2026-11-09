@@ -12,21 +12,97 @@ own cloud accounts, one for each platform:
   └──────────────────────┘             └────────────────────────────────────────────┘
 ```
 
-Three commands do the work, from your laptop:
+You pay Google and Scaleway directly. There is no Tapdance account, and Tapdance never sees your
+cloud passwords or keys: it uses the `gcloud` and `scw` tools you are logged in to. Only need Android?
+Skip everything marked **iOS only**.
+
+## What you need
+
+- **Accounts:** [Google Cloud](https://console.cloud.google.com) with billing on, [Scaleway](https://console.scaleway.com)
+  with a payment method (iOS only), and [Tailscale](https://login.tailscale.com) with **HTTPS
+  Certificates** turned on (free).
+- **On your laptop (Linux or macOS):** [Node.js](https://nodejs.org) 22.13 or newer, Tailscale logged
+  in, [gcloud](https://cloud.google.com/sdk/docs/install) and (iOS only)
+  [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/), and your agent (Claude Code here).
+- **Cost:** about USD 0.20 an hour for the Android machine while it runs (it switches itself off when
+  idle), and EUR 3 a day for the Mac, at least one day.
+
+## Set it up once
+
+All on your laptop:
+
+1. **Log in to your clouds.** `gcloud init` (pick your project), and for iOS `scw init` (paste an API
+   key from the Scaleway console). Details: [step 2](#2-prepare-your-laptop).
+2. **Install Tapdance.**
+
+   ```bash
+   npm install -g tapdance-cli
+   ```
+
+3. **Create the iPhone machine (iOS only).** It shows the cost and asks first. Start it first: Scaleway
+   takes a while to install macOS.
+
+   ```bash
+   tapdance machine create --cloud scaleway
+   ```
+
+4. **Create the Android machine,** in a second terminal while the Mac installs:
+
+   ```bash
+   tapdance machine create --cloud gcp
+   ```
+
+   Each one prints a **Tailscale link** a few minutes in: open it and approve the machine. Each ends
+   with `Machine … is ready and connected.` Android takes about 10 minutes, the Mac about an hour.
+
+5. **Give Claude Code the Tapdance tools,** in your app's project folder. Start Claude Code and type
+   `/mcp`: you should see `tapdance`.
+
+   ```bash
+   claude mcp add tapdance -- "$(command -v node)" "$(command -v tapdance)" mcp
+   ```
+
+## Ask your agent
+
+Tell it what you want, in plain words, in your app's folder. For example: "Lease an Android phone,
+install app-debug.apk, sign up with a new account and take a screenshot of each screen. Then do the
+same on an iPhone with the iOS app built from our main branch." Building the iOS app on the Mac needs
+a one-time setup: [step 6](#6-ask-it-to-test-your-app).
+
+## When you are done
 
 ```bash
-tapdance machine create --cloud scaleway   # iPhones
-tapdance machine create --cloud gcp        # Android phones
-tapdance machine destroy ios               # and android, when you are done
+tapdance machine destroy android
+tapdance machine destroy ios
 ```
 
-Each `create` makes the machine in your account, installs everything on it, adds it to your private
-network and connects your laptop to it. Each `destroy` removes the machine and everything made for it,
-and checks that nothing is left that costs money. You pay Google and Scaleway directly. There is no
-Tapdance account, and Tapdance never sees your cloud passwords or keys: it uses the `gcloud` and `scw`
-tools you are logged in to.
+Each one removes the machine and everything made for it, and checks that nothing is left that costs
+money: **you should see** `Nothing billable left from this machine.` The Mac cannot be deleted in its
+first 24 hours; `destroy` then sets it to go as soon as Scaleway allows.
 
-Only need Android? Skip everything marked **iOS only**.
+## Or let it run by itself
+
+```bash
+tapdance machine auto on --platform android
+```
+
+From then on, when your agent asks for an Android phone and the machine is off, Tapdance starts it; if
+there is no machine, it creates one in the background and tells the agent to try again in a few
+minutes (the agent passes on the Tailscale link for you to approve). The machine switches itself off
+after 30 minutes without use. `--delete-after-days 7` also deletes it once it has been off a week, so
+its disk stops billing. For iPhones, `tapdance machine auto on --platform ios --accept-mac-day` lets it
+rent a Mac when needed; each new Mac costs at least one day. `tapdance machine auto` shows the setting,
+`tapdance machine auto off` turns it off.
+
+**Want help along the way?** Paste this into Claude Code on your laptop:
+
+```text
+Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
+("Set it up once") one step at a time. Run the commands meant for my laptop yourself, tell me exactly
+what to click in the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to.
+Ask before anything that costs money, give me each Tailscale link to approve, and never print token
+files or passwords.
+```
 
 **How sure this is.** These commands are new. They have been tested with stand-ins for Google Cloud and
 Scaleway, not yet on a real account. Each step they automate has run for real by hand (the
@@ -34,29 +110,7 @@ Scaleway, not yet on a real account. Each step they automate has run for real by
 Google Cloud and iOS on a Scaleway Mac mini were tested in one session. The agent in those runs was a
 test script, not Claude Code itself. Report what trips you up with `tapdance report`.
 
-## The short version
-
-| Step | What you do | Time |
-| --- | --- | --- |
-| 1 | Create three accounts: Google Cloud, Scaleway (iOS only) and Tailscale | 15 min, plus Scaleway's identity check |
-| 2 | Install Tapdance, Tailscale and `gcloud` on your laptop | 10 min |
-| 3 | Rent a Mac mini on Scaleway's website (iOS only) | 5 min, then about an hour of waiting |
-| 4–5 | Create the Android machine and run one setup command on it | 20 min |
-| 6 | Run one setup command on the Mac (iOS only) | 15 min |
-| 7–8 | Try a phone yourself, then add Tapdance to Claude Code | 5 min |
-| 9 | Ask your agent to test your app | – |
-| 10 | Delete the machines so they stop billing | 5 min |
-
-Each step below says exactly what to type and what you should see.
-
-**Want help along the way?** Paste this into Claude Code on your laptop:
-
-```text
-Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
-one step at a time. Run the commands meant for my laptop yourself, tell me exactly what to click in
-the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to. Ask before
-anything that costs money, and never print token files or passwords.
-```
+The sections below are the same steps in detail: what to type, and what you should see.
 
 ## Before you start
 
@@ -376,6 +430,8 @@ gcloud out with `gcloud auth revoke --all`: its login can reach your whole accou
 
 - **"gcloud is not logged in" or "scw cannot reach Scaleway":** run `gcloud init` or `scw init` again
   (step 2).
+- **"Billing is not turned on":** link a billing account to the project in the Google Cloud console
+  (**Billing > Link a billing account**). A Firebase project's billing account works too.
 - **Google Cloud says the quota for `N2_CPUS` is too low:** your new project needs a higher limit. Ask
   for 4 or more under **IAM & Admin > Quotas & system limits** in the console, or try another zone with
   `--zone europe-west1-b`.

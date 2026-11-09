@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { createInterface } from "node:readline/promises";
@@ -9,6 +10,7 @@ import { currentTargets } from "./connect-targets.js";
 import { readUserConfig } from "./commands-worker.js";
 import { defaultLabel } from "./host/plan.js";
 import { bold, dim, green, red, table, yellow, type Output } from "./output.js";
+import { autoHousekeeping, autoPolicyFrom, closeQuietly, describePolicy, machineAutoHook, openLog, readAuto, writeAuto, type AutoOnOptions } from "./machine/auto.js";
 import { assetPaths, confirmOrThrow, formatSeconds, localTailscaleBin, type MachineIo } from "./machine/common.js";
 import { age, money } from "./machine/cost.js";
 import { realExec, realSleep } from "./machine/exec.js";
@@ -62,6 +64,32 @@ export function defaultMachineIo(out: Output, verbose = false): MachineIo {
     verbose,
     tailscaleBin: localTailscaleBin(),
     readSecret,
+    spawnCreate: async (args, logFile) => {
+      const fd = openLog(logFile);
+      try {
+        const child = spawn(process.execPath, [CLI_ENTRY, ...args], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+        child.unref();
+        if (child.pid === undefined) throw new TapdanceError("INTERNAL", "Could not start the background machine create");
+        return child.pid;
+      } finally {
+        closeQuietly(fd);
+      }
+    },
+    alive: (pid) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    healthz: async (endpoint) => {
+      try {
+        return (await fetch(`${endpoint.replace(/\/$/, "")}/v1/healthz`, { signal: AbortSignal.timeout(5_000) })).ok;
+      } catch {
+        return false;
+      }
+    },
     targetNames: async () => currentTargets(await readUserConfig()).targets.map((t) => t.name),
   };
 }
@@ -337,6 +365,23 @@ export function renderDestroy(d: DestroyReport & { record: MachineRecord; clean:
   return lines.join("\n");
 }
 
+/** The SDK hook for auto mode, or undefined when it is off for every platform. */
+export async function machineAutoOption(out: Output): Promise<import("@tapdance/sdk").MachineAutoHook | undefined> {
+  const io = defaultMachineIo(out);
+  const config = await readAuto(io);
+  return config.android || config.ios ? machineAutoHook(io, config) : undefined;
+}
+
+/** Runs the auto mode housekeeping (delete-after-days), warning instead of failing. */
+export async function runHousekeeping(io: MachineIo): Promise<string[]> {
+  try {
+    return await autoHousekeeping(io);
+  } catch (error) {
+    io.out.warn(`Auto mode housekeeping: ${(error as Error).message.split("\n")[0]}`);
+    return [];
+  }
+}
+
 export function registerMachineCommands(program: Command, globals: () => GlobalOptions): void {
   const machine = program
     .command("machine")
@@ -393,7 +438,9 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
     .action(async (o: { project?: string }) => {
       const out = output(globals());
       try {
-        const { machines, warnings } = await machineList(defaultMachineIo(out), o);
+        const io = defaultMachineIo(out);
+        for (const m of await runHousekeeping(io)) out.progress(m);
+        const { machines, warnings } = await machineList(io, o);
         for (const w of warnings) out.warn(w);
         out.result({ machines }, () =>
           machines.length === 0
@@ -423,6 +470,78 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
         }
       });
   }
+
+  const auto = machine
+    .command("auto")
+    .description("Auto mode: when the agent asks for a phone and no machine for that platform is up, this computer starts the stopped machine or creates one in your cloud; it stops itself when idle. `machine auto` shows the setting")
+    .action(async () => {
+      const out = output(globals());
+      try {
+        const io = defaultMachineIo(out);
+        for (const m of await runHousekeeping(io)) out.progress(m);
+        const config = await readAuto(io);
+        const rows = await Promise.all((["android", "ios"] as const).filter((p) => config[p]).map(async (p) => ({ platform: p, policy: config[p]!, machine: await io.store.get(config[p]!.name) })));
+        out.result({ auto: config, machines: rows.map((r) => ({ platform: r.platform, name: r.policy.name, exists: r.machine !== undefined, done: r.machine?.done ?? [] })) }, () =>
+          rows.length === 0
+            ? "Auto mode is off. Turn it on with `tapdance machine auto on --platform android` (Google Cloud) or `--platform ios --accept-mac-day` (Scaleway)."
+            : rows.map((r) => `${describePolicy(r.platform, r.policy)}\n  now: ${r.machine ? (r.machine.done.includes("connect") ? "created" : `being created (${r.machine.done.length} of 6 steps)`) : "no machine yet"}`).join("\n"),
+        );
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  auto
+    .command("on")
+    .description("Turn auto mode on for a platform: android (a Google Cloud N2 VM) or ios (a Scaleway Mac mini, only with --accept-mac-day)")
+    .option("--platform <platform>", "android or ios")
+    .option("--cloud <cloud>", "gcp for android, scaleway for ios (the default for each)")
+    .option("--name <name>", "the machine's name (default: the platform)")
+    .option("--project <id>", "Google Cloud or Scaleway project id (default: the CLI's)")
+    .option("--zone <zone>", "as for machine create")
+    .option("--type <type>", "as for machine create")
+    .option("--idle-stop <minutes|off>", "android: stop the VM after this many idle minutes (default 30)")
+    .option("--max-hours <hours|off>", "android: stop the VM at the latest this many hours after each start (default 8)")
+    .option("--delete-after-days <days>", "android: destroy the machine once it has been stopped this many days (default: never)")
+    .option("--accept-mac-day", "ios: agree that each new Mac auto mode rents bills at least 24 hours")
+    .option("-y, --yes", "do not ask for confirmation")
+    .action(async (o: AutoOnOptions & { yes?: boolean }) => {
+      const out = output(globals());
+      try {
+        const io = defaultMachineIo(out);
+        const { platform, policy } = autoPolicyFrom(o, { idleStop: parseIdleStop, maxHours: parseMaxHours }, io.now());
+        if (policy.cloud === "gcp") policy.project = await gcpPreflight(io, policy.project);
+        else await scalewayPreflight(io);
+        out.progress(describePolicy(platform, policy));
+        out.progress(policy.cloud === "gcp" ? `cost: ${gcpPriceLine(policy.type ?? GCP_DEFAULTS.machineType, GCP_DEFAULTS.diskGb)}` : `cost: ${scalewayPriceLine(policy.type ?? SCALEWAY_DEFAULTS.machineType)} per Mac`);
+        await confirmOrThrow("Turn auto mode on? Tapdance will create or start machines in your account when your agent needs one.", o.yes, ask, process.stdin.isTTY === true);
+        const config = await readAuto(io);
+        config[platform] = policy;
+        await writeAuto(io, config);
+        out.result({ platform, policy }, () => `Auto mode is on for ${platform}. The next ${platform} lease brings machine ${policy.name} up if it is not.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
+
+  auto
+    .command("off")
+    .description("Turn auto mode off (for one platform with --platform); existing machines stay, remove them with `tapdance machine destroy`")
+    .option("--platform <platform>", "android or ios (default: both)")
+    .action(async (o: { platform?: string }) => {
+      const out = output(globals());
+      try {
+        const io = defaultMachineIo(out);
+        const config = await readAuto(io);
+        const platforms: Array<"android" | "ios"> | undefined = o.platform === undefined ? ["android", "ios"] : o.platform === "android" || o.platform === "ios" ? [o.platform] : undefined;
+        if (!platforms) throw new TapdanceError("USAGE", "--platform is android or ios");
+        for (const p of platforms) delete config[p];
+        await writeAuto(io, config);
+        out.result({ auto: config }, () => `Auto mode is off for ${platforms.join(" and ")}. Machines it made are still there: \`tapdance machine list\`.`);
+      } catch (error) {
+        process.exitCode = out.error(error);
+      }
+    });
 
   machine
     .command("destroy <name>")

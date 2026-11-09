@@ -86,6 +86,7 @@ export interface GcpInstance {
   machineType: string;
   creationTimestamp: string;
   lastStartTimestamp?: string;
+  lastStopTimestamp?: string;
   labels?: Record<string, string>;
   disks?: Array<{ diskSizeGb?: string }>;
 }
@@ -104,6 +105,12 @@ export async function gcpPreflight(io: MachineIo, projectFlag: string | undefine
     if (!project || project === "(unset)") throw new TapdanceError("USAGE", "No Google Cloud project chosen", { hint: "Pass --project <PROJECT_ID>, or set a default with `gcloud config set project <PROJECT_ID>`." });
   }
   if (!/^[a-z][-a-z0-9]{4,28}[a-z0-9]$/.test(project)) throw new TapdanceError("USAGE", `"${project}" is not a Google Cloud project id`);
+  const billing = await io.exec("gcloud", ["billing", "projects", "describe", project, "--format=value(billingEnabled)"], { timeoutMs: 30_000 });
+  if (billing.code === 0 && billing.stdout.trim().toLowerCase() === "false") {
+    throw new TapdanceError("HOST_CHECK_FAILED", `Billing is not turned on for Google Cloud project ${project}`, {
+      hint: `Link a billing account: in the console (Billing > Link a billing account), or \`gcloud billing accounts list\` and then \`gcloud billing projects link ${project} --billing-account=<ACCOUNT_ID>\`.`,
+    });
+  }
   return project;
 }
 
@@ -241,7 +248,7 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       run: async () => {
         const remote = (c: string) => gcp.ssh(record, c, { timeoutMs: 90_000 });
         record.endpoint = await remoteEndpoint(remote);
-        const c = await connectMachine(io, { endpoint: record.endpoint, target: record.target, label: record.label }, remote);
+        const c = await connectMachine(io, { endpoint: record.endpoint, target: record.target, label: record.label, platform: "android" }, remote);
         if (!c.ok) io.out.warn(`connect saved the machine, but some checks failed: ${c.checks.filter((x) => x.status === "fail").map((x) => `${x.name}: ${x.message ?? ""}`).join("; ")}`);
       },
     },

@@ -27,6 +27,12 @@ export interface MachineIo {
   targetNames: () => Promise<string[]>;
   /** Reads a secret with echo off, or from stdin when it is not a terminal. */
   readSecret: (prompt: string) => Promise<string>;
+  /** Auto mode: runs `tapdance <args>` detached, output to the log file; returns its pid. */
+  spawnCreate: (args: string[], logFile: string) => Promise<number>;
+  /** True while that process runs. */
+  alive: (pid: number) => boolean;
+  /** True when a guard answers at `<endpoint>/v1/healthz`. */
+  healthz: (endpoint: string) => Promise<boolean>;
 }
 
 /** The two scripts, from the npm package (dist/assets) or, in a source checkout, the repository. */
@@ -162,7 +168,7 @@ export function remoteTokenPath(label: string): string {
  */
 export async function connectMachine(
   io: MachineIo,
-  input: { endpoint: string; target: string; label: string },
+  input: { endpoint: string; target: string; label: string; platform: "android" | "ios" },
   remote: (command: string) => Promise<{ code: number; stdout: string; stderr: string }>,
 ): Promise<{ ok: boolean; checks: Array<{ name: string; status: string; message?: string }> }> {
   const t = await remote(`cat ${remoteTokenPath(input.label)}`);
@@ -172,7 +178,7 @@ export async function connectMachine(
       hint: `host up writes it to ${remoteTokenPath(input.label)}; the setup step may not have finished.`,
     });
   }
-  const r = await io.exec(io.self[0], [io.self[1], "--json", "connect", input.endpoint, "--name", input.target], { input: `${token}\n`, env: io.env, timeoutMs: 120_000 });
+  const r = await io.exec(io.self[0], [io.self[1], "--json", "connect", input.endpoint, "--name", input.target, "--platform", input.platform], { input: `${token}\n`, env: io.env, timeoutMs: 120_000 });
   const data = parseJson<{ ok?: boolean; checks?: Array<{ name: string; status: string; message?: string }>; error?: { message?: string; hint?: string } }>(r.stdout || "{}", "tapdance connect");
   if (data.error) throw new TapdanceError("HOST_CHECK_FAILED", `tapdance connect failed: ${data.error.message ?? "unknown error"}`, data.error.hint ? { hint: data.error.hint } : {});
   return { ok: data.ok === true, checks: data.checks ?? [] };
