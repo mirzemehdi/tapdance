@@ -62,7 +62,7 @@ Run the devices as a dedicated user, `tapdance`, with **no sudo rights**. Anythi
 make the worker run, runs as this user.
 
 `host-setup.sh` uses sudo for a few steps: system packages (git, unzip, and the emulator's libraries
-`libpulse0 libxkbfile1 libxi6 libsm6 libice6`), the Tailscale install and login, the `kvm` group, and
+`libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3`), the Tailscale install and login, the `kvm` group, and
 linger, which keeps the worker and guard running without a login session. On a machine it detects as
 a cloud VM it also asks for a sudoers rule for `systemctl poweroff` (the idle stop). A user without
 sudo cannot do these. So do them first, once, from the admin account:
@@ -72,7 +72,7 @@ sudo adduser --disabled-password tapdance
 sudo usermod -aG kvm tapdance
 sudo loginctl enable-linger tapdance
 sudo apt-get update
-sudo apt-get install -y git unzip curl libpulse0 libxkbfile1 libxi6 libsm6 libice6
+sudo apt-get install -y git unzip curl libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3
 curl -fsSL https://tailscale.com/install.sh | sh
 sudo tailscale up --operator=tapdance
 ```

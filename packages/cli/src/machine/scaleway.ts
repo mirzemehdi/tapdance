@@ -322,8 +322,10 @@ export async function scalewayDestroy(io: MachineIo, scw: Scaleway, record: Mach
   if (server && server.status === "ready" && record.ip && record.done.includes("install")) {
     io.out.progress("Logging the Mac out of Tailscale (removes it from your tailnet)…");
     const r = await macSsh(io, record, TAILSCALE_LOGOUT, { timeoutMs: 90_000 });
-    if (r.code === 0) removed.push(`Tailscale node ${record.tailscaleHostname} (logged out)`);
-    else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the Mac had not joined your tailnet, nothing to remove");
+    if (r.code === 0) {
+      removed.push(`Tailscale: ${record.tailscaleHostname} logged out`);
+      notes.push(`Tailscale may keep ${record.tailscaleHostname} listed as offline: delete it under Machines in the admin console (https://login.tailscale.com/admin/machines).`);
+    } else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the Mac had not joined your tailnet, nothing to remove");
     else notes.push(`Could not log ${record.tailscaleHostname} out of Tailscale; remove it under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);
   }
   io.out.progress(`Removing connect target ${record.target}…`);

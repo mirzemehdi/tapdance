@@ -61,7 +61,7 @@ export function createArgs(p: AutoPolicy): string[] {
   return a;
 }
 
-const LOGIN_URL = /https:\/\/login\.tailscale\.com\/\S+/;
+const LOGIN_URL = /https:\/\/login\.tailscale\.com\/a\/\S+/;
 const STOPPED = new Set(["TERMINATED", "STOPPED", "SUSPENDED"]);
 const BOOTING = new Set(["PROVISIONING", "STAGING", "RUNNING", "STOPPING", "SUSPENDING", "REPAIRING"]);
 

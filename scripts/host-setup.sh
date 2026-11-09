@@ -204,9 +204,9 @@ image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
 # The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
 # A fixed list per package manager (the same as `tapdance doctor`'s hint), checked by package, so on a
 # fresh machine the list is known before the emulator is installed and goes into the one question.
-EMULATOR_LIBS_APT=(libpulse0 libxkbfile1 libxi6 libsm6 libice6)
-EMULATOR_LIBS_DNF=(pulseaudio-libs libxkbfile libXi libSM libICE)
-EMULATOR_LIBS_PACMAN=(libpulse libxkbfile libxi libsm libice)
+EMULATOR_LIBS_APT=(libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3)
+EMULATOR_LIBS_DNF=(pulseaudio-libs libxkbfile libXi libSM libICE nss)
+EMULATOR_LIBS_PACMAN=(libpulse libxkbfile libxi libsm libice nss)
 # The emulator libraries this machine's package manager lacks, one per line (Linux only).
 missing_emulator_libs() {
   [[ "$OS" == Linux ]] || return 0
@@ -696,8 +696,15 @@ if (( ! SKIP_PREREQ )); then
           sudo usermod -aG kvm "$(id -un)"
           # The group applies to new logins only; an ACL lets this login and its running systemd user
           # manager (which starts the worker) use /dev/kvm now. A reboot drops the ACL; the group remains.
+          # Without setfacl (Ubuntu's cloud image has no acl package), restart the systemd user manager so it
+          # and the services it starts (the worker, the guard) pick up the new group; this login does not
+          # need it. Seen on a Google Cloud N2 VM made by `tapdance machine create`, 2026-11-09.
           if ! { command -v setfacl >/dev/null 2>&1 && sudo setfacl -m "u:$(id -un):rw" /dev/kvm; }; then
-            INSTALL_NOTES+=("log out and back in so the kvm group applies, then run this script again")
+            if systemctl is-active --quiet "user@$(id -u).service" 2>/dev/null && sudo systemctl restart "user@$(id -u).service"; then
+              say "restarted your systemd user manager so the worker it starts gets the kvm group"
+            else
+              INSTALL_NOTES+=("log out and back in so the kvm group applies, then run this script again")
+            fi
           fi ;;
         poweroff-rule) install_poweroff_rule ;;
       esac

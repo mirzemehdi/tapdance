@@ -114,7 +114,7 @@ export function localTailscaleBin(): string | undefined {
   return findTailscale();
 }
 
-const LOGIN_URL = /https:\/\/login\.tailscale\.com\/\S+/;
+const LOGIN_URL = /https:\/\/login\.tailscale\.com\/a\/\S+/;
 const INTERESTING = /^(host-setup:|TAPDANCE HOST READY|endpoint:|devices:|self-test:|cost guard:|error|warning|›|✓|✗|\[\d+\/\d+\])/i;
 
 /**

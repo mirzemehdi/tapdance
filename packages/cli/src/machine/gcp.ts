@@ -296,8 +296,10 @@ export async function gcpDestroy(io: MachineIo, gcp: Gcp, record: MachineRecord)
   if (vm?.status === "RUNNING") {
     io.out.progress("Logging the machine out of Tailscale (removes it from your tailnet)…");
     const r = await gcp.ssh(record, TAILSCALE_LOGOUT, { timeoutMs: 90_000 });
-    if (r.code === 0) removed.push(`Tailscale node ${record.tailscaleHostname} (logged out)`);
-    else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the machine had not joined your tailnet, nothing to remove");
+    if (r.code === 0) {
+      removed.push(`Tailscale: ${record.tailscaleHostname} logged out`);
+      notes.push(`Tailscale may keep ${record.tailscaleHostname} listed as offline: delete it under Machines in the admin console (https://login.tailscale.com/admin/machines).`);
+    } else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the machine had not joined your tailnet, nothing to remove");
     else notes.push(`Could not log ${record.tailscaleHostname} out of Tailscale; remove it under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);
   } else if (record.done.includes("setup")) {
     notes.push(`The VM was not running, so it could not log out of Tailscale: remove ${record.tailscaleHostname} under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);

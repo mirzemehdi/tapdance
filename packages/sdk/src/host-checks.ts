@@ -50,6 +50,8 @@ const EMULATOR_LIB_PACKAGES: Record<string, string> = {
   "libXi.so.6": "libxi6",
   "libSM.so.6": "libsm6",
   "libICE.so.6": "libice6",
+  // Emulator 37.2.13 on Ubuntu 24.04's cloud image (machine create, 2026-11-09).
+  "libnss3.so": "libnss3",
 };
 
 /** All packages the emulator needs on a minimal Ubuntu: installing them together avoids one lease failure per library. */
