@@ -1,6 +1,6 @@
 {
   "name": "@tapdance/sdk",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Programmatic Tapdance API: session-scoped device control for agents and tools.",
   "license": "AGPL-3.0-only",
   "type": "module",
