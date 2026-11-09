@@ -19,8 +19,9 @@ Skip everything marked **iOS only**.
 ## What you need
 
 - **Accounts:** [Google Cloud](https://console.cloud.google.com) with billing on, [Scaleway](https://console.scaleway.com)
-  with a payment method (iOS only), and [Tailscale](https://login.tailscale.com) with **HTTPS
-  Certificates** turned on (free).
+  with a payment method (iOS only; it may ask to verify your identity first, so sign up a day early), and
+  [Tailscale](https://login.tailscale.com) with **HTTPS Certificates** turned on (free; it gives your
+  machines `https://` addresses and the live view). New words are in the [glossary](../glossary.md).
 - **On your laptop (Linux or macOS):** [Node.js](https://nodejs.org) 22.13 or newer, Tailscale logged
   in, [gcloud](https://cloud.google.com/sdk/docs/install) and (iOS only)
   [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/), and your agent (Claude Code here).
@@ -29,10 +30,12 @@ Skip everything marked **iOS only**.
 
 ## Set it up once
 
-All on your laptop:
+All on your laptop. Sections 1 and 2 below have the details for the first two steps.
 
-1. **Log in to your clouds.** `gcloud init` (pick your project), and for iOS `scw init` (paste an API
-   key from the Scaleway console). Details: [step 2](#2-prepare-your-laptop).
+1. **Accounts and tools.** A Google Cloud project with billing on, a Scaleway account (iOS only) and a
+   Tailscale account ([section 1](#1-create-the-accounts)). On the laptop: Tailscale logged in, Node.js
+   22.13 or newer, `gcloud init` (pick your project), and for iOS `scw init` (paste an API key from the
+   Scaleway console) ([section 2](#2-prepare-your-laptop)).
 2. **Install Tapdance.**
 
    ```bash
@@ -40,24 +43,40 @@ All on your laptop:
    ```
 
 3. **Create the iPhone machine (iOS only).** It shows the cost and asks first. Start it first: Scaleway
-   takes a while to install macOS.
+   takes a while to install macOS. Kotlin Multiplatform app, or a private repository? See
+   [section 3](#3-create-the-iphone-machine-ios-only) for the options to add now. This part has been
+   tested with a stand-in for Scaleway only, not yet on a real account.
 
    ```bash
    tapdance machine create --cloud scaleway
    ```
 
-4. **Create the Android machine,** in a second terminal while the Mac installs:
+4. **Create the Android machine,** in a second terminal while the Mac installs. It goes in the zone
+   your gcloud is set to, else `us-central1-a`; add `--zone europe-west1-b` (or one near you) to choose.
 
    ```bash
    tapdance machine create --cloud gcp
    ```
 
-   Each one prints a **Tailscale link** a few minutes in: open it and approve the machine. Each ends
-   with `Machine … is ready and connected.` Android took about 6 minutes plus your click in the measured
-   run, the Mac about an hour.
+   Each one prints a **Tailscale link** when its setup reaches that point: open it and approve the
+   machine. For Android that is about 3 minutes in; for the Mac, after macOS is installed, often an hour
+   in. The command waits for you; if the link has expired by then, run the same command again for a new
+   one. Android takes about 10 minutes (6 of them work in the measured run, plus your click); the Mac
+   about an hour and a half.
 
-5. **Give Claude Code the Tapdance tools,** in your app's project folder. Start Claude Code and type
-   `/mcp`: you should see `tapdance`.
+5. **Let only your laptop reach the machines.** By default every machine in a tailnet can reach every
+   other, and these machines run your app's code. In the Tailscale admin console, under **Access
+   controls**, allow your laptop to reach them on port 4720 and nothing else, for example:
+
+   ```json
+   { "action": "accept", "src": ["<your laptop's 100.x address>"], "dst": ["tapdance-android:4720", "tapdance-ios:4720"] }
+   ```
+
+   Use the names `create` printed; the [threat model](../security/threat-model.md) explains the rule.
+
+6. **Give Claude Code the Tapdance tools,** in your app's project folder. If you already added it from
+   the README, skip this. Start Claude Code and type `/mcp`: you should see `tapdance`. The full paths
+   matter when Node.js came from nvm.
 
    ```bash
    claude mcp add tapdance -- "$(command -v node)" "$(command -v tapdance)" mcp
@@ -92,8 +111,10 @@ there is no machine, it creates one in the background and tells the agent to try
 minutes (the agent passes on the Tailscale link for you to approve). The machine switches itself off
 after 30 minutes without use. Each new machine still needs you to approve it in Tailscale: the agent
 passes the link on, so keep an eye on what it tells you. `--delete-after-days 7` also deletes it once it has been off a week, so
-its disk stops billing. For iPhones, `tapdance machine auto on --platform ios --accept-mac-day` lets it
-rent a Mac when needed; each new Mac costs at least one day. `tapdance machine auto` shows the setting,
+its disk stops billing. Auto mode keeps at most one machine per platform. Without `--delete-after-days`,
+a stopped Android machine is never deleted, and its disk bills about USD 7 a month. For iPhones,
+`tapdance machine auto on --platform ios --accept-mac-day` lets it rent a Mac when needed, one at a time;
+each new Mac costs at least one day. `tapdance machine auto` shows the setting,
 `tapdance machine auto off` turns it off.
 
 **Want help along the way?** Paste this into Claude Code on your laptop:
@@ -190,7 +211,7 @@ npm install -g tapdance-cli
 tapdance --version
 ```
 
-**You should see** a version such as `0.2.0`. The npm package called just `tapdance` is a different
+**You should see** a version such as `0.2.1`. The npm package called just `tapdance` is a different
 project, so install `tapdance-cli`.
 
 **gcloud, Google Cloud's command-line tool.** Install it from
@@ -222,6 +243,13 @@ Start this first, because Scaleway takes a while to install macOS:
 tapdance machine create --cloud scaleway
 ```
 
+Add options for the Mac's setup after `--`, now rather than after the Mac day has started:
+
+- **A Kotlin Multiplatform app:** `-- --android-build-sdk`. Its iOS build also configures the Android
+  parts and fails with "SDK location not found" without the Android SDK.
+- **A private repository** the Mac should build from: `-- --with-gh`, which installs the GitHub tool
+  for step 6. Both together: `-- --android-build-sdk --with-gh`.
+
 It checks that `scw` is logged in, shows what it will rent and what it costs, and asks:
 
 ```text
@@ -248,7 +276,7 @@ Machine ios is ready and connected.
 ```
 
 The smallest Mac mini has room for one iPhone at a time, so it keeps no spare one running and each new
-iPhone takes one to two minutes to start. `--type M2-M` rents the 16 GB one (EUR 4.08 a day) instead.
+iPhone takes one to two minutes to start. `--type M2-M` rents the 16 GB one (EUR 4.08 a day before VAT) instead.
 
 ## 4. Create the Android machine
 
@@ -267,7 +295,7 @@ create and what it costs, and asks `Create it?`. Answer `y`. It then:
    as a self-test. Here too it prints a **Tailscale link**: open it and approve `tapdance-android`;
 6. connects your laptop to it.
 
-**You should see** `Machine android is ready and connected.` after about 10 minutes.
+**You should see** `Machine android is ready and connected.` after about 10 minutes (6 of them work in the measured run, plus your click).
 
 If it stops with an error, it says which step failed and why. Fix what it names, then run the same
 command again: it continues where it stopped. Common ones are in [If something goes
@@ -329,10 +357,16 @@ and Cursor are in [connect your agent](../agents.md).
 
 The agent uploads the APK to the Android machine itself.
 
-**iOS: let the Mac build it from GitHub.** Do this once. The commands below log in to the Mac with
-`ssh m1@<mac-ip>`; for a Mac that `tapdance machine create` made, use the line it printed after
-"A shell on the machine" instead (also in `tapdance machine list --json`, as `shell`), for example
-`ssh -i ~/.tapdance/machines/ios/id_ed25519 m1@51.15.0.10 'tapdance host gh-login'`.
+**iOS: let the Mac build it from GitHub.** Do this once. The commands below log in to the Mac with the
+key `tapdance machine create` made for it. Find the Mac's address in the line it printed after "A
+shell on the machine", or with `tapdance machine list --json` (the `shell` field):
+
+```bash
+KEY=~/.tapdance/machines/ios/id_ed25519
+MAC=m1@<mac-ip>
+```
+
+A **public repository** needs no GitHub token: skip steps 1 and 2, and use `--git-auth none` in step 3.
 
 1. **If the repository is private, make a GitHub token.** On GitHub, open **Settings > Developer
    settings > Personal access tokens > Fine-grained tokens > Generate new token**. Pick only your app's
@@ -341,7 +375,7 @@ The agent uploads the APK to the Android machine itself.
    is not shown on screen:
 
    ```bash
-   ssh -t m1@<mac-ip> 'tapdance host gh-login'
+   ssh -t -i "$KEY" "$MAC" 'tapdance host gh-login'
    ```
 
    The prompt form has not been tried on a rented Mac yet. The form that has been tried passes the token
@@ -349,7 +383,7 @@ The agent uploads the APK to the Android machine itself.
 
    ```bash
    read -rs TOKEN
-   printf '%s' "$TOKEN" | ssh m1@<mac-ip> 'tapdance host gh-login'
+   printf '%s' "$TOKEN" | ssh -i "$KEY" "$MAC" 'tapdance host gh-login'
    unset TOKEN
    ```
 
@@ -358,8 +392,12 @@ The agent uploads the APK to the Android machine itself.
 3. **Allow builds of your repository** on the Mac:
 
    ```bash
-   ssh m1@<mac-ip> 'tapdance host builds enable --repo https://github.com/<you>/<your-app> --git-auth gh --allow-admin-account'
+   ssh -i "$KEY" "$MAC" 'tapdance host builds enable --repo https://github.com/<you>/<your-app> --git-auth gh --allow-admin-account'
    ```
+
+   `--allow-admin-account`: the rented Mac's only user is an administrator, which is fine on a Mac that
+   holds nothing of yours. The Mac needs the GitHub tool for `--git-auth gh`: create it with `-- --with-gh`
+   (section 3).
 
    It checks that the Mac can read the repository and warns if not.
 
@@ -368,7 +406,7 @@ The agent uploads the APK to the Android machine itself.
    For example, from your app's folder on the laptop:
 
    ```bash
-   ssh m1@<mac-ip> 'tapdance host builds files add --repo https://github.com/<you>/<your-app> iosApp/iosApp/GoogleService-Info.plist' < iosApp/iosApp/GoogleService-Info.plist
+   ssh -i "$KEY" "$MAC" 'tapdance host builds files add --repo https://github.com/<you>/<your-app> iosApp/iosApp/GoogleService-Info.plist' < iosApp/iosApp/GoogleService-Info.plist
    ```
 
    The second path is where the file belongs in the repository. The Mac copies it in before each build.

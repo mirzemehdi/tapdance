@@ -80,7 +80,7 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The computer your agent runs on** (a Mac, or Linux with KVM), with [Android Studio](https://developer.android.com/studio) | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another computer you own:** a Mac, a Mac mini, or a Linux PC or server with KVM | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | About USD 0.20 an hour while it runs (it switches itself off when idle), plus its disk until you delete it, paid to Google | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes (6 measured, plus one approval click) |
+| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | About USD 0.20 an hour while it runs (it switches itself off when idle), plus its disk until you delete it, paid to Google | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes (6 of them work in the measured run, plus one approval click) |
 
 **iPhones** run only on a Mac, with [Xcode](https://developer.apple.com/xcode/):
 
@@ -90,7 +90,8 @@ each platform you test. One machine can serve both, and your agent can use sever
 | **Another Mac or Mac mini you own** | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
 | **A Mac mini rented in your own [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) account**, with one command | About EUR 3 a day, 24 hours minimum, paid to Scaleway | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour (most of it Scaleway installing macOS) |
 
-With no Mac of your own, two commands make the machines in your own accounts and connect them, once
+With no Mac of your own, two commands make the machines in your own accounts and connect them, after a
+short setup: once
 [Tailscale](https://tailscale.com), [gcloud](https://cloud.google.com/sdk/docs/install) and
 [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/) are logged in on your computer:
 
@@ -152,7 +153,7 @@ When the setup is done, ask your agent something from the table above.
 
 ## Project status
 
-Tapdance is an early release, 0.1.x on npm. What has run for real:
+Tapdance is an early release, 0.2.x on npm. What has run for real:
 
 - The whole test loop on a Mac, with iPhone simulators and Android emulators.
 - An agent on one machine testing a real app on phones on another machine: the owner's Mac, Google
