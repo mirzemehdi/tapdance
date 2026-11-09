@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { TapdanceError, tapdanceHome } from "@tapdance/sdk";
@@ -114,11 +115,39 @@ export class MachineStore {
     await mkdir(dir, { recursive: true, mode: 0o700 });
     await chmod(dir, 0o700);
     const file = join(dir, "machine.json");
-    await writeFile(`${file}.tmp`, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
-    await rename(`${file}.tmp`, file);
+    // A temp name of its own: two processes saving at once (a background create and destroy) never
+    // write into the same temp file, so the rename always moves a whole record into place.
+    const tmp = `${file}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+    try {
+      await writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      await rename(tmp, file);
+    } catch (error) {
+      await rm(tmp, { force: true });
+      throw error;
+    }
   }
 
   async remove(name: string): Promise<void> {
     await rm(this.dir(name), { recursive: true, force: true });
+  }
+
+  /** `destroy` marks the machine while it runs, so a create still running stops before its next step. */
+  destroyingPath(name: string): string {
+    return join(this.dir(name), "destroying");
+  }
+
+  async markDestroying(name: string, pid: number): Promise<void> {
+    await mkdir(this.dir(name), { recursive: true, mode: 0o700 });
+    await writeFile(this.destroyingPath(name), `${pid}\n`, { mode: 0o600 });
+  }
+
+  async clearDestroying(name: string): Promise<void> {
+    await rm(this.destroyingPath(name), { force: true });
+  }
+
+  /** The pid of the destroy that marked the machine (the caller checks it still runs), or undefined. */
+  async destroyingPid(name: string): Promise<number | undefined> {
+    const pid = Number((await readFile(this.destroyingPath(name), "utf8").catch(() => "")).trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
   }
 }

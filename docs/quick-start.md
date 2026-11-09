@@ -1,7 +1,8 @@
 # Test your app on this computer
 
 Your agent and the phones run on the same computer: a Mac for iPhones and Android, or a Linux
-machine with KVM for Android. Tapdance starts clean iPhone simulators and Android
+machine with KVM for Android (Linux with the agent on the same machine has not been run end to end
+yet). Tapdance starts clean iPhone simulators and Android
 emulators for your agent, and gives them back wiped when it is done. Free, about 15 minutes if Xcode
 is already installed.
 

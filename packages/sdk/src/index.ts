@@ -1,4 +1,4 @@
-export { Tapdance, leaseCommand, summarize, type TapdanceOptions, type LeaseOptions, type DeviceSummary, type HumanRequest, type MachineAutoHook } from "./tapdance.js";
+export { Tapdance, leaseCommand, summarize, type TapdanceOptions, type LeaseOptions, type DeviceSummary, type HumanRequest, type MachineAutoHook, type MachineAutoInput } from "./tapdance.js";
 export { createProvider } from "./provider-factory.js";
 export { RoutingProvider, servedPlatforms, TARGET_PROBE_MS, type RouteTarget } from "./routing-provider.js";
 export { runKeepalive, renewIfDue, type KeepaliveOptions, type RenewOutcome } from "./keepalive.js";

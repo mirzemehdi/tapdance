@@ -26,7 +26,7 @@ Skip everything marked **iOS only**.
   in, [gcloud](https://cloud.google.com/sdk/docs/install) and (iOS only)
   [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/), and your agent (Claude Code here).
 - **Cost:** about USD 0.20 an hour for the Android machine while it runs (it switches itself off when
-  idle), and EUR 3-6 a day for the Mac (the cheapest Mac mini in stock), at least one day.
+  idle), and EUR 2.64-5.28 a day before VAT, depending on which Mac mini is in stock, at least one day.
 
 ## Set it up once
 
@@ -36,7 +36,7 @@ All on your laptop. Sections 1 and 2 below have the details for the first two st
    Tailscale account ([section 1](#1-create-the-accounts)). On the laptop: Tailscale logged in, Node.js
    22.13 or newer, `gcloud init` (pick your project), and for iOS `scw init` (paste an API key from the
    Scaleway console) ([section 2](#2-prepare-your-laptop)).
-2. **Install Tapdance.**
+2. **Install Tapdance** (0.3.0 or newer: older versions have no `tapdance machine`).
 
    ```bash
    npm install -g tapdance-cli
@@ -46,7 +46,9 @@ All on your laptop. Sections 1 and 2 below have the details for the first two st
    takes a while to install macOS. Kotlin Multiplatform app, or a private repository? See
    [section 3](#3-create-the-iphone-machine-ios-only) for the options to add now. Already rented a Mac in
    the Scaleway console? `create` finds it and asks whether to use it, so you do not pay for a second
-   day; `--server-id <its name or id>` picks one, `--new` rents another anyway.
+   day; `--server-id <its name or id>` picks one, `--new` rents another anyway. A Mac you bring this way
+   is deleted by `tapdance machine destroy ios` later, and Tapdance leaves its deletion schedule as it
+   is: without automatic deletion set in the Scaleway console, it bills until you destroy it.
 
    ```bash
    tapdance machine create --cloud scaleway
@@ -63,17 +65,21 @@ All on your laptop. Sections 1 and 2 below have the details for the first two st
    machine. For Android that is about 3 minutes in; for the Mac, after macOS is installed, often an hour
    in. The command waits for you; if the link has expired by then, run the same command again for a new
    one. Android takes about 10 minutes (6 of them work in the measured run, plus your click); the Mac
-   about an hour and a half.
+   about 1 to 1½ hours: Scaleway's macOS install (about an hour in earlier runs), then 10 to 20 minutes
+   of setup (8½ minutes measured on a Mac that was already installed).
 
 5. **Let only your laptop reach the machines.** By default every machine in a tailnet can reach every
    other, and these machines run your app's code. In the Tailscale admin console, under **Access
-   controls**, allow your laptop to reach them on port 4720 and nothing else, for example:
+   controls**, delete the default rule that lets every machine reach every other, then add a rule that
+   lets your laptop reach the two machines on port 4720:
 
    ```json
-   { "action": "accept", "src": ["<your laptop's 100.x address>"], "dst": ["tapdance-android:4720", "tapdance-ios:4720"] }
+   { "action": "accept", "src": ["<your laptop's 100.x address>"], "dst": ["<Android machine's 100.x address>:4720", "<Mac's 100.x address>:4720"] }
    ```
 
-   Use the names `create` printed; the [threat model](../security/threat-model.md) explains the rule.
+   The 100.x addresses are listed under **Machines**; use the machines `create` named (they may end in
+   `-1`). If you use your tailnet for other things, add rules for those too. The
+   [threat model](../security/threat-model.md) explains why.
 
 6. **Give Claude Code the Tapdance tools,** in your app's project folder. If you already added it from
    the README, skip this. Start Claude Code and type `/mcp`: you should see `tapdance`. The full paths
@@ -88,7 +94,7 @@ All on your laptop. Sections 1 and 2 below have the details for the first two st
 Tell it what you want, in plain words, in your app's folder. For example: "Lease an Android phone,
 install app-debug.apk, sign up with a new account and take a screenshot of each screen. Then do the
 same on an iPhone with the iOS app built from our main branch." Building the iOS app on the Mac needs
-a one-time setup: [step 6](#6-ask-it-to-test-your-app).
+a one-time setup first: [section 6](#6-ask-it-to-test-your-app), steps 1 to 4.
 
 ## When you are done
 
@@ -97,9 +103,10 @@ tapdance machine destroy android
 tapdance machine destroy ios
 ```
 
-Each one removes the machine and everything made for it, and checks that nothing is left that costs
-money: **you should see** `Nothing billable left from this machine.` The Mac cannot be deleted in its
-first 24 hours; `destroy` then sets it to go as soon as Scaleway allows.
+Each one removes the machine and everything made for it, and checks what is left that costs money. For
+Android **you should see** `Nothing billable left from this machine.` The Mac cannot be deleted in its
+first 24 hours: `destroy` then says `Left: the Mac mini, scheduled for deletion at <time>`, and it
+bills until then. (`destroy` on a Mac has not run on a real account yet.)
 
 ## Or let it run by itself
 
@@ -111,11 +118,13 @@ From then on, when your agent asks for an Android phone and the machine is off, 
 there is no machine, it creates one in the background and tells the agent to try again in a few
 minutes (the agent passes on the Tailscale link for you to approve). The machine switches itself off
 after 30 minutes without use. Each new machine still needs you to approve it in Tailscale: the agent
-passes the link on, so keep an eye on what it tells you. `--delete-after-days 7` also deletes it once it has been off a week, so
-its disk stops billing. Auto mode keeps at most one machine per platform. Without `--delete-after-days`,
-a stopped Android machine is never deleted, and its disk bills about USD 7 a month. For iPhones,
+passes the link on, so keep an eye on what it tells you. Auto mode keeps at most one machine per
+platform and never deletes one: a stopped Android machine keeps its disk, which bills about USD 6.40 a
+month, until you run `tapdance machine destroy android` yourself. `--delete-after-days 7` reminds you
+once it has been off a week. For iPhones,
 `tapdance machine auto on --platform ios --accept-mac-day` lets it rent a Mac when needed, one at a time;
-each new Mac costs at least one day. If your project already has a Mac, auto mode does not rent another:
+each new Mac costs at least one day (auto mode for iPhones has not run on a real account yet). If your
+project already has a Mac, auto mode does not rent another:
 it asks you to set that one up once with `--server-id`. `tapdance machine auto` shows the setting,
 `tapdance machine auto off` turns it off.
 
@@ -133,8 +142,10 @@ files or passwords.
 about 6 minutes of work plus the Tailscale click, the agent's checklists passed, auto mode created,
 stopped and started the machine by itself, and `destroy` left nothing that bills
 ([evidence](../testing/evidence/2026-11-09-byoc-self-run.md)). The iPhone part ran for real on a Scaleway Mac mini the owner had rented
-(`--server-id`): set up and connected in under 9 minutes, and the iOS checklists passed. Renting the
-Mac with `create` itself has been tested only with a stand-in for Scaleway so far. Each step it automates has run for real by hand (the
+(`--server-id`): set up and connected in under 9 minutes, and the iOS checklists passed. Not run on a
+real account yet: renting a Mac with `create` (the rent, the macOS install wait, the scheduled
+deletion), `destroy` on a Mac, and auto mode for iPhones. These are tested only
+with a stand-in for Scaleway and gcloud. Each step it automates has run for real by hand (the
 [do it by hand](#under-the-hood-do-it-by-hand) section at the end). The agent in these runs was a test
 script, not Claude Code itself. Report what trips you up with `tapdance report`.
 
@@ -146,22 +157,23 @@ The sections below are the same steps in detail: what to type, and what you shou
 
 - **[Google Cloud](https://cloud.google.com/compute):** about USD 0.20 an hour while the Android machine
   runs, an `n2-standard-4` ([N2 machine types](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)).
-  It switches itself off after 30 minutes without use. Its 64 GB disk costs about USD 7 a month, even
+  It switches itself off after 30 minutes without use. Its 64 GB disk costs about USD 6.40 a month, even
   while the machine is off, until you destroy it.
-- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) (iOS only):** from EUR 2.64 a day before
-  VAT for the smallest Mac mini (M1-M, often out of stock) to EUR 4.08 for an M2-M; `create` rents the
+- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) (iOS only):** EUR 2.64-5.28 a day
+  before VAT, depending on which Mac mini is in stock (M1-M 2.64, often out of stock; M2-M 4.08; M2-L
+  5.04; M4-S 5.28); `create` rents the
   cheapest one in stock and tells you which and what it costs before you say yes. Apple's licence makes Scaleway bill at least 24
   hours, and the Mac cannot be deleted sooner. It bills until it is deleted, even when switched off.
   `create` asks before renting it, and sets it to be deleted by itself at the 24-hour mark.
 - **Tailscale:** free for personal use.
 
-A test day costs roughly EUR 3-6 for the Mac plus one or two dollars for Google Cloud.
+A test day costs EUR 2.64-5.28 (before VAT) for the Mac plus one or two dollars for Google Cloud.
 
 These prices are approximate, read on 2026-11-09. Google and Scaleway change them: check
 [Google Cloud's N2 prices](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types) and [Scaleway's Mac mini prices](https://www.scaleway.com/en/pricing/apple-silicon/) before you start.
 
-**How long it takes.** About 10 minutes for the Android machine. About an hour for the Mac, most of it
-Scaleway installing macOS, when there is nothing for you to do; start it first and set up Android
+**How long it takes.** About 10 minutes for the Android machine. About 1 to 1½ hours for the Mac, most
+of it Scaleway installing macOS, when there is nothing for you to do; start it first and set up Android
 meanwhile. Building your iOS app on the Mac adds 10 to 60 minutes the first time: a Kotlin
 Multiplatform app's first build took 9 minutes on the smallest Mac mini.
 
@@ -218,7 +230,7 @@ npm install -g tapdance-cli
 tapdance --version
 ```
 
-**You should see** a version such as `0.2.1`. The npm package called just `tapdance` is a different
+**You should see** `0.3.0` or newer. The npm package called just `tapdance` is a different
 project, so install `tapdance-cli`.
 
 **gcloud, Google Cloud's command-line tool.** Install it from
@@ -239,8 +251,9 @@ see** your project ID when you run `gcloud config get-value project`.
 scw init
 ```
 
-It asks for an API key: create one in the Scaleway console under **IAM > API keys** and paste it there.
-The key stays in scw's own config file; Tapdance never reads it.
+It asks for an API key. In the Scaleway console, under **IAM > API keys**, generate a key for
+**yourself** (so it has your permissions). `scw init` asks for its access key and secret key, then your
+default organization, project and zone. The key stays in scw's own config file; Tapdance never reads it.
 
 ## 3. Create the iPhone machine (iOS only)
 
@@ -296,7 +309,7 @@ tapdance machine create --cloud gcp
 It uses the project `gcloud` is set to (`--project <PROJECT_ID>` picks another), shows what it will
 create and what it costs, and asks `Create it?`. Answer `y`. It then:
 
-1. turns on the Compute Engine API in your project;
+1. turns on the Compute Engine, IAP and OS Login APIs in your project;
 2. makes a private network that only Google's own SSH service can enter;
 3. creates the machine `tapdance-android`;
 4. waits until it answers;
@@ -310,10 +323,8 @@ If it stops with an error, it says which step failed and why. Fix what it names,
 command again: it continues where it stopped. Common ones are in [If something goes
 wrong](#if-something-goes-wrong).
 
-Once both machines are in your Tailscale network, you can make it safer: by default every machine in a
-tailnet can reach every other, and the rented machines run your app, so change the **Access controls**
-so that only your laptop can reach them, on port 4720. The [threat model](../security/threat-model.md)
-has the rule to paste.
+Once both machines are in your Tailscale network, let only your laptop reach them:
+[step 5 of "Set it up once"](#set-it-up-once) has the rule.
 
 ## 5. Try both phones, then connect your agent
 
@@ -406,7 +417,8 @@ A **public repository** needs no GitHub token: skip steps 1 and 2, and use `--gi
 
    `--allow-admin-account`: the rented Mac's only user is an administrator, which is fine on a Mac that
    holds nothing of yours. The Mac needs the GitHub tool for `--git-auth gh`: create it with `-- --with-gh`
-   (section 3).
+   (section 3). Created it without? Install the tool on the Mac yourself: `ssh -i "$KEY" "$MAC" 'brew
+   install gh'` if Homebrew is there, else from [cli.github.com](https://cli.github.com).
 
    It checks that the Mac can read the repository and warns if not.
 
@@ -466,7 +478,8 @@ tapdance machine destroy ios
 
 Each `destroy` asks first, then logs the machine out of Tailscale, removes it from your laptop, deletes
 it with everything made for it (its disk, network and firewall rule on Google Cloud; its ssh key on
-Scaleway), and checks your account. **You should see** `Nothing billable left from this machine.` It
+Scaleway), and checks your account. For Android **you should see** `Nothing billable left from this
+machine.` It
 also lists other things in your project that cost money, such as your other machine; it leaves those
 alone.
 
@@ -488,7 +501,8 @@ gcloud out with `gcloud auth revoke --all`: its login can reach your whole accou
   `--zone europe-west1-b`.
 - **Google Cloud says nested virtualization is not allowed:** your Google account belongs to an
   organization that forbids it. Use a personal Google account and a new project.
-- **Scaleway has no Mac in stock:** try `--type M2-M`, or later.
+- **Scaleway has no Mac in stock:** `create` names the offers in stock: pick one with `--type` and
+  `--zone`, or try later.
 - **The Tailscale link timed out:** run the same `create` command again and open the new link.
 - **Old machines stay listed in Tailscale:** `destroy` logs the machine out, but Tailscale keeps it as
   offline, and a new machine then gets a name like `tapdance-android-1`. Delete the old entries under
@@ -512,7 +526,7 @@ Everything else: [troubleshooting](../troubleshooting.md). The words used here a
 What `tapdance machine create` does, and how to do it yourself, for example on another cloud or to see
 each step. The full reference is [`tapdance machine`](../cli-reference.md#machine).
 
-**On Google Cloud** it runs your `gcloud`: it turns on the Compute Engine and IAP APIs, creates a
+**On Google Cloud** it runs your `gcloud`: it turns on the Compute Engine, IAP and OS Login APIs, creates a
 network, subnet and firewall rule called `tapdance-android` (the rule lets only Google's IAP range
 `35.235.240.0/20` reach SSH), creates the VM `tapdance-android` with nested virtualization, no service
 account, OS Login and a stop 8 hours after each start, labelled `tapdance-machine=android`, copies
@@ -548,7 +562,7 @@ account for simulators. Keep the password private; you need it in D.
 With automatic deletion, the Mac is gone after 24 hours. To test again another day, rent a new one and
 repeat A and D. Running `tapdance connect … --name mac` with the new
 Mac's address replaces the old one on your laptop. Turn automatic deletion off if you want to keep the
-Mac longer: it keeps billing about EUR 3 a day.
+Mac longer: it keeps billing, EUR 2.64 a day before VAT for an M1-M.
 
 ### By hand B. Start the Android machine on Google Cloud
 

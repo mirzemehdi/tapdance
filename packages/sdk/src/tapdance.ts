@@ -40,7 +40,7 @@ import {
   type DeviceOperation,
   type DeviceOperationResult, type TimedTap, type AppBuildRequest, type AppBuildResult, type AppCiInstallRequest, type AppCiInstallResult } from "@tapdance/core";
 import { aabToApk } from "./bundletool.js";
-import { PROFILE_PROVIDER, ProfileProvider, isNotableBuildLine } from "@tapdance/provider-simlock";
+import { PROFILE_PROVIDER, ProfileProvider, defaultProfilePath, isNotableBuildLine } from "@tapdance/provider-simlock";
 import { auditScreen, type AuditReport } from "./audit.js";
 import { hostChecks } from "./host-checks.js";
 import { findTool, runTool, type ToolRun } from "./tools.js";
@@ -81,10 +81,29 @@ export interface MachineAutoHook {
    * for the lease. Throws a retryable TapdanceError when the host is not ready yet (a machine being
    * created), with what the person must do, if anything.
    */
-  ensure(input: { platform: Platform; reason: "no-target" | "unreachable"; error?: TapdanceError }, progress: (message: string) => void): Promise<{ notice?: string }>;
+  ensure(input: MachineAutoInput, progress: (message: string) => void): Promise<{ notice?: string }>;
 }
 
-/** Lease errors after which auto mode may bring a host up and retry once. */
+/**
+ * What the SDK tells the auto-mode hook, so it can tell "no host serves this platform" (it may create
+ * a machine) from "a host answered and refused" (it must not: rethrow the error).
+ */
+export interface MachineAutoInput {
+  platform: Platform;
+  reason: "no-target" | "unreachable";
+  /** The lease error, for reason "unreachable". */
+  error?: TapdanceError;
+  /** The configured provider kind (local, self-hosted). */
+  provider: string;
+  /** The hosts this computer is configured to use: its connect targets, or its single endpoint. */
+  targets: Array<{ name: string; endpoint: string; platforms?: Platform[] }>;
+  /** provider local and this computer has a local worker (its Simlock profile exists). */
+  localWorker: boolean;
+  /** The connect target the lease error came from, when the SDK can tell. */
+  failedTarget?: string;
+}
+
+/** Lease errors after which auto mode is asked; it brings a host up and retries once, or rethrows. */
 const AUTO_RETRY_CODES: ReadonlySet<string> = new Set(["PROVIDER_UNREACHABLE", "DEVICE_UNAVAILABLE", "WORKER_OFFLINE"]);
 
 /** The longest `waitFor` (10 minutes): an audio preview, a slow sync. */
@@ -277,10 +296,34 @@ export class Tapdance {
     if (!o.provider) this.providerPromise = undefined;
   }
 
+  /** Whether a host is configured for the platform: a connect target, a single endpoint, or a local worker. */
   private targetServes(platform: Platform): boolean {
     const r = this.resolvedConfig;
-    if (r.targets.length === 0) return r.config.provider !== "self-hosted" ? false : Boolean(r.config.endpoint);
+    if (r.targets.length === 0) {
+      if (r.config.provider === "local") return this.hasLocalWorker();
+      return r.config.provider === "self-hosted" && Boolean(r.config.endpoint);
+    }
     return r.targets.some((t) => !t.platforms || t.platforms.includes(platform));
+  }
+
+  /** provider local with a local worker set up on this computer (its Simlock profile exists). */
+  private hasLocalWorker(): boolean {
+    const { config } = this.resolvedConfig;
+    return config.provider === "local" && existsSync(config.simlock.profilePath ?? defaultProfilePath(this.options.env ?? process.env));
+  }
+
+  /** The hook's view of the configured hosts, and which one an error came from. */
+  private autoInput(platform: Platform, reason: MachineAutoInput["reason"], error?: TapdanceError): MachineAutoInput {
+    const r = this.resolvedConfig;
+    const targets: MachineAutoInput["targets"] =
+      r.targets.length > 0
+        ? r.targets.map((t) => ({ name: t.name, endpoint: t.endpoint, ...(t.platforms ? { platforms: t.platforms } : {}) }))
+        : r.config.provider === "self-hosted" && r.config.endpoint
+          ? [{ name: r.config.endpoint, endpoint: r.config.endpoint }]
+          : [];
+    const named = error?.details?.["target"];
+    const failedTarget = typeof named === "string" ? named : error && r.targets.length === 1 ? r.targets[0]!.name : undefined;
+    return { platform, reason, ...(error ? { error } : {}), provider: r.config.provider, targets, localWorker: this.hasLocalWorker(), ...(failedTarget !== undefined ? { failedTarget } : {}) };
   }
 
   provider(): Promise<DeviceProvider> {
@@ -496,7 +539,7 @@ export class Tapdance {
     const auto = !options.profile && options.target === undefined && this.options.machineAuto?.handles(options.platform) ? this.options.machineAuto : undefined;
     const autoNotices: string[] = [];
     if (auto && !this.targetServes(options.platform)) {
-      const r = await auto.ensure({ platform: options.platform, reason: "no-target" }, (m) => this.progress(m));
+      const r = await auto.ensure(this.autoInput(options.platform, "no-target"), (m) => this.progress(m));
       if (r.notice) autoNotices.push(r.notice);
       await this.reloadTargets();
     }
@@ -562,7 +605,7 @@ export class Tapdance {
       } catch (error) {
         const e = error instanceof TapdanceError ? error : undefined;
         if (!auto || !e || !AUTO_RETRY_CODES.has(e.code)) throw error;
-        const r = await auto.ensure({ platform: options.platform, reason: "unreachable", error: e }, (m) => this.progress(m));
+        const r = await auto.ensure(this.autoInput(options.platform, "unreachable", e), (m) => this.progress(m));
         if (r.notice) autoNotices.push(r.notice);
         await this.reloadTargets();
         provider = await this.provider();

@@ -80,7 +80,7 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The computer your agent runs on** (a Mac, or Linux with KVM), with [Android Studio](https://developer.android.com/studio) | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another computer you own:** a Mac, a Mac mini, or a Linux PC or server with KVM | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | Roughly USD 0.20 an hour while it runs (it switches itself off when idle), plus about USD 7 a month for its disk until you delete it, paid to Google. [Current N2 prices](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types) | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes (6 of them work in the measured run, plus one approval click) |
+| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | Roughly USD 0.20 an hour while it runs (it switches itself off when idle), plus about USD 6.40 a month for its disk until you delete it, paid to Google. [Current N2 prices](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types) | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes (6 of them work in the measured run, plus one approval click) |
 
 **iPhones** run only on a Mac, with [Xcode](https://developer.apple.com/xcode/):
 
@@ -88,12 +88,14 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The Mac your agent runs on** | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another Mac or Mac mini you own** | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A Mac mini rented in your own [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) account**, with one command | Roughly EUR 3-6 a day before VAT (the cheapest Mac mini in stock), 24 hours minimum, paid to Scaleway. [Current Mac mini prices](https://www.scaleway.com/en/pricing/apple-silicon/) | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour (most of it Scaleway installing macOS) |
+| **A Mac mini rented in your own [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) account**, with one command | EUR 2.64-5.28 a day before VAT, depending on which Mac mini is in stock, 24 hours minimum, paid to Scaleway. [Current Mac mini prices](https://www.scaleway.com/en/pricing/apple-silicon/) | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about 1 to 1½ hours (most of it Scaleway installing macOS) |
 
 With no Mac of your own, two commands make the machines in your own accounts and connect them, after a
 short setup: once
 [Tailscale](https://tailscale.com), [gcloud](https://cloud.google.com/sdk/docs/install) and
 [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/) are logged in on your computer:
+
+`tapdance machine` needs Tapdance 0.3.0 or newer.
 
 ```bash
 tapdance machine create --cloud gcp        # Android phones in your Google Cloud project
@@ -148,9 +150,11 @@ what they print and tells you what it needs from you.
   Set up Tapdance so you can test my app on an Android emulator in my Google Cloud project and an
   iPhone simulator on a Mac mini in my Scaleway account, following
   https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md ("Set it up once").
-  Check that gcloud, scw and Tailscale are logged in and tell me how if not, then run
-  `tapdance machine create` for each. Show me the cost and ask me before each create, give me the
-  Tailscale link to approve, add the Tapdance MCP server at the end, and never print token files or
+  Check that gcloud, scw and Tailscale are logged in and tell me how if not. For each machine, run
+  `tapdance machine create` once without `--yes` to show me the cost, and after I agree run it again
+  with `--yes` in the background (Android takes about 10 minutes, the Mac about an hour or more).
+  Watch its output and give me the Tailscale link as soon as it appears. If it stops, run the same
+  command again: it continues. Add the Tapdance MCP server at the end, and never print token files or
   passwords.
   ```
 

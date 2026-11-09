@@ -39,6 +39,25 @@ export function marker(name: string): string {
   return `${LABEL}=${name}`;
 }
 
+/** Instance states in which the VM is stopped (it bills only its disk) and can be started. */
+export const GCP_STOPPED: ReadonlySet<string> = new Set(["TERMINATED", "STOPPED", "SUSPENDED"]);
+
+/** The network, subnet and firewall rule of a machine: gcloud command group and resource name. */
+export function networkParts(record: Pick<MachineRecord, "resourceName" | "zone">): Array<{ what: string; kind: string[]; name: string; extra: string[] }> {
+  const n = record.resourceName;
+  return [
+    { what: "firewall rule", kind: ["compute", "firewall-rules"], name: `${n}-iap-ssh`, extra: [] },
+    { what: "subnet", kind: ["compute", "networks", "subnets"], name: n, extra: ["--region", regionOf(record.zone)] },
+    { what: "network", kind: ["compute", "networks"], name: n, extra: [] },
+  ];
+}
+
+function notOurs(what: string, name: string, project: string, machine: string): TapdanceError {
+  return new TapdanceError("FORBIDDEN", `The ${what} ${name} in ${project} is not marked ${marker(machine)}; Tapdance did not make it for this machine and leaves it alone`, {
+    hint: "Pick another --name for a new machine, or rename or delete that resource yourself if you no longer need it.",
+  });
+}
+
 export class Gcp {
   constructor(
     private readonly io: MachineIo,
@@ -58,12 +77,26 @@ export class Gcp {
     return this.gcloud(this.sshArgs(record, command), { timeoutMs: 120_000, ...options });
   }
 
-  async exists(kind: string[], name: string, extra: string[] = []): Promise<boolean> {
-    const r = await this.gcloud([...kind, "describe", name, ...extra, "--format=value(name)"], { timeoutMs: 60_000 });
-    if (r.code === 0) return true;
-    if (/not found|was not found|notFound/i.test(r.stderr)) return false;
-    check(r, `gcloud ${kind.join(" ")} describe ${name}`);
-    return false;
+  /**
+   * Whether a network, subnet or firewall rule exists and was made for this machine: "missing", "ours"
+   * (its description is exactly tapdance-machine=<name>) or "theirs".
+   */
+  async owner(kind: string[], name: string, extra: string[], machine: string): Promise<"missing" | "ours" | "theirs"> {
+    const r = await this.gcloud([...kind, "describe", name, ...extra, "--format=value(description)"], { timeoutMs: 60_000 });
+    if (r.code !== 0) {
+      if (/not found|was not found|notFound/i.test(r.stderr)) return "missing";
+      check(r, `gcloud ${kind.join(" ")} describe ${name}`);
+    }
+    return r.stdout.trim() === marker(machine) ? "ours" : "theirs";
+  }
+
+  /** Starts the VM when it is stopped (an idle stop or --max-hours may stop it between create runs). */
+  async ensureRunning(record: MachineRecord, progress: (m: string) => void): Promise<void> {
+    const vm = await this.instance(record);
+    if (!vm || !GCP_STOPPED.has(vm.status)) return;
+    if (vm.labels?.[LABEL] !== record.name) throw notOurs("VM", record.resourceName, this.project, record.name);
+    progress(`  the VM is ${vm.status.toLowerCase()}: starting it`);
+    check(await this.gcloud(["compute", "instances", "start", record.resourceName, "--zone", record.zone], { timeoutMs: 600_000 }), "gcloud compute instances start");
   }
 
   async instance(record: Pick<MachineRecord, "resourceName" | "zone">): Promise<GcpInstance | undefined> {
@@ -179,13 +212,19 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       id: "network",
       title: `Create a private network (${n}) that allows only Google's SSH tunnel in`,
       run: async () => {
-        if (!(await gcp.exists(["compute", "networks"], n))) {
+        // Each part is reused only when it carries this machine's marker; anything else of that name is refused.
+        const own = async (what: string, kind: string[], name: string, extra: string[] = []) => {
+          const o = await gcp.owner(kind, name, extra, record.name);
+          if (o === "theirs") throw notOurs(what, name, gcp.project, record.name);
+          return o === "ours";
+        };
+        if (!(await own("network", ["compute", "networks"], n))) {
           check(await gcp.gcloud(["compute", "networks", "create", n, "--subnet-mode=custom", `--description=${marker(record.name)}`]), "gcloud compute networks create");
         }
-        if (!(await gcp.exists(["compute", "networks", "subnets"], n, ["--region", region]))) {
+        if (!(await own("subnet", ["compute", "networks", "subnets"], n, ["--region", region]))) {
           check(await gcp.gcloud(["compute", "networks", "subnets", "create", n, `--network=${n}`, `--region=${region}`, `--range=${SUBNET_RANGE}`, `--description=${marker(record.name)}`]), "gcloud compute networks subnets create");
         }
-        if (!(await gcp.exists(["compute", "firewall-rules"], `${n}-iap-ssh`))) {
+        if (!(await own("firewall rule", ["compute", "firewall-rules"], `${n}-iap-ssh`))) {
           check(
             await gcp.gcloud([
               "compute", "firewall-rules", "create", `${n}-iap-ssh`,
@@ -201,7 +240,11 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       id: "vm",
       title: `Create the VM (${record.machineType}, nested virtualization, Ubuntu 24.04)`,
       run: async () => {
-        if (await gcp.instance(record)) return;
+        const vm = await gcp.instance(record);
+        if (vm) {
+          if (vm.labels?.[LABEL] !== record.name) throw notOurs("VM", n, gcp.project, record.name);
+          return;
+        }
         const r = await gcp.gcloud(gcpInstanceCreateArgs(record), { timeoutMs: 600_000 });
         if (r.code !== 0 && /N2_CPUS|quota/i.test(r.stderr)) {
           throw new TapdanceError("NO_CAPACITY", `Google Cloud refused the VM: ${errorTail(r)}`, { hint: "Ask for a higher N2 CPU quota (4 or more) in the console under IAM & Admin > Quotas, or pick another zone with --zone." });
@@ -216,6 +259,7 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       id: "ssh",
       title: "Wait until the VM answers over SSH (through Google's IAP tunnel)",
       run: async () => {
+        await gcp.ensureRunning(record, io.out.progress);
         const deadline = io.now().getTime() + 8 * 60_000;
         let last: ExecResult | undefined;
         while (io.now().getTime() < deadline) {
@@ -232,6 +276,7 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       id: "setup",
       title: "Set up the machine: Android SDK, emulator, Tailscale, Tapdance host (about 5-10 min)",
       run: async () => {
+        await gcp.ensureRunning(record, io.out.progress);
         check(await gcp.gcloud(["compute", "scp", io.assets.hostSetup, `${n}:tapdance-host-setup.sh`, "--zone", record.zone, "--tunnel-through-iap", `--billing-project=${gcp.project}`], { timeoutMs: 180_000 }), "copying host-setup.sh to the VM");
         const cmd = gcpSetupCommand(record, { withKey: input.tailscaleKey !== undefined, extra: input.extraSetupArgs });
         const r = await gcp.ssh(record, cmd, {
@@ -250,6 +295,7 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       id: "connect",
       title: "Connect this computer to the machine",
       run: async () => {
+        await gcp.ensureRunning(record, io.out.progress);
         const remote = (c: string) => gcp.ssh(record, c, { timeoutMs: 90_000 });
         record.endpoint = await remoteEndpoint(remote);
         // Tailscale may have named it tapdance-<name>-1 (an older node of that name is still listed).
@@ -288,19 +334,26 @@ export interface LeftoverReport {
 
 export async function gcpDestroy(io: MachineIo, gcp: Gcp, record: MachineRecord): Promise<DestroyReport> {
   const n = record.resourceName;
-  const region = regionOf(record.zone);
   const removed: string[] = [];
   const notes: string[] = [];
   const vm = await gcp.instance(record);
   if (vm && vm.labels?.[LABEL] !== record.name) {
     throw new TapdanceError("FORBIDDEN", `The VM ${n} in ${gcp.project} is not labelled ${marker(record.name)}; Tapdance did not make it and leaves it alone`);
   }
+  // Every part is checked before anything is deleted: a network, subnet or firewall rule of that name
+  // without this machine's marker is someone else's.
+  const parts: Array<ReturnType<typeof networkParts>[number]> = [];
+  for (const part of networkParts(record)) {
+    const o = await gcp.owner(part.kind, part.name, part.extra, record.name);
+    if (o === "theirs") throw notOurs(part.what, part.name, gcp.project, record.name);
+    if (o === "ours") parts.push(part);
+  }
   if (vm?.status === "RUNNING") {
-    io.out.progress("Logging the machine out of Tailscale (removes it from your tailnet)…");
+    io.out.progress("Logging the machine out of Tailscale…");
     const r = await gcp.ssh(record, TAILSCALE_LOGOUT, { timeoutMs: 90_000 });
     if (r.code === 0) {
       removed.push(`Tailscale: ${record.tailscaleHostname} logged out`);
-      notes.push(`Tailscale may keep ${record.tailscaleHostname} listed as offline: delete it under Machines in the admin console (https://login.tailscale.com/admin/machines).`);
+      notes.push(`Tailscale keeps listing ${record.tailscaleHostname} as offline: delete it under Machines in the admin console (https://login.tailscale.com/admin/machines).`);
     } else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the machine had not joined your tailnet, nothing to remove");
     else notes.push(`Could not log ${record.tailscaleHostname} out of Tailscale; remove it under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);
   } else if (record.done.includes("setup")) {
@@ -313,17 +366,9 @@ export async function gcpDestroy(io: MachineIo, gcp: Gcp, record: MachineRecord)
     check(await gcp.gcloud(["compute", "instances", "delete", n, "--zone", record.zone, "--delete-disks=all"], { timeoutMs: 600_000 }), "gcloud compute instances delete");
     removed.push(`VM ${n} and its boot disk`);
   }
-  if (await gcp.exists(["compute", "firewall-rules"], `${n}-iap-ssh`)) {
-    check(await gcp.gcloud(["compute", "firewall-rules", "delete", `${n}-iap-ssh`]), "gcloud compute firewall-rules delete");
-    removed.push(`firewall rule ${n}-iap-ssh`);
-  }
-  if (await gcp.exists(["compute", "networks", "subnets"], n, ["--region", region])) {
-    check(await gcp.gcloud(["compute", "networks", "subnets", "delete", n, "--region", region]), "gcloud compute networks subnets delete");
-    removed.push(`subnet ${n}`);
-  }
-  if (await gcp.exists(["compute", "networks"], n)) {
-    check(await gcp.gcloud(["compute", "networks", "delete", n]), "gcloud compute networks delete");
-    removed.push(`network ${n}`);
+  for (const part of parts) {
+    check(await gcp.gcloud([...part.kind, "delete", part.name, ...part.extra]), `gcloud ${part.kind.join(" ")} delete`);
+    removed.push(`${part.what} ${part.name}`);
   }
   io.out.progress("Checking that nothing billable is left…");
   const leftovers = await gcpLeftovers(gcp, record);
@@ -339,15 +384,19 @@ export async function gcpLeftovers(gcp: Gcp, record: Pick<MachineRecord, "name" 
   const ours: string[] = [];
   const others: string[] = [];
   const unknown: string[] = [];
+  // Exact names only: machine "android" must never claim "android-2"'s tapdance-android-2.
+  const nameIs = (...names: string[]) => (row: string) => names.includes(row.split(/\s+/)[0] ?? "");
+  // `labels` prints as key=value pairs separated by ";" (or ","): the value must be exactly this name.
+  const labelled = (row: string) => (row.split(/\s+/)[3] ?? "").split(/[;,]/).some((kv) => kv.trim() === marker(record.name));
   const kinds: Array<[string, string[], (row: string) => boolean]> = [
-    ["instance", ["compute", "instances", "list", "--format=value(name,zone.basename(),status,labels)"], (row) => row.split(/\s+/)[0] === n || row.includes(`${LABEL}=${record.name}`)],
-    ["disk", ["compute", "disks", "list", "--format=value(name,zone.basename(),sizeGb)"], (row) => row.split(/\s+/)[0] === n],
-    ["address", ["compute", "addresses", "list", "--format=value(name,region.basename(),status)"], (row) => row.startsWith(n)],
-    ["snapshot", ["compute", "snapshots", "list", "--format=value(name,diskSizeGb)"], (row) => row.startsWith(n)],
-    ["firewall rule", ["compute", "firewall-rules", "list", `--filter=name~^${n}-`, "--format=value(name)"], () => true],
-    ["network", ["compute", "networks", "list", `--filter=name=${n}`, "--format=value(name)"], () => true],
-    ["forwarding rule", ["compute", "forwarding-rules", "list", "--format=value(name,region.basename())"], (row) => row.startsWith(n)],
-    ["router", ["compute", "routers", "list", "--format=value(name,region.basename())"], (row) => row.startsWith(n)],
+    ["instance", ["compute", "instances", "list", "--format=value(name,zone.basename(),status,labels)"], (row) => nameIs(n)(row) || labelled(row)],
+    ["disk", ["compute", "disks", "list", "--format=value(name,zone.basename(),sizeGb)"], nameIs(n)],
+    ["address", ["compute", "addresses", "list", "--format=value(name,region.basename(),status)"], nameIs(n)],
+    ["snapshot", ["compute", "snapshots", "list", "--format=value(name,diskSizeGb)"], nameIs(n)],
+    ["firewall rule", ["compute", "firewall-rules", "list", "--format=value(name)"], nameIs(`${n}-iap-ssh`)],
+    ["network", ["compute", "networks", "list", "--format=value(name)"], nameIs(n)],
+    ["forwarding rule", ["compute", "forwarding-rules", "list", "--format=value(name,region.basename())"], nameIs(n)],
+    ["router", ["compute", "routers", "list", "--format=value(name,region.basename())"], nameIs(n)],
   ];
   for (const [kind, args, isOurs] of kinds) {
     const r = await gcp.gcloud(args, { timeoutMs: 120_000 });
