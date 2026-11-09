@@ -8,6 +8,21 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
+## [Unreleased]
+
+### Fixed
+
+- Auto mode starts its own stopped machine even when another connect target is offline (#167); a lease
+  that names auto mode's own machine with `--target` uses auto mode too.
+- A lease for a model no host has reports the refusal of the host that answered, not the silence of an
+  offline one (#168).
+- `tapdance machine auto` shows each machine's real state (running, stopped); "Started machine …" is
+  printed as information, not as a warning (#169).
+
+### Changed
+
+- README: the prompts that let your agent do the setup come first; the manual steps follow.
+
 ## [0.3.0] - 2026-11-09
 
 **New: `tapdance machine`** makes the machines that run the phones in your own Google Cloud (Android)

@@ -636,10 +636,21 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
         for (const m of await runHousekeeping(io)) out.progress(m);
         const config = await readAuto(io);
         const rows = await Promise.all((["android", "ios"] as const).filter((p) => config[p]).map(async (p) => ({ platform: p, policy: config[p]!, machine: await io.store.get(config[p]!.name) })));
-        out.result({ auto: config, machines: rows.map((r) => ({ platform: r.platform, name: r.policy.name, exists: r.machine !== undefined, done: r.machine?.done ?? [] })) }, () =>
+        // The cloud's own state of each created machine (running, stopped, …), as `machine list` shows it (#169).
+        const states = new Map<string, string>();
+        if (rows.some((r) => r.machine?.done.includes("connect"))) {
+          try {
+            for (const m of (await machineList(io)).machines) states.set(m.name, m.state);
+          } catch {
+            // The setting still shows; only the live state is missing.
+          }
+        }
+        const now = (r: (typeof rows)[number]) =>
+          r.machine ? (r.machine.done.includes("connect") ? (states.get(r.machine.name) ?? "created (state unknown)") : `being created (${r.machine.done.length} of 6 steps)`) : "no machine yet";
+        out.result({ auto: config, machines: rows.map((r) => ({ platform: r.platform, name: r.policy.name, exists: r.machine !== undefined, done: r.machine?.done ?? [], ...(r.machine && states.has(r.machine.name) ? { state: states.get(r.machine.name) } : {}) })) }, () =>
           rows.length === 0
             ? "Auto mode is off. Turn it on with `tapdance machine auto on --platform android` (Google Cloud) or `--platform ios --accept-mac-day` (Scaleway)."
-            : rows.map((r) => `${describePolicy(r.platform, r.policy)}\n  now: ${r.machine ? (r.machine.done.includes("connect") ? "created" : `being created (${r.machine.done.length} of 6 steps)`) : "no machine yet"}`).join("\n"),
+            : rows.map((r) => `${describePolicy(r.platform, r.policy)}\n  now: ${now(r)}`).join("\n"),
         );
       } catch (error) {
         process.exitCode = out.error(error);

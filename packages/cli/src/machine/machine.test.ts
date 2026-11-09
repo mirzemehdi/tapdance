@@ -580,6 +580,21 @@ describe("machine auto (mocked gcloud and scw)", () => {
     expect(autoDecision(noTarget("android"), undefined)).toBe("provision");
   });
 
+  // #167: an offline connect target with no platform list must not stop auto mode starting its own machine.
+  it("starts its own stopped machine even when another target is down, and creates nothing for a refusal", () => {
+    const targets = [{ name: "old-mac", endpoint: "https://old.tail1.ts.net:4720" }, { name: "android", endpoint: "https://a.tail1.ts.net:4720", platforms: ["android" as const] }];
+    const bothDown = new TapdanceError("PROVIDER_UNREACHABLE", "Cannot lease android: target old-mac does not answer; nor does android", { details: { target: "old-mac", down: ["old-mac", "android"] } });
+    const base = { platform: "android" as const, reason: "unreachable" as const, provider: "self-hosted", targets, localWorker: false };
+    expect(autoDecision({ ...base, error: bothDown, failedTarget: "old-mac" }, "android")).toBe("provision");
+    // The own machine answers; only the old Mac is down: nothing to start, and nothing is created.
+    const otherDown = new TapdanceError("PROVIDER_UNREACHABLE", "Cannot lease android: target old-mac does not answer", { details: { target: "old-mac", down: ["old-mac"] } });
+    expect(autoDecision({ ...base, error: otherDown, failedTarget: "old-mac" }, "android")).toBe("rethrow");
+    // The own machine answered and refused (no such model): rethrown, never provisioned.
+    const refused = new TapdanceError("DEVICE_UNAVAILABLE", "No connect target that answered can lease android \"Pixel 99\"", { details: { down: ["old-mac"] } });
+    expect(autoDecision({ ...base, error: refused }, "android")).toBe("rethrow");
+    expect(autoDecision({ ...base, error: refused, failedTarget: "android" }, "android")).toBe("rethrow");
+  });
+
   it("only reminds about an Android machine stopped longer than --delete-after-days: it deletes nothing", async () => {
     const make = (stoppedAt: string) => (c: Call) => {
       if (c.file === "gcloud" && has(c, "instances", "describe")) return { stdout: JSON.stringify({ name: "tapdance-android", zone: "z", status: "TERMINATED", machineType: "m/n2-standard-4", creationTimestamp: "2026-10-01T10:00:00Z", lastStopTimestamp: stoppedAt, labels: { "tapdance-machine": "android" } }) };

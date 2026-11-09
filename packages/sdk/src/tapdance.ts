@@ -82,6 +82,8 @@ export interface MachineAutoHook {
    * created), with what the person must do, if anything.
    */
   ensure(input: MachineAutoInput, progress: (message: string) => void): Promise<{ notice?: string }>;
+  /** True when `target` is the connect target of auto mode's own machine for the platform. */
+  ownsTarget?(platform: Platform, target: string): boolean;
 }
 
 /**
@@ -313,7 +315,7 @@ export class Tapdance {
   }
 
   /** The hook's view of the configured hosts, and which one an error came from. */
-  private autoInput(platform: Platform, reason: MachineAutoInput["reason"], error?: TapdanceError): MachineAutoInput {
+  private autoInput(platform: Platform, reason: MachineAutoInput["reason"], error?: TapdanceError, target?: string): MachineAutoInput {
     const r = this.resolvedConfig;
     const targets: MachineAutoInput["targets"] =
       r.targets.length > 0
@@ -322,7 +324,7 @@ export class Tapdance {
           ? [{ name: r.config.endpoint, endpoint: r.config.endpoint }]
           : [];
     const named = error?.details?.["target"];
-    const failedTarget = typeof named === "string" ? named : error && r.targets.length === 1 ? r.targets[0]!.name : undefined;
+    const failedTarget = typeof named === "string" ? named : error && target !== undefined ? target : error && r.targets.length === 1 ? r.targets[0]!.name : undefined;
     return { platform, reason, ...(error ? { error } : {}), provider: r.config.provider, targets, localWorker: this.hasLocalWorker(), ...(failedTarget !== undefined ? { failedTarget } : {}) };
   }
 
@@ -536,9 +538,12 @@ export class Tapdance {
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
     }
-    const auto = !options.profile && options.target === undefined && this.options.machineAuto?.handles(options.platform) ? this.options.machineAuto : undefined;
+    // A lease that names a target uses auto mode only when that target is auto mode's own machine (#167).
+    const hook = this.options.machineAuto;
+    const auto =
+      !options.profile && hook?.handles(options.platform) && (options.target === undefined || hook.ownsTarget?.(options.platform, options.target) === true) ? hook : undefined;
     const autoNotices: string[] = [];
-    if (auto && !this.targetServes(options.platform)) {
+    if (auto && options.target === undefined && !this.targetServes(options.platform)) {
       const r = await auto.ensure(this.autoInput(options.platform, "no-target"), (m) => this.progress(m));
       if (r.notice) autoNotices.push(r.notice);
       await this.reloadTargets();
@@ -605,7 +610,7 @@ export class Tapdance {
       } catch (error) {
         const e = error instanceof TapdanceError ? error : undefined;
         if (!auto || !e || !AUTO_RETRY_CODES.has(e.code)) throw error;
-        const r = await auto.ensure(this.autoInput(options.platform, "unreachable", e), (m) => this.progress(m));
+        const r = await auto.ensure(this.autoInput(options.platform, "unreachable", e, options.target), (m) => this.progress(m));
         if (r.notice) autoNotices.push(r.notice);
         await this.reloadTargets();
         provider = await this.provider();

@@ -57,6 +57,16 @@ describe("lease notices in CLI output (field run 2d; MOCKED provider)", () => {
     await t.close();
   });
 
+  // #169: what auto mode did for the lease is information, not a warning.
+  it("prints auto mode's notices as progress, other notices as warnings", async () => {
+    const lines: string[] = [];
+    const out = { progress: (m: string) => lines.push(`› ${m}`), warn: (m: string) => lines.push(`warning: ${m}`) };
+    const started = "Started machine android for this lease in 41 s; it stops itself again when idle.";
+    const t = { lease: async () => ({ notices: [started, NOTICE] }) } as unknown as Parameters<typeof leaseWithNotices>[0];
+    await leaseWithNotices(t, { platform: "android" }, out);
+    expect(lines).toEqual([`› ${started}`, `warning: ${NOTICE}`]);
+  });
+
   it("host up's self-test prints the lease notices instead of dropping them", async () => {
     const { t, out, lines, cwd } = await setup(true);
     await selfTestLease(t, "android", cwd, out);
