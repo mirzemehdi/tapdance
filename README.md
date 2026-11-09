@@ -71,41 +71,63 @@ full paths instead; [connect your agent](docs/agents.md) shows how, and covers C
 
 ### 3. Choose where the phones run
 
-The phones are emulators and simulators. They run on your Mac, on another Mac you own, or on machines
-you rent.
+The phones are emulators and simulators. Android and iPhone have different options: pick one row for
+each platform you test. One machine can serve both, and your agent can use several machines at once.
 
-| Where the phones run | Cost | Time | Guide |
-| --- | --- | --- | --- |
-| **My Mac.** Your agent and the phones on the same Mac. iPhones need [Xcode](https://developer.apple.com/xcode/); Android phones need [Android Studio](https://developer.android.com/studio). | Free | About 15 minutes, if Xcode is installed | [Try it on your Mac](docs/quick-start.md) |
-| **A Mac or Mac mini elsewhere.** Your agent on a laptop or server, the phones on a Mac you own, connected by [Tailscale](https://tailscale.com), a free private network. | Free | About 30 minutes | [Run the phones on another machine](docs/deployment/one-command-host.md) |
-| **No Mac.** Android on [Google Cloud](https://cloud.google.com/compute), an [N2 machine](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines). iPhones on a [Mac mini rented from Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/). Both reached through [Tailscale](https://tailscale.com). | About USD 0.20 an hour for Google Cloud, plus its disk until you delete it. About EUR 3 a day for the Mac, 24 hours minimum. | About 1.5 hours | [Start without a Mac](docs/guides/start-without-a-mac.md) |
+**Android phones** run on any Mac, or on a Linux machine with KVM:
 
-| **Tapdance Cloud.** No Mac, no cloud account: sign up and your agent gets phones on machines we run, one customer per machine. | Per hour or per Mac day | Minutes | Not available yet ([plan](docs/hosting-plan.md#stage-5--tapdance-cloud-one-step-at-a-time)) |
+| Where | Cost | Guide |
+| --- | --- | --- |
+| **The computer your agent runs on** (a Mac, or Linux with KVM), with [Android Studio](https://developer.android.com/studio) | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
+| **Another computer you own:** a Mac, a Mac mini, or a Linux PC or server with KVM | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
+| **A rented Google Cloud machine** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)) | About USD 0.20 an hour, plus its disk until you delete it | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 30 minutes |
 
-Only need Android? Your own Mac or Google Cloud is enough: follow either guide and skip the iPhone
-steps. Windows cannot run the phones.
+**iPhones** run only on a Mac, with [Xcode](https://developer.apple.com/xcode/):
+
+| Where | Cost | Guide |
+| --- | --- | --- |
+| **The Mac your agent runs on** | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
+| **Another Mac or Mac mini you own** | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
+| **A rented Mac mini** from [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) | About EUR 3 a day, 24 hours minimum | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour |
+
+**Coming later: Tapdance Cloud.** No machine of your own: sign up and your agent gets Android phones
+and iPhones on machines we run, one customer per machine, paid per hour or per Mac day. Not available
+yet ([plan](docs/hosting-plan.md#stage-5--tapdance-cloud-one-step-at-a-time)).
+
+A machine other than the one your agent runs on is reached through [Tailscale](https://tailscale.com),
+a free private network between your own machines. Your agent can run on Windows, but Windows cannot
+run the phones.
 
 **Or let your agent do the setup.** Paste one of these into Claude Code. It runs the commands, reads
 what they print and tells you what it needs from you.
 
-- **My Mac** (run Claude Code on that Mac):
+- **Phones on the computer Claude Code runs on** (a Mac, or Linux with KVM for Android):
 
   ```text
-  Set up Tapdance on this Mac so you can test my app on simulators, following
-  https://github.com/mirzemehdi/tapdance/blob/main/docs/quick-start.md ("Set it up once").
+  Set up Tapdance on this computer so you can test my app on iPhone simulators and Android emulators,
+  following https://github.com/mirzemehdi/tapdance/blob/main/docs/quick-start.md ("Set it up once").
   Install it with npm, start the phone service, run `tapdance doctor` and fix what it reports, then
   add the Tapdance MCP server for this project. Stop and ask me before installing Xcode or Android
   Studio, or changing anything outside Tapdance.
   ```
 
-- **A Mac or Mac mini elsewhere** (run Claude Code on your laptop; you run one command on the Mac):
+- **Phones on another computer you own** (a Mac, a Mac mini, or Linux with KVM):
 
   ```text
-  Help me run my app's test phones on my Mac mini while you stay on this laptop, following
-  https://github.com/mirzemehdi/tapdance/blob/main/docs/deployment/one-command-host.md ("Set it up once").
-  Tell me the one command to run on the Mac mini, wait for me to copy its key file here, then
-  install Tapdance on this laptop, connect to the Mac mini and add the Tapdance MCP server. Never
-  print the key file's contents.
+  Help me run my app's test phones on my Mac mini (or Linux machine) while you stay on this
+  computer, following https://github.com/mirzemehdi/tapdance/blob/main/docs/deployment/one-command-host.md
+  ("Set it up once"). Tell me the one command to run on that machine, wait for me to copy its key
+  file here, then install Tapdance here, connect to it and add the Tapdance MCP server. Never print
+  the key file's contents.
+  ```
+
+- **Phones on rented machines** (Google Cloud for Android, Scaleway for iPhones):
+
+  ```text
+  Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
+  one step at a time. Run the commands meant for this computer yourself, tell me exactly what to
+  click in the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to. Ask
+  before anything that costs money, and never print token files or passwords.
   ```
 
 When the setup is done, ask your agent something from the table above.
