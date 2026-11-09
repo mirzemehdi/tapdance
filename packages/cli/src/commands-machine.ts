@@ -45,6 +45,7 @@ export interface CreateOptions {
   maxHours?: string;
   keep?: boolean;
   serverId?: string;
+  new?: boolean;
   label?: string;
   tailscaleKey?: boolean;
   setupRef?: string;
@@ -188,7 +189,7 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
   else await scalewayPreflight(io);
   if (!record) {
     if (o.serverId && isGcp) throw new TapdanceError("USAGE", "--server-id is for --cloud scaleway (a Mac mini you rented yourself)");
-    let zone: string;
+    let zone = SCALEWAY_DEFAULTS.zone as string;
     let macType = o.type;
     let adopted: { name: string; id: string; createdAt?: string; deletableAt?: string } | undefined;
     const offerNotes: string[] = [];
@@ -200,6 +201,23 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
       macType = server.type;
       adopted = { name: server.name, id: server.id, ...(server.created_at ? { createdAt: server.created_at } : {}), ...(server.deletable_at ? { deletableAt: server.deletable_at } : {}) };
     } else {
+      // A Mac the person already rented is used instead of renting another day, unless --new says so.
+      const known = new Set((await io.store.list()).map((r) => r.serverId).filter(Boolean));
+      const existing = o.new ? [] : (await new Scaleway(io, project).listServers(o.zone ? [o.zone] : [])).filter((s) => !known.has(s.id) && s.status !== "deleting" && (!o.zone || s.zone === o.zone));
+      const one = existing.length === 1 ? existing[0]! : undefined;
+      const describe = (s: { name: string; id: string; type: string; zone?: string; status: string }) => `${s.name} (${s.type}, ${s.zone ?? "?"}, ${s.status}, id ${s.id})`;
+      if (one && isTty && !o.yes && (await ask(`You already have a Mac mini in this project: ${describe(one)}. Use it instead of renting a new one?`))) {
+        const server = (await new Scaleway(io, project).findServer(one.id, one.zone))!;
+        zone = server.zone ?? one.zone ?? SCALEWAY_DEFAULTS.zone;
+        macType = server.type;
+        adopted = { name: server.name, id: server.id, ...(server.created_at ? { createdAt: server.created_at } : {}), ...(server.deletable_at ? { deletableAt: server.deletable_at } : {}) };
+      } else if (existing.length > 0 && !(one && isTty && !o.yes)) {
+        throw new TapdanceError("USAGE", `You already have ${existing.length === 1 ? "a Mac mini" : `${existing.length} Mac minis`} in this Scaleway project: ${existing.map(describe).join("; ")}`, {
+          hint: `Set ${existing.length === 1 ? "it" : "one"} up with \`tapdance machine create --cloud scaleway --server-id ${existing[0]!.id}\` (its name works too), or rent another one anyway with --new.`,
+        });
+      }
+    }
+    if (!isGcp && !adopted) {
       const pick = await pickScalewayOffer(io, { ...(o.type ? { type: o.type } : {}), ...(o.zone ? { zone: o.zone } : {}) });
       zone = pick.zone;
       macType = pick.type;
@@ -429,7 +447,8 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
     .option("--idle-stop <minutes|off>", "gcp: stop the VM after this many minutes without a lease, request or build (default 30)")
     .option("--max-hours <hours|off>", "gcp: stop the VM at the latest this many hours after each start (default 8)")
     .option("--keep", "scaleway: do not schedule the Mac for automatic deletion at the 24-hour mark")
-    .option("--server-id <id>", "scaleway: set up a Mac mini you already rented (its id from the console) instead of renting one")
+    .option("--server-id <id|name>", "scaleway: set up a Mac mini you already rented (its id or name from the console) instead of renting one")
+    .option("--new", "scaleway: rent a new Mac mini even when your project already has one")
     .option("--label <name>", "the pairing's name on the machine (default: this computer's name)")
     .option("--tailscale-key", "join the tailnet with a pre-approved auth key, read with echo off (or from stdin), instead of a login link you open")
     .option("--setup-ref <ref>", "build Tapdance on the machine from this git ref instead of installing tapdance-cli from npm at this CLI's version")

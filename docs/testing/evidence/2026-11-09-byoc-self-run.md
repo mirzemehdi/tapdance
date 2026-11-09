@@ -143,9 +143,10 @@ Leases: 1.4–6 s from a warm spare (the 16 GB Mac keeps one), 60–86 s when no
 | Item | Result |
 | --- | --- |
 | Simulators | Simlock does not log the clone time on its own; a lease without a ready spare (clone + boot) took 60–86 s, the first lease of the kind about 60 s |
-| Landscape taps (#56 patch) | The demo's sign-in in landscape-left: typing into both fields and tapping "Sign in" landed, "Welcome, ada@example.com" in 0.5 s. **Partial**: the demo is a SwiftUI app, not one on the legacy compatibility screen the patch is for |
-| agent-device 0.21.36 | `handle_alert get` works (no alert was shown, so handling one was not exercised). A snapshot deeper than 64 levels: **not run** (no such app in the repository) |
+| Landscape taps (#56 patch) | The SwiftUI demo in landscape-left: typing into both fields and tapping "Sign in" landed ("Welcome, ada@example.com" in 0.5 s). **On the legacy compatibility screen they miss** (new `examples/ios-compat-demo`, no launch screen, letterboxed in a 320×480-point window): `ui inspect` reports the app's own points (viewport 320×480, landscape 480×320) and taps are sent to those points on the 402×874 screen without the letterbox's scale (about 1.26; 1.18 in landscape) and offset. "Tap me" at app (160, 67) is at about (202, 219) on screen; the tap went to (160, 67) and the counter stayed 0, in portrait and in landscape; a `--x/--y` tap at the button's screen position missed too. **FAIL**, filed as an issue |
+| agent-device 0.21.36 | A snapshot deeper than 64 levels: **PASS** on `examples/ios-compat-demo` (80 nested views: `ui inspect` returned 84 elements, `level-80` and `deep-leaf` included). `handle_alert get` works; handling a shown alert was not exercised (no alert appeared) |
 | Through the worker guard | A recording, screenshots and an app upload and install: PASS |
+| `worker cleanup` (agent-device claims) | On the Mac: a lease's claim was `~/.simlock/agent-device/device-claims/<hash>.json`; `worker restart --force` removed it; `worker cleanup` then reported "No stale device claims" correctly. The same restart left Simlock's lease record (`device status` said Ready while `release` said ended: #163); releasing the lease in Simlock before the restart made status say `unknown` instead, which is what `worker restart --force` now does |
 | `host warm` / `doctor` | `host warm` read the default spare (`iPhone 17 / 27.0 (learned)`); `doctor` from the agent's machine: target `ios` up, guard answered in 54 ms, agent-device served |
 
 The Mac was kept for the rest of its paid day at the owner's request, so its `destroy` and the
@@ -197,11 +198,12 @@ An estimate from list prices; the billing page was not read. The project remains
 10. `machine create` could not set up a Mac the person had rented: `--server-id` (with a one-time password
     login to add the key).
 11. `host warm` read back Simlock's held-back slots; it now shows the spares it set.
+12. `worker restart --force` left Simlock's lease records behind, so `device status` said Ready for a
+    lease agent-device had dropped (#163); it now releases each running lease in Simlock first.
 
 ## Open, not fixed here
 
-- After `tapdance worker restart --force` mid-lease, Simlock still listed the lease (so `device status`
-  said Ready) while agent-device had dropped its session (so `release` said it had already ended).
+- Taps on an iOS app on the legacy compatibility screen miss in every orientation (above).
 
 - The Tailscale node stays listed after `destroy` (above).
 - Auto mode needs a person to approve each new machine's Tailscale link, so an unattended agent waits

@@ -89,12 +89,21 @@ export class Scaleway {
   }
 
   /** Finds a Mac by id in any Mac zone. */
-  async findServer(id: string, zone?: string): Promise<ScwServer | undefined> {
-    for (const z of zone ? [zone] : MAC_ZONES) {
-      const s = await this.server(id, z);
-      if (s) return { ...s, zone: s.zone ?? z };
+  /** Finds a Mac by id, or by its name as the console shows it, in any Mac zone. */
+  async findServer(idOrName: string, zone?: string): Promise<ScwServer | undefined> {
+    const isId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrName);
+    if (isId) {
+      for (const z of zone ? [zone] : MAC_ZONES) {
+        const s = await this.server(idOrName, z);
+        if (s) return { ...s, zone: s.zone ?? z };
+      }
+      return undefined;
     }
-    return undefined;
+    const named = (await this.listServers(zone ? [zone] : [])).filter((s) => s.name === idOrName && (!zone || s.zone === zone));
+    if (named.length > 1) throw new TapdanceError("USAGE", `Several Mac minis are called ${idOrName}`, { hint: `Pass the id instead: ${named.map((s) => `${s.id} (${s.zone})`).join(", ")}.` });
+    if (!named[0]) return undefined;
+    const full = await this.server(named[0].id, named[0].zone ?? zone ?? MAC_ZONES[0]);
+    return full ? { ...full, zone: full.zone ?? named[0].zone } : undefined;
   }
 
   async createKey(name: string, publicKey: string): Promise<string> {

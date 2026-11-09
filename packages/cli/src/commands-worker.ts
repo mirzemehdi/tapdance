@@ -488,6 +488,25 @@ export async function warmReport(): Promise<{ text: string; config?: Record<stri
   return { text: describeWarm(config, pool, limits), ...(warmConfig ? { config: warmConfig } : {}), ...(pool ? { warmPool: pool } : {}) };
 }
 
+/**
+ * `worker restart --force`: releases each running lease in Simlock before the restart, so the lease
+ * record and agent-device agree afterwards (#163). Returns the ids ended; one that will not release is
+ * reported and left to the restart.
+ */
+export async function endLeasesBeforeRestart(ids: string[], out: Pick<ReturnType<typeof output>, "progress" | "warn">, run: (args: string[]) => Promise<string> = (a) => simlock(a)): Promise<string[]> {
+  const ended: string[] = [];
+  for (const id of ids) {
+    try {
+      await run(["--local", "release", id, "--yes"]);
+      ended.push(id);
+      out.progress(`Ended lease ${id.slice(0, 12)} before the restart (its agent sees it as ended)`);
+    } catch (error) {
+      out.warn(`Could not end lease ${id.slice(0, 12)} before the restart: ${(error as Error).message.split("\n")[0]}`);
+    }
+  }
+  return ended;
+}
+
 /** Ends every lease on the local worker (Simlock's nuke without --delete-devices: keeps the seeds and saved baselines; since Simlock 0.6 each ended lease's device is deleted, as at any release). */
 export async function simlockNuke(): Promise<void> {
   await simlock(["--local", "nuke", "--yes"]).catch(() => "");
@@ -734,7 +753,7 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
   worker
     .command("restart")
     .description("Restart the worker daemon (ends agent-device sessions on it; a login service left from an older Tapdance is installed again); refuses while leases run unless --force")
-    .option("--force", "restart even while devices are leased (their agents lose them)")
+    .option("--force", "restart even while devices are leased: their leases are ended first, so their agents see them as ended")
     .action(async (o: { force?: boolean }) => {
       const out = output(globals());
       try {
@@ -746,8 +765,11 @@ export function registerWorkerCommands(program: Command, globals: () => GlobalOp
             hint: "Wait until they are released (tapdance worker status), or pass --force.",
           });
         }
+        // With --force, end those leases in Simlock first: otherwise its lease record outlives the
+        // restart, so `device status` says Ready while every command (and release) finds it gone (#163).
+        const ended = running.length > 0 ? await endLeasesBeforeRestart(running.map((l) => String(l.id ?? "")).filter(Boolean), out) : [];
         await restart(false, out);
-        out.result({ restarted: true }, () => "Restarted");
+        out.result({ restarted: true, endedLeases: ended }, () => (ended.length ? `Restarted; ended ${ended.length} lease(s) first: ${ended.map((id) => id.slice(0, 12)).join(", ")}` : "Restarted"));
       } catch (error) {
         process.exitCode = out.error(error);
       }

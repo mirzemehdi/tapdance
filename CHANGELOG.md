@@ -23,8 +23,13 @@ file means the code exists, not that it has been tested on every platform.
   cloud credentials. `--cloud gcp` ran for real, and `--cloud scaleway --server-id` on a Mac the owner
   had rented (docs/testing/evidence/2026-11-09-byoc-self-run.md); renting a Mac with `create` is
   unit-tested only.
-- `machine create --cloud scaleway --server-id <id>` sets up a Mac mini you rented yourself; without
-  `--type`/`--zone` it rents the cheapest Mac mini in stock in any Mac zone.
+- `examples/ios-compat-demo`: a UIKit app on the legacy compatibility screen with an 80-level view tree,
+  for the agent-device checks in #153.
+- `machine create --cloud scaleway --server-id <id|name>` sets up a Mac mini you rented yourself. Without
+  it, `create` first looks for a Mac already in your project and asks to use it (in a script it stops
+  and names it); `--new` rents another anyway. Auto mode never rents a Mac while the project has one of
+  yours. When it does rent, it picks the cheapest Mac mini in stock in any Mac zone unless `--type`/`--zone`
+  say otherwise.
 - `tapdance machine auto on|off` (auto mode): a lease (CLI or MCP) that finds no host for the platform
   starts the stopped machine, or creates one in the background and answers with a retryable error that
   carries the Tailscale approval link; `--delete-after-days` destroys a long-stopped Android machine;
@@ -46,6 +51,8 @@ file means the code exists, not that it has been tested on every platform.
 - Scaleway: `scw ... list zone=all` does not list Macs in `fr-par-1`, so `scaleway-leftovers.sh` and
   `machine destroy`'s check could report nothing left while a Mac there billed. Every Mac zone is now
   asked by name; the script also prints `scheduled_deletion=false` instead of `?`.
+- `worker restart --force` ends running leases in Simlock first, so `device status` no longer says Ready for
+  a lease the restart took away (#163).
 - `host warm` reads back the spares it set ("android 1, ios 0") instead of Simlock's held-back slots.
 - `host-setup.sh` on Ubuntu 24.04's cloud image (found by `machine create` on Google Cloud): the
   emulator needs `libnss3` (also named by `doctor`); the systemd user manager is restarted after the

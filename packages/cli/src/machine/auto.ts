@@ -97,6 +97,17 @@ async function creatingError(io: MachineIo, platform: Platform, p: AutoPolicy, s
 async function startCreate(io: MachineIo, platform: Platform, p: AutoPolicy): Promise<never> {
   const running = await runningCreate(io, p.name);
   if (running) throw await creatingError(io, platform, p, false);
+  if (p.cloud === "scaleway") {
+    // A Mac the person already rented is set up, not rented again: that takes a person, once.
+    const known = new Set((await io.store.list()).map((r) => r.serverId).filter(Boolean));
+    const theirs = (await new Scaleway(io, p.project).listServers(p.zone ? [p.zone] : [])).filter((s) => !known.has(s.id) && s.status !== "deleting");
+    if (theirs.length > 0) {
+      throw new TapdanceError("PROVIDER_UNAVAILABLE", `Auto mode will not rent a Mac for ${platform}: this Scaleway project already has ${theirs.map((s) => `${s.name} (${s.type}, ${s.zone ?? "?"})`).join(", ")}`, {
+        hint: `Ask the person to set it up once with \`tapdance machine create --cloud scaleway --name ${p.name} --server-id ${theirs[0]!.id}\`; auto mode then uses it.`,
+        retryable: false,
+      });
+    }
+  }
   const { mkdir } = await import("node:fs/promises");
   await mkdir(io.store.dir(p.name), { recursive: true, mode: 0o700 });
   const pid = await io.spawnCreate(createArgs(p), join(io.store.dir(p.name), "auto-create.log"));

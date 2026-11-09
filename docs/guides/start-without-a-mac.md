@@ -45,7 +45,8 @@ All on your laptop. Sections 1 and 2 below have the details for the first two st
 3. **Create the iPhone machine (iOS only).** It shows the cost and asks first. Start it first: Scaleway
    takes a while to install macOS. Kotlin Multiplatform app, or a private repository? See
    [section 3](#3-create-the-iphone-machine-ios-only) for the options to add now. Already rented a Mac in
-   the Scaleway console? Add `--server-id <its id>` to set that one up instead of renting another.
+   the Scaleway console? `create` finds it and asks whether to use it, so you do not pay for a second
+   day; `--server-id <its name or id>` picks one, `--new` rents another anyway.
 
    ```bash
    tapdance machine create --cloud scaleway
@@ -114,7 +115,8 @@ passes the link on, so keep an eye on what it tells you. `--delete-after-days 7`
 its disk stops billing. Auto mode keeps at most one machine per platform. Without `--delete-after-days`,
 a stopped Android machine is never deleted, and its disk bills about USD 7 a month. For iPhones,
 `tapdance machine auto on --platform ios --accept-mac-day` lets it rent a Mac when needed, one at a time;
-each new Mac costs at least one day. `tapdance machine auto` shows the setting,
+each new Mac costs at least one day. If your project already has a Mac, auto mode does not rent another:
+it asks you to set that one up once with `--server-id`. `tapdance machine auto` shows the setting,
 `tapdance machine auto off` turns it off.
 
 **Want help along the way?** Paste this into Claude Code on your laptop:

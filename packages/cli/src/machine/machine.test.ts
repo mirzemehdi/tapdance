@@ -331,7 +331,7 @@ describe("machine create --cloud scaleway (mocked scw and ssh)", () => {
   it("rents, schedules deletion, sets up with the Mac's password on stdin only, and removes the setup's sudo rule", async () => {
     const { io, calls } = await fakeIo(scwOk());
     await writeKeyStub(io, "ios");
-    const record = await machineCreate(io, { cloud: "scaleway", yes: true }, ["--with-gh"], false);
+    const record = await machineCreate(io, { cloud: "scaleway", yes: true, new: true }, ["--with-gh"], false);
     expect(record.done).toEqual(["ssh-key", "server", "install", "auto-login", "setup", "connect"]);
     expect(calls.some((c) => has(c, "update", "srv-1", "schedule-deletion=true"))).toBe(true);
     expect(calls.some((c) => has(c, "reboot", "srv-1"))).toBe(true);
@@ -353,21 +353,21 @@ describe("machine create --cloud scaleway (mocked scw and ssh)", () => {
   it("removes the setup's sudo rule even when setup fails", async () => {
     const { io, calls } = await fakeIo(scwOk({ failSetup: true }));
     await writeKeyStub(io, "ios");
-    await expect(machineCreate(io, { cloud: "scaleway", yes: true }, [], false)).rejects.toThrow(/Step 5 of 6/);
+    await expect(machineCreate(io, { cloud: "scaleway", yes: true, new: true }, [], false)).rejects.toThrow(/Step 5 of 6/);
     expect(calls.filter((c) => c.file === "ssh").some((c) => c.args.at(-1)!.startsWith("sudo -n rm -f /etc/sudoers.d/tapdance-setup"))).toBe(true);
   });
 
   it("refuses stop and start, explaining the billing", async () => {
     const { io } = await fakeIo(scwOk());
     await writeKeyStub(io, "ios");
-    await machineCreate(io, { cloud: "scaleway", yes: true }, [], false);
+    await machineCreate(io, { cloud: "scaleway", yes: true, new: true }, [], false);
     await expect(machineStop(io, "ios", false)).rejects.toMatchObject({ code: "NOT_SUPPORTED", hint: expect.stringContaining("also while it is switched off") });
   });
 
   it("schedules deletion before the 24 hours are up, and leaves other Macs alone", async () => {
     const { io, calls } = await fakeIo(scwOk({ deletableAt: "2026-11-10T10:00:00Z" }));
     await writeKeyStub(io, "ios");
-    await machineCreate(io, { cloud: "scaleway", yes: true }, [], false);
+    await machineCreate(io, { cloud: "scaleway", yes: true, new: true }, [], false);
     const d = await machineDestroy(io, "ios", { yes: true }, false);
     expect(calls.some((c) => has(c, "server", "delete"))).toBe(false);
     expect(d.record.pendingDeletionAt).toBe("2026-11-10T10:00:00Z");
@@ -380,7 +380,7 @@ describe("machine create --cloud scaleway (mocked scw and ssh)", () => {
   it("deletes after the 24 hours", async () => {
     const { io, calls } = await fakeIo(scwOk({ deletableAt: "2026-11-09T09:00:00Z" }));
     await writeKeyStub(io, "ios");
-    await machineCreate(io, { cloud: "scaleway", yes: true }, [], false);
+    await machineCreate(io, { cloud: "scaleway", yes: true, new: true }, [], false);
     await machineDestroy(io, "ios", { yes: true }, false);
     expect(calls.some((c) => has(c, "server", "delete", "srv-1"))).toBe(true);
   });
@@ -483,7 +483,7 @@ describe("machine auto (mocked gcloud and scw)", () => {
   });
 
   it("refuses to rent a new Mac after the old one is gone unless the day was accepted", async () => {
-    const { io, spawned } = await fakeIo((c) => (c.file === "scw" && has(c, "server", "get") ? { code: 1, stderr: "404 not found" } : scwOk()(c)));
+    const { io, spawned } = await fakeIo((c) => (c.file === "scw" && has(c, "server", "get") ? { code: 1, stderr: "404 not found" } : c.file === "scw" && has(c, "server", "list") ? { stdout: "[]" } : scwOk()(c)));
     await io.store.save({ version: 1, name: "ios", cloud: "scaleway", createdAt: "2026-11-08T10:00:00Z", zone: "fr-par-3", machineType: "M1-M", resourceName: "tapdance-ios", label: "l", target: "ios", tailscaleHostname: "tapdance-ios", setupRef: "v0.2.0", serverId: "srv-1", done: ["connect"], timings: {} });
     await writeAuto(io, { ios: { cloud: "scaleway", name: "ios", enabledAt: "x" } });
     await expect(ensureMachine(io, "ios", () => undefined)).rejects.toThrow(/may not rent a new one/);
@@ -491,12 +491,19 @@ describe("machine auto (mocked gcloud and scw)", () => {
     await expect(ensureMachine(io, "ios", () => undefined)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE" });
     expect(spawned).toHaveLength(1);
   });
+
+  it("does not rent a Mac in the background when the project already has one of the person's", async () => {
+    const { io, spawned } = await fakeIo((c) => (c.file === "scw" && has(c, "server", "get") ? { code: 1, stderr: "404 not found" } : scwOk()(c)));
+    await writeAuto(io, { ios: { cloud: "scaleway", name: "ios", acceptMacDay: true, enabledAt: "x" } });
+    await expect(ensureMachine(io, "ios", () => undefined)).rejects.toMatchObject({ code: "PROVIDER_UNAVAILABLE", hint: expect.stringContaining("--server-id") });
+    expect(spawned).toHaveLength(0);
+  });
 });
 
 describe("Scaleway zones, offers and a Mac you rented (mocked scw and ssh)", () => {
   /** An account with one Mac the person rented in fr-par-1, and stock per zone. */
   function account(opts: { sshDenied?: boolean } = {}): Handler {
-    const mine = { id: "own-1", name: "apple-silicon-wizardly-shirley", type: "M2-L", status: "ready", ip: "62.0.0.9", ssh_username: "m1", sudo_password: MAC_PW, created_at: "2026-11-09T14:39:00Z", deletable_at: "2026-11-10T14:39:00Z", zone: "fr-par-1" };
+    const mine = { id: "5b6b4f7c-0000-4000-8000-00000000c0de", name: "apple-silicon-wizardly-shirley", type: "M2-L", status: "ready", ip: "62.0.0.9", ssh_username: "m1", sudo_password: MAC_PW, created_at: "2026-11-09T14:39:00Z", deletable_at: "2026-11-10T14:39:00Z", zone: "fr-par-1" };
     let keyInstalled = !opts.sshDenied;
     return (c) => {
       if (c.file === "/usr/bin/tailscale") return { stdout: JSON.stringify({ BackendState: "Running", CertDomains: ["x"] }) };
@@ -519,7 +526,7 @@ describe("Scaleway zones, offers and a Mac you rented (mocked scw and ssh)", () 
       if (has(c, "server-type", "list")) {
         return { stdout: JSON.stringify(zone === "fr-par-1" ? [{ name: "M1-M", stock: "no_stock" }, { name: "M4-S", stock: "low_stock" }] : [{ name: "M1-M", stock: "no_stock" }, { name: "M2-M", stock: "available" }]) };
       }
-      if (has(c, "server", "get")) return zone === "fr-par-1" && c.args.includes("own-1") ? { stdout: JSON.stringify(mine) } : { code: 1, stderr: "404 not found" };
+      if (has(c, "server", "get")) return zone === "fr-par-1" && c.args.includes("5b6b4f7c-0000-4000-8000-00000000c0de") ? { stdout: JSON.stringify(mine) } : { code: 1, stderr: "404 not found" };
       if (has(c, "server", "list")) return { stdout: JSON.stringify(zone === "fr-par-1" ? [mine] : []) };
       if (has(c, "private-network", "list")) return { stdout: "[]" };
       return { stdout: "{}" };
@@ -540,8 +547,8 @@ describe("Scaleway zones, offers and a Mac you rented (mocked scw and ssh)", () 
   it("sets up a Mac the person rented: rents nothing, adds no project key, schedules no deletion", async () => {
     const { io, calls } = await fakeIo(account({ sshDenied: true }));
     await writeKeyStub(io, "ios");
-    const record = await machineCreate(io, { cloud: "scaleway", serverId: "own-1", yes: true }, [], false);
-    expect(record).toMatchObject({ adopted: true, serverId: "own-1", zone: "fr-par-1", machineType: "M2-L", resourceName: "apple-silicon-wizardly-shirley" });
+    const record = await machineCreate(io, { cloud: "scaleway", serverId: "5b6b4f7c-0000-4000-8000-00000000c0de", yes: true }, [], false);
+    expect(record).toMatchObject({ adopted: true, serverId: "5b6b4f7c-0000-4000-8000-00000000c0de", zone: "fr-par-1", machineType: "M2-L", resourceName: "apple-silicon-wizardly-shirley" });
     expect(record.done).toContain("connect");
     expect(calls.some((c) => has(c, "server", "create"))).toBe(false);
     expect(calls.some((c) => has(c, "ssh-key", "create"))).toBe(false);
@@ -552,6 +559,14 @@ describe("Scaleway zones, offers and a Mac you rented (mocked scw and ssh)", () 
     expect(flat(calls)).not.toContain(MAC_PW);
     const { existsSync } = await import("node:fs");
     expect(existsSync(join(io.store.dir("ios"), "askpass.sh"))).toBe(false);
+  });
+
+  it("does not rent another Mac when the project already has one, and finds it by name", async () => {
+    const { io, calls } = await fakeIo(account());
+    await expect(machineCreate(io, { cloud: "scaleway", yes: true }, [], false)).rejects.toMatchObject({ code: "USAGE", hint: expect.stringContaining("--server-id 5b6b4f7c-0000-4000-8000-00000000c0de") });
+    expect(calls.some((c) => has(c, "server", "create"))).toBe(false);
+    const { Scaleway } = await import("./scaleway.js");
+    expect((await new Scaleway(io, undefined).findServer("apple-silicon-wizardly-shirley"))?.id).toBe("5b6b4f7c-0000-4000-8000-00000000c0de");
   });
 
   it("refuses an id that is not in the project", async () => {

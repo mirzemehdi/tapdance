@@ -858,7 +858,8 @@ destroy <name>` removes whatever was created so far. The machine's setup output 
 | `--project <id>` | The Google Cloud project (default: `gcloud config get-value project`) or Scaleway project id (default: scw's). Use a project of its own for Tapdance if you can. |
 | `--zone <zone>` | gcp: default gcloud's `compute/zone`, else `us-central1-a`. scaleway: default the first Mac zone (`fr-par-1`, `fr-par-3`) with the offer in stock. Every Mac zone is asked by name: `scw`'s `zone=all` does not list Macs in `fr-par-1`. |
 | `--type <type>` | gcp: the machine type (default `n2-standard-4`; N2 only, since nested virtualization needs Intel). scaleway: the Mac mini offer; default the cheapest offer in stock in any Mac zone (M1-M has 8 GB and holds one simulator at a time; M2-M and up have 16 GB or more). Out of stock everywhere: `NO_CAPACITY`, naming what is in stock. |
-| `--server-id <id>` | scaleway: set up a Mac mini you already rented (its id from the console, any Mac zone) instead of renting one. Nothing is rented, no key is added to your project and the deletion schedule is left as it is; if the Mac does not accept Tapdance's ssh key, it is added with one password login (the password from Scaleway's API reaches ssh through a throwaway `SSH_ASKPASS` helper, never on a command line or in a file). `destroy` later deletes that Mac, or schedules its deletion inside its first 24 hours. |
+| `--server-id <id\|name>` | scaleway: set up a Mac mini you already rented (its id or name from the console, any Mac zone) instead of renting one. Nothing is rented, no key is added to your project and the deletion schedule is left as it is; if the Mac does not accept Tapdance's ssh key, it is added with one password login (the password from Scaleway's API reaches ssh through a throwaway `SSH_ASKPASS` helper, never on a command line or in a file). `destroy` later deletes that Mac, or schedules its deletion inside its first 24 hours. Without `--server-id`, `create` looks for a Mac already in your project first: in a terminal it asks whether to use it; in a script, or with several, it stops and names them instead of renting another day. |
+| `--new` | scaleway: rent a new Mac mini even when your project already has one. |
 | `--disk-gb <gb>` | gcp: boot disk size, 32-500 (default 64). |
 | `--idle-stop <minutes\|off>` | gcp: the host powers the VM off after this many minutes without a lease, request or build (default 30). Passed to `host up --idle-stop`. |
 | `--max-hours <hours\|off>` | gcp: Compute Engine stops the VM at the latest this many hours after each start, even if Tapdance cannot (default 8; `--max-run-duration` with `STOP`). |
@@ -2433,7 +2434,8 @@ left from an older Tapdance is installed again); refuses while leases run unless
 --force
 
 Options:
-  --force     restart even while devices are leased (their agents lose them)
+  --force     restart even while devices are leased: their leases are ended
+              first, so their agents see them as ended
   -h, --help  display help for command
 ```
 
@@ -2992,8 +2994,10 @@ Options:
                              after each start (default 8)
   --keep                     scaleway: do not schedule the Mac for automatic
                              deletion at the 24-hour mark
-  --server-id <id>           scaleway: set up a Mac mini you already rented (its
-                             id from the console) instead of renting one
+  --server-id <id|name>      scaleway: set up a Mac mini you already rented (its
+                             id or name from the console) instead of renting one
+  --new                      scaleway: rent a new Mac mini even when your
+                             project already has one
   --label <name>             the pairing's name on the machine (default: this
                              computer's name)
   --tailscale-key            join the tailnet with a pre-approved auth key, read
