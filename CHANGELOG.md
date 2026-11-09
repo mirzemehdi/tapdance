@@ -13,6 +13,23 @@ file means the code exists, not that it has been tested on every platform.
 A fix for the worker guard; update every host (`npm install -g tapdance-cli@latest`, then `tapdance
 host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machines on 0.2.0 and 0.2.1 work together.
 
+### Added
+
+- `tapdance machine create / list / stop / start / destroy` (stage 5.1, "bring your own cloud,
+  self-run"): from the agent's machine, one command creates an Android host on a Google Cloud N2 VM
+  (`--cloud gcp`) or an iOS host on a Scaleway Mac mini (`--cloud scaleway`) in your own account, with
+  your own logged-in `gcloud` or `scw`, sets it up with `host-setup.sh` → `host up`, joins it to your
+  tailnet and runs `tapdance connect`; one command removes it with everything made for it and checks
+  that nothing billable is left. Resumable create steps, idle stop for Google Cloud by default,
+  Scaleway's 24-hour minimum confirmed before renting and automatic deletion at the 24-hour mark
+  (`--keep` turns it off), cost estimates in `list`. Tapdance never asks for, reads, prints or stores
+  cloud credentials. Unit-tested with mocked cloud tools only; not yet run on a real account.
+- `host-setup.sh --tailscale-auth-key-stdin` (a pre-approved Tailscale auth key on stdin, handed to
+  `tailscale up` through a mode-600 file deleted right after) and `--tailscale-hostname`.
+- `macos-auto-login.sh --password-stdin`.
+- The npm package carries `host-setup.sh` and `macos-auto-login.sh` in `dist/assets`, so `machine
+  create` copies the scripts that match the CLI.
+
 ### Changed
 
 - Worker guard: an app install or reinstall must name an upload this client made through the guard;

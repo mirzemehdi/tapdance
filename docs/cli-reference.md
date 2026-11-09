@@ -38,6 +38,7 @@ Global flags for every command: `--json`, `-c, --config <path>`, `--session <id>
 | Scenarios | [`run`](#run) |
 | Hosting (on the host) | [`host up`](#host-up), [`host status / pause / resume / warm / builds / artifacts / token / gh-login / down`](#host) |
 | Hosting (on the agent's machine) | [`connect`](#connect), [`connect --list`](#connect), [`disconnect`](#connect) |
+| Machines in your own cloud (on the agent's machine) | [`machine create / list / stop / start / destroy`](#machine) |
 | Self-hosting | [`worker …`](#worker), [`worker guard …`](#worker), [`gateway …`](#gateway), [`simlock`](#simlock) |
 | External tools | [`tools`](#tools), [`tool`](#tool-asc-android), [`asc`](#tool-asc-android), [`android`](#tool-asc-android) |
 | Agents | [`mcp`](#mcp) (stdio), [`mcp --http`](#mcp) (Streamable HTTP) |
@@ -804,6 +805,105 @@ machine (the release cannot reach the host any more). The host revokes this mach
 When the pairing token expires or is revoked, calls fail with `AUTH_FAILED`. The host's owner issues a
 new one (`tapdance host up --label <name> --repair`), and you run `tapdance connect` again with the new
 token file.
+
+### `machine`
+
+```text
+tapdance machine create --cloud gcp|scaleway [--name <name>] [--project <id>] [--zone <zone>] [--type <type>]
+                        [--disk-gb <gb>] [--idle-stop <minutes|off>] [--max-hours <hours|off>] [--keep]
+                        [--label <name>] [--tailscale-key] [--setup-ref <ref>] [--verbose] [-y, --yes]
+                        [-- <host-setup.sh options>]
+tapdance machine list [--project <id>]
+tapdance machine stop <name>
+tapdance machine start <name>
+tapdance machine destroy <name> [-y, --yes]
+```
+
+On the agent's machine: makes a host in **your own** cloud account, with your own logged-in cloud CLI,
+and connects this computer to it. Android runs on a Google Cloud N2 VM (`--cloud gcp`, with
+[gcloud](https://cloud.google.com/sdk/docs/install)); iOS runs on a Scaleway Mac mini
+(`--cloud scaleway`, with the [scw CLI](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/)).
+There is no Tapdance account and no server of ours: you pay Google or Scaleway directly. Tapdance never
+asks for, reads, prints or stores your cloud credentials; it runs `gcloud` and `scw` as you. This
+computer must already be in a [Tailscale](https://tailscale.com) network (tailnet).
+
+**`create`** checks that the cloud CLI is installed and logged in (and says how to log in if not), shows
+what it will create and what it costs, and asks for confirmation (`--yes` skips it, for scripts). Then it
+runs these steps, printing each one and the time it took:
+
+| `--cloud gcp` (Android) | `--cloud scaleway` (iOS) |
+| --- | --- |
+| 1. Turn on the Compute Engine and IAP APIs | 1. Make an ssh key for this Mac (in `~/.tapdance/machines/<name>/`) and add it to your Scaleway project |
+| 2. A network `tapdance-<name>` with one subnet and one firewall rule that lets only Google's IAP SSH range (`35.235.240.0/20`) in | 2. Rent the Mac mini `tapdance-<name>` (no commitment) and schedule it for automatic deletion at the 24-hour mark |
+| 3. The VM `tapdance-<name>`: `n2-standard-4`, nested virtualization, Ubuntu 24.04, 64 GB `pd-balanced`, no service account, OS Login, Shielded VM, a stop after `--max-hours` per start | 3. Wait for Scaleway to install macOS |
+| 4. Wait until it answers over IAP SSH | 4. Automatic login (`macos-auto-login.sh --password-stdin`), a restart, and a check that the login session is there |
+| 5. Copy `host-setup.sh` to it and run it with `--yes`: Android SDK, emulator, image, Tailscale, Tapdance, `host up` (pairing, `tailscale serve`, self-test) | 5. Copy `host-setup.sh` to it and run it with `--ios-only --yes --allow-admin-account`: Xcode's first launch, an iOS runtime, Tailscale, Tapdance, `host up`; on the 8 GB M1-M also `--warm android=0,ios=0` |
+| 6. Read the endpoint (`host status --json`) and the pairing token over ssh, and run `tapdance connect --name <name>` with the token on stdin | 6. The same over ssh |
+
+If a step fails, it says which one and why, and the same command run again continues at that step
+(the record in `~/.tapdance/machines/<name>/machine.json` says which steps are done). `tapdance machine
+destroy <name>` removes whatever was created so far. The machine's setup output goes to
+`~/.tapdance/machines/<name>/setup.log`; `--verbose` also shows every line of it.
+
+| Option | Meaning |
+| --- | --- |
+| `--cloud <gcp\|scaleway>` | Required. `gcp`: Android on a Google Cloud N2 VM. `scaleway`: iOS on a Scaleway Mac mini. |
+| `--name <name>` | The machine's name (1-20 lower-case letters, digits, dashes), also its connect target. Default `android` for gcp, `ios` for scaleway. Refused when this computer already has a connect target of that name that `machine` did not make. |
+| `--project <id>` | The Google Cloud project (default: `gcloud config get-value project`) or Scaleway project id (default: scw's). Use a project of its own for Tapdance if you can. |
+| `--zone <zone>` | gcp: default gcloud's `compute/zone`, else `us-central1-a`. scaleway: `fr-par-3`, where Scaleway's Macs are. |
+| `--type <type>` | gcp: the machine type (default `n2-standard-4`; N2 only, since nested virtualization needs Intel). scaleway: the Mac mini offer (default `M1-M`, 8 GB, one simulator at a time; `M2-M` has 16 GB). |
+| `--disk-gb <gb>` | gcp: boot disk size, 32-500 (default 64). |
+| `--idle-stop <minutes\|off>` | gcp: the host powers the VM off after this many minutes without a lease, request or build (default 30). Passed to `host up --idle-stop`. |
+| `--max-hours <hours\|off>` | gcp: Compute Engine stops the VM at the latest this many hours after each start, even if Tapdance cannot (default 8; `--max-run-duration` with `STOP`). |
+| `--keep` | scaleway: do not schedule automatic deletion; the Mac bills until `machine destroy`. |
+| `--label <name>` | The pairing's name on the machine (default: this computer's host name). |
+| `--tailscale-key` | Join the tailnet with a pre-approved [auth key](https://tailscale.com/kb/1085/auth-keys) instead of a login link. Read with echo off at the terminal, or from stdin (`--yes --tailscale-key < key-file`). It goes to the machine on ssh's stdin and from there to `tailscale up --auth-key=file:` through a mode-600 file deleted right after; never in an argument, a log or a file of Tapdance's. For gcp do not use an ephemeral key: Tailscale removes an ephemeral node while the VM is stopped. Without this option the machine prints a login link, which `create` shows: open it and approve the machine. |
+| `--setup-ref <ref>` | The Tapdance git ref the machine installs from source (default: this version's tag, e.g. `v0.2.0`). |
+| `--verbose` | Show every line of the machine's setup. |
+| `-y, --yes` | Do not ask for confirmation. |
+| `-- <options>` | Extra options for `host-setup.sh` on the machine, e.g. `-- --with-gh --android-build-sdk` or `-- --play-store`. |
+
+**What it creates, and how it is found again.** Every resource is named `tapdance-<name>`. On Google
+Cloud the VM carries the labels `tapdance-machine=<name>` and `created-by=tapdance`, and the network,
+subnet and firewall rule say `tapdance-machine=<name>` in their description (they take no labels).
+Scaleway's Apple silicon servers take no tags: Tapdance's Mac is the one named `tapdance-<name>` whose
+id this computer recorded. `list` and `destroy` act on nothing else in your account. The Compute Engine
+and IAP APIs stay on after destroy (they cost nothing).
+
+**The Scaleway Mac's password.** The rented Mac's only account is an administrator whose password
+Scaleway's API returns. `create` reads it with your scw login into memory and sends it to the Mac over
+ssh's stdin, twice: for automatic login, and for a `NOPASSWD` sudo rule
+(`/etc/sudoers.d/tapdance-setup`, checked with `visudo`) that lets the unattended setup use sudo and is
+removed at the end of the setup step, also when it fails. The password is never printed, logged,
+put in an argument or stored by Tapdance; `/etc/kcpassword` (automatic login) holds it obfuscated, as
+on any Mac with automatic login.
+
+**`list`** shows the machines this computer made, with their cloud, type, state from the cloud, age,
+the rate now and an estimated cost so far from list prices (excluding VAT): for Google Cloud an upper
+bound that counts the whole age as running time plus the disk, since Compute Engine does not report
+earlier stops; for Scaleway the hours since creation, at least 24. `--project` also looks in a Google
+Cloud project for Tapdance's VMs made from another computer. Your cloud's billing page is the final
+word.
+
+**`stop` / `start`** (gcp): stop the VM, which then bills only its disk, or start it; Tailscale, the
+worker and the guard come back by themselves in about a minute. The VM also stops itself when idle
+(`--idle-stop`). A Scaleway Mac mini cannot be stopped to save money: it bills by the hour until it is
+deleted, also while switched off, and cannot be deleted in its first 24 hours, so both commands refuse
+with `NOT_SUPPORTED` and say so.
+
+**`destroy`** asks for confirmation (`--yes` skips it), then: logs the machine out of Tailscale (which
+removes its node; when the VM is stopped it cannot, and says which node to remove in the admin
+console), removes the connect target and its token, deletes the VM with its disk, the firewall rule,
+subnet and network (gcp) or the Mac mini and its ssh key (scaleway), and then checks for leftovers:
+the same kinds as `infrastructure/scripts/gcp-leftovers.sh` and `scaleway-leftovers.sh`, split into
+**this machine's** (must be none: it says "Nothing billable left from this machine") and **other billable
+resources** in the project or account, not made by Tapdance, which it lists and never touches. Exit 1
+when something of the machine is left or could not be checked. A Scaleway Mac in its first 24 hours
+cannot be deleted: `destroy` schedules its deletion, says when, and keeps the record so `list` shows
+it until it is gone.
+
+Status: unit-tested with mocked `gcloud`, `scw` and ssh (`machine.test.ts`); not yet run on a real cloud
+account (STATUS M-07).
 
 ## External tools
 
@@ -2788,6 +2888,122 @@ On the agent's machine: remove a connect target (by name or endpoint) and its
 saved token
 
 Options:
+  -h, --help  display help for command
+```
+
+### `tapdance machine`
+
+```text
+Usage: tapdance machine [options] [command]
+
+On the agent's machine: create, list, stop, start and destroy phone machines in
+your own Google Cloud (Android) or Scaleway (iOS) account, with your own
+logged-in gcloud or scw
+
+Options:
+  -h, --help                             display help for command
+
+Commands:
+  create [options] [host-setup-args...]  Create a machine in your cloud account, set it up as a Tapdance host, join it to your tailnet and connect this computer to it. Run it again after a failure: it continues where it stopped
+  list [options]                         List the machines this computer created, with cloud, type, state, age and an estimated cost so far
+  stop <name>                            gcp: stop the VM (it then bills only its disk). Scaleway Macs cannot be stopped to save money
+  start <name>                           gcp: start a stopped VM; Tailscale and the host come back by themselves
+  destroy [options] <name>               Remove the machine and everything created for it (disk, network, firewall rule, ssh key, Tailscale node, connect target), then check that nothing billable is left
+  help [command]                         display help for command
+```
+
+### `tapdance machine create`
+
+```text
+Usage: tapdance machine create [options] [host-setup-args...]
+
+Create a machine in your cloud account, set it up as a Tapdance host, join it to
+your tailnet and connect this computer to it. Run it again after a failure: it
+continues where it stopped
+
+Arguments:
+  host-setup-args            after --: extra options for host-setup.sh on the
+                             machine, e.g. -- --with-gh --android-build-sdk
+
+Options:
+  --cloud <cloud>            gcp (Android, a Google Cloud N2 VM) or scaleway
+                             (iOS, a Scaleway Mac mini)
+  --name <name>              the machine's name, also its connect target
+                             (default: android for gcp, ios for scaleway)
+  --project <id>             Google Cloud project id (default: gcloud's) or
+                             Scaleway project id (default: scw's)
+  --zone <zone>              gcp: default gcloud's compute/zone, else
+                             us-central1-a; scaleway: fr-par-3
+  --type <type>              gcp: machine type (default n2-standard-4);
+                             scaleway: Mac mini offer (default M1-M)
+  --disk-gb <gb>             gcp: boot disk size (default 64)
+  --idle-stop <minutes|off>  gcp: stop the VM after this many minutes without a
+                             lease, request or build (default 30)
+  --max-hours <hours|off>    gcp: stop the VM at the latest this many hours
+                             after each start (default 8)
+  --keep                     scaleway: do not schedule the Mac for automatic
+                             deletion at the 24-hour mark
+  --label <name>             the pairing's name on the machine (default: this
+                             computer's name)
+  --tailscale-key            join the tailnet with a pre-approved auth key, read
+                             with echo off (or from stdin), instead of a login
+                             link you open
+  --setup-ref <ref>          the Tapdance git ref the machine installs (default:
+                             this version's tag)
+  --verbose                  show every line of the machine's setup, not only
+                             its progress
+  -y, --yes                  do not ask for confirmation (for scripts; read the
+                             cost first)
+  -h, --help                 display help for command
+```
+
+### `tapdance machine list`
+
+```text
+Usage: tapdance machine list [options]
+
+List the machines this computer created, with cloud, type, state, age and an
+estimated cost so far
+
+Options:
+  --project <id>  also look for Tapdance's VMs in this Google Cloud project
+  -h, --help      display help for command
+```
+
+### `tapdance machine stop`
+
+```text
+Usage: tapdance machine stop [options] <name>
+
+gcp: stop the VM (it then bills only its disk). Scaleway Macs cannot be stopped
+to save money
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance machine start`
+
+```text
+Usage: tapdance machine start [options] <name>
+
+gcp: start a stopped VM; Tailscale and the host come back by themselves
+
+Options:
+  -h, --help  display help for command
+```
+
+### `tapdance machine destroy`
+
+```text
+Usage: tapdance machine destroy [options] <name>
+
+Remove the machine and everything created for it (disk, network, firewall rule,
+ssh key, Tailscale node, connect target), then check that nothing billable is
+left
+
+Options:
+  -y, --yes   do not ask for confirmation
   -h, --help  display help for command
 ```
 

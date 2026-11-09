@@ -80,7 +80,7 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The computer your agent runs on** (a Mac, or Linux with KVM), with [Android Studio](https://developer.android.com/studio) | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another computer you own:** a Mac, a Mac mini, or a Linux PC or server with KVM | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A rented Google Cloud machine** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)) | About USD 0.20 an hour, plus its disk until you delete it | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 30 minutes |
+| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | About USD 0.20 an hour while it runs (it switches itself off when idle), plus its disk until you delete it, paid to Google | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes |
 
 **iPhones** run only on a Mac, with [Xcode](https://developer.apple.com/xcode/):
 
@@ -88,7 +88,21 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The Mac your agent runs on** | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another Mac or Mac mini you own** | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A rented Mac mini** from [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) | About EUR 3 a day, 24 hours minimum | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour |
+| **A Mac mini rented in your own [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) account**, with one command | About EUR 3 a day, 24 hours minimum, paid to Scaleway | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour (most of it Scaleway installing macOS) |
+
+With no Mac of your own, two commands make the machines in your own accounts and connect them, once
+[Tailscale](https://tailscale.com), [gcloud](https://cloud.google.com/sdk/docs/install) and
+[scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/) are logged in on your computer:
+
+```bash
+tapdance machine create --cloud gcp        # Android phones in your Google Cloud project
+tapdance machine create --cloud scaleway   # iPhones on a Mac mini in your Scaleway account
+tapdance machine destroy android           # when you are done (and: tapdance machine destroy ios)
+```
+
+`tapdance machine auto on --platform android` goes one step further: your agent's first lease creates
+or starts the machine by itself. These commands are new: they have been tested with stand-ins for the
+cloud tools, not yet on a real account.
 
 **Coming later: Tapdance Cloud.** No machine of your own: sign up and your agent gets Android phones
 and iPhones on machines we run, one customer per machine, paid per hour or per Mac day. Not available
@@ -121,13 +135,16 @@ what they print and tells you what it needs from you.
   the key file's contents.
   ```
 
-- **Phones on rented machines** (Google Cloud for Android, Scaleway for iPhones):
+- **Phones on machines in your own cloud accounts** (Google Cloud for Android, Scaleway for iPhones):
 
   ```text
-  Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
-  one step at a time. Run the commands meant for this computer yourself, tell me exactly what to
-  click in the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to. Ask
-  before anything that costs money, and never print token files or passwords.
+  Set up Tapdance so you can test my app on an Android emulator in my Google Cloud project and an
+  iPhone simulator on a Mac mini in my Scaleway account, following
+  https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md ("Set it up once").
+  Check that gcloud, scw and Tailscale are logged in and tell me how if not, then run
+  `tapdance machine create` for each. Show me the cost and ask me before each create, give me the
+  Tailscale link to approve, add the Tapdance MCP server at the end, and never print token files or
+  passwords.
   ```
 
 When the setup is done, ask your agent something from the table above.

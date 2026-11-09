@@ -2,6 +2,11 @@
 
 ## What you get
 
+> **One command instead:** `tapdance machine create --cloud scaleway` rents the Mac with your logged-in
+> `scw`, sets it up as below and connects the agent's machine; `tapdance machine destroy ios` removes it
+> ([`tapdance machine`](../cli-reference.md#machine), [start without a Mac](../guides/start-without-a-mac.md)).
+> This page is the same path by hand.
+
 You have no spare Mac. You rent a Mac mini from Scaleway and make it an iOS **host** with one script.
 Your agent (on your laptop, a Linux VPS, anywhere in your tailnet) leases iOS simulators on it through
 the **guard**, in [device-only mode](../security/device-only-mode.md): `host-setup.sh` → `host up` on the

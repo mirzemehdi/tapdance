@@ -4,6 +4,11 @@ This guide runs Android emulators on a Compute Engine VM in your own Google Clou
 coding agent that runs somewhere else (your laptop, or for example a Linux VPS). You create the VM, run
 one script on it, and connect the agent's machine over Tailscale.
 
+> **One command instead:** `tapdance machine create --cloud gcp` does all of this from the agent's
+> machine with your logged-in `gcloud`, and `tapdance machine destroy android` removes it again
+> ([`tapdance machine`](../cli-reference.md#machine), [start without a Mac](../guides/start-without-a-mac.md)).
+> This page is the same path by hand, with Terraform or gcloud.
+
 Proven (2026-11-03, again on 2026-11-04 and 11-05): an `n2-standard-4` VM in `europe-west1-b`, made
 with the Terraform module and set up with `scripts/host-setup.sh`, hosted Android emulators for an
 agent on a Mac and for one on a Linux VPS: the CLI and MCP checklists, the browser viewer, installs

@@ -74,6 +74,14 @@
 #   --android-build-sdk  with --ios-only: also the Android command-line tools and platform-tools (and the
 #                        SDK licences), no emulator or image. Kotlin Multiplatform apps with Android
 #                        modules need an SDK to build even their iOS app on the host (tapdance app build)
+#   --tailscale-auth-key-stdin
+#                        join the tailnet with a Tailscale auth key read from standard input (one line;
+#                        prompted with echo off when stdin is a terminal) instead of printing a login
+#                        link. The key is kept in memory, handed to `tailscale up` as a mode-600 file
+#                        that is deleted right after, and never printed. `tapdance machine create` uses
+#                        it with --tailscale-key
+#   --tailscale-hostname NAME
+#                        the machine's name in the tailnet (`tailscale up --hostname`), e.g. tapdance-android
 #
 # Settings: TAPDANCE_REPO (git URL; an SSH URL works for a private repository), TAPDANCE_REF (main),
 # TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis; --play-store sets
@@ -99,6 +107,7 @@ die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
 
 YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; IOS_ONLY=0; BUILD_SDK=0; EXTRA_SDK=(); PASS=()
+TS_KEY_STDIN=0; TS_KEY=""; TS_HOSTNAME=""
 add_sdk_packages() {
   local p; local IFS=', '
   for p in $1; do
@@ -119,6 +128,8 @@ while (( $# )); do
     --with-gh) WITH_GH=1 ;;
     --ios-only) IOS_ONLY=1 ;;
     --android-build-sdk) BUILD_SDK=1 ;;
+    --tailscale-auth-key-stdin) TS_KEY_STDIN=1 ;;
+    --tailscale-hostname) [[ $# -ge 2 ]] || die "--tailscale-hostname needs a name"; TS_HOSTNAME="$2"; shift ;;
     --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
     --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
     *) PASS+=("$1") ;;
@@ -132,6 +143,19 @@ case "$OS" in
   *) die "this script runs on macOS or Linux. On Windows run scripts/host-setup.ps1 for your options." ;;
 esac
 [[ ${EUID:-$(id -u)} -ne 0 ]] || die "run it as the user that will own the worker, not as root."
+[[ -z "$TS_HOSTNAME" || "$TS_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || die "--tailscale-hostname: \"$TS_HOSTNAME\" is not a host name (letters, digits and -)"
+# The auth key is read first, before anything else uses standard input, and kept only in memory.
+if (( TS_KEY_STDIN )); then
+  if [[ -t 0 ]]; then
+    printf 'Tailscale auth key (input hidden): ' >&2; IFS= read -rs TS_KEY || true; printf '\n' >&2
+  else
+    IFS= read -r TS_KEY || true
+  fi
+  TS_KEY="${TS_KEY//[$'\r\n\t ']/}"
+  [[ "$TS_KEY" =~ ^tskey-[A-Za-z0-9_-]+$ ]] || die "--tailscale-auth-key-stdin: standard input did not hold a Tailscale auth key (tskey-...)"
+  # Standard input is used up; prompts read /dev/tty, and without one --yes must answer them.
+  exec </dev/null
+fi
 (( ! IOS_ONLY )) || [[ "$OS" == Darwin ]] || die "--ios-only is for macOS: iOS simulators need a Mac with Xcode."
 (( ! IOS_ONLY || BUILD_SDK || ${#EXTRA_SDK[@]} == 0 )) || die "--sdk-packages with --ios-only needs --android-build-sdk (the Android SDK the packages go into)"
 case "$(uname -m)" in
@@ -558,9 +582,20 @@ tailscale_login() {
     return 0
   fi
   local me; me="$(id -un)"
+  local up=(up --operator="$me")
+  [[ -n "$TS_HOSTNAME" ]] && up+=(--hostname="$TS_HOSTNAME")
   if ! "$ts" status >/dev/null 2>&1; then
-    if ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
-      sudo "$ts" up --operator="$me"
+    if [[ -n "$TS_KEY" ]]; then
+      # Handed over as a file (never on a command line, where `ps` would show it), deleted right after.
+      local keyfile="$TMP/tailscale-auth-key"
+      ( umask 077; printf '%s\n' "$TS_KEY" > "$keyfile" )
+      say "joining the tailnet with the auth key from standard input"
+      local rc=0
+      sudo "$ts" "${up[@]}" --auth-key="file:$keyfile" || rc=$?
+      rm -f "$keyfile"; TS_KEY=""
+      (( rc == 0 )) || die "tailscale up with the auth key failed (exit $rc): check that the key is valid, not expired and not used up, then run this again"
+    elif ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
+      sudo "$ts" "${up[@]}"
     else
       say "note: Tailscale: run \`sudo tailscale up --operator=$me\` and open the link, then run this script again to expose the guard"
     fi

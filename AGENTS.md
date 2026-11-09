@@ -75,6 +75,9 @@ generated index is stale, or when any doc or hint names a `tapdance` command tha
    that may contain upstream output. Never return worker join tokens or the operator token to an
    agent; the operator token is loaded only for fleet views.
 6. **Do not couple core logic to a cloud.** No Google Cloud, AWS or Scaleway SDKs in `packages/`.
+   `tapdance machine` (`packages/cli/src/machine/`) runs the user's own logged-in `gcloud` and `scw` as
+   external commands with argument arrays; it never reads, stores or prints their credentials, and nothing
+   outside that folder depends on it.
 7. **No fake implementations.** A missing backend fails with `NOT_SUPPORTED` and a hint, like
    `provider: "cloud"` does.
 8. **Errors are `TapdanceError`s** with a stable code from `errors.ts`, a message a person can act on,

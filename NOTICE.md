@@ -95,6 +95,9 @@ apply to your use of them.
 | [Maestro](https://github.com/mobile-dev-inc/maestro) | Apache-2.0 | See the Maestro docs |
 | [Xcode](https://developer.apple.com/xcode/) (`xcodebuild`, `simctl`) | Apple's Xcode and SDK license | Mac App Store or developer.apple.com |
 | Android SDK, emulator and platform tools | Android Software Development Kit License Agreement | Android Studio or the command-line tools |
+| [Google Cloud CLI](https://cloud.google.com/sdk) (`gcloud`), used by `tapdance machine --cloud gcp` | Apache-2.0; Google Cloud's terms for the account | See cloud.google.com/sdk/docs/install |
+| [Scaleway CLI](https://github.com/scaleway/scaleway-cli) (`scw`), used by `tapdance machine --cloud scaleway` | Apache-2.0; Scaleway's terms for the account | See Scaleway's CLI quickstart |
+| [Tailscale](https://tailscale.com) (`tailscale`) | BSD-3-Clause (client); Tailscale's terms for the service | tailscale.com/download |
 
 Simlock drives Xcode's `simctl` and the Android SDK's `adb` and emulator on workers. Tapdance never
 redistributes Xcode, the Android SDK or system images.
