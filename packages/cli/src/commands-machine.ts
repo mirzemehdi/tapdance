@@ -29,7 +29,7 @@ import {
   lastSegment,
   type DestroyReport,
 } from "./machine/gcp.js";
-import { SCALEWAY_DEFAULTS, Scaleway, scalewayCostOf, scalewayCreate, scalewayDestroy, scalewayPreflight, scalewayPriceLine, scalewayStock } from "./machine/scaleway.js";
+import { MAC_ZONES, SCALEWAY_DEFAULTS, Scaleway, pickScalewayOffer, scalewayCostOf, scalewayCreate, scalewayDestroy, scalewayPreflight, scalewayPriceLine } from "./machine/scaleway.js";
 import { CLOUDS, MachineStore, assertMachineName, resourceName, type Cloud, type MachineRecord } from "./machine/state.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
@@ -44,6 +44,7 @@ export interface CreateOptions {
   idleStop?: string;
   maxHours?: string;
   keep?: boolean;
+  serverId?: string;
   label?: string;
   tailscaleKey?: boolean;
   setupRef?: string;
@@ -143,6 +144,16 @@ export function createSummary(record: MachineRecord): string[] {
       "  time: about 10 minutes",
     ];
   }
+  if (record.adopted) {
+    return [
+      bold(`Set up your Scaleway Mac mini ${record.resourceName} (${record.machineType}, ${record.zone}) as iOS machine "${record.name}".`),
+      "  Tapdance rents nothing: the Mac already bills you by the hour until it is deleted, at least 24 hours.",
+      "  It turns on automatic login, installs Xcode's first-launch setup, an iOS runtime, Tailscale and Tapdance, and connects this computer.",
+      yellow(`  \`tapdance machine destroy ${record.name}\` later deletes this Mac (or schedules its deletion before ${record.deletableAt ?? "its 24 hours are up"}).`),
+      `  It joins your Tailscale network as ${record.tailscaleHostname} and is connected to this computer as target "${record.target}".`,
+      "  time: about 20 minutes",
+    ];
+  }
   return [
     bold(`Rent an iOS machine "${record.name}" from Scaleway: a Mac mini ${record.machineType} in ${record.zone}${record.project ? ` (project ${record.project})` : ""}.`),
     yellow(`  Scaleway bills a Mac mini for at least 24 hours, and you cannot delete it sooner (Apple's macOS licence).`),
@@ -176,7 +187,24 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
   if (isGcp) project = await gcpPreflight(io, project);
   else await scalewayPreflight(io);
   if (!record) {
-    const zone = isGcp ? await gcpDefaultZone(io, o.zone) : (o.zone ?? SCALEWAY_DEFAULTS.zone);
+    if (o.serverId && isGcp) throw new TapdanceError("USAGE", "--server-id is for --cloud scaleway (a Mac mini you rented yourself)");
+    let zone: string;
+    let macType = o.type;
+    let adopted: { name: string; id: string; createdAt?: string; deletableAt?: string } | undefined;
+    const offerNotes: string[] = [];
+    if (isGcp) zone = await gcpDefaultZone(io, o.zone);
+    else if (o.serverId) {
+      const server = await new Scaleway(io, project).findServer(o.serverId, o.zone);
+      if (!server) throw new TapdanceError("USAGE", `No Mac mini ${o.serverId} in your Scaleway project${o.zone ? ` in ${o.zone}` : ` (looked in ${MAC_ZONES.join(", ")})`}`, { hint: "Copy its id from the Scaleway console (Bare Metal > Apple silicon > the Mac > Overview), and pass --zone if it is in another zone." });
+      zone = server.zone ?? o.zone ?? SCALEWAY_DEFAULTS.zone;
+      macType = server.type;
+      adopted = { name: server.name, id: server.id, ...(server.created_at ? { createdAt: server.created_at } : {}), ...(server.deletable_at ? { deletableAt: server.deletable_at } : {}) };
+    } else {
+      const pick = await pickScalewayOffer(io, { ...(o.type ? { type: o.type } : {}), ...(o.zone ? { zone: o.zone } : {}) });
+      zone = pick.zone;
+      macType = pick.type;
+      if (pick.note) offerNotes.push(pick.note);
+    }
     const diskGb = o.diskGb === undefined ? GCP_DEFAULTS.diskGb : Number(o.diskGb);
     if (!Number.isInteger(diskGb) || diskGb < 32 || diskGb > 500) throw new TapdanceError("USAGE", "--disk-gb must be 32 to 500");
     const setupRef = o.setupRef ?? "";
@@ -185,26 +213,27 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
       version: 1,
       name,
       cloud,
-      createdAt: io.now().toISOString(),
+      createdAt: adopted?.createdAt ?? io.now().toISOString(),
       ...(project ? { project } : {}),
       zone,
-      machineType: o.type ?? (isGcp ? GCP_DEFAULTS.machineType : SCALEWAY_DEFAULTS.machineType),
-      resourceName: resourceName(name),
+      machineType: (isGcp ? o.type : macType) ?? (isGcp ? GCP_DEFAULTS.machineType : SCALEWAY_DEFAULTS.machineType),
+      resourceName: adopted ? adopted.name : resourceName(name),
       label: defaultLabel(o.label ?? hostname()),
       target: name,
       tailscaleHostname: resourceName(name),
       setupRef,
       ...(setupRef ? {} : { tapdanceVersion: pkg.version }),
-      ...(isGcp ? { idleStopMinutes: parseIdleStop(o.idleStop), maxHours: parseMaxHours(o.maxHours), diskGb } : { scheduledDeletion: !o.keep }),
+      ...(isGcp
+        ? { idleStopMinutes: parseIdleStop(o.idleStop), maxHours: parseMaxHours(o.maxHours), diskGb }
+        : adopted
+          ? { adopted: true, serverId: adopted.id, scheduledDeletion: false, ...(adopted.deletableAt ? { deletableAt: adopted.deletableAt } : {}) }
+          : { scheduledDeletion: !o.keep }),
       done: [],
       timings: {},
     };
-    if (!isGcp) {
-      const stock = await scalewayStock(io, record.machineType, record.zone);
-      if (stock && /no_stock|out/i.test(stock)) throw new TapdanceError("NO_CAPACITY", `Scaleway has no ${record.machineType} in stock in ${record.zone} right now`, { hint: "Try another offer with --type (e.g. M2-M), or later." });
-    }
+    for (const n of offerNotes) io.out.progress(n);
     for (const line of createSummary(record)) io.out.progress(line);
-    await confirmOrThrow(isGcp ? "Create it?" : "Rent it? You pay Scaleway for at least 24 hours.", o.yes, ask, isTty);
+    await confirmOrThrow(isGcp ? "Create it?" : record.adopted ? "Set this Mac up as a Tapdance host?" : "Rent it? You pay Scaleway for at least 24 hours.", o.yes, ask, isTty);
     await io.store.save(record);
   } else {
     io.out.progress(`Machine ${name} exists on this computer: continuing its setup (${record.done.length} step(s) done). Other options given now are ignored.`);
@@ -394,12 +423,13 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
     .option("--cloud <cloud>", "gcp (Android, a Google Cloud N2 VM) or scaleway (iOS, a Scaleway Mac mini)")
     .option("--name <name>", "the machine's name, also its connect target (default: android for gcp, ios for scaleway)")
     .option("--project <id>", "Google Cloud project id (default: gcloud's) or Scaleway project id (default: scw's)")
-    .option("--zone <zone>", "gcp: default gcloud's compute/zone, else us-central1-a; scaleway: fr-par-3")
-    .option("--type <type>", "gcp: machine type (default n2-standard-4); scaleway: Mac mini offer (default M1-M)")
+    .option("--zone <zone>", "gcp: default gcloud's compute/zone, else us-central1-a; scaleway: default the first Mac zone (fr-par-1, fr-par-3) with the offer in stock")
+    .option("--type <type>", "gcp: machine type (default n2-standard-4); scaleway: Mac mini offer (default: the cheapest in stock)")
     .option("--disk-gb <gb>", "gcp: boot disk size (default 64)")
     .option("--idle-stop <minutes|off>", "gcp: stop the VM after this many minutes without a lease, request or build (default 30)")
     .option("--max-hours <hours|off>", "gcp: stop the VM at the latest this many hours after each start (default 8)")
     .option("--keep", "scaleway: do not schedule the Mac for automatic deletion at the 24-hour mark")
+    .option("--server-id <id>", "scaleway: set up a Mac mini you already rented (its id from the console) instead of renting one")
     .option("--label <name>", "the pairing's name on the machine (default: this computer's name)")
     .option("--tailscale-key", "join the tailnet with a pre-approved auth key, read with echo off (or from stdin), instead of a login link you open")
     .option("--setup-ref <ref>", "build Tapdance on the machine from this git ref instead of installing tapdance-cli from npm at this CLI's version")

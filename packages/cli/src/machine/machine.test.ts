@@ -492,3 +492,70 @@ describe("machine auto (mocked gcloud and scw)", () => {
     expect(spawned).toHaveLength(1);
   });
 });
+
+describe("Scaleway zones, offers and a Mac you rented (mocked scw and ssh)", () => {
+  /** An account with one Mac the person rented in fr-par-1, and stock per zone. */
+  function account(opts: { sshDenied?: boolean } = {}): Handler {
+    const mine = { id: "own-1", name: "apple-silicon-wizardly-shirley", type: "M2-L", status: "ready", ip: "62.0.0.9", ssh_username: "m1", sudo_password: MAC_PW, created_at: "2026-11-09T14:39:00Z", deletable_at: "2026-11-10T14:39:00Z", zone: "fr-par-1" };
+    let keyInstalled = !opts.sshDenied;
+    return (c) => {
+      if (c.file === "/usr/bin/tailscale") return { stdout: JSON.stringify({ BackendState: "Running", CertDomains: ["x"] }) };
+      if (c.file === "node") return { stdout: JSON.stringify(c.args.includes("connect") ? { ok: true, checks: [] } : {}) };
+      if (c.file === "ssh-keygen" || c.file === "scp") return {};
+      if (c.file === "ssh") {
+        const cmd = c.args[c.args.length - 1]!;
+        if (cmd.includes("authorized_keys")) {
+          keyInstalled = true;
+          return {};
+        }
+        if (!keyInstalled) return { code: 255, stderr: "m1@62.0.0.9: Permission denied (publickey,password,keyboard-interactive)." };
+        if (cmd === "who") return { stdout: "m1 console\n" };
+        if (cmd.includes("host status --json")) return { stdout: JSON.stringify({ ready: true, endpoint: "https://apple-silicon-wizardly-shirley.tail1234.ts.net:4720" }) };
+        if (cmd.startsWith("cat ")) return { stdout: TOKEN };
+        return {};
+      }
+      if (c.file !== "scw") return undefined;
+      const zone = c.args.find((a) => a.startsWith("zone="))?.slice(5);
+      if (has(c, "server-type", "list")) {
+        return { stdout: JSON.stringify(zone === "fr-par-1" ? [{ name: "M1-M", stock: "no_stock" }, { name: "M4-S", stock: "low_stock" }] : [{ name: "M1-M", stock: "no_stock" }, { name: "M2-M", stock: "available" }]) };
+      }
+      if (has(c, "server", "get")) return zone === "fr-par-1" && c.args.includes("own-1") ? { stdout: JSON.stringify(mine) } : { code: 1, stderr: "404 not found" };
+      if (has(c, "server", "list")) return { stdout: JSON.stringify(zone === "fr-par-1" ? [mine] : []) };
+      if (has(c, "private-network", "list")) return { stdout: "[]" };
+      return { stdout: "{}" };
+    };
+  }
+
+  it("never asks for zone=all, and picks the cheapest Mac mini in stock in any zone", async () => {
+    const { io, calls } = await fakeIo(account());
+    const { pickScalewayOffer } = await import("./scaleway.js");
+    expect(await pickScalewayOffer(io, {})).toMatchObject({ type: "M2-M", zone: "fr-par-3" });
+    expect(await pickScalewayOffer(io, { type: "M4-S" })).toMatchObject({ type: "M4-S", zone: "fr-par-1" });
+    await expect(pickScalewayOffer(io, { type: "M1-M" })).rejects.toMatchObject({ code: "NO_CAPACITY", hint: expect.stringContaining("M2-M in fr-par-3") });
+    const { Scaleway } = await import("./scaleway.js");
+    expect((await new Scaleway(io, undefined).listServers()).map((s) => s.zone)).toEqual(["fr-par-1"]);
+    expect(calls.some((c) => c.args.includes("zone=all"))).toBe(false);
+  });
+
+  it("sets up a Mac the person rented: rents nothing, adds no project key, schedules no deletion", async () => {
+    const { io, calls } = await fakeIo(account({ sshDenied: true }));
+    await writeKeyStub(io, "ios");
+    const record = await machineCreate(io, { cloud: "scaleway", serverId: "own-1", yes: true }, [], false);
+    expect(record).toMatchObject({ adopted: true, serverId: "own-1", zone: "fr-par-1", machineType: "M2-L", resourceName: "apple-silicon-wizardly-shirley" });
+    expect(record.done).toContain("connect");
+    expect(calls.some((c) => has(c, "server", "create"))).toBe(false);
+    expect(calls.some((c) => has(c, "ssh-key", "create"))).toBe(false);
+    expect(calls.some((c) => c.args.includes("schedule-deletion=true"))).toBe(false);
+    // The password went to ssh only through the askpass helper's environment, never an argument.
+    const keyCall = calls.find((c) => c.file === "ssh" && c.args.at(-1)!.includes("authorized_keys"))!;
+    expect(keyCall.args).toContain("PubkeyAuthentication=no");
+    expect(flat(calls)).not.toContain(MAC_PW);
+    const { existsSync } = await import("node:fs");
+    expect(existsSync(join(io.store.dir("ios"), "askpass.sh"))).toBe(false);
+  });
+
+  it("refuses an id that is not in the project", async () => {
+    const { io } = await fakeIo(account());
+    await expect(machineCreate(io, { cloud: "scaleway", serverId: "nope", yes: true }, [], false)).rejects.toThrow(/No Mac mini nope/);
+  });
+});

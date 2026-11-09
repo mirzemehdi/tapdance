@@ -29,6 +29,11 @@ import type { MachineRecord } from "./state.js";
  */
 
 export const SCALEWAY_DEFAULTS = { zone: "fr-par-3", machineType: "M1-M" } as const;
+/**
+ * The zones Scaleway rents Mac minis in (2026-11-09). `scw ... list zone=all` does NOT include fr-par-1
+ * for Apple silicon (it returned nothing while a Mac ran there), so every list asks each zone by name.
+ */
+export const MAC_ZONES = ["fr-par-1", "fr-par-3"] as const;
 export const SCW_LOGIN_HINT = "Install the scw CLI (https://www.scaleway.com/en/docs/scaleway-cli/quickstart/) and run `scw init`. Tapdance uses your scw login and never reads or stores its keys.";
 const SUDOERS = "/etc/sudoers.d/tapdance-setup";
 /** Offers with 8 GB: one simulator at a time, so no warm spare (docs/ios/scaleway-mac.md). */
@@ -72,9 +77,24 @@ export class Scaleway {
     return parseJson<ScwServer>(r.stdout, "scw apple-silicon server get");
   }
 
-  async listServers(): Promise<ScwServer[]> {
-    const r = check(await this.scw(["apple-silicon", "server", "list", "zone=all", ...this.projectArg()], { timeoutMs: 120_000 }), "scw apple-silicon server list", SCW_LOGIN_HINT);
-    return parseJson<ScwServer[]>(r.stdout || "[]", "scw apple-silicon server list") ?? [];
+  /** Every Mac in the project, asking each Mac zone by name (and any extra zone given). */
+  async listServers(extraZones: string[] = []): Promise<ScwServer[]> {
+    const zones = [...new Set([...MAC_ZONES, ...extraZones])];
+    const all: ScwServer[] = [];
+    for (const zone of zones) {
+      const r = check(await this.scw(["apple-silicon", "server", "list", `zone=${zone}`, ...this.projectArg()], { timeoutMs: 120_000 }), `scw apple-silicon server list zone=${zone}`, SCW_LOGIN_HINT);
+      for (const s of parseJson<ScwServer[]>(r.stdout || "[]", "scw apple-silicon server list") ?? []) all.push({ ...s, zone: s.zone ?? zone });
+    }
+    return all;
+  }
+
+  /** Finds a Mac by id in any Mac zone. */
+  async findServer(id: string, zone?: string): Promise<ScwServer | undefined> {
+    for (const z of zone ? [zone] : MAC_ZONES) {
+      const s = await this.server(id, z);
+      if (s) return { ...s, zone: s.zone ?? z };
+    }
+    return undefined;
   }
 
   async createKey(name: string, publicKey: string): Promise<string> {
@@ -112,9 +132,43 @@ export class Scaleway {
 }
 
 export async function scalewayPreflight(io: MachineIo): Promise<void> {
-  const r = await io.exec("scw", ["apple-silicon", "server-type", "list", `zone=${SCALEWAY_DEFAULTS.zone}`, "-o", "json"], { timeoutMs: 60_000 });
+  const r = await io.exec("scw", ["apple-silicon", "server-type", "list", `zone=${MAC_ZONES[0]}`, "-o", "json"], { timeoutMs: 60_000 });
   if (r.code === 127) throw new TapdanceError("HOST_CHECK_FAILED", "scw is not installed on this computer", { hint: SCW_LOGIN_HINT });
   if (r.code !== 0) throw new TapdanceError("AUTH_FAILED", `scw cannot reach Scaleway with your login: ${errorTail(r, 2)}`, { hint: SCW_LOGIN_HINT });
+}
+
+/** The offers of a zone with their stock (`available`, `low_stock`, `no_stock`), or [] when unknown. */
+export async function scalewayOffers(io: MachineIo, zone: string): Promise<Array<{ name: string; stock: string }>> {
+  const r = await io.exec("scw", ["apple-silicon", "server-type", "list", `zone=${zone}`, "-o", "json"], { timeoutMs: 60_000 });
+  if (r.code !== 0) return [];
+  try {
+    return (JSON.parse(r.stdout) as Array<{ name?: string; stock?: string }>).filter((t) => t.name).map((t) => ({ name: t.name!, stock: t.stock ?? "unknown" }));
+  } catch {
+    return [];
+  }
+}
+
+const inStock = (stock: string) => !/no_stock|out/i.test(stock);
+
+/**
+ * Picks the offer and zone to rent: the ones asked for, else the first zone with the asked offer in
+ * stock, else the cheapest offer in stock in any Mac zone. Refuses only when nothing is in stock.
+ */
+export async function pickScalewayOffer(io: MachineIo, want: { type?: string; zone?: string }): Promise<{ type: string; zone: string; note?: string }> {
+  const zones = want.zone ? [want.zone] : [...MAC_ZONES];
+  const offers: Array<{ zone: string; name: string; stock: string }> = [];
+  for (const zone of zones) for (const o of await scalewayOffers(io, zone)) offers.push({ zone, ...o });
+  if (offers.length === 0) return { type: want.type ?? SCALEWAY_DEFAULTS.machineType, zone: want.zone ?? SCALEWAY_DEFAULTS.zone, note: "Scaleway did not report its stock; trying anyway" };
+  const price = (n: string) => SCALEWAY_HOURLY_EUR[n] ?? Number.POSITIVE_INFINITY;
+  const candidates = offers.filter((o) => (!want.type || o.name === want.type) && inStock(o.stock)).sort((a, b) => price(a.name) - price(b.name) || zones.indexOf(a.zone as never) - zones.indexOf(b.zone as never));
+  const pick = candidates[0];
+  if (!pick) {
+    const seen = offers.filter((o) => inStock(o.stock)).map((o) => `${o.name} in ${o.zone}`);
+    throw new TapdanceError("NO_CAPACITY", `Scaleway has no ${want.type ?? "Mac mini"} in stock${want.zone ? ` in ${want.zone}` : ""} right now`, {
+      hint: seen.length ? `In stock now: ${seen.join(", ")}. Pick one with --type and --zone.` : "No Mac mini is in stock in any zone; try later.",
+    });
+  }
+  return { type: pick.name, zone: pick.zone, ...(want.type ? {} : { note: `cheapest Mac mini in stock: ${pick.name} in ${pick.zone} (${pick.stock})` }) };
 }
 
 /** Server-type stock, when Scaleway reports it (field names vary; undefined when unknown). */
@@ -167,6 +221,37 @@ export function sudoersInstallCommand(user: string): string {
 }
 export const SUDOERS_REMOVE = `sudo -n rm -f ${SUDOERS} ${SUDOERS}.new`;
 
+/**
+ * Appends this computer's public key for the Mac to its authorized_keys with one password login. The
+ * password reaches ssh through a throwaway SSH_ASKPASS helper that prints it from its environment: never
+ * on a command line, in a file or in a log. The helper is deleted right after.
+ */
+export async function installKeyWithPassword(io: MachineIo, record: MachineRecord, password: string, publicKey: string): Promise<void> {
+  const { writeFile, rm } = await import("node:fs/promises");
+  const helper = join(io.store.dir(record.name), "askpass.sh");
+  await writeFile(helper, '#!/bin/sh\nprintf \'%s\\n\' "$TAPDANCE_ASKPASS"\n', { mode: 0o700 });
+  try {
+    const dir = io.store.dir(record.name);
+    const r = await io.exec(
+      "ssh",
+      [
+        "-o", `UserKnownHostsFile=${join(dir, "known_hosts")}`,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "PubkeyAuthentication=no",
+        "-o", "PreferredAuthentications=keyboard-interactive,password",
+        "-o", "NumberOfPasswordPrompts=1",
+        "-o", "ConnectTimeout=15",
+        `${record.sshUser ?? "m1"}@${record.ip}`,
+        "umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys",
+      ],
+      { input: `${publicKey}\n`, timeoutMs: 60_000, env: { ...io.env, SSH_ASKPASS: helper, SSH_ASKPASS_REQUIRE: "force", DISPLAY: io.env["DISPLAY"] ?? ":0", TAPDANCE_ASKPASS: password } },
+    );
+    check(r, "adding this computer's ssh key to the Mac with its password");
+  } finally {
+    await rm(helper, { force: true });
+  }
+}
+
 export interface ScalewayCreateInput {
   record: MachineRecord;
   tailscaleKey?: string;
@@ -216,18 +301,20 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
   const steps: Step[] = [
     {
       id: "ssh-key",
-      title: "Make an ssh key for this Mac and add it to your Scaleway project",
+      title: record.adopted ? "Make an ssh key for this Mac" : "Make an ssh key for this Mac and add it to your Scaleway project",
       run: async () => {
         const have = await readFile(`${keyFile}.pub`, "utf8").catch(() => undefined);
         if (!have) check(await io.exec("ssh-keygen", ["-t", "ed25519", "-N", "", "-C", record.resourceName, "-f", keyFile, "-q"], { timeoutMs: 30_000 }), "ssh-keygen");
         const pub = (await readFile(`${keyFile}.pub`, "utf8")).trim();
-        if (!record.sshKeyId) record.sshKeyId = await scw.createKey(record.resourceName, pub);
+        // A Mac already rented does not get the project's keys again, so an adopted Mac needs none there.
+        if (!record.sshKeyId && !record.adopted) record.sshKeyId = await scw.createKey(record.resourceName, pub);
       },
     },
     {
       id: "server",
-      title: `Rent the Mac mini (${record.machineType}, ${record.zone})`,
+      title: record.adopted ? `Use your Mac mini ${record.resourceName} (${record.machineType}, ${record.zone})` : `Rent the Mac mini (${record.machineType}, ${record.zone})`,
       run: async () => {
+        if (record.adopted) return;
         if (!record.serverId) {
           const s = await scw.create(record);
           record.serverId = s.id;
@@ -246,6 +333,13 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
         record.sshUser = s.ssh_username ?? "m1";
         record.deletableAt = s.deletable_at;
         await io.store.save(record);
+        // Scaleway installs the project's ssh keys only when it installs macOS: a Mac rented before the
+        // key was added (one handed over with --server-id) needs it added once, with its password.
+        const probe = await macSsh(io, record, "true", { timeoutMs: 30_000 });
+        if (probe.code !== 0 && /Permission denied/i.test(probe.stderr)) {
+          io.out.progress("  adding this computer's key for the Mac, with one password login (the password comes from Scaleway's API and is not shown)");
+          await installKeyWithPassword(io, record, await sudoPassword(), (await readFile(`${keyFile}.pub`, "utf8")).trim());
+        }
         await waitSsh(10);
       },
     },
@@ -364,12 +458,12 @@ export async function scalewayDestroy(io: MachineIo, scw: Scaleway, record: Mach
   return { removed, notes, leftovers };
 }
 
-export async function scalewayLeftovers(scw: Scaleway, record: Pick<MachineRecord, "resourceName" | "serverId" | "pendingDeletionAt">): Promise<LeftoverReport> {
+export async function scalewayLeftovers(scw: Scaleway, record: Pick<MachineRecord, "resourceName" | "serverId" | "pendingDeletionAt" | "zone">): Promise<LeftoverReport> {
   const ours: string[] = [];
   const others: string[] = [];
   const unknown: string[] = [];
   try {
-    for (const s of await scw.listServers()) {
+    for (const s of await scw.listServers(record.zone ? [record.zone] : [])) {
       const row = `Mac mini ${s.name} id=${s.id} type=${s.type} status=${s.status}${s.deletable_at ? ` deletable_at=${s.deletable_at}` : ""}`;
       // A Mac being deleted no longer bills.
       if (s.status === "deleting") continue;
@@ -379,11 +473,14 @@ export async function scalewayLeftovers(scw: Scaleway, record: Pick<MachineRecor
   } catch (error) {
     unknown.push(`Mac mini servers (${(error as Error).message.split("\n")[0]})`);
   }
-  const pn = await scw.scw(["apple-silicon", "private-network", "list", "zone=all"], { timeoutMs: 60_000 });
-  if (pn.code !== 0) unknown.push(`Mac mini private networks (${errorTail(pn, 1) || `exit ${pn.code}`})`);
-  else {
+  for (const zone of MAC_ZONES) {
+    const pn = await scw.scw(["apple-silicon", "private-network", "list", `zone=${zone}`], { timeoutMs: 60_000 });
+    if (pn.code !== 0) {
+      unknown.push(`Mac mini private networks in ${zone} (${errorTail(pn, 1) || `exit ${pn.code}`})`);
+      continue;
+    }
     for (const p of parseJson<Array<{ server_id?: string; private_network_id?: string }>>(pn.stdout || "[]", "scw apple-silicon private-network list") ?? []) {
-      const row = `private network ${p.private_network_id} on server ${p.server_id}`;
+      const row = `private network ${p.private_network_id} on server ${p.server_id} (${zone})`;
       if (p.server_id === record.serverId) ours.push(row);
       else others.push(row);
     }

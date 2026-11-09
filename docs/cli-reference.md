@@ -2977,9 +2977,11 @@ Options:
   --project <id>             Google Cloud project id (default: gcloud's) or
                              Scaleway project id (default: scw's)
   --zone <zone>              gcp: default gcloud's compute/zone, else
-                             us-central1-a; scaleway: fr-par-3
+                             us-central1-a; scaleway: default the first Mac zone
+                             (fr-par-1, fr-par-3) with the offer in stock
   --type <type>              gcp: machine type (default n2-standard-4);
-                             scaleway: Mac mini offer (default M1-M)
+                             scaleway: Mac mini offer (default: the cheapest in
+                             stock)
   --disk-gb <gb>             gcp: boot disk size (default 64)
   --idle-stop <minutes|off>  gcp: stop the VM after this many minutes without a
                              lease, request or build (default 30)
@@ -2987,6 +2989,8 @@ Options:
                              after each start (default 8)
   --keep                     scaleway: do not schedule the Mac for automatic
                              deletion at the 24-hour mark
+  --server-id <id>           scaleway: set up a Mac mini you already rented (its
+                             id from the console) instead of renting one
   --label <name>             the pairing's name on the machine (default: this
                              computer's name)
   --tailscale-key            join the tailnet with a pre-approved auth key, read

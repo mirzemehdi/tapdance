@@ -36,6 +36,8 @@ export interface MachineRecord {
   diskGb?: number;
   /** Scaleway */
   serverId?: string;
+  /** A Mac the person rented themselves and handed over with --server-id (Tapdance did not rent it). */
+  adopted?: boolean;
   sshKeyId?: string;
   sshUser?: string;
   ip?: string;
