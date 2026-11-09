@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import { join } from "node:path";
 import { TapdanceError } from "@tapdance/sdk";
 import {
@@ -192,6 +193,19 @@ export async function scalewayStock(io: MachineIo, type: string, zone: string): 
   }
 }
 
+/** A user name ssh may be given: what Scaleway's API reports is checked, never trusted. */
+const SSH_USER = /^[a-z_][a-z0-9_-]{0,31}$/;
+
+/** `user@ip` for ssh, refusing an address or user name from the API that is not one. */
+export function sshTarget(record: Pick<MachineRecord, "sshUser" | "ip">): { user: string; host: string; dest: string; scpHost: string } {
+  const user = record.sshUser ?? "m1";
+  const ip = record.ip ?? "";
+  if (!SSH_USER.test(user)) throw new TapdanceError("INTERNAL", `Scaleway reported "${user}" as the Mac's ssh user, which is not a user name`);
+  const family = isIP(ip);
+  if (family === 0) throw new TapdanceError("INTERNAL", `Scaleway reported "${ip}" as the Mac's address, which is not an IP address`);
+  return { user, host: ip, dest: `${user}@${ip}`, scpHost: family === 6 ? `${user}@[${ip}]` : `${user}@${ip}` };
+}
+
 export function sshBase(io: MachineIo, record: MachineRecord): string[] {
   const dir = io.store.dir(record.name);
   return [
@@ -206,11 +220,12 @@ export function sshBase(io: MachineIo, record: MachineRecord): string[] {
 }
 
 export function macSsh(io: MachineIo, record: MachineRecord, command: string, options: { input?: string; timeoutMs?: number; onLine?: (l: string) => void } = {}): Promise<ExecResult> {
-  return io.exec("ssh", [...sshBase(io, record), `${record.sshUser ?? "m1"}@${record.ip}`, command], { timeoutMs: 120_000, ...options });
+  // `--` ends ssh's options: nothing after it is read as one, whatever the API returned.
+  return io.exec("ssh", [...sshBase(io, record), "--", sshTarget(record).dest, command], { timeoutMs: 120_000, ...options });
 }
 
 export function macScp(io: MachineIo, record: MachineRecord, local: string, remote: string): Promise<ExecResult> {
-  return io.exec("scp", [...sshBase(io, record), local, `${record.sshUser ?? "m1"}@${record.ip}:${remote}`], { timeoutMs: 180_000 });
+  return io.exec("scp", [...sshBase(io, record), "--", local, `${sshTarget(record).scpHost}:${remote}`], { timeoutMs: 180_000 });
 }
 
 /** The command line create runs on the Mac. */
@@ -250,7 +265,8 @@ export async function installKeyWithPassword(io: MachineIo, record: MachineRecor
         "-o", "PreferredAuthentications=keyboard-interactive,password",
         "-o", "NumberOfPasswordPrompts=1",
         "-o", "ConnectTimeout=15",
-        `${record.sshUser ?? "m1"}@${record.ip}`,
+        "--",
+        sshTarget(record).dest,
         "umask 077; mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys",
       ],
       { input: `${publicKey}\n`, timeoutMs: 60_000, env: { ...io.env, SSH_ASKPASS: helper, SSH_ASKPASS_REQUIRE: "force", DISPLAY: io.env["DISPLAY"] ?? ":0", TAPDANCE_ASKPASS: password } },
@@ -285,7 +301,10 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
     while (io.now().getTime() < deadline) {
       const s = await scw.server(record.serverId!, record.zone);
       if (!s) throw new TapdanceError("INTERNAL", `The Mac ${record.serverId} is gone`);
-      if (s.status === "ready" && s.ip) return s;
+      if (s.status === "ready" && s.ip) {
+        sshTarget({ ip: s.ip, ...(s.ssh_username ? { sshUser: s.ssh_username } : {}) });
+        return s;
+      }
       if (s.status === "error" || s.status === "locked") throw new TapdanceError("PROVIDER_UNAVAILABLE", `Scaleway reports the Mac as ${s.status}`, { hint: "Look at it in the Scaleway console (Bare Metal > Apple silicon)." });
       const mins = Math.round((io.now().getTime() - started) / 60_000);
       if (s.status !== lastStatus || mins - lastShown >= 5) {
@@ -325,9 +344,18 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
       run: async () => {
         if (record.adopted) return;
         if (!record.serverId) {
-          const s = await scw.create(record);
-          record.serverId = s.id;
-          record.createdAt = s.created_at ?? record.createdAt;
+          // A rent whose answer was lost (a timeout, a crash) left a Mac of this exact name: use it
+          // instead of renting a second one.
+          const earlier = await rentedForRecord(io, scw, record);
+          if (earlier) {
+            io.out.progress(`  found the Mac mini ${record.resourceName} rented by an earlier run (${earlier.id}); using it`);
+            record.serverId = earlier.id;
+            record.createdAt = earlier.created_at ?? record.createdAt;
+          } else {
+            const s = await scw.create(record);
+            record.serverId = s.id;
+            record.createdAt = s.created_at ?? record.createdAt;
+          }
           await io.store.save(record);
         }
         if (record.scheduledDeletion) await scw.scheduleDeletion(record.serverId, record.zone);
@@ -350,6 +378,12 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
           await installKeyWithPassword(io, record, await sudoPassword(), (await readFile(`${keyFile}.pub`, "utf8")).trim());
         }
         await waitSsh(10);
+        // The key is on the Mac now. Left in the project, Scaleway would install it on every Mac
+        // rented there later; nothing here needs it again (later steps and destroy use the Mac's copy).
+        if (record.sshKeyId) {
+          if (await scw.deleteKey(record.sshKeyId)) delete record.sshKeyId;
+          else io.out.warn(`Could not delete the ssh key ${record.resourceName} from your Scaleway project; destroy tries again, or delete it under Project > SSH keys.`);
+        }
       },
     },
     {
@@ -357,23 +391,28 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
       title: "Turn on automatic login, so the host comes back after a restart",
       run: async () => {
         const pw = await sudoPassword();
-        check(await macSsh(io, record, sudoersInstallCommand(record.sshUser ?? "m1"), { input: `${pw}\n`, timeoutMs: 60_000 }), "installing the setup's sudo rule on the Mac");
-        check(await macScp(io, record, io.assets.autoLogin, "tapdance-auto-login.sh"), "copying macos-auto-login.sh to the Mac");
-        check(await macSsh(io, record, `bash tapdance-auto-login.sh --password-stdin ${shJoin([record.sshUser ?? "m1"])}`, { input: `${pw}\n`, timeoutMs: 120_000 }), "macos-auto-login.sh on the Mac");
-        io.out.progress("  restarting the Mac so the login session starts…");
-        await scw.reboot(record.serverId!, record.zone);
-        await io.sleep(30_000);
-        await waitReady("restart", 20);
-        await waitSsh(10);
-        const deadline = io.now().getTime() + 5 * 60_000;
-        while (io.now().getTime() < deadline) {
-          const who = await macSsh(io, record, "who", { timeoutMs: 30_000 });
-          if (who.code === 0 && /\bconsole\b/.test(who.stdout)) return;
-          await io.sleep(10_000);
+        try {
+          check(await macSsh(io, record, sudoersInstallCommand(record.sshUser ?? "m1"), { input: `${pw}\n`, timeoutMs: 60_000 }), "installing the setup's sudo rule on the Mac");
+          check(await macScp(io, record, io.assets.autoLogin, "tapdance-auto-login.sh"), "copying macos-auto-login.sh to the Mac");
+          check(await macSsh(io, record, `bash tapdance-auto-login.sh --password-stdin ${shJoin([record.sshUser ?? "m1"])}`, { input: `${pw}\n`, timeoutMs: 120_000 }), "macos-auto-login.sh on the Mac");
+          io.out.progress("  restarting the Mac so the login session starts…");
+          await scw.reboot(record.serverId!, record.zone);
+          await io.sleep(30_000);
+          await waitReady("restart", 20);
+          await waitSsh(10);
+          const deadline = io.now().getTime() + 5 * 60_000;
+          while (io.now().getTime() < deadline) {
+            const who = await macSsh(io, record, "who", { timeoutMs: 30_000 });
+            if (who.code === 0 && /\bconsole\b/.test(who.stdout)) return;
+            await io.sleep(10_000);
+          }
+          throw new TapdanceError("HOST_CHECK_FAILED", "The Mac restarted but nobody is logged in on its console: automatic login did not take", {
+            hint: "Look at the Mac's screen through the VNC link in the Scaleway console.",
+          });
+        } finally {
+          // The setup step installs the rule again for itself; it never stays between steps.
+          await macSsh(io, record, SUDOERS_REMOVE, { timeoutMs: 30_000 }).catch(() => undefined);
         }
-        throw new TapdanceError("HOST_CHECK_FAILED", "The Mac restarted but nobody is logged in on its console: automatic login did not take", {
-          hint: "Look at the Mac's screen through the VNC link in the Scaleway console.",
-        });
       },
     },
     {
@@ -420,16 +459,25 @@ export async function scalewayCreate(io: MachineIo, scw: Scaleway, input: Scalew
 export async function scalewayDestroy(io: MachineIo, scw: Scaleway, record: MachineRecord): Promise<DestroyReport> {
   const removed: string[] = [];
   const notes: string[] = [];
-  const server = record.serverId ? await scw.server(record.serverId, record.zone) : undefined;
+  // No id recorded: a rent whose answer was lost may still have made the Mac, under this exact name.
+  const server = record.serverId
+    ? await scw.server(record.serverId, record.zone)
+    : record.adopted
+      ? undefined
+      : await rentedForRecord(io, scw, record).catch((error: unknown) => {
+          notes.push((error as Error).message);
+          return undefined;
+        });
   if (server && server.name !== record.resourceName) {
-    throw new TapdanceError("FORBIDDEN", `The Scaleway server ${record.serverId} is called ${server.name}, not ${record.resourceName}; Tapdance leaves it alone`);
+    throw new TapdanceError("FORBIDDEN", `The Scaleway server ${server.id} is called ${server.name}, not ${record.resourceName}; Tapdance leaves it alone`);
   }
+  if (server && !record.serverId) record.serverId = server.id;
   if (server && server.status === "ready" && record.ip && record.done.includes("install")) {
-    io.out.progress("Logging the Mac out of Tailscale (removes it from your tailnet)…");
+    io.out.progress("Logging the Mac out of Tailscale…");
     const r = await macSsh(io, record, TAILSCALE_LOGOUT, { timeoutMs: 90_000 });
     if (r.code === 0) {
       removed.push(`Tailscale: ${record.tailscaleHostname} logged out`);
-      notes.push(`Tailscale may keep ${record.tailscaleHostname} listed as offline: delete it under Machines in the admin console (https://login.tailscale.com/admin/machines).`);
+      notes.push(`Tailscale keeps listing ${record.tailscaleHostname} as offline: delete it under Machines in the admin console (https://login.tailscale.com/admin/machines).`);
     } else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the Mac had not joined your tailnet, nothing to remove");
     else notes.push(`Could not log ${record.tailscaleHostname} out of Tailscale; remove it under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);
   }
@@ -444,9 +492,12 @@ export async function scalewayDestroy(io: MachineIo, scw: Scaleway, record: Mach
       notes.push(`Scaleway does not delete a Mac before its first 24 hours: it is scheduled for deletion at ${server.deletable_at} and billed until then. Nothing else to do; \`tapdance machine list\` shows it until it is gone.`);
     } else {
       const r = await scw.delete(server.id, record.zone);
-      if (r.code !== 0 && /24|deletable|minimum/i.test(r.stderr)) {
+      const again = r.code === 0 ? undefined : await scw.server(server.id, record.zone).catch(() => undefined);
+      // Too early: Scaleway now reports a deletable_at still ahead, or says so in the error.
+      const notYet = (again?.deletable_at !== undefined && new Date(again.deletable_at) > io.now()) || TOO_EARLY.test(r.stderr);
+      if (r.code !== 0 && notYet) {
         await scw.scheduleDeletion(server.id, record.zone);
-        record.pendingDeletionAt = server.deletable_at ?? "after its first 24 hours";
+        record.pendingDeletionAt = again?.deletable_at ?? server.deletable_at ?? "after its first 24 hours";
         notes.push("Scaleway refused to delete the Mac yet (24-hour minimum); it is scheduled for deletion instead.");
       } else {
         check(r, "scw apple-silicon server delete");
@@ -465,6 +516,31 @@ export async function scalewayDestroy(io: MachineIo, scw: Scaleway, record: Mach
   io.out.progress("Checking that nothing billable is left…");
   const leftovers = await scalewayLeftovers(scw, record);
   return { removed, notes, leftovers };
+}
+
+/**
+ * Scaleway's refusal to delete a Mac in its first 24 hours, when its deletable_at cannot be read back.
+ * Only that refusal: any other failure (permissions, a server already locked) is shown as it is.
+ */
+const TOO_EARLY = /not (yet )?deletable|cannot be deleted (yet|before)|before (its|the) (first )?24 ?h|24[- ]?hours? minimum|minimum (rental|allocation|billing) (period|duration)/i;
+
+/**
+ * The Mac this record's create rented when the record has no id for it: in the record's zone, named
+ * exactly as the record says, not deleting, not another record's, and rented no earlier than the
+ * record was made. A Mac of that name rented before the record is refused, never adopted.
+ */
+export async function rentedForRecord(io: MachineIo, scw: Scaleway, record: MachineRecord): Promise<ScwServer | undefined> {
+  const known = new Set((await io.store.list()).filter((r) => r.name !== record.name).map((r) => r.serverId).filter(Boolean));
+  const named = (await scw.listServers([record.zone])).filter((s) => s.zone === record.zone && s.name === record.resourceName && s.status !== "deleting" && !known.has(s.id));
+  if (named.length === 0) return undefined;
+  const since = Date.parse(record.createdAt) - 5 * 60_000;
+  const before = named.filter((s) => s.created_at === undefined || Date.parse(s.created_at) < since);
+  if (before.length > 0 || named.length > 1) {
+    throw new TapdanceError("USAGE", `Your Scaleway project already has ${named.length === 1 ? "a Mac mini" : `${named.length} Mac minis`} called ${record.resourceName} that this machine's record did not rent: ${named.map((s) => `${s.id} (${s.created_at ?? "?"})`).join(", ")}`, {
+      hint: "Tapdance does not use or delete it. Set one up with `tapdance machine create --cloud scaleway --server-id <id>` under another --name, or delete it in the Scaleway console.",
+    });
+  }
+  return named[0];
 }
 
 export async function scalewayLeftovers(scw: Scaleway, record: Pick<MachineRecord, "resourceName" | "serverId" | "pendingDeletionAt" | "zone">): Promise<LeftoverReport> {
@@ -506,4 +582,10 @@ export function scalewayPriceLine(type: string): string {
   return rate === undefined
     ? `${type}: see https://www.scaleway.com/en/pricing/apple-silicon/`
     : `EUR ${rate.toFixed(2)} an hour before VAT (${type}, list price read 2026-11-09), billed for at least 24 hours: EUR ${(rate * 24).toFixed(2)} at least. Current prices: https://www.scaleway.com/en/pricing/apple-silicon/`;
+}
+
+/** What auto mode pays per Mac when no --type is set: the cheapest offer in stock when it rents. */
+export function scalewayCheapestLine(): string {
+  const daily = Object.values(SCALEWAY_HOURLY_EUR).map((h) => h * 24);
+  return `the cheapest Mac mini in stock when it rents: EUR ${Math.min(...daily).toFixed(2)} to ${Math.max(...daily).toFixed(2)} a day before VAT (list prices read 2026-11-09), at least 24 hours each. Current prices: https://www.scaleway.com/en/pricing/apple-silicon/`;
 }

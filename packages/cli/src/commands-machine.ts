@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { createInterface } from "node:readline/promises";
-import type { Command } from "commander";
-import { TapdanceError } from "@tapdance/sdk";
+import { Option, type Command } from "commander";
+import { TapdanceError, defaultProfilePath, loadConfig } from "@tapdance/sdk";
 import { CLI_ENTRY, output, type GlobalOptions } from "./context.js";
 import { readSecret } from "./commands-setup.js";
 import { currentTargets } from "./connect-targets.js";
@@ -13,6 +13,7 @@ import { bold, dim, green, red, table, yellow, type Output } from "./output.js";
 import { autoHousekeeping, autoPolicyFrom, closeQuietly, describePolicy, machineAutoHook, openLog, readAuto, writeAuto, type AutoOnOptions } from "./machine/auto.js";
 import { assetPaths, confirmOrThrow, formatSeconds, localTailscaleBin, type MachineIo } from "./machine/common.js";
 import { age, money } from "./machine/cost.js";
+import { LOCK_TOKEN_ENV, acquireLock, holderAlive, lockHolder } from "./machine/lock.js";
 import { realExec, realSleep } from "./machine/exec.js";
 import {
   GCP_DEFAULTS,
@@ -29,7 +30,7 @@ import {
   lastSegment,
   type DestroyReport,
 } from "./machine/gcp.js";
-import { MAC_ZONES, SCALEWAY_DEFAULTS, Scaleway, pickScalewayOffer, scalewayCostOf, scalewayCreate, scalewayDestroy, scalewayPreflight, scalewayPriceLine } from "./machine/scaleway.js";
+import { MAC_ZONES, SCALEWAY_DEFAULTS, Scaleway, pickScalewayOffer, scalewayCheapestLine, scalewayCostOf, scalewayCreate, scalewayDestroy, scalewayPreflight, scalewayPriceLine } from "./machine/scaleway.js";
 import { CLOUDS, MachineStore, assertMachineName, resourceName, type Cloud, type MachineRecord } from "./machine/state.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
@@ -66,10 +67,10 @@ export function defaultMachineIo(out: Output, verbose = false): MachineIo {
     verbose,
     tailscaleBin: localTailscaleBin(),
     readSecret,
-    spawnCreate: async (args, logFile) => {
+    spawnCreate: async (args, logFile, env) => {
       const fd = openLog(logFile);
       try {
-        const child = spawn(process.execPath, [CLI_ENTRY, ...args], { detached: true, stdio: ["ignore", fd, fd], env: process.env });
+        const child = spawn(process.execPath, [CLI_ENTRY, ...args], { detached: true, stdio: ["ignore", fd, fd], env: { ...process.env, ...env } });
         child.unref();
         if (child.pid === undefined) throw new TapdanceError("INTERNAL", "Could not start the background machine create");
         return child.pid;
@@ -81,9 +82,29 @@ export function defaultMachineIo(out: Output, verbose = false): MachineIo {
       try {
         process.kill(pid, 0);
         return true;
+      } catch (error) {
+        // EPERM: it runs, under another user.
+        return (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+    },
+    processStart: async (pid) => {
+      const r = await realExec("ps", ["-o", "lstart=", "-p", String(pid)], { timeoutMs: 10_000, env: { ...process.env, LC_ALL: "C", LANG: "C" } });
+      const t = r.code === 0 ? Date.parse(r.stdout.trim()) : Number.NaN;
+      return Number.isFinite(t) ? t : undefined;
+    },
+    kill: (pid, signal) => {
+      try {
+        process.kill(pid, signal);
+        return true;
       } catch {
         return false;
       }
+    },
+    proc: { pid: process.pid, startedAt: Math.round(Date.now() - process.uptime() * 1000) },
+    localWorker: async () => {
+      const r = await loadConfig().catch(() => undefined);
+      if (!r || r.config.provider !== "local") return false;
+      return existsSync(r.config.simlock.profilePath ?? defaultProfilePath());
     },
     healthz: async (endpoint) => {
       try {
@@ -167,9 +188,28 @@ export function createSummary(record: MachineRecord): string[] {
   ];
 }
 
+/** A machine is reached as a connect target, and connect targets replace the local worker: refused. */
+export async function refuseLocalWorker(io: MachineIo): Promise<void> {
+  if (!(await io.localWorker())) return;
+  throw new TapdanceError("USAGE", "This computer leases from its own local worker (provider local); a machine is reached as a connect target, and connect targets replace the local worker", {
+    hint: "To use machines instead, switch first with `tapdance config set provider self-hosted --global` (the local worker stays installed but is no longer used; `tapdance config set provider local --global` switches back), then run this again.",
+  });
+}
+
 export async function machineCreate(io: MachineIo, o: CreateOptions, extra: string[], isTty: boolean): Promise<MachineRecord> {
   const cloud = parseCloud(o.cloud);
   const name = assertMachineName(o.name ?? (cloud === "gcp" ? "android" : "ios"));
+  // One create per machine at a time; auto mode's background create takes over its spawner's lock.
+  const adopt = io.env[LOCK_TOKEN_ENV];
+  const { release } = await acquireLock(io, name, "create", adopt ? { adopt } : {});
+  try {
+    return await createLocked(io, o, extra, isTty, cloud, name);
+  } finally {
+    await release();
+  }
+}
+
+async function createLocked(io: MachineIo, o: CreateOptions, extra: string[], isTty: boolean, cloud: Cloud, name: string): Promise<MachineRecord> {
   let record = await io.store.get(name);
   if (record && record.cloud !== cloud) {
     throw new TapdanceError("USAGE", `Machine ${name} already exists on ${record.cloud}`, { hint: `Pick another --name, or remove it first with \`tapdance machine destroy ${name}\`.` });
@@ -179,6 +219,7 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
   }
   const resuming = record !== undefined;
   if (!record) {
+    await refuseLocalWorker(io);
     if ((await io.targetNames()).includes(name)) {
       throw new TapdanceError("USAGE", `This computer already has a connect target called ${name}`, { hint: `Pick another --name, or remove that target with \`tapdance disconnect ${name}\` first.` });
     }
@@ -307,29 +348,38 @@ export async function machineList(io: MachineIo, opts: { project?: string } = {}
       continue;
     }
     for (const vm of vms) {
-      const name = vm.labels?.[LABEL] ?? vm.name;
-      const r = records.find((x) => x.cloud === "gcp" && x.name === name && x.project === project);
-      const base: MachineRecord = r ?? {
-        version: 1, name, cloud: "gcp", createdAt: vm.creationTimestamp, project, zone: lastSegment(vm.zone), machineType: lastSegment(vm.machineType),
-        resourceName: vm.name, label: "", target: name, tailscaleHostname: vm.name, setupRef: "", diskGb: Number(vm.disks?.[0]?.diskSizeGb ?? GCP_DEFAULTS.diskGb), done: [], timings: {},
-      };
-      seen.add(name);
-      machines.push({ ...listed({ ...base, createdAt: vm.creationTimestamp }, vm.status, now), shell: shellCommand(base, io.store.dir(name))!, tracked: r !== undefined, ...(r ? {} : { note: "made by Tapdance on another computer (no local record)" }) });
+      // One odd row (a label value that is not a machine name) never hides the others.
+      try {
+        const name = vm.labels?.[LABEL] ?? vm.name;
+        const r = records.find((x) => x.cloud === "gcp" && x.name === name && x.project === project);
+        const base: MachineRecord = r ?? {
+          version: 1, name, cloud: "gcp", createdAt: vm.creationTimestamp, project, zone: lastSegment(vm.zone), machineType: lastSegment(vm.machineType),
+          resourceName: vm.name, label: "", target: name, tailscaleHostname: vm.name, setupRef: "", diskGb: Number(vm.disks?.[0]?.diskSizeGb ?? GCP_DEFAULTS.diskGb), done: [], timings: {},
+        };
+        const shell = shellCommand(base, io.store.dir(name))!;
+        seen.add(name);
+        machines.push({ ...listed({ ...base, createdAt: vm.creationTimestamp }, vm.status, now), shell, tracked: r !== undefined, ...(r ? {} : { note: "made by Tapdance on another computer (no local record)" }) });
+      } catch (error) {
+        warnings.push(`Google Cloud project ${project}: VM ${vm.name}: ${(error as Error).message.split("\n")[0]}`);
+      }
     }
   }
   for (const r of records.filter((x) => x.cloud === "gcp" && !seen.has(x.name))) {
     machines.push({ ...listed(r, r.done.includes("vm") ? "gone" : "not created", now), note: r.done.includes("vm") ? "no longer in Google Cloud; `tapdance machine destroy` removes the rest" : "create did not finish; run create again or destroy" });
   }
   const macs = records.filter((r) => r.cloud === "scaleway");
-  if (macs.length) {
-    const scw = new Scaleway(io, undefined);
+  // Each Mac is looked up in the project its record names (absent: scw's default project).
+  const macProjects = [...new Set(macs.map((r) => r.project ?? ""))];
+  for (const project of macProjects) {
+    const group = macs.filter((r) => (r.project ?? "") === project);
+    const scw = new Scaleway(io, project || undefined);
     let servers: Awaited<ReturnType<Scaleway["listServers"]>> | undefined;
     try {
-      servers = await scw.listServers();
+      servers = await scw.listServers([...new Set(group.map((r) => r.zone))]);
     } catch (error) {
-      warnings.push(`Scaleway: ${(error as Error).message.split("\n")[0]}`);
+      warnings.push(`Scaleway${project ? ` project ${project}` : ""}: ${(error as Error).message.split("\n")[0]}`);
     }
-    for (const r of macs) {
+    for (const r of group) {
       const s = servers?.find((x) => x.id === r.serverId);
       const state = servers === undefined ? "unknown" : s ? s.status : r.serverId ? "gone" : "not created";
       const shell = shellCommand(r, io.store.dir(r.name));
@@ -379,20 +429,75 @@ export async function machineStop(io: MachineIo, name: string, start: boolean): 
   return `Stopped ${r.name}. It now bills only its disk (about USD ${(((r.diskGb ?? GCP_DEFAULTS.diskGb) * 0.1)).toFixed(2)} a month) until you destroy it. Start it again with \`tapdance machine start ${r.name}\`.`;
 }
 
-export async function machineDestroy(io: MachineIo, name: string, o: { yes?: boolean }, isTty: boolean): Promise<DestroyReport & { record: MachineRecord; clean: boolean }> {
-  const r = await requireRecord(io, name);
+const TAILSCALE_NOTE = "logs it out of Tailscale (Tailscale keeps listing it as offline; delete it under Machines in the admin console)";
+
+/**
+ * Stops a create of this machine that is still running (auto mode's background create, or one in
+ * another terminal): SIGTERM, then up to 30 s for it to exit. Refuses when it does not.
+ */
+async function stopRunningCreate(io: MachineIo, name: string): Promise<void> {
+  let holder = await lockHolder(io, name);
+  // A lease process holds the lock only for the moment it takes to start the background create.
+  for (let i = 0; i < 10 && holder?.role === "starting"; i++) {
+    await io.sleep(1_000);
+    holder = await lockHolder(io, name);
+  }
+  if (!holder || holder.pid === io.proc.pid || holder.role !== "create") return;
+  io.out.progress(`Stopping the create of machine ${name} that is still running (pid ${holder.pid})…`);
+  io.kill(holder.pid, "SIGTERM");
+  const deadline = io.now().getTime() + 30_000;
+  while (await holderAlive(io, holder)) {
+    if (io.now().getTime() >= deadline) {
+      throw new TapdanceError("TIMEOUT", `The create of machine ${name} (pid ${holder.pid}) did not stop within 30 s; nothing was destroyed`, {
+        hint: `Stop it yourself (\`kill ${holder.pid}\`), then run \`tapdance machine destroy ${name}\` again.`,
+      });
+    }
+    await io.sleep(1_000);
+  }
+}
+
+/**
+ * Destroys a machine. It always asks a person first, at a terminal: there is no --yes, and without a
+ * terminal (an agent, a script, CI) it refuses. `ask` is the question (injected by tests).
+ */
+export async function machineDestroy(
+  io: MachineIo,
+  name: string,
+  isTty: boolean,
+  ask: (question: string) => Promise<boolean>,
+  o: { yes?: boolean } = {},
+): Promise<DestroyReport & { record: MachineRecord; clean: boolean }> {
+  if (o.yes) {
+    throw new TapdanceError("USAGE", "destroy always asks for confirmation; --yes is not accepted", { hint: `Run \`tapdance machine destroy ${name}\` in a terminal and answer its question.` });
+  }
+  let r = await requireRecord(io, name);
   io.out.progress(
     r.cloud === "gcp"
-      ? `Destroy machine ${r.name}: the VM ${r.resourceName} and its disk, network and firewall rule in project ${r.project}, its Tailscale node and connect target ${r.target}.`
-      : `Destroy machine ${r.name}: the Scaleway Mac mini ${r.resourceName}${r.serverId ? ` (${r.serverId})` : ""}, its ssh key in your Scaleway project, its Tailscale node and connect target ${r.target}.`,
+      ? `Destroy machine ${r.name}: the VM ${r.resourceName} and its disk, network and firewall rule in project ${r.project}, and connect target ${r.target}; it also ${TAILSCALE_NOTE}.`
+      : `Destroy machine ${r.name}: the Scaleway Mac mini ${r.resourceName}${r.serverId ? ` (${r.serverId})` : ""}, its ssh key in your Scaleway project if one is left, and connect target ${r.target}; it also ${TAILSCALE_NOTE}.`,
   );
-  await confirmOrThrow("Destroy it? This cannot be undone.", o.yes, ask, isTty);
-  const report = r.cloud === "gcp" ? await gcpDestroy(io, new Gcp(io, r.project!), r) : await scalewayDestroy(io, new Scaleway(io, r.project), r);
-  const pending = r.pendingDeletionAt !== undefined;
-  const clean = report.leftovers.ours.length === 0 && report.leftovers.unknown.length === 0;
-  if (clean && !pending) await io.store.remove(r.name);
-  else await io.store.save(r);
-  return { ...report, record: r, clean: clean || (pending && report.leftovers.unknown.length === 0) };
+  if (!isTty) throw new TapdanceError("USAGE", "destroy asks you at a terminal", { hint: `Run \`tapdance machine destroy ${r.name}\` yourself in a terminal.` });
+  if (!(await ask("Destroy it? This cannot be undone."))) throw new TapdanceError("USAGE", "Cancelled; nothing was changed");
+  // Marked first, so a create still running stops before its next step; then stopped, then locked out.
+  await io.store.markDestroying(r.name, io.proc.pid);
+  try {
+    await stopRunningCreate(io, r.name);
+    const { release } = await acquireLock(io, r.name, "destroy");
+    try {
+      // The create just stopped may have saved more (a server id), so the record is read again.
+      r = (await io.store.get(r.name)) ?? r;
+      const report = r.cloud === "gcp" ? await gcpDestroy(io, new Gcp(io, r.project!), r) : await scalewayDestroy(io, new Scaleway(io, r.project), r);
+      const pending = r.pendingDeletionAt !== undefined;
+      const clean = report.leftovers.ours.length === 0 && report.leftovers.unknown.length === 0;
+      if (clean && !pending) await io.store.remove(r.name);
+      else await io.store.save(r);
+      return { ...report, record: r, clean: clean || (pending && report.leftovers.unknown.length === 0) };
+    } finally {
+      await release();
+    }
+  } finally {
+    await io.store.clearDestroying(r.name);
+  }
 }
 
 export function renderDestroy(d: DestroyReport & { record: MachineRecord; clean: boolean }): string {
@@ -552,7 +657,7 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
     .option("--type <type>", "as for machine create")
     .option("--idle-stop <minutes|off>", "android: stop the VM after this many idle minutes (default 30)")
     .option("--max-hours <hours|off>", "android: stop the VM at the latest this many hours after each start (default 8)")
-    .option("--delete-after-days <days>", "android: destroy the machine once it has been stopped this many days (default: never)")
+    .option("--delete-after-days <days>", "android: remind you to destroy the machine once it has been stopped this many days (default: never); nothing is deleted automatically")
     .option("--accept-mac-day", "ios: agree that each new Mac auto mode rents bills at least 24 hours")
     .option("-y, --yes", "do not ask for confirmation")
     .action(async (o: AutoOnOptions & { yes?: boolean }) => {
@@ -560,10 +665,15 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
       try {
         const io = defaultMachineIo(out);
         const { platform, policy } = autoPolicyFrom(o, { idleStop: parseIdleStop, maxHours: parseMaxHours }, io.now());
+        await refuseLocalWorker(io);
         if (policy.cloud === "gcp") policy.project = await gcpPreflight(io, policy.project);
         else await scalewayPreflight(io);
         out.progress(describePolicy(platform, policy));
-        out.progress(policy.cloud === "gcp" ? `cost: ${gcpPriceLine(policy.type ?? GCP_DEFAULTS.machineType, GCP_DEFAULTS.diskGb)}` : `cost: ${scalewayPriceLine(policy.type ?? SCALEWAY_DEFAULTS.machineType)} per Mac`);
+        out.progress(
+          policy.cloud === "gcp"
+            ? `cost: ${gcpPriceLine(policy.type ?? GCP_DEFAULTS.machineType, GCP_DEFAULTS.diskGb)}`
+            : `cost: ${policy.type ? `${scalewayPriceLine(policy.type)} per Mac` : scalewayCheapestLine()}`,
+        );
         await confirmOrThrow("Turn auto mode on? Tapdance will create or start machines in your account when your agent needs one.", o.yes, ask, process.stdin.isTTY === true);
         const config = await readAuto(io);
         config[platform] = policy;
@@ -595,12 +705,13 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
 
   machine
     .command("destroy <name>")
-    .description("Remove the machine and everything created for it (disk, network, firewall rule, ssh key, Tailscale node, connect target), then check that nothing billable is left")
-    .option("-y, --yes", "do not ask for confirmation")
+    .description("Remove the machine and everything created for it (VM and disk, network, firewall rule, ssh key, connect target), log it out of Tailscale, then check that nothing billable is left. Always asks you first, at a terminal")
+    // Not offered: destroy always asks a person. Given anyway, it is refused with a clear message.
+    .addOption(new Option("-y, --yes").hideHelp())
     .action(async (name: string, o: { yes?: boolean }) => {
       const out = output(globals());
       try {
-        const d = await machineDestroy(defaultMachineIo(out), name, o, process.stdin.isTTY === true);
+        const d = await machineDestroy(defaultMachineIo(out), name, process.stdin.isTTY === true && process.stderr.isTTY === true, ask, o);
         out.result({ machine: name, removed: d.removed, notes: d.notes, leftovers: d.leftovers, pendingDeletionAt: d.record.pendingDeletionAt, nothingBillableLeft: d.clean && !d.record.pendingDeletionAt }, () => renderDestroy(d));
         if (!d.clean) process.exitCode = 1;
       } catch (error) {

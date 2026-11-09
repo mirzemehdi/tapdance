@@ -94,6 +94,8 @@ export function toTapdanceError(error: unknown): TapdanceError {
 const SECRET_PATTERNS: RegExp[] = [
   /slk_[A-Za-z0-9_-]{8,}/g,
   /tdg_[A-Za-z0-9_-]{16,}/g,
+  // Tailscale auth, API and OAuth client keys (`machine create --tailscale-key`): tskey-auth-…, tskey-api-…, tskey-client-….
+  /\btskey-[A-Za-z0-9_-]{10,}/g,
   // GitHub tokens (`host gh-login` puts one on the host): classic, OAuth, app and fine-grained.
   /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g,
   /(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/gi,

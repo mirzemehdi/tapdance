@@ -2,7 +2,7 @@ import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, leaseCommand, loadConfig, renewIfDue, runKeepalive, type LeaseHandle } from "./index.js";
+import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, leaseCommand, loadConfig, renewIfDue, runKeepalive, type LeaseHandle, type MachineAutoInput } from "./index.js";
 import { FakeProvider } from "./testing.js";
 import { completeMp4 } from "./tapdance.js";
 
@@ -627,8 +627,10 @@ describe("lease loss and TTL caps (#27)", () => {
 
 // Auto mode (`tapdance machine auto`): the SDK's generic hook, with FakeProvider (MOCKED provider).
 describe("machineAuto lease hook (FakeProvider, mocked)", () => {
-  async function withHook(failFirst: boolean, handles = true) {
+  async function withHook(failFirst: boolean, handles = true, opts: { localWorker?: boolean } = {}) {
     const cwd = await mkdtemp(join(tmpdir(), "td-auto-"));
+    // SIMLOCK_HOME points at the temp dir, so a real local worker on this computer does not count.
+    if (opts.localWorker) await writeFile(join(cwd, "agent-device-profile.json"), "{}");
     const provider = new FakeProvider();
     const lease = provider.lease.bind(provider);
     let calls = 0;
@@ -638,20 +640,22 @@ describe("machineAuto lease hook (FakeProvider, mocked)", () => {
       return lease(...args);
     };
     const ensured: string[] = [];
+    const inputs: MachineAutoInput[] = [];
     const t = await Tapdance.create({
       cwd,
-      env: { TAPDANCE_HOME: cwd },
+      env: { TAPDANCE_HOME: cwd, SIMLOCK_HOME: cwd },
       session: { id: "auto", source: "test" },
       provider,
       machineAuto: {
         handles: () => handles,
-        ensure: async ({ reason }) => {
-          ensured.push(reason);
+        ensure: async (input) => {
+          ensured.push(input.reason);
+          inputs.push(input);
           return { notice: "Started machine android for this lease in 58 s" };
         },
       },
     });
-    return { t, ensured, calls: () => calls };
+    return { t, ensured, inputs, calls: () => calls };
   }
 
   it("asks the hook first when no connect target serves the platform, and passes its notice on", async () => {
@@ -662,10 +666,19 @@ describe("machineAuto lease hook (FakeProvider, mocked)", () => {
   });
 
   it("retries once after an unreachable host when the hook brought it up", async () => {
-    const { t, ensured, calls } = await withHook(true);
+    const { t, ensured, inputs, calls } = await withHook(true);
     await t.lease({ platform: "android" });
     expect(ensured).toEqual(["no-target", "unreachable"]);
     expect(calls()).toBe(2);
+    // The hook learns the configured hosts and the error, to tell "no host" from "a host refused".
+    expect(inputs[1]).toMatchObject({ platform: "android", provider: "local", targets: [], localWorker: false, error: { code: "PROVIDER_UNREACHABLE" } });
+  });
+
+  it("treats a local worker as serving the platform: no create before the lease", async () => {
+    const { t, ensured, inputs } = await withHook(true, true, { localWorker: true });
+    await t.lease({ platform: "android" });
+    expect(ensured).toEqual(["unreachable"]);
+    expect(inputs[0]).toMatchObject({ provider: "local", localWorker: true });
   });
 
   it("leaves leases alone when auto mode is off for the platform", async () => {

@@ -32,6 +32,11 @@ describe("errors and redaction", () => {
 
   it("redacts Simlock secrets, bearer headers and token fields", () => {
     expect(redactSecrets("token slk_d2FybS1wb29sLWFnZW50 here")).toBe("token [REDACTED] here");
+    // A Tailscale key (built from parts so no secret scanner flags this file); the placeholder "tskey-..." stays readable.
+    const tsKey = ["tskey", "auth", "kAbCdEf1CNTRL", "XyZ0123456789"].join("-");
+    expect(redactSecrets(`tailscale up --auth-key=${tsKey} failed`)).toBe("tailscale up --auth-key=[REDACTED] failed");
+    expect(redactSecrets(`key ${tsKey}`)).toBe("key [REDACTED]");
+    expect(redactSecrets("That is not a Tailscale auth key (tskey-...)")).toBe("That is not a Tailscale auth key (tskey-...)");
     expect(redactSecrets("Authorization: Bearer abcdefghijklmnop")).toBe("Authorization: Bearer [REDACTED]");
     // GitHub tokens, as a host with `host gh-login` holds one (fake values).
     expect(redactSecrets("fatal: https://x:ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@github.com")).not.toContain("ghp_aaaa");

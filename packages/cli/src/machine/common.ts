@@ -27,10 +27,21 @@ export interface MachineIo {
   targetNames: () => Promise<string[]>;
   /** Reads a secret with echo off, or from stdin when it is not a terminal. */
   readSecret: (prompt: string) => Promise<string>;
-  /** Auto mode: runs `tapdance <args>` detached, output to the log file; returns its pid. */
-  spawnCreate: (args: string[], logFile: string) => Promise<number>;
+  /** Auto mode: runs `tapdance <args>` detached, output to the log file, with `env` added; returns its pid. */
+  spawnCreate: (args: string[], logFile: string, env: Record<string, string>) => Promise<number>;
   /** True while that process runs. */
   alive: (pid: number) => boolean;
+  /** When a process started (ms since the epoch), or undefined when that cannot be told. */
+  processStart: (pid: number) => Promise<number | undefined>;
+  /** Sends a signal to a process; false when it is gone. */
+  kill: (pid: number, signal: NodeJS.Signals) => boolean;
+  /** This process, as recorded in a machine's create lock. */
+  proc: { pid: number; startedAt: number };
+  /**
+   * True when this computer leases from its own local worker (provider local with a worker set up). A
+   * machine is reached as a connect target, and connect targets replace the local worker.
+   */
+  localWorker: () => Promise<boolean>;
   /** True when a guard answers at `<endpoint>/v1/healthz`. */
   healthz: (endpoint: string) => Promise<boolean>;
 }
@@ -65,6 +76,10 @@ export async function runSteps(record: MachineRecord, steps: Step[], io: Machine
       io.out.progress(`${n} ${step.title}: ${dim("done earlier")}`);
       continue;
     }
+    // `machine destroy` marks the machine before it stops this create: never start another step then.
+    if (await destroyingNow(io, record.name)) {
+      throw new TapdanceError("CANCELLED", `Machine ${record.name} is being destroyed; its create stopped before step ${i + 1} of ${total} ("${step.title}")`);
+    }
     io.out.progress(`${n} ${bold(step.title)}…`);
     const started = io.now().getTime();
     try {
@@ -85,6 +100,12 @@ export async function runSteps(record: MachineRecord, steps: Step[], io: Machine
     await io.store.save(record);
     io.out.progress(`${n} ${green("✓")} ${step.title} (${formatSeconds(secs)})`);
   }
+}
+
+/** True while a `machine destroy` of this machine runs (the pid in its mark is alive). */
+export async function destroyingNow(io: Pick<MachineIo, "store" | "alive">, name: string): Promise<boolean> {
+  const pid = await io.store.destroyingPid(name);
+  return pid !== undefined && io.alive(pid);
 }
 
 export function formatSeconds(s: number): string {
@@ -141,7 +162,8 @@ export function setupLineHandler(io: MachineIo, logFile: string): (line: string)
 export async function remoteEndpoint(remote: (command: string) => Promise<{ code: number; stdout: string; stderr: string }>): Promise<string> {
   const r = await remote(`${ENV_PREFIX}tapdance host status --json`);
   const status = parseJson<{ ready?: boolean; endpoint?: string; steps?: Array<{ step: string; ok: boolean; detail: string }> }>(r.stdout.trim() || "{}", "tapdance host status on the machine");
-  if (!status.endpoint || !/^https?:\/\/[^/]+\.ts\.net(:\d+)?\/?$/.test(status.endpoint)) {
+  const endpoint = tailnetEndpoint(status.endpoint);
+  if (!endpoint) {
     const bad = (status.steps ?? []).filter((s) => !s.ok).map((s) => `${s.step}: ${s.detail}`).join("; ");
     throw new TapdanceError("HOST_CHECK_FAILED", `The machine is not serving its guard on Tailscale yet${bad ? ` (${bad})` : ""}`, {
       hint: "Check that the machine was approved in the Tailscale admin console.",
@@ -151,7 +173,26 @@ export async function remoteEndpoint(remote: (command: string) => Promise<{ code
     const bad = (status.steps ?? []).filter((s) => !s.ok).map((s) => `${s.step}: ${s.detail}`).join("; ");
     throw new TapdanceError("HOST_CHECK_FAILED", `The machine's host is not ready${bad ? `: ${bad}` : ""}`);
   }
-  return status.endpoint.replace(/\/$/, "");
+  return endpoint;
+}
+
+/**
+ * The machine's endpoint as `scheme://host[:port]`, only when it is an http(s) URL on a Tailscale name
+ * (`*.ts.net`) with no user info, path, query or fragment; otherwise undefined.
+ */
+export function tailnetEndpoint(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "" || (url.pathname !== "/" && url.pathname !== "")) return undefined;
+  const host = url.hostname.toLowerCase();
+  if (!host.endsWith(".ts.net") || host === ".ts.net" || !/^[a-z0-9.-]+$/.test(host)) return undefined;
+  return `${url.protocol}//${url.host}`;
 }
 
 /** How the machine installs Tapdance: from npm at a version, or from source at a git ref. */

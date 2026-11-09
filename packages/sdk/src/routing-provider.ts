@@ -281,6 +281,8 @@ export class RoutingProvider implements DeviceProvider {
 
     const down: Array<{ target: RouteTarget; reason: string }> = [];
     const skipped: string[] = [];
+    /** Targets that answered and serve no such platform at all (not a model or capacity mismatch). */
+    const unserved: string[] = [];
     // Ask every candidate at once, then pick in config order: the first that can run the request and
     // has a free slot (or a warm spare), else the first that can run it at all, where it queues (review).
     const probes = await Promise.all(
@@ -306,6 +308,7 @@ export class RoutingProvider implements DeviceProvider {
       const entries = inventory.catalog.filter((c) => c.platform === request.platform && (c.models.length > 0 || c.osVersions.length > 0));
       const capacity = inventory.capacity.find((c) => c.platform === request.platform);
       if (entries.length === 0 || capacity?.served === false || capacity?.limit === 0) {
+        if (entries.length === 0 || capacity?.served === false) unserved.push(target.name);
         skipped.push(capacity?.limit === 0 && entries.length > 0 ? `${target.name} has no ${request.platform} capacity` : `${target.name} serves ${servedPlatforms(inventory).join(", ") || "nothing"}`);
         continue;
       }
@@ -335,14 +338,14 @@ export class RoutingProvider implements DeviceProvider {
         {
           hint: `${up.length ? `Up: ${up.join(", ")}.` : "No other target answers either."} Retry when ${first.target.name} is back (\`tapdance host status\` on that host, \`tailscale status\` here); \`tapdance doctor\` shows every target.`,
           retryable: true,
-          details: { platform: request.platform, target: first.target.name, endpoint: first.target.endpoint, down: down.map((d) => d.target.name), up: answers.filter((a) => a.inventory).map((a) => a.target.name), ...(skipped.length ? { skipped } : {}) },
+          details: { platform: request.platform, target: first.target.name, endpoint: first.target.endpoint, down: down.map((d) => d.target.name), up: answers.filter((a) => a.inventory).map((a) => a.target.name), ...(skipped.length ? { skipped } : {}), ...(unserved.length ? { unserved } : {}) },
         },
       );
     }
     throw new TapdanceError("DEVICE_UNAVAILABLE", `No connect target can lease ${request.platform}${request.device ? ` "${request.device}"` : ""}${request.osVersion ? ` ${request.osVersion}` : ""}: ${skipped.join("; ")}`, {
       hint: "`tapdance devices` lists what each target serves.",
       retryable: false,
-      details: { platform: request.platform, skipped },
+      details: { platform: request.platform, skipped, unserved },
     });
   }
 

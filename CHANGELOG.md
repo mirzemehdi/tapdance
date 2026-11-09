@@ -10,6 +10,23 @@ file means the code exists, not that it has been tested on every platform.
 
 ## [Unreleased]
 
+### Changed
+
+- `tapdance machine destroy` always asks you at a terminal: it takes no `--yes`, refuses with no
+  terminal, and stops a create of that machine that is still running before it removes anything.
+- Auto mode creates or rents a machine only when no host serves the platform; other lease errors
+  reach the agent unchanged. One create per machine at a time (a lock), and a failed background create
+  is tried again at most every 10 minutes. `--delete-after-days` only reminds you; nothing is deleted
+  automatically. `machine auto on` and `machine create` refuse while this computer leases from its own
+  local worker.
+- Google Cloud resources are reused or deleted only when their exact name and label or description
+  mark them as this machine's; the leftovers check matches exact names. A create resumes by starting a
+  stopped VM. A Scaleway Mac rented by an earlier, interrupted run is adopted instead of rented again.
+- Safer setup: the Mac's temporary passwordless sudo rule is also removed after the auto-login step;
+  Scaleway's IP and ssh user are checked before use; the project ssh key is deleted once it is on the
+  Mac; child processes are killed with their whole process group on timeout; the endpoint read from a
+  machine must be on `*.ts.net`; Tailscale auth keys are redacted from errors and logs.
+
 ### Added
 
 - `tapdance machine create / list / stop / start / destroy` (stage 5.1, "bring your own cloud,
@@ -32,7 +49,8 @@ file means the code exists, not that it has been tested on every platform.
   say otherwise.
 - `tapdance machine auto on|off` (auto mode): a lease (CLI or MCP) that finds no host for the platform
   starts the stopped machine, or creates one in the background and answers with a retryable error that
-  carries the Tailscale approval link; `--delete-after-days` destroys a long-stopped Android machine;
+  carries the Tailscale approval link; `--delete-after-days` reminds you to destroy a long-stopped
+  Android machine;
   Macs only with `--accept-mac-day`. The SDK gains a generic `machineAuto` option for it
   (`TapdanceOptions`); it holds no cloud code. Ran for real on Google Cloud (create on a lease, idle
   stop, start on a lease).
@@ -68,14 +86,15 @@ host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machine
 
 - Worker guard: an app install or reinstall must name an upload this client made through the guard;
   requests without one, or with an install source, are refused. Only `diff snapshot` passes the guard.
-  The guard also remembers the upload id a finalize reply names. Unit-tested only.
+  The guard also remembers the upload id a finalize reply names. On a real host on 2026-11-09, seven
+  forged install requests were all refused ([evidence](docs/testing/evidence/2026-11-09-byoc-self-run.md)).
 
 ## [0.2.0] - 2026-11-08
 
 **Upgrade every machine together.** Tapdance 0.2.0 runs Simlock 0.6.0, which cannot talk to the
 Simlock 0.5.0 in Tapdance 0.1.x. Update the agent's machine and every host (`npm install -g
 tapdance-cli@latest`, then `tapdance worker restart` or `tapdance host up` on each host). Not yet run
-on a real device yet: the run is tracked in #153.
+on a real device: the run is tracked in #153 (since run: [evidence](docs/testing/evidence/2026-11-09-byoc-self-run.md)).
 
 ### Changed
 

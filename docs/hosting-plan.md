@@ -321,7 +321,7 @@ it. Everything happens on the customer's side with their own login, so no key re
 The Scaleway 24-hour minimum makes auto mode keep a Mac for its paid day rather than delete it early.
 
 **Done when:** a stranger with a Google Cloud and a Scaleway account goes from nothing to their
-agent testing both platforms in under 30 minutes with three commands or fewer, and after destroy
+agent testing both platforms with three commands or fewer and under 30 minutes of their own time (a new Mac also waits about an hour for Scaleway's macOS install), and after destroy
 the leftovers scripts find nothing. Auto mode: the first lease brings a machine up, and an idle
 machine stops by itself. Evidence file from a real run.
 

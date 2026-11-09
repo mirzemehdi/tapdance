@@ -3,7 +3,7 @@
 ## What you get
 
 > **One command instead:** `tapdance machine create --cloud scaleway` rents the cheapest Mac mini in
-> stock with your logged-in `scw` (or, with `--server-id <id>`, takes one you rented in the console), sets
+> stock with your logged-in `scw` (renting this way has not run on a real account yet) (or, with `--server-id <id>`, takes one you rented in the console), sets
 > it up as below and connects the agent's machine; `tapdance machine destroy ios` removes it. Set up for
 > real on a Mac mini **M2-L** in `fr-par-1` in 8 min 37 s ([evidence](../testing/evidence/2026-11-09-byoc-self-run.md))
 > ([`tapdance machine`](../cli-reference.md#machine), [start without a Mac](../guides/start-without-a-mac.md)).

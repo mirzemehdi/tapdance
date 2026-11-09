@@ -811,16 +811,17 @@ token file.
 ```text
 tapdance machine create --cloud gcp|scaleway [--name <name>] [--project <id>] [--zone <zone>] [--type <type>]
                         [--disk-gb <gb>] [--idle-stop <minutes|off>] [--max-hours <hours|off>] [--keep]
-                        [--label <name>] [--tailscale-key] [--setup-ref <ref>] [--verbose] [-y, --yes]
-                        [-- <host-setup.sh options>]
+                        [--label <name>] [--tailscale-key] [--setup-ref <ref>] [--server-id <id|name>] [--new]
+                        [--verbose] [-y, --yes] [-- <host-setup.sh options>]
 tapdance machine list [--project <id>]
 tapdance machine stop <name>
 tapdance machine start <name>
-tapdance machine destroy <name> [-y, --yes]
+tapdance machine destroy <name>
 tapdance machine auto
-tapdance machine auto on --platform android [--name <name>] [--project <id>] [--zone <zone>] [--type <type>]
+tapdance machine auto on --platform android [--cloud gcp] [--name <name>] [--project <id>] [--zone <zone>] [--type <type>]
                          [--idle-stop <minutes|off>] [--max-hours <hours|off>] [--delete-after-days <days>] [-y, --yes]
-tapdance machine auto on --platform ios --accept-mac-day [--name <name>] [--project <id>] [--type <type>] [-y, --yes]
+tapdance machine auto on --platform ios --accept-mac-day [--cloud scaleway] [--name <name>] [--project <id>] [--zone <zone>]
+                         [--type <type>] [-y, --yes]
 tapdance machine auto off [--platform android|ios]
 ```
 
@@ -839,7 +840,7 @@ runs these steps, printing each one and the time it took:
 
 | `--cloud gcp` (Android) | `--cloud scaleway` (iOS) |
 | --- | --- |
-| 1. Turn on the Compute Engine and IAP APIs | 1. Make an ssh key for this Mac (in `~/.tapdance/machines/<name>/`) and add it to your Scaleway project |
+| 1. Turn on the Compute Engine, IAP and OS Login APIs | 1. Make an ssh key for this Mac (in `~/.tapdance/machines/<name>/`) and add it to your Scaleway project |
 | 2. A network `tapdance-<name>` with one subnet and one firewall rule that lets only Google's IAP SSH range (`35.235.240.0/20`) in | 2. Rent the Mac mini `tapdance-<name>` (no commitment) and schedule it for automatic deletion at the 24-hour mark |
 | 3. The VM `tapdance-<name>`: `n2-standard-4`, nested virtualization, Ubuntu 24.04, 64 GB `pd-balanced`, no service account, OS Login, Shielded VM, a stop after `--max-hours` per start | 3. Wait for Scaleway to install macOS |
 | 4. Wait until it answers over IAP SSH | 4. Automatic login (`macos-auto-login.sh --password-stdin`), a restart, and a check that the login session is there |
@@ -875,8 +876,8 @@ destroy <name>` removes whatever was created so far. The machine's setup output 
 Cloud the VM carries the labels `tapdance-machine=<name>` and `created-by=tapdance`, and the network,
 subnet and firewall rule say `tapdance-machine=<name>` in their description (they take no labels).
 Scaleway's Apple silicon servers take no tags: Tapdance's Mac is the one named `tapdance-<name>` whose
-id this computer recorded. `list` and `destroy` act on nothing else in your account. The Compute Engine
-and IAP APIs stay on after destroy (they cost nothing).
+id this computer recorded. `list` and `destroy` act on nothing else in your account. The Compute
+Engine, IAP and OS Login APIs stay on after destroy (they cost nothing).
 
 **The Scaleway Mac's password.** The rented Mac's only account is an administrator whose password
 Scaleway's API returns. `create` reads it with your scw login into memory and sends it to the Mac over
@@ -899,9 +900,9 @@ worker and the guard come back by themselves in about a minute. The VM also stop
 deleted, also while switched off, and cannot be deleted in its first 24 hours, so both commands refuse
 with `NOT_SUPPORTED` and say so.
 
-**`destroy`** asks for confirmation (`--yes` skips it), then: logs the machine out of Tailscale (which
-removes its node; when the VM is stopped it cannot, and says which node to remove in the admin
-console), removes the connect target and its token, deletes the VM with its disk, the firewall rule,
+**`destroy`** always asks you at a terminal first: it takes no `--yes`, and with no terminal (an agent, a script) it refuses. If a create of that machine is still running, it stops it first (and refuses, destroying nothing, if it does not stop within 30 s). Then it logs the machine out of Tailscale (Tailscale
+still lists it as offline: delete it under **Machines** in the admin console; when the VM is stopped
+it cannot log out, and `destroy` names the node to delete), removes the connect target and its token, deletes the VM with its disk, the firewall rule,
 subnet and network (gcp) or the Mac mini and its ssh key (scaleway), and then checks for leftovers:
 the same kinds as `infrastructure/scripts/gcp-leftovers.sh` and `scaleway-leftovers.sh`, split into
 **this machine's** (must be none: it says "Nothing billable left from this machine") and **other billable
@@ -918,23 +919,31 @@ that platform answers, this computer brings one up with your own `gcloud` or `sc
 computer. The setting is in `~/.tapdance/machines/auto.json` (mode 600), never in a project's
 `tapdance.config.json`, so a repository cannot make you spend money.
 
-- **No connect target serves the platform, or its machine was never created:** it starts `tapdance
-  machine create … --yes` in the background (output in `~/.tapdance/machines/<name>/auto-create.log`)
-  and the lease fails at once with `PROVIDER_UNAVAILABLE`, retryable, saying how far the create got and,
-  once the setup prints it, the Tailscale link a person must open to approve the machine. A lease while
-  it runs gets the same answer; a second create never starts. Lease again when it is done.
+- **It creates only when no host serves the platform:** no connect target for it and no local worker.
+  Any other failure reaches the agent unchanged and creates nothing: an unknown model, a missing
+  runtime, a device in use, or another host for the platform being down.
+- **No host serves the platform:** it starts `tapdance machine create … --yes` in the background
+  (output in `~/.tapdance/machines/<name>/auto-create.log`) and the lease fails at once with
+  `PROVIDER_UNAVAILABLE`, retryable, saying how far the create got and, once the setup prints it, the
+  Tailscale link a person must open to approve the machine. A lease while it runs gets the same answer.
+  Only one create of a machine runs at a time (a lock in `~/.tapdance/machines/<name>/create.lock`),
+  also against a `machine create` you start by hand. A background create that failed is tried again at
+  most once every 10 minutes; meanwhile the lease says why it stopped and when the next try is.
 - **The machine is stopped** (it stopped itself when idle): it runs `gcloud compute instances start`,
   waits until the guard answers (up to 4 minutes), and leases; the lease carries a notice such as
   "Started machine android for this lease in 58 s".
 - **The machine runs but does not answer yet:** it waits up to 3 minutes, then fails with
   `PROVIDER_UNREACHABLE` and how to check the host.
-- **The VM is gone from Google Cloud:** it removes what is left of it and creates a new one.
+- **The VM is gone from Google Cloud:** it creates a new VM in the same network; nothing is deleted.
+  The old Tailscale entry stays listed as offline.
 - **iOS:** only with `--accept-mac-day`, since each new Mac bills at least 24 hours. A Mac is kept for
   its paid day and deleted by Scaleway at the 24-hour mark (create schedules that); the next iOS lease
-  after that rents a new Mac. At most one Mac per auto setting.
+  after that rents a new Mac, the cheapest in stock unless `--type` says otherwise (EUR 2.64 to 11.76 a
+  day before VAT at list prices read on 2026-11-09). At most one Mac per auto setting.
 - **Idle:** the Android machine stops itself after `--idle-stop` minutes (default 30) and at the latest
-  `--max-hours` after each start, as with `create`. `--delete-after-days <days>` also destroys it once
-  it has been stopped that long (its disk bills about USD 7 a month while stopped). That check runs on
+  `--max-hours` after each start, as with `create`. Auto mode never deletes a machine.
+  `--delete-after-days <days>` reminds you to destroy it once it has been stopped that long (its disk
+  bills about USD 6.40 a month while stopped). That check runs on
   this computer when Tapdance does: `tapdance machine auto`, `tapdance machine list` and the start of
   `tapdance mcp`.
 
@@ -942,6 +951,11 @@ computer. The setting is in `~/.tapdance/machines/auto.json` (mode 600), never i
 (`--yes` skips it). `tapdance machine auto` shows the setting and each machine's state; `tapdance
 machine auto off` turns it off and leaves the machines (remove them with `tapdance machine destroy`).
 A lease that names a `--target`, and device profiles, never trigger auto mode.
+
+A connect target replaces the local worker, so `machine auto on`, and `machine create` for a new
+machine, refuse while this computer leases from its own local worker (provider `local` with a worker
+set up). Switch with `tapdance config set provider self-hosted --global` (and back with `... local
+--global`).
 
 Status: `--cloud gcp` ran for real: create, stop, destroy, the leftovers check and auto mode (create on a
 lease, idle stop, start on a lease). `--cloud scaleway --server-id` ran for real on a Mac mini M2-L in
@@ -2957,7 +2971,7 @@ Commands:
   stop <name>                            gcp: stop the VM (it then bills only its disk). Scaleway Macs cannot be stopped to save money
   start <name>                           gcp: start a stopped VM; Tailscale and the host come back by themselves
   auto                                   Auto mode: when the agent asks for a phone and no machine for that platform is up, this computer starts the stopped machine or creates one in your cloud; it stops itself when idle. `machine auto` shows the setting
-  destroy [options] <name>               Remove the machine and everything created for it (disk, network, firewall rule, ssh key, Tailscale node, connect target), then check that nothing billable is left
+  destroy [options] <name>               Remove the machine and everything created for it (VM and disk, network, firewall rule, ssh key, connect target), log it out of Tailscale, then check that nothing billable is left. Always asks you first, at a terminal
   help [command]                         display help for command
 ```
 
@@ -3089,8 +3103,9 @@ Options:
                               (default 30)
   --max-hours <hours|off>     android: stop the VM at the latest this many hours
                               after each start (default 8)
-  --delete-after-days <days>  android: destroy the machine once it has been
-                              stopped this many days (default: never)
+  --delete-after-days <days>  android: remind you to destroy the machine once it
+                              has been stopped this many days (default: never);
+                              nothing is deleted automatically
   --accept-mac-day            ios: agree that each new Mac auto mode rents bills
                               at least 24 hours
   -y, --yes                   do not ask for confirmation
@@ -3115,12 +3130,11 @@ Options:
 ```text
 Usage: tapdance machine destroy [options] <name>
 
-Remove the machine and everything created for it (disk, network, firewall rule,
-ssh key, Tailscale node, connect target), then check that nothing billable is
-left
+Remove the machine and everything created for it (VM and disk, network, firewall
+rule, ssh key, connect target), log it out of Tailscale, then check that nothing
+billable is left. Always asks you first, at a terminal
 
 Options:
-  -y, --yes   do not ask for confirmation
   -h, --help  display help for command
 ```
 
