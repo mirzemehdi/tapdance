@@ -946,7 +946,7 @@ Status: `--cloud gcp` ran for real: create, stop, destroy, the leftovers check a
 lease, idle stop, start on a lease). `--cloud scaleway --server-id` ran for real on a Mac mini M2-L in
 `fr-par-1`: set up and connected in 8 min 37 s, the iOS checklists passed
 ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)). Renting a Mac with `create` (no
-`--server-id`), Scaleway's `destroy`, `--tailscale-key` and `--delete-after-days` are unit-tested only, with mocked
+`--server-id`) has not run; the arguments it sends were checked against `scw` 2.65.2's `--help`. Scaleway's `destroy`, `--tailscale-key` and `--delete-after-days` are unit-tested only, with mocked
 `gcloud`, `scw` and ssh (`machine.test.ts`); the lease hook with a mocked provider (`tapdance.test.ts`).
 `destroy` logs the machine out of Tailscale, but Tailscale keeps listing it as offline until you delete
 it in the admin console (STATUS M-07).

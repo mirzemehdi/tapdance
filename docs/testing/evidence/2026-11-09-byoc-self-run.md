@@ -12,8 +12,11 @@ Later that day (14:39–15:35 UTC) the iOS half ran on a Scaleway Mac mini the o
 console: `machine create --cloud scaleway --server-id` set it up and connected it, and the iOS checklists
 and the iOS items of #153 ran on it ([Scaleway](#scaleway-ios)). **Not run:** renting a Mac with `create`
 itself (the rent step, Scaleway's macOS install wait, the project ssh key, scheduled deletion) and
-Scaleway's `destroy`: the owner kept the Mac for the rest of its paid day. Step 5.1 stays open in the
-hosting plan until the rent path has run.
+Scaleway's `destroy`: the owner kept the Mac for the rest of its paid day. The rent path's `scw` calls
+(`server create` with `name`, `type`, `zone`, `project-id`, `commitment-type=none`; `server update
+schedule-deletion=true`; `server reboot`/`delete`; `iam ssh-key create`/`delete`) match `scw` 2.65.2's
+`--help`; the JSON `server create` returns and the project key reaching a fresh Mac are untested (the
+password fallback covers the second).
 
 ## Environment
 
