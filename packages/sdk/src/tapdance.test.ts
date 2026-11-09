@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROFILE_PROVIDER, Tapdance, TapdanceError, createProvider, leaseCommand, loadConfig, renewIfDue, runKeepalive, type LeaseHandle, type MachineAutoInput } from "./index.js";
 import { FakeProvider } from "./testing.js";
 import { completeMp4 } from "./tapdance.js";
+import { RoutingProvider } from "./routing-provider.js";
 
 async function setup(sessionId = "s1", provider = new FakeProvider()) {
   const home = await mkdtemp(join(tmpdir(), "td-sdk-"));
@@ -679,6 +680,39 @@ describe("machineAuto lease hook (FakeProvider, mocked)", () => {
     await t.lease({ platform: "android" });
     expect(ensured).toEqual(["unreachable"]);
     expect(inputs[0]).toMatchObject({ provider: "local", localWorker: true });
+  });
+
+  // #167 (2026-11-09 VPS run): `device lease --platform android --target android` with auto mode on and
+  // the android machine stopped failed with PROVIDER_UNREACHABLE; the hook was never asked, because the
+  // SDK turns auto mode off whenever a target is named. Expected to fail until #167 is fixed: then drop `.fails`.
+  it.fails("#167: asks the hook when the lease names the auto machine's target and it does not answer", async () => {
+    const cwd = await mkdtemp(join(tmpdir(), "td-auto-target-"));
+    // MOCKED host: a FakeProvider behind a one-target RoutingProvider, down on the first lease.
+    const host = new FakeProvider();
+    const hostLease = host.lease.bind(host);
+    let calls = 0;
+    host.lease = async (...args: Parameters<FakeProvider["lease"]>) => {
+      calls++;
+      if (calls === 1) throw new TapdanceError("PROVIDER_UNREACHABLE", "Cannot lease android: target android (https://android.tail1234.ts.net:4720) does not answer", { details: { target: "android" } });
+      return hostLease(...args);
+    };
+    const router = new RoutingProvider([{ name: "android", endpoint: "https://android.tail1234.ts.net:4720", platforms: ["android"], provider: host, probe: () => host.inventory() }]);
+    const ensured: string[] = [];
+    const t = await Tapdance.create({
+      cwd,
+      env: { TAPDANCE_HOME: cwd, SIMLOCK_HOME: cwd },
+      session: { id: "auto-target", source: "test" },
+      provider: router,
+      machineAuto: {
+        handles: () => true,
+        ensure: async (input) => {
+          ensured.push(input.reason);
+          return { notice: "Started machine android for this lease in 41 s" };
+        },
+      },
+    });
+    await t.lease({ platform: "android", target: "android" });
+    expect(ensured).toContain("unreachable");
   });
 
   it("leaves leases alone when auto mode is off for the platform", async () => {

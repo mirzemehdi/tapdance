@@ -538,6 +538,30 @@ describe("machine auto (mocked gcloud and scw)", () => {
     expect(calls.some((c) => has(c, "instances", "start", "tapdance-android"))).toBe(true);
   });
 
+  // #167, reproduced from the 2026-11-09 VPS run: an old Mac connect target with no platform list was
+  // offline, the android machine was stopped, and auto mode backed off instead of starting it.
+  // Expected to fail until #167 is fixed: then drop `.fails`.
+  it.fails("#167: starts its stopped machine when the other target is an offline host with no platform list", async () => {
+    let started = false;
+    const handler: Handler = (c) => {
+      if (c.file === "gcloud" && has(c, "instances", "describe")) return { stdout: JSON.stringify({ name: "tapdance-android", zone: "z/us-central1-a", status: started ? "RUNNING" : "TERMINATED", machineType: "m/n2-standard-4", creationTimestamp: "2026-11-01T10:00:00Z", labels: { "tapdance-machine": "android" } }) };
+      if (c.file === "gcloud" && has(c, "instances", "start")) started = true;
+      return gcloudOk({ vm: true })(c);
+    };
+    const { io, calls } = await fakeIo(handler, { healthy: () => started });
+    await io.store.save(androidRecord());
+    await writeAuto(io, { android: autoPolicyFrom({ platform: "android", project: "my-project" }, parsers, io.now()).policy });
+    const OLD_MAC = "https://old-mac.tail1234.ts.net:4720";
+    // The error RoutingProvider.lease throws when both hosts time out; the SDK names its first target as failedTarget.
+    const error = new TapdanceError("PROVIDER_UNREACHABLE", `Cannot lease android: target old-mac (${OLD_MAC}) does not answer (The operation was aborted due to timeout); nor does android`, {
+      details: { platform: "android", target: "old-mac", endpoint: OLD_MAC, down: ["old-mac", "android"], up: [] },
+    });
+    const input: MachineAutoInput = { platform: "android", reason: "unreachable", error, provider: "self-hosted", targets: [{ name: "old-mac", endpoint: OLD_MAC }, { name: "android", endpoint: ENDPOINT, platforms: ["android"] }], localWorker: false, failedTarget: "old-mac" };
+    const r = await ensureMachine(io, input, () => undefined);
+    expect(r.notice).toMatch(/Started machine android for this lease/);
+    expect(calls.some((c) => has(c, "instances", "start", "tapdance-android"))).toBe(true);
+  });
+
   it("creates nothing when the lease failed on a host that answered (an unknown model on its own machine)", async () => {
     const { io, calls, spawned } = await fakeIo(gcloudOk({ vm: true }));
     await io.store.save(androidRecord());

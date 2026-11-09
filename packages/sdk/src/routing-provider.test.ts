@@ -154,6 +154,19 @@ describe("RoutingProvider (mocked hosts)", () => {
     expect((await router.lease("s2", lease("android"))).location.target).toBe("n2");
   });
 
+  // #168 (2026-11-09 VPS run): an unknown model with the android host up and an old Mac target (no
+  // platform list) offline came back as PROVIDER_UNREACHABLE naming the Mac, with "Up: ..., android
+  // (android)" in the fix line; the answer from the host that is up was lost. Expected to fail until
+  // #168 is fixed: then drop `.fails`.
+  it.fails("#168: reports the refusal of the host that answered, not a down host, for an unknown model", async () => {
+    const oldMac = target("old-mac", "https://old-mac.tail1.ts.net", ["ios"], { down: true });
+    const n2 = target("android", N2, ["android"], { platforms: ["android"] });
+    const error = await new RoutingProvider([oldMac, n2]).lease("s1", lease("android", { device: "Pixel 99 Ultra" })).catch((e: unknown) => e as TapdanceError);
+    expect(error).toBeInstanceOf(TapdanceError);
+    expect(error.code).not.toBe("PROVIDER_UNREACHABLE");
+    expect(error.message).toContain("Pixel 99 Ultra");
+  });
+
   it("skips a down host for another host of the same platform", async () => {
     const a = target("a", "https://a.example.com", ["android"], { down: true });
     const b = target("b", "https://b.example.com", ["android"]);
