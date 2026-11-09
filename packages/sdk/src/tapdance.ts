@@ -538,10 +538,11 @@ export class Tapdance {
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
     }
-    // A lease that names a target uses auto mode only when that target is auto mode's own machine (#167).
+    // A lease that names a target uses auto mode only when that target is auto mode's own machine (#167);
+    // the hook's `ensure` decides again from the failed target, so a hook without `ownsTarget` is safe.
     const hook = this.options.machineAuto;
     const auto =
-      !options.profile && hook?.handles(options.platform) && (options.target === undefined || hook.ownsTarget?.(options.platform, options.target) === true) ? hook : undefined;
+      !options.profile && hook?.handles(options.platform) && (options.target === undefined || hook.ownsTarget?.(options.platform, options.target) !== false) ? hook : undefined;
     const autoNotices: string[] = [];
     if (auto && options.target === undefined && !this.targetServes(options.platform)) {
       const r = await auto.ensure(this.autoInput(options.platform, "no-target"), (m) => this.progress(m));

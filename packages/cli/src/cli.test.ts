@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -473,5 +473,28 @@ describe("repository URL", () => {
         expect(m[1], file).toBe(declared);
       }
     }
+  });
+});
+
+// #169 (2026-11-09 VPS run): `tapdance machine auto` said "now: created" both while the VM was
+// TERMINATED and while it was RUNNING. MOCKED gcloud: a fake `gcloud` on PATH answers that the VM is
+// TERMINATED; no cloud account is touched. Fixed in #170.
+describe("machine auto status (built CLI, mocked gcloud)", () => {
+  it("#169: shows a stopped auto-mode VM as stopped, not 'created'", () => {
+    const home = mkdtempSync(join(tmpdir(), "td-cli-auto-"));
+    const bin = mkdtempSync(join(tmpdir(), "td-cli-bin-"));
+    const vm = { name: "tapdance-android", zone: "zones/us-central1-a", status: "TERMINATED", machineType: "machineTypes/n2-standard-4", creationTimestamp: "2026-11-09T19:00:00Z", lastStopTimestamp: "2026-11-09T19:59:00Z", labels: { "tapdance-machine": "android", "created-by": "tapdance" } };
+    writeFileSync(join(bin, "gcloud"), `#!/bin/sh\ncase " $* " in\n  *" describe "*) echo '${JSON.stringify(vm)}' ;;\n  *" list "*) echo '${JSON.stringify([vm])}' ;;\n  *) echo '' ;;\nesac\n`);
+    chmodSync(join(bin, "gcloud"), 0o755);
+    mkdirSync(join(home, "machines", "android"), { recursive: true });
+    writeFileSync(join(home, "machines", "auto.json"), JSON.stringify({ android: { cloud: "gcp", name: "android", project: "my-project", idleStop: 30, maxHours: 8, enabledAt: "2026-11-09T19:58:00Z" } }));
+    writeFileSync(
+      join(home, "machines", "android", "machine.json"),
+      JSON.stringify({ version: 1, name: "android", cloud: "gcp", createdAt: "2026-11-09T19:00:00Z", project: "my-project", zone: "us-central1-a", machineType: "n2-standard-4", resourceName: "tapdance-android", label: "l", target: "android", tailscaleHostname: "tapdance-android", setupRef: "v0.3.0", endpoint: "https://tapdance-android.tail1234.ts.net:4720", done: ["apis", "network", "vm", "ssh", "setup", "connect"], timings: {} }),
+    );
+    const r = tapdance(["machine", "auto"], { TAPDANCE_HOME: home, PATH: `${bin}:${process.env["PATH"] ?? ""}` });
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toContain("now: created");
+    expect(r.stdout).toMatch(/now: .*stopped/i);
   });
 });
