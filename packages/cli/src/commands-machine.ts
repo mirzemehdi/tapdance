@@ -179,8 +179,8 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
     const zone = isGcp ? await gcpDefaultZone(io, o.zone) : (o.zone ?? SCALEWAY_DEFAULTS.zone);
     const diskGb = o.diskGb === undefined ? GCP_DEFAULTS.diskGb : Number(o.diskGb);
     if (!Number.isInteger(diskGb) || diskGb < 32 || diskGb > 500) throw new TapdanceError("USAGE", "--disk-gb must be 32 to 500");
-    const setupRef = o.setupRef ?? `v${pkg.version}`;
-    if (!/^[A-Za-z0-9._/-]{1,100}$/.test(setupRef)) throw new TapdanceError("USAGE", `--setup-ref "${setupRef}" is not a git ref`);
+    const setupRef = o.setupRef ?? "";
+    if (setupRef && !/^[A-Za-z0-9._/-]{1,100}$/.test(setupRef)) throw new TapdanceError("USAGE", `--setup-ref "${setupRef}" is not a git ref`);
     record = {
       version: 1,
       name,
@@ -194,6 +194,7 @@ export async function machineCreate(io: MachineIo, o: CreateOptions, extra: stri
       target: name,
       tailscaleHostname: resourceName(name),
       setupRef,
+      ...(setupRef ? {} : { tapdanceVersion: pkg.version }),
       ...(isGcp ? { idleStopMinutes: parseIdleStop(o.idleStop), maxHours: parseMaxHours(o.maxHours), diskGb } : { scheduledDeletion: !o.keep }),
       done: [],
       timings: {},
@@ -401,7 +402,7 @@ export function registerMachineCommands(program: Command, globals: () => GlobalO
     .option("--keep", "scaleway: do not schedule the Mac for automatic deletion at the 24-hour mark")
     .option("--label <name>", "the pairing's name on the machine (default: this computer's name)")
     .option("--tailscale-key", "join the tailnet with a pre-approved auth key, read with echo off (or from stdin), instead of a login link you open")
-    .option("--setup-ref <ref>", "the Tapdance git ref the machine installs (default: this version's tag)")
+    .option("--setup-ref <ref>", "build Tapdance on the machine from this git ref instead of installing tapdance-cli from npm at this CLI's version")
     .option("--verbose", "show every line of the machine's setup, not only its progress")
     .option("-y, --yes", "do not ask for confirmation (for scripts; read the cost first)")
     .argument("[host-setup-args...]", "after --: extra options for host-setup.sh on the machine, e.g. -- --with-gh --android-build-sdk")

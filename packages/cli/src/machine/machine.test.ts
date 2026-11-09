@@ -171,7 +171,7 @@ describe("machine create --cloud gcp (mocked gcloud)", () => {
     await machineCreate(io, { cloud: "gcp", yes: true, tailscaleKey: true }, ["--play-store"], false);
     const setup = calls.find((c) => has(c, "compute", "ssh") && c.args.some((x) => x.includes("host-setup.sh")))!;
     expect(setup.input).toBe(`${TS_KEY}\n`);
-    expect(setup.args.find((x) => x.includes("host-setup.sh"))).toContain("--tailscale-auth-key-stdin --idle-stop 30 --play-store");
+    expect(setup.args.find((x) => x.includes("host-setup.sh"))).toMatch(/--tailscale-auth-key-stdin --idle-stop 30 --tapdance-version \d+\.\d+\.\d+ --play-store/);
     expect(flat(calls)).not.toContain(TS_KEY);
     expect(progress.join("\n")).not.toContain(TS_KEY);
     expect(shJoin(["it's"])).toBe(`'it'\\''s'`);
@@ -228,11 +228,24 @@ describe("machine destroy / stop on Google Cloud (mocked gcloud)", () => {
     expect(d.clean).toBe(true);
     const deletes = calls.filter((c) => c.args.includes("delete")).map((c) => c.args.slice(0, c.args.indexOf("delete") + 2).join(" "));
     expect(deletes).toEqual(["compute instances delete tapdance-android", "compute firewall-rules delete tapdance-android-iap-ssh", "compute networks subnets delete tapdance-android", "compute networks delete tapdance-android"]);
-    expect(calls.some((c) => c.args.includes("tailscale logout"))).toBe(true);
+    expect(calls.some((c) => c.args.some((x) => x.endsWith("tailscale logout")))).toBe(true);
     expect(calls.some((c) => c.file === "node" && c.args.includes("disconnect"))).toBe(true);
     expect(d.leftovers.others).toEqual(["disk someone-elses-disk us-central1-a 10"]);
     expect(renderDestroy(d)).toContain("Nothing billable left from this machine.");
     expect(await io.store.get("android")).toBeUndefined();
+  });
+
+  it("builds from source only with --setup-ref, and says nothing to remove when the VM never joined Tailscale", async () => {
+    const base = gcloudOk();
+    const { io, calls } = await fakeIo((c) => (c.file === "gcloud" && c.args.some((a) => a.includes("tailscale logout")) ? { code: 3 } : base(c)));
+    const record = await machineCreate(io, { cloud: "gcp", yes: true, setupRef: "feat/x" }, [], false);
+    const setup = calls.find((c) => has(c, "compute", "ssh") && c.args.some((x) => x.includes("bash tapdance-host-setup.sh")))!.args.find((x) => x.includes("bash tapdance-host-setup.sh"))!;
+    expect(setup).toContain("TAPDANCE_REF=feat/x ");
+    expect(setup).not.toContain("--tapdance-version");
+    expect(record.tapdanceVersion).toBeUndefined();
+    const d = await machineDestroy(io, "android", { yes: true }, false);
+    expect(d.removed).toContain("Tailscale: the machine had not joined your tailnet, nothing to remove");
+    expect(d.notes).toEqual([]);
   });
 
   it("refuses a VM that is not labelled as this machine", async () => {
@@ -327,7 +340,8 @@ describe("machine create --cloud scaleway (mocked scw and ssh)", () => {
     expect(pwInputs.length).toBeGreaterThanOrEqual(2);
     const setup = calls.find((c) => c.file === "ssh" && c.args.at(-1)!.includes("host-setup.sh"))!;
     expect(setup.args.at(-1)).toContain("--ios-only --yes --allow-admin-account --label");
-    expect(setup.args.at(-1)).toContain("--warm android=0,ios=0 --with-gh");
+    expect(setup.args.at(-1)).toMatch(/--warm android=0,ios=0 --tapdance-version \d+\.\d+\.\d+ --with-gh/);
+    expect(setup.args.at(-1)).not.toContain("TAPDANCE_REF");
     const last = calls.filter((c) => c.file === "ssh").map((c) => c.args.at(-1)!);
     expect(last.indexOf("sudo -n rm -f /etc/sudoers.d/tapdance-setup /etc/sudoers.d/tapdance-setup.new")).toBeGreaterThan(last.findIndex((x) => x.includes("host-setup.sh")));
     const saved = await readFile(join(io.store.dir("ios"), "machine.json"), "utf8");
@@ -389,6 +403,11 @@ describe("host-setup.sh --tailscale-auth-key-stdin (runs the real script, which 
     expect(r.status).not.toBe(0);
     expect(r.stderr).toContain("did not hold a Tailscale auth key");
     expect(`${r.stdout}${r.stderr}`).not.toContain("SECRETVALUE");
+  });
+  it("refuses a --tapdance-version that is not a version", async () => {
+    const r = await run("", ["--tapdance-version", "latest;rm", "--check"]);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toContain("is not a version like 0.2.1");
   });
   it("refuses a bad --tailscale-hostname", async () => {
     const r = await run("", ["--tailscale-hostname", "bad name;rm", "--check"]);

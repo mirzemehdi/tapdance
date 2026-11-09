@@ -154,6 +154,15 @@ export async function remoteEndpoint(remote: (command: string) => Promise<{ code
   return status.endpoint.replace(/\/$/, "");
 }
 
+/** How the machine installs Tapdance: from npm at a version, or from source at a git ref. */
+export function installArgs(record: { setupRef: string; tapdanceVersion?: string }): { env: string; args: string[] } {
+  if (record.tapdanceVersion) return { env: "", args: ["--tapdance-version", record.tapdanceVersion] };
+  return { env: `TAPDANCE_REF=${record.setupRef} `, args: [] };
+}
+
+/** Logs the machine out of Tailscale; exit 3/4: it never joined (Tailscale missing or logged out). */
+export const TAILSCALE_LOGOUT = "[ -f ~/.tapdance/env.sh ] && . ~/.tapdance/env.sh; command -v tailscale >/dev/null 2>&1 || exit 3; tailscale status >/dev/null 2>&1 || exit 4; tailscale logout";
+
 /** Sourced first in every remote command: host-setup.sh puts PATH, ANDROID_HOME and JAVA_HOME there. */
 export const ENV_PREFIX = "[ -f ~/.tapdance/env.sh ] && . ~/.tapdance/env.sh; ";
 

@@ -843,7 +843,7 @@ runs these steps, printing each one and the time it took:
 | 2. A network `tapdance-<name>` with one subnet and one firewall rule that lets only Google's IAP SSH range (`35.235.240.0/20`) in | 2. Rent the Mac mini `tapdance-<name>` (no commitment) and schedule it for automatic deletion at the 24-hour mark |
 | 3. The VM `tapdance-<name>`: `n2-standard-4`, nested virtualization, Ubuntu 24.04, 64 GB `pd-balanced`, no service account, OS Login, Shielded VM, a stop after `--max-hours` per start | 3. Wait for Scaleway to install macOS |
 | 4. Wait until it answers over IAP SSH | 4. Automatic login (`macos-auto-login.sh --password-stdin`), a restart, and a check that the login session is there |
-| 5. Copy `host-setup.sh` to it and run it with `--yes`: Android SDK, emulator, image, Tailscale, Tapdance, `host up` (pairing, `tailscale serve`, self-test) | 5. Copy `host-setup.sh` to it and run it with `--ios-only --yes --allow-admin-account`: Xcode's first launch, an iOS runtime, Tailscale, Tapdance, `host up`; on the 8 GB M1-M also `--warm android=0,ios=0` |
+| 5. Copy `host-setup.sh` to it and run it with `--yes --tapdance-version <this CLI's version>`: Android SDK, emulator, image, Tailscale, `tapdance-cli` from npm, `host up` (pairing, `tailscale serve`, self-test) | 5. Copy `host-setup.sh` to it and run it with `--ios-only --yes --allow-admin-account --tapdance-version <version>`: Xcode's first launch, an iOS runtime, Tailscale, Tapdance, `host up`; on the 8 GB M1-M also `--warm android=0,ios=0` |
 | 6. Read the endpoint (`host status --json`) and the pairing token over ssh, and run `tapdance connect --name <name> --platform android` with the token on stdin | 6. The same over ssh, with `--platform ios` |
 
 If a step fails, it says which one and why, and the same command run again continues at that step
@@ -864,7 +864,7 @@ destroy <name>` removes whatever was created so far. The machine's setup output 
 | `--keep` | scaleway: do not schedule automatic deletion; the Mac bills until `machine destroy`. |
 | `--label <name>` | The pairing's name on the machine (default: this computer's host name). |
 | `--tailscale-key` | Join the tailnet with a pre-approved [auth key](https://tailscale.com/kb/1085/auth-keys) instead of a login link. Read with echo off at the terminal, or from stdin (`--yes --tailscale-key < key-file`). It goes to the machine on ssh's stdin and from there to `tailscale up --auth-key=file:` through a mode-600 file deleted right after; never in an argument, a log or a file of Tapdance's. For gcp do not use an ephemeral key: Tailscale removes an ephemeral node while the VM is stopped. Without this option the machine prints a login link, which `create` shows: open it and approve the machine. |
-| `--setup-ref <ref>` | The Tapdance git ref the machine installs from source (default: this version's tag, e.g. `v0.2.0`). |
+| `--setup-ref <ref>` | Build Tapdance on the machine from this git ref (for a branch under test). Default: install `tapdance-cli` from npm at this CLI's version (`host-setup.sh --tapdance-version`). |
 | `--verbose` | Show every line of the machine's setup. |
 | `-y, --yes` | Do not ask for confirmation. |
 | `-- <options>` | Extra options for `host-setup.sh` on the machine, e.g. `-- --with-gh --android-build-sdk` or `-- --play-store`. |
@@ -2988,8 +2988,9 @@ Options:
   --tailscale-key            join the tailnet with a pre-approved auth key, read
                              with echo off (or from stdin), instead of a login
                              link you open
-  --setup-ref <ref>          the Tapdance git ref the machine installs (default:
-                             this version's tag)
+  --setup-ref <ref>          build Tapdance on the machine from this git ref
+                             instead of installing tapdance-cli from npm at this
+                             CLI's version
   --verbose                  show every line of the machine's setup, not only
                              its progress
   -y, --yes                  do not ask for confirmation (for scripts; read the

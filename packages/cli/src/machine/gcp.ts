@@ -1,6 +1,8 @@
 import { TapdanceError } from "@tapdance/sdk";
 import {
   ENV_PREFIX,
+  TAILSCALE_LOGOUT,
+  installArgs,
   checkLocalTailscale,
   connectMachine,
   disconnectMachine,
@@ -26,7 +28,7 @@ export const GCP_DEFAULTS = { zone: "us-central1-a", machineType: "n2-standard-4
 export const IAP_RANGE = "35.235.240.0/20";
 export const LABEL = "tapdance-machine";
 const SUBNET_RANGE = "10.88.0.0/24";
-const APIS = ["compute.googleapis.com", "iap.googleapis.com"];
+const APIS = ["compute.googleapis.com", "iap.googleapis.com", "oslogin.googleapis.com"];
 export const GCLOUD_LOGIN_HINT = "Install gcloud (https://cloud.google.com/sdk/docs/install), then run `gcloud auth login` and `gcloud config set project <PROJECT_ID>`. Tapdance uses your gcloud login and never reads or stores its credentials.";
 
 export function regionOf(zone: string): string {
@@ -48,7 +50,8 @@ export class Gcp {
   }
 
   sshArgs(record: MachineRecord, command: string): string[] {
-    return ["compute", "ssh", record.resourceName, "--zone", record.zone, "--tunnel-through-iap", "--command", command];
+    // --billing-project: a gcloud with another quota project set fails OS Login otherwise (stage 2, #15).
+    return ["compute", "ssh", record.resourceName, "--zone", record.zone, "--tunnel-through-iap", `--billing-project=${this.project}`, "--command", command];
   }
 
   ssh(record: MachineRecord, command: string, options: { input?: string; timeoutMs?: number; onLine?: (l: string) => void } = {}): Promise<ExecResult> {
@@ -132,8 +135,9 @@ export function gcpSetupCommand(record: MachineRecord, opts: { withKey: boolean;
   const args = ["bash", "tapdance-host-setup.sh", "--yes", "--label", record.label, "--tailscale-hostname", record.tailscaleHostname];
   if (opts.withKey) args.push("--tailscale-auth-key-stdin");
   args.push("--idle-stop", String(record.idleStopMinutes ?? GCP_DEFAULTS.idleStop));
-  args.push(...opts.extra);
-  return `${ENV_PREFIX}TAPDANCE_REF=${shJoin([record.setupRef])} ${shJoin(args)}`;
+  const install = installArgs(record);
+  args.push(...install.args, ...opts.extra);
+  return `${ENV_PREFIX}${install.env ? `TAPDANCE_REF=${shJoin([record.setupRef])} ` : ""}${shJoin(args)}`;
 }
 
 export function gcpInstanceCreateArgs(record: MachineRecord): string[] {
@@ -163,7 +167,7 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
   const steps: Step[] = [
     {
       id: "apis",
-      title: "Turn on the Compute Engine and IAP APIs",
+      title: "Turn on the Compute Engine, IAP and OS Login APIs",
       run: async () => {
         const r = check(await gcp.gcloud(["services", "list", "--enabled", "--format=value(config.name)"], { timeoutMs: 120_000 }), "gcloud services list", GCLOUD_LOGIN_HINT);
         const on = new Set(r.stdout.split("\n").map((s) => s.trim()));
@@ -228,7 +232,7 @@ export async function gcpCreate(io: MachineIo, gcp: Gcp, input: GcpCreateInput):
       id: "setup",
       title: "Set up the machine: Android SDK, emulator, Tailscale, Tapdance host (about 5-10 min)",
       run: async () => {
-        check(await gcp.gcloud(["compute", "scp", io.assets.hostSetup, `${n}:tapdance-host-setup.sh`, "--zone", record.zone, "--tunnel-through-iap"], { timeoutMs: 180_000 }), "copying host-setup.sh to the VM");
+        check(await gcp.gcloud(["compute", "scp", io.assets.hostSetup, `${n}:tapdance-host-setup.sh`, "--zone", record.zone, "--tunnel-through-iap", `--billing-project=${gcp.project}`], { timeoutMs: 180_000 }), "copying host-setup.sh to the VM");
         const cmd = gcpSetupCommand(record, { withKey: input.tailscaleKey !== undefined, extra: input.extraSetupArgs });
         const r = await gcp.ssh(record, cmd, {
           timeoutMs: 60 * 60_000,
@@ -291,8 +295,9 @@ export async function gcpDestroy(io: MachineIo, gcp: Gcp, record: MachineRecord)
   }
   if (vm?.status === "RUNNING") {
     io.out.progress("Logging the machine out of Tailscale (removes it from your tailnet)…");
-    const r = await gcp.ssh(record, "tailscale logout", { timeoutMs: 90_000 });
+    const r = await gcp.ssh(record, TAILSCALE_LOGOUT, { timeoutMs: 90_000 });
     if (r.code === 0) removed.push(`Tailscale node ${record.tailscaleHostname} (logged out)`);
+    else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the machine had not joined your tailnet, nothing to remove");
     else notes.push(`Could not log ${record.tailscaleHostname} out of Tailscale; remove it under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);
   } else if (record.done.includes("setup")) {
     notes.push(`The VM was not running, so it could not log out of Tailscale: remove ${record.tailscaleHostname} under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);

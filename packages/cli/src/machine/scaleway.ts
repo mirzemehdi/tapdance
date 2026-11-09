@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { TapdanceError } from "@tapdance/sdk";
 import {
   ENV_PREFIX,
+  TAILSCALE_LOGOUT,
+  installArgs,
   checkLocalTailscale,
   connectMachine,
   disconnectMachine,
@@ -153,8 +155,9 @@ export function macSetupCommand(record: MachineRecord, opts: { withKey: boolean;
   const args = ["bash", "tapdance-host-setup.sh", "--ios-only", "--yes", "--allow-admin-account", "--label", record.label, "--tailscale-hostname", record.tailscaleHostname];
   if (opts.withKey) args.push("--tailscale-auth-key-stdin");
   if (SMALL_MEMORY.has(record.machineType)) args.push("--warm", "android=0,ios=0");
-  args.push(...opts.extra);
-  return `${ENV_PREFIX}TAPDANCE_REF=${shJoin([record.setupRef])} ${shJoin(args)}`;
+  const install = installArgs(record);
+  args.push(...install.args, ...opts.extra);
+  return `${ENV_PREFIX}${install.env ? `TAPDANCE_REF=${shJoin([record.setupRef])} ` : ""}${shJoin(args)}`;
 }
 
 /** A sudoers drop-in for the setup only, validated by visudo before it is moved into place. */
@@ -316,10 +319,11 @@ export async function scalewayDestroy(io: MachineIo, scw: Scaleway, record: Mach
   if (server && server.name !== record.resourceName) {
     throw new TapdanceError("FORBIDDEN", `The Scaleway server ${record.serverId} is called ${server.name}, not ${record.resourceName}; Tapdance leaves it alone`);
   }
-  if (server && server.status === "ready" && record.ip && record.done.includes("setup")) {
+  if (server && server.status === "ready" && record.ip && record.done.includes("install")) {
     io.out.progress("Logging the Mac out of Tailscale (removes it from your tailnet)…");
-    const r = await macSsh(io, record, `${ENV_PREFIX}tailscale logout`, { timeoutMs: 90_000 });
+    const r = await macSsh(io, record, TAILSCALE_LOGOUT, { timeoutMs: 90_000 });
     if (r.code === 0) removed.push(`Tailscale node ${record.tailscaleHostname} (logged out)`);
+    else if (r.code === 3 || r.code === 4) removed.push("Tailscale: the Mac had not joined your tailnet, nothing to remove");
     else notes.push(`Could not log ${record.tailscaleHostname} out of Tailscale; remove it under Machines in the Tailscale admin console (https://login.tailscale.com/admin/machines).`);
   }
   io.out.progress(`Removing connect target ${record.target}…`);

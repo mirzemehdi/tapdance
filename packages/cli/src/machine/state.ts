@@ -27,7 +27,10 @@ export interface MachineRecord {
   /** The connect target name on this computer (the machine name). */
   target: string;
   tailscaleHostname: string;
+  /** A git ref to build Tapdance from on the machine (--setup-ref), or "" to use tapdanceVersion. */
   setupRef: string;
+  /** The tapdance-cli version the machine installs from npm (default: this CLI's). */
+  tapdanceVersion?: string;
   idleStopMinutes?: number | "off";
   maxHours?: number | "off";
   diskGb?: number;

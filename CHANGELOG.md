@@ -31,6 +31,8 @@ host up` or `tapdance worker restart`). Simlock is unchanged (0.6.0), so machine
   (`TapdanceOptions`); it holds no cloud code. Unit-tested only.
 - `machine create` checks that billing is on for the Google Cloud project, and connects with
   `--platform`, so leases route to the right machine.
+- `host-setup.sh --tapdance-version X.Y.Z` installs `tapdance-cli` from npm instead of building from
+  source; `machine create` passes its own version (`--setup-ref` builds a git ref instead).
 - `host-setup.sh --tailscale-auth-key-stdin` (a pre-approved Tailscale auth key on stdin, handed to
   `tailscale up` through a mode-600 file deleted right after) and `--tailscale-hostname`.
 - `macos-auto-login.sh --password-stdin`.

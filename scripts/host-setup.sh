@@ -80,6 +80,10 @@
 #                        link. The key is kept in memory, handed to `tailscale up` as a mode-600 file
 #                        that is deleted right after, and never printed. `tapdance machine create` uses
 #                        it with --tailscale-key
+#   --tapdance-version X.Y.Z
+#                        install Tapdance from npm (tapdance-cli@X.Y.Z) instead of building it from source,
+#                        when the `tapdance` command is missing. `tapdance machine create` passes its own
+#                        version
 #   --tailscale-hostname NAME
 #                        the machine's name in the tailnet (`tailscale up --hostname`), e.g. tapdance-android
 #
@@ -107,7 +111,7 @@ die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
 
 YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; IOS_ONLY=0; BUILD_SDK=0; EXTRA_SDK=(); PASS=()
-TS_KEY_STDIN=0; TS_KEY=""; TS_HOSTNAME=""
+TS_KEY_STDIN=0; TS_KEY=""; TS_HOSTNAME=""; TD_VERSION=""
 add_sdk_packages() {
   local p; local IFS=', '
   for p in $1; do
@@ -130,6 +134,7 @@ while (( $# )); do
     --android-build-sdk) BUILD_SDK=1 ;;
     --tailscale-auth-key-stdin) TS_KEY_STDIN=1 ;;
     --tailscale-hostname) [[ $# -ge 2 ]] || die "--tailscale-hostname needs a name"; TS_HOSTNAME="$2"; shift ;;
+    --tapdance-version) [[ $# -ge 2 ]] || die "--tapdance-version needs a version, e.g. 0.2.1"; TD_VERSION="$2"; shift ;;
     --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
     --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
     *) PASS+=("$1") ;;
@@ -143,6 +148,7 @@ case "$OS" in
   *) die "this script runs on macOS or Linux. On Windows run scripts/host-setup.ps1 for your options." ;;
 esac
 [[ ${EUID:-$(id -u)} -ne 0 ]] || die "run it as the user that will own the worker, not as root."
+[[ -z "$TD_VERSION" || "$TD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || die "--tapdance-version: \"$TD_VERSION\" is not a version like 0.2.1"
 [[ -z "$TS_HOSTNAME" || "$TS_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || die "--tailscale-hostname: \"$TS_HOSTNAME\" is not a host name (letters, digits and -)"
 # The auth key is read first, before anything else uses standard input, and kept only in memory.
 if (( TS_KEY_STDIN )); then
@@ -736,6 +742,17 @@ if (( CHECK )); then (( ! XCODE_MISSING )) || exit 1; exit 0; fi
 TAPDANCE=()
 if command -v tapdance >/dev/null 2>&1 && tapdance host --help >/dev/null 2>&1; then
   TAPDANCE=(tapdance)
+elif [[ -n "$TD_VERSION" ]]; then
+  node_ok || die "Node.js 22.13 or later is required (https://nodejs.org)."
+  command -v npm >/dev/null 2>&1 || die "npm is required to install tapdance-cli@$TD_VERSION (it comes with Node.js)."
+  say "installing tapdance-cli@$TD_VERSION from npm into $SHARE/npm"
+  npm install -g --prefix "$SHARE/npm" --no-audit --no-fund "tapdance-cli@$TD_VERSION"
+  [[ -x "$SHARE/npm/bin/tapdance" ]] || die "npm did not install the tapdance command into $SHARE/npm/bin"
+  mkdir -p "$BIN_DIR"
+  ln -sf "$SHARE/npm/bin/tapdance" "$BIN_DIR/tapdance"
+  hash -r
+  say "linked $BIN_DIR/tapdance -> $SHARE/npm/bin/tapdance ($("$SHARE/npm/bin/tapdance" --version))"
+  TAPDANCE=("$SHARE/npm/bin/tapdance")
 else
   node_ok || die "Node.js 22.13 or later is required (https://nodejs.org)."
   command -v git >/dev/null 2>&1 || die "git is required (macOS: xcode-select --install; Linux: your package manager)."
