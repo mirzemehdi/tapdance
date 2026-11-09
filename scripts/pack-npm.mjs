@@ -72,6 +72,11 @@ const manifest = {
 };
 writeFileSync(join(stage, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 copyDist(join(root, "packages/cli/dist"), join(stage, "dist"));
+// The scripts `tapdance machine create` copies to a new cloud machine, so it runs the version that
+// matches this CLI, never a download.
+mkdirSync(join(stage, "dist/assets"), { recursive: true });
+cpSync(join(root, "scripts/host-setup.sh"), join(stage, "dist/assets/host-setup.sh"));
+cpSync(join(root, "infrastructure/scripts/macos-auto-login.sh"), join(stage, "dist/assets/macos-auto-login.sh"));
 for (const f of ["README.md", "LICENSE", "NOTICE.md"]) cpSync(join(root, f), join(stage, f));
 
 // 2. A real, flat npm install of the public dependencies, with no install scripts.

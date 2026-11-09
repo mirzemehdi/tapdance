@@ -4,6 +4,11 @@ This guide runs Android emulators on a Compute Engine VM in your own Google Clou
 coding agent that runs somewhere else (your laptop, or for example a Linux VPS). You create the VM, run
 one script on it, and connect the agent's machine over Tailscale.
 
+> **One command instead:** `tapdance machine create --cloud gcp` does all of this from the agent's
+> machine with your logged-in `gcloud`, and `tapdance machine destroy android` removes it again
+> ([`tapdance machine`](../cli-reference.md#machine), [start without a Mac](../guides/start-without-a-mac.md)).
+> This page is the same path by hand, with Terraform or gcloud.
+
 Proven (2026-11-03, again on 2026-11-04 and 11-05): an `n2-standard-4` VM in `europe-west1-b`, made
 with the Terraform module and set up with `scripts/host-setup.sh`, hosted Android emulators for an
 agent on a Mac and for one on a Linux VPS: the CLI and MCP checklists, the browser viewer, installs
@@ -254,7 +259,7 @@ curl -fsSL https://raw.githubusercontent.com/mirzemehdi/tapdance/main/scripts/ho
 1. **It lists what is missing and asks once** ("Install them now?"). On a fresh VM that is Node.js, a
    JDK 17, the Android command-line tools, platform-tools, the emulator, the system image
    `system-images;android-34;google_apis;x86_64` (about 1.5 GB), the emulator's system libraries that
-   Ubuntu's cloud image lacks (`libpulse0 libxkbfile1 libxi6 libsm6 libice6` and their dependencies,
+   Ubuntu's cloud image lacks (`libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3` and their dependencies,
    in one apt step with git and unzip), Tailscale, and access to `/dev/kvm`. Saying yes also
    **accepts the Android SDK licences**; read them first at
    [developer.android.com/studio/terms](https://developer.android.com/studio/terms).
@@ -846,7 +851,7 @@ With Cloud NAT instead of an external IP, add a few dollars of NAT and traffic.
 | `vmx` present, `/dev/kvm` missing | The KVM module is not loaded. | `sudo modprobe kvm_intel`. Terraform route: read `/var/log/tapdance-startup.log`. |
 | `/dev/kvm present but not writable by this user` | Your user cannot open `/dev/kvm`. | Run the setup script again: it adds you to the `kvm` group and sets an ACL. If `setfacl` was missing (`sudo apt-get install -y acl`), or after a reboot without a new login, log out and back in so the group applies (`id -nG` lists `kvm`). |
 | apt or git downloads time out | No outbound route. | Terraform route: Cloud NAT must exist (`assign_external_ip = false`), or give the VM an external IP (`assign_external_ip = true`). |
-| `doctor` or `host up`: "the emulator cannot start: system library libpulse.so.0 is missing" | Ubuntu's cloud image lacks the emulator's audio and X libraries. | `sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6` (the setup script does this). For another missing `.so`, install it with apt and open an issue so the script can include it. |
+| `doctor` or `host up`: "the emulator cannot start: system library libpulse.so.0 is missing" | Ubuntu's cloud image lacks the emulator's audio and X libraries. | `sudo apt-get install -y libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3` (the setup script does this). For another missing `.so`, install it with apt and open an issue so the script can include it. |
 | `host up` fails at the worker step: "Failed to connect to bus: No medium found" | No systemd user manager runs for your account in a non-interactive SSH session. | Update Tapdance and run the setup script again: `host up` turns on linger and waits for the user manager. For an OS Login account, see the next row. |
 | "Could not enable linger: No such file or directory", also with `sudo` | An OS Login account, which logind cannot look up. | The setup script installs `tapdance-user-manager.service` instead; `systemctl status tapdance-user-manager.service` should show it active. |
 | The worker and guard stop when you close SSH, or do not come back after a VM restart | Linger is off; `host up` warned "Could not turn on linger". | `sudo loginctl enable-linger $USER`, then `tapdance host up --label my-vps` again. `loginctl show-user $USER --property=Linger` should print `Linger=yes`. For an OS Login account, run the setup script again so it installs `tapdance-user-manager.service`. |

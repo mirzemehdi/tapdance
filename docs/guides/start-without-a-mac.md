@@ -1,112 +1,196 @@
 # Start without a Mac: Android on Google Cloud, iOS on a rented Mac
 
 This walkthrough takes you from nothing to your AI agent testing your app on an Android phone and an
-iPhone, with only a laptop. The phones are emulators and simulators that run on two rented machines:
+iPhone, with only a laptop. The phones are emulators and simulators that run on two machines in your
+own cloud accounts, one for each platform:
 
 ```text
   your laptop                         a private network (Tailscale, free)
-  ┌──────────────────────┐             ┌──────────────────────────────────────┐
-  │ your AI agent        │ ──────────▶ │ Google Cloud machine: Android phones │
-  │ + Tapdance           │ ──────────▶ │ Scaleway Mac mini:    iPhones        │
-  └──────────────────────┘             └──────────────────────────────────────┘
+  ┌──────────────────────┐             ┌────────────────────────────────────────────┐
+  │ your AI agent        │ ──────────▶ │ Google Cloud machine (yours): Android phones │
+  │ + Tapdance           │ ──────────▶ │ Scaleway Mac mini (yours):    iPhones        │
+  └──────────────────────┘             └────────────────────────────────────────────┘
 ```
 
-Only need Android? Skip step 3 and step 6, and every part marked **iOS only**. Then it takes about 30
-minutes and costs only the Google Cloud machine.
+You pay Google and Scaleway directly. There is no Tapdance account, and Tapdance never sees your
+cloud passwords or keys: it uses the `gcloud` and `scw` tools you are logged in to. Only need Android?
+Skip everything marked **iOS only**.
 
-## The short version
+## What you need
 
-| Step | What you do | Time |
-| --- | --- | --- |
-| 1 | Create three accounts: Google Cloud, Scaleway (iOS only) and Tailscale | 15 min, plus Scaleway's identity check |
-| 2 | Install Tapdance, Tailscale and `gcloud` on your laptop | 10 min |
-| 3 | Rent a Mac mini on Scaleway's website (iOS only) | 5 min, then about an hour of waiting |
-| 4–5 | Create the Android machine and run one setup command on it | 20 min |
-| 6 | Run one setup command on the Mac (iOS only) | 15 min |
-| 7–8 | Try a phone yourself, then add Tapdance to Claude Code | 5 min |
-| 9 | Ask your agent to test your app | – |
-| 10 | Delete the machines so they stop billing | 5 min |
+- **Accounts:** [Google Cloud](https://console.cloud.google.com) with billing on, [Scaleway](https://console.scaleway.com)
+  with a payment method (iOS only; it may ask to verify your identity first, so sign up a day early), and
+  [Tailscale](https://login.tailscale.com) with **HTTPS Certificates** turned on (free; it gives your
+  machines `https://` addresses and the live view). New words are in the [glossary](../glossary.md).
+- **On your laptop (Linux or macOS):** [Node.js](https://nodejs.org) 22.13 or newer, Tailscale logged
+  in, [gcloud](https://cloud.google.com/sdk/docs/install) and (iOS only)
+  [scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/), and your agent (Claude Code here).
+- **Cost:** about USD 0.20 an hour for the Android machine while it runs (it switches itself off when
+  idle), and EUR 3-6 a day for the Mac (the cheapest Mac mini in stock), at least one day.
 
-Each step below says exactly what to type and what you should see.
+## Set it up once
+
+All on your laptop. Sections 1 and 2 below have the details for the first two steps.
+
+1. **Accounts and tools.** A Google Cloud project with billing on, a Scaleway account (iOS only) and a
+   Tailscale account ([section 1](#1-create-the-accounts)). On the laptop: Tailscale logged in, Node.js
+   22.13 or newer, `gcloud init` (pick your project), and for iOS `scw init` (paste an API key from the
+   Scaleway console) ([section 2](#2-prepare-your-laptop)).
+2. **Install Tapdance.**
+
+   ```bash
+   npm install -g tapdance-cli
+   ```
+
+3. **Create the iPhone machine (iOS only).** It shows the cost and asks first. Start it first: Scaleway
+   takes a while to install macOS. Kotlin Multiplatform app, or a private repository? See
+   [section 3](#3-create-the-iphone-machine-ios-only) for the options to add now. Already rented a Mac in
+   the Scaleway console? `create` finds it and asks whether to use it, so you do not pay for a second
+   day; `--server-id <its name or id>` picks one, `--new` rents another anyway.
+
+   ```bash
+   tapdance machine create --cloud scaleway
+   ```
+
+4. **Create the Android machine,** in a second terminal while the Mac installs. It goes in the zone
+   your gcloud is set to, else `us-central1-a`; add `--zone europe-west1-b` (or one near you) to choose.
+
+   ```bash
+   tapdance machine create --cloud gcp
+   ```
+
+   Each one prints a **Tailscale link** when its setup reaches that point: open it and approve the
+   machine. For Android that is about 3 minutes in; for the Mac, after macOS is installed, often an hour
+   in. The command waits for you; if the link has expired by then, run the same command again for a new
+   one. Android takes about 10 minutes (6 of them work in the measured run, plus your click); the Mac
+   about an hour and a half.
+
+5. **Let only your laptop reach the machines.** By default every machine in a tailnet can reach every
+   other, and these machines run your app's code. In the Tailscale admin console, under **Access
+   controls**, allow your laptop to reach them on port 4720 and nothing else, for example:
+
+   ```json
+   { "action": "accept", "src": ["<your laptop's 100.x address>"], "dst": ["tapdance-android:4720", "tapdance-ios:4720"] }
+   ```
+
+   Use the names `create` printed; the [threat model](../security/threat-model.md) explains the rule.
+
+6. **Give Claude Code the Tapdance tools,** in your app's project folder. If you already added it from
+   the README, skip this. Start Claude Code and type `/mcp`: you should see `tapdance`. The full paths
+   matter when Node.js came from nvm.
+
+   ```bash
+   claude mcp add tapdance -- "$(command -v node)" "$(command -v tapdance)" mcp
+   ```
+
+## Ask your agent
+
+Tell it what you want, in plain words, in your app's folder. For example: "Lease an Android phone,
+install app-debug.apk, sign up with a new account and take a screenshot of each screen. Then do the
+same on an iPhone with the iOS app built from our main branch." Building the iOS app on the Mac needs
+a one-time setup: [step 6](#6-ask-it-to-test-your-app).
+
+## When you are done
+
+```bash
+tapdance machine destroy android
+tapdance machine destroy ios
+```
+
+Each one removes the machine and everything made for it, and checks that nothing is left that costs
+money: **you should see** `Nothing billable left from this machine.` The Mac cannot be deleted in its
+first 24 hours; `destroy` then sets it to go as soon as Scaleway allows.
+
+## Or let it run by itself
+
+```bash
+tapdance machine auto on --platform android
+```
+
+From then on, when your agent asks for an Android phone and the machine is off, Tapdance starts it; if
+there is no machine, it creates one in the background and tells the agent to try again in a few
+minutes (the agent passes on the Tailscale link for you to approve). The machine switches itself off
+after 30 minutes without use. Each new machine still needs you to approve it in Tailscale: the agent
+passes the link on, so keep an eye on what it tells you. `--delete-after-days 7` also deletes it once it has been off a week, so
+its disk stops billing. Auto mode keeps at most one machine per platform. Without `--delete-after-days`,
+a stopped Android machine is never deleted, and its disk bills about USD 7 a month. For iPhones,
+`tapdance machine auto on --platform ios --accept-mac-day` lets it rent a Mac when needed, one at a time;
+each new Mac costs at least one day. If your project already has a Mac, auto mode does not rent another:
+it asks you to set that one up once with `--server-id`. `tapdance machine auto` shows the setting,
+`tapdance machine auto off` turns it off.
 
 **Want help along the way?** Paste this into Claude Code on your laptop:
 
 ```text
 Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
-one step at a time. Run the commands meant for my laptop yourself, tell me exactly what to click in
-the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to. Ask before
-anything that costs money, and never print token files or passwords.
+("Set it up once") one step at a time. Run the commands meant for my laptop yourself, tell me exactly
+what to click in the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to.
+Ask before anything that costs money, give me each Tailscale link to approve, and never print token
+files or passwords.
 ```
+
+**How sure this is.** The Android part ran for real on a Google Cloud account: `machine create` took
+about 6 minutes of work plus the Tailscale click, the agent's checklists passed, auto mode created,
+stopped and started the machine by itself, and `destroy` left nothing that bills
+([evidence](../testing/evidence/2026-11-09-byoc-self-run.md)). The iPhone part ran for real on a Scaleway Mac mini the owner had rented
+(`--server-id`): set up and connected in under 9 minutes, and the iOS checklists passed. Renting the
+Mac with `create` itself has been tested only with a stand-in for Scaleway so far. Each step it automates has run for real by hand (the
+[do it by hand](#under-the-hood-do-it-by-hand) section at the end). The agent in these runs was a test
+script, not Claude Code itself. Report what trips you up with `tapdance report`.
+
+The sections below are the same steps in detail: what to type, and what you should see.
 
 ## Before you start
 
 **What it costs.**
 
-- **[Google Cloud](https://cloud.google.com/compute):** about USD 0.20 an hour while the machine runs, an `n2-standard-4`
-  ([N2 machine types](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)). Its 64 GB disk costs about USD 7 a
-  month, even while the machine is stopped, until you delete it. Step 10 deletes it.
-- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/):** EUR 2.64 a day before VAT for the smallest Mac mini, about EUR 3 with VAT. Apple's
-  licence makes Scaleway bill at least 24 hours. It bills until you delete the Mac, even when it is
-  switched off.
+- **[Google Cloud](https://cloud.google.com/compute):** about USD 0.20 an hour while the Android machine
+  runs, an `n2-standard-4` ([N2 machine types](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)).
+  It switches itself off after 30 minutes without use. Its 64 GB disk costs about USD 7 a month, even
+  while the machine is off, until you destroy it.
+- **[Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) (iOS only):** from EUR 2.64 a day before
+  VAT for the smallest Mac mini (M1-M, often out of stock) to EUR 4.08 for an M2-M; `create` rents the
+  cheapest one in stock and tells you which and what it costs before you say yes. Apple's licence makes Scaleway bill at least 24
+  hours, and the Mac cannot be deleted sooner. It bills until it is deleted, even when switched off.
+  `create` asks before renting it, and sets it to be deleted by itself at the 24-hour mark.
 - **Tailscale:** free for personal use.
 
-A test day costs roughly EUR 3 for the Mac plus one or two dollars for Google Cloud.
+A test day costs roughly EUR 3-6 for the Mac plus one or two dollars for Google Cloud.
 
-**How long it takes.** About 1.5 hours until both phones work, most of it waiting for Scaleway to
-install macOS. You can set up the Android machine while you wait. Building your iOS app on the rented
-Mac adds 30 to 60 minutes the first time: a Kotlin Multiplatform app's first build took 9 minutes on
-the smallest Mac mini.
+These prices are approximate, read on 2026-11-09. Google and Scaleway change them: check
+[Google Cloud's N2 prices](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types) and [Scaleway's Mac mini prices](https://www.scaleway.com/en/pricing/apple-silicon/) before you start.
+
+**How long it takes.** About 10 minutes for the Android machine. About an hour for the Mac, most of it
+Scaleway installing macOS, when there is nothing for you to do; start it first and set up Android
+meanwhile. Building your iOS app on the Mac adds 10 to 60 minutes the first time: a Kotlin
+Multiplatform app's first build took 9 minutes on the smallest Mac mini.
 
 **What you need.**
 
 - A laptop with Linux or macOS. Windows is expected to work as the laptop, but nobody has tried it yet.
 - A Google account and a payment card. Google Cloud and Scaleway both ask for one.
 - Claude Code, or another AI agent that supports MCP, on the laptop.
-- Your app's code on GitHub. For Android, you build a debug APK on your laptop. For iOS, the rented Mac
-  builds the app from GitHub (step 9). That works for native iOS apps and Kotlin Multiplatform apps.
-  Flutter and React Native apps have not been tried: the Mac runs only `xcodebuild`, so for those, let
-  your CI build a simulator app instead (step 9).
-- If your repository is private, a GitHub token the Mac can read it with. Step 9 makes one.
-
-**How sure this is.** Each part of this path has run for real: from a Linux server, Android on Google
-Cloud and iOS on a Scaleway Mac mini were tested in one session. Two things have not. The Google Cloud
-commands below were run in a slightly different form, with Terraform. And the agent in those runs was
-a test script, not Claude Code itself. Claude Code uses the same tools in the same way, but nobody has
-recorded a run with it yet. Report what trips you up with `tapdance report`.
+- Your app's code on GitHub. For Android, you build a debug APK on your laptop. For iOS, the Mac builds
+  the app from GitHub (step 6). That works for native iOS apps and Kotlin Multiplatform apps. Flutter
+  and React Native apps have not been tried: the Mac runs only `xcodebuild`, so for those, let your CI
+  build a simulator app instead (step 6).
 
 ## 1. Create the accounts
 
-Do them in this order. Start a day early if you can: Scaleway may ask you to verify your identity
-before you can rent a Mac, and that can take a while.
+Start a day early if you can: Scaleway may ask you to verify your identity before you can rent a Mac.
 
-1. **Google Cloud.** Go to [console.cloud.google.com](https://console.cloud.google.com) and sign in with
-   your Google account. Set up billing when it asks. Create a new project, for example
-   `tapdance-test`, and note its **project ID**: the project picker shows it, often with a number at
-   the end. A project of its own makes cleaning up easy, because you can delete the whole project.
-2. **Scaleway (iOS only).** Sign up at [console.scaleway.com](https://console.scaleway.com) and add a payment
-   method.
-3. **Tailscale.** Sign up at [login.tailscale.com](https://login.tailscale.com) with the same Google
-   account. Tailscale makes a private network between your machines, so the phones are never open to
-   the internet.
-
-In Tailscale's admin console, open **DNS** and turn on **HTTPS Certificates**. Your machines then talk
-over `https://`, and you can watch the phones live in your browser.
-
-By default, every machine in your Tailscale network can reach every other. The rented machines build
-and run your app, so it is safer if they cannot reach your laptop. Once all three machines are in the
-network (after step 6, or step 5 if you only need Android), change the **Access controls** so that only your laptop can reach the other
-two, on port 4720. The [threat model](../security/threat-model.md) has the rule to paste.
-
-**You should see:** a Google Cloud project with billing on, a Scaleway console, and a Tailscale admin
-console with no machines yet.
+1. **Google Cloud.** Go to [console.cloud.google.com](https://console.cloud.google.com) and sign in.
+   Set up billing when it asks. Create a new project, for example `tapdance-test`, and note its
+   **project ID** (the project picker shows it). A project of its own keeps Tapdance apart from
+   everything else you run.
+2. **Scaleway (iOS only).** Sign up at [console.scaleway.com](https://console.scaleway.com) and add a
+   payment method.
+3. **Tailscale.** Sign up at [login.tailscale.com](https://login.tailscale.com). Tailscale makes a
+   private network between your machines, so the phones are never open to the internet. In its admin
+   console, open **DNS** and turn on **HTTPS Certificates**: your machines then talk over `https://`,
+   and you can watch the phones live in your browser.
 
 ## 2. Prepare your laptop
-
-**git and curl.** On Ubuntu:
-
-```bash
-sudo apt install -y git curl
-```
 
 **Tailscale.** On Linux:
 
@@ -127,8 +211,6 @@ source ~/.bashrc
 nvm install 22
 ```
 
-Any Node.js from 22.13 on works.
-
 **Tapdance:**
 
 ```bash
@@ -136,33 +218,317 @@ npm install -g tapdance-cli
 tapdance --version
 ```
 
-
-**You should see** a version such as `0.1.0`. The npm package called just `tapdance` is a different
+**You should see** a version such as `0.2.1`. The npm package called just `tapdance` is a different
 project, so install `tapdance-cli`.
 
-**The gcloud command-line tool.** Install it from
-[cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install). Then point it at your
-project and turn on the Compute Engine API:
+**gcloud, Google Cloud's command-line tool.** Install it from
+[cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install), then log in and pick
+your project:
 
 ```bash
 gcloud init
-gcloud services enable compute.googleapis.com
 ```
 
-`gcloud init` opens a browser to log you in, then asks which project to use: pick `tapdance-test`.
-**You should see** your project ID when you run `gcloud config get-value project`.
+It opens a browser to log you in, then asks which project to use: pick `tapdance-test`. **You should
+see** your project ID when you run `gcloud config get-value project`.
 
-**An SSH key for the rented Mac (iOS only),** if you do not have one:
+**scw, Scaleway's command-line tool (iOS only).** Install it from
+[Scaleway's quickstart](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/), then:
 
 ```bash
-ssh-keygen -t ed25519
-cat ~/.ssh/id_ed25519.pub
+scw init
 ```
 
-Press Enter to accept the file name. A passphrase is optional. The second command prints your public
-key: you paste it into Scaleway in the next step.
+It asks for an API key: create one in the Scaleway console under **IAM > API keys** and paste it there.
+The key stays in scw's own config file; Tapdance never reads it.
 
-## 3. Rent the Mac (it takes about an hour to be ready)
+## 3. Create the iPhone machine (iOS only)
+
+Start this first, because Scaleway takes a while to install macOS:
+
+```bash
+tapdance machine create --cloud scaleway
+```
+
+Add options for the Mac's setup after `--`, now rather than after the Mac day has started:
+
+- **A Kotlin Multiplatform app:** `-- --android-build-sdk`. Its iOS build also configures the Android
+  parts and fails with "SDK location not found" without the Android SDK.
+- **A private repository** the Mac should build from: `-- --with-gh`, which installs the GitHub tool
+  for step 6. Both together: `-- --android-build-sdk --with-gh`.
+
+It checks that `scw` is logged in, shows what it will rent and what it costs, and asks:
+
+```text
+› cheapest Mac mini in stock: M2-M in fr-par-3 (available)
+› Rent an iOS machine "ios" from Scaleway: a Mac mini M2-M in fr-par-3.
+›   Scaleway bills a Mac mini for at least 24 hours, and you cannot delete it sooner (Apple's macOS licence).
+›   It bills until it is deleted, also while switched off: EUR 0.17 an hour before VAT (M2-M), ...
+›   It is scheduled for automatic deletion at the 24-hour mark, so a forgotten Mac costs one day (--keep turns that off).
+Rent it? You pay Scaleway for at least 24 hours. [y/N]
+```
+
+Answer `y`. Then it works through six steps and prints each one with the time it took. Two things need
+you:
+
+- **Waiting.** Step 3 waits for Scaleway to install macOS, often 20 to 60 minutes. Leave it running and
+  do step 4 in a second terminal.
+- **One click.** In step 5 it prints **Open this link and approve the machine in your Tailscale
+  network**. Open the link and approve the machine. It is called `tapdance-ios`.
+
+**You should see** at the end:
+
+```text
+Machine ios is ready and connected.
+  endpoint: https://tapdance-ios.tail1234.ts.net:4720
+```
+
+On a 16 GB Mac mini (M2-M and up) Tapdance keeps one iPhone booted as a spare, so the next one starts in
+seconds. The 8 GB M1-M has room for one iPhone at a time: there it keeps no spare, and each new iPhone
+takes one to two minutes to start. `--type` and `--zone` pick an offer yourself.
+
+## 4. Create the Android machine
+
+```bash
+tapdance machine create --cloud gcp
+```
+
+It uses the project `gcloud` is set to (`--project <PROJECT_ID>` picks another), shows what it will
+create and what it costs, and asks `Create it?`. Answer `y`. It then:
+
+1. turns on the Compute Engine API in your project;
+2. makes a private network that only Google's own SSH service can enter;
+3. creates the machine `tapdance-android`;
+4. waits until it answers;
+5. installs the Android tools, an Android system image and Tapdance on it, and starts one Android phone
+   as a self-test. Here too it prints a **Tailscale link**: open it and approve `tapdance-android`;
+6. connects your laptop to it.
+
+**You should see** `Machine android is ready and connected.` after about 10 minutes (6 of them work in the measured run, plus your click).
+
+If it stops with an error, it says which step failed and why. Fix what it names, then run the same
+command again: it continues where it stopped. Common ones are in [If something goes
+wrong](#if-something-goes-wrong).
+
+Once both machines are in your Tailscale network, you can make it safer: by default every machine in a
+tailnet can reach every other, and the rented machines run your app, so change the **Access controls**
+so that only your laptop can reach them, on port 4720. The [threat model](../security/threat-model.md)
+has the rule to paste.
+
+## 5. Try both phones, then connect your agent
+
+Borrow each phone once by hand. Run this in your app's project folder, so the screenshots land there:
+
+```bash
+cd ~/<your-app>
+tapdance device lease --platform android
+tapdance screenshot
+tapdance device release
+tapdance device lease --platform ios
+tapdance screenshot
+tapdance device release
+```
+
+**You should see** each lease print the phone it got, and each screenshot saved under
+`./tapdance-artifacts/`.
+
+**If Android is unreachable**, the Google Cloud machine has switched itself off after 30 minutes without
+use. Start it again, and wait about a minute:
+
+```bash
+tapdance machine start android
+```
+
+You can tell your agent it may run that command itself.
+
+Now give your agent the phones. For Claude Code, from your app's project folder:
+
+```bash
+claude mcp add tapdance -- "$(command -v node)" "$(command -v tapdance)" mcp
+```
+
+The full paths matter because Node.js came from nvm: Claude Code started from a desktop launcher or an
+IDE may not see nvm's `PATH`. Start Claude Code in that folder and run `/mcp`. **You should see** a
+server called `tapdance`, connected, with tools such as `lease_device` and `take_screenshot`. Codex
+and Cursor are in [connect your agent](../agents.md).
+
+## 6. Ask it to test your app
+
+**Android: build on your laptop.** Build a debug APK as you normally would, for example:
+
+- a native Android app: `./gradlew assembleDebug`, which writes `app/build/outputs/apk/debug/app-debug.apk`;
+- a Kotlin Multiplatform app: `./gradlew :composeApp:assembleDebug`, which writes
+  `composeApp/build/outputs/apk/debug/composeApp-debug.apk`;
+- a Flutter app: `flutter build apk --debug`, which writes `build/app/outputs/flutter-apk/app-debug.apk`;
+- a React Native app: `cd android && ./gradlew assembleRelease`, which writes
+  `android/app/build/outputs/apk/release/app-release.apk`. Use a release build: a debug build loads its
+  JavaScript from Metro on your laptop, which the cloud machine cannot reach.
+
+The agent uploads the APK to the Android machine itself.
+
+**iOS: let the Mac build it from GitHub.** Do this once. The commands below log in to the Mac with the
+key `tapdance machine create` made for it. Find the Mac's address in the line it printed after "A
+shell on the machine", or with `tapdance machine list --json` (the `shell` field):
+
+```bash
+KEY=~/.tapdance/machines/ios/id_ed25519
+MAC=m1@<mac-ip>
+```
+
+A **public repository** needs no GitHub token: skip steps 1 and 2, and use `--git-auth none` in step 3.
+
+1. **If the repository is private, make a GitHub token.** On GitHub, open **Settings > Developer
+   settings > Personal access tokens > Fine-grained tokens > Generate new token**. Pick only your app's
+   repository, and give it **Contents: Read-only**. Copy the token.
+2. **Log the Mac in to GitHub with it.** On your laptop, run this and paste the token when it asks. It
+   is not shown on screen:
+
+   ```bash
+   ssh -t -i "$KEY" "$MAC" 'tapdance host gh-login'
+   ```
+
+   The prompt form has not been tried on a rented Mac yet. The form that has been tried passes the token
+   over ssh's input, without writing it to a file:
+
+   ```bash
+   read -rs TOKEN
+   printf '%s' "$TOKEN" | ssh -i "$KEY" "$MAC" 'tapdance host gh-login'
+   unset TOKEN
+   ```
+
+   `read -rs` waits for you to paste the token and press Enter, without showing it.
+
+3. **Allow builds of your repository** on the Mac:
+
+   ```bash
+   ssh -i "$KEY" "$MAC" 'tapdance host builds enable --repo https://github.com/<you>/<your-app> --git-auth gh --allow-admin-account'
+   ```
+
+   `--allow-admin-account`: the rented Mac's only user is an administrator, which is fine on a Mac that
+   holds nothing of yours. The Mac needs the GitHub tool for `--git-auth gh`: create it with `-- --with-gh`
+   (section 3).
+
+   It checks that the Mac can read the repository and warns if not.
+
+4. **Files kept out of git?** If the iOS build needs files your repository does not contain, such as
+   `google-services.json`, `GoogleService-Info.plist` or `local.properties`, give the Mac a copy once.
+   For example, from your app's folder on the laptop:
+
+   ```bash
+   ssh -i "$KEY" "$MAC" 'tapdance host builds files add --repo https://github.com/<you>/<your-app> iosApp/iosApp/GoogleService-Info.plist' < iosApp/iosApp/GoogleService-Info.plist
+   ```
+
+   The second path is where the file belongs in the repository. The Mac copies it in before each build.
+
+The agent can then build any branch of that repository on the Mac and install it on the iPhone. The Mac
+builds what is on GitHub, so **push your branch first**: changes only on your laptop are not tested. If the
+Xcode project sits in a subfolder, as `iosApp/iosApp.xcodeproj` does in a Kotlin Multiplatform app, it
+is found as long as there is only one, up to two folders deep. The [host builds guide](host-builds.md) has the other options.
+
+**Flutter or React Native?** Building them on the Mac has not been tried. Let your CI build a simulator
+app instead and have the Mac install it: see [build in CI](ci-builds.md). Installing an iOS app from CI
+is unit-tested only so far.
+
+Then ask your agent, for example:
+
+```text
+Lease an Android phone, install composeApp/build/outputs/apk/debug/composeApp-debug.apk,
+open the app, sign in with the test account from TESTING.md, and take a screenshot of each
+screen. Release the phone. Then lease an iPhone, build the iOS app from our main branch on
+the Mac, install it and do the same. Tell me what looked wrong, and release the iPhone at the end.
+```
+
+An agent session holds one phone at a time, so the agent releases the Android phone before it leases
+the iPhone.
+
+**You should see:** the agent leases a phone, installs and opens the app, taps through it, and saves
+screenshots under `./tapdance-artifacts/`.
+
+You can watch the phone live in your browser while the agent works. Ask the agent for its session id:
+the `get_device_status` tool reports it, and in Claude Code it starts with `claude-code:`. Then run:
+
+```bash
+tapdance --session claude-code:<id> view
+```
+
+Open the link it prints. Touching the phone in the browser takes over; **Hand back** returns it to the
+agent.
+
+## 7. Stop paying
+
+When you are done:
+
+```bash
+tapdance device release
+tapdance machine destroy android
+tapdance machine destroy ios
+```
+
+Each `destroy` asks first, then logs the machine out of Tailscale, removes it from your laptop, deletes
+it with everything made for it (its disk, network and firewall rule on Google Cloud; its ssh key on
+Scaleway), and checks your account. **You should see** `Nothing billable left from this machine.` It
+also lists other things in your project that cost money, such as your other machine; it leaves those
+alone.
+
+The Mac is different in its first 24 hours: Scaleway does not delete it sooner. `destroy` then sets it
+to be deleted as soon as Scaleway allows and tells you when; it bills until then. `tapdance machine
+list` shows your machines, what they cost so far (an estimate), and the Mac until it is gone.
+
+Then, if you made one, delete the GitHub token. If you do not use Google Cloud for anything else, log
+gcloud out with `gcloud auth revoke --all`: its login can reach your whole account.
+
+## If something goes wrong
+
+- **"gcloud is not logged in" or "scw cannot reach Scaleway":** run `gcloud init` or `scw init` again
+  (step 2).
+- **"Billing is not turned on":** link a billing account to the project in the Google Cloud console
+  (**Billing > Link a billing account**). A Firebase project's billing account works too.
+- **Google Cloud says the quota for `N2_CPUS` is too low:** your new project needs a higher limit. Ask
+  for 4 or more under **IAM & Admin > Quotas & system limits** in the console, or try another zone with
+  `--zone europe-west1-b`.
+- **Google Cloud says nested virtualization is not allowed:** your Google account belongs to an
+  organization that forbids it. Use a personal Google account and a new project.
+- **Scaleway has no Mac in stock:** try `--type M2-M`, or later.
+- **The Tailscale link timed out:** run the same `create` command again and open the new link.
+- **Old machines stay listed in Tailscale:** `destroy` logs the machine out, but Tailscale keeps it as
+  offline, and a new machine then gets a name like `tapdance-android-1`. Delete the old entries under
+  **Machines** in the Tailscale admin console.
+- **A step failed:** fix what it names and run the same command again; it continues at that step. To
+  give up instead, `tapdance machine destroy <name>` removes what was made.
+- **Android is unreachable later:** the machine switched itself off. `tapdance machine start android`.
+- **iPhone leases fail with "Internal error":** the small Mac ran out of memory. Log in to it (the
+  `shell` line of `tapdance machine list --json`) and run `tapdance host warm android=0,ios=0`.
+- **The first command on a new iPhone times out:** run it again. The first one starts a helper on the
+  phone and can be slow.
+- **The iOS build fails with "SDK location not found":** it is a Kotlin Multiplatform app and the Mac
+  has no Android SDK. Create the Mac with `tapdance machine create --cloud scaleway -- --android-build-sdk`,
+  or on a Mac you have, run `host-setup.sh` again with `--android-build-sdk`.
+
+Everything else: [troubleshooting](../troubleshooting.md). The words used here are explained in the
+[glossary](../glossary.md).
+
+## Under the hood: do it by hand
+
+What `tapdance machine create` does, and how to do it yourself, for example on another cloud or to see
+each step. The full reference is [`tapdance machine`](../cli-reference.md#machine).
+
+**On Google Cloud** it runs your `gcloud`: it turns on the Compute Engine and IAP APIs, creates a
+network, subnet and firewall rule called `tapdance-android` (the rule lets only Google's IAP range
+`35.235.240.0/20` reach SSH), creates the VM `tapdance-android` with nested virtualization, no service
+account, OS Login and a stop 8 hours after each start, labelled `tapdance-machine=android`, copies
+`scripts/host-setup.sh` to it over IAP SSH and runs it with `--yes`, reads the endpoint and the pairing
+token over SSH and runs `tapdance connect` with the token on stdin. The token is never shown.
+
+**On Scaleway** it runs your `scw`: it makes an ssh key in `~/.tapdance/machines/ios/` and adds it to
+your project, rents the Mac mini `tapdance-ios` and schedules its deletion, waits for macOS, reads the
+Mac's password from Scaleway's API into memory and sends it to the Mac over ssh's stdin to turn on
+automatic login (`infrastructure/scripts/macos-auto-login.sh --password-stdin`) and to allow sudo
+during the setup only, restarts the Mac, runs `host-setup.sh --ios-only` and connects the same way.
+The password is never printed or saved by Tapdance.
+
+The steps below are the same path typed by hand: it ran for real in the earlier field tests.
+
+### By hand A. Rent the Mac (it takes about an hour to be ready)
 
 Start this first, because Scaleway needs about an hour to install macOS.
 
@@ -177,14 +543,14 @@ Start this first, because Scaleway needs about an hour to install macOS.
 
 **You should see:** the Mac mini listed as installing. When it is ready, its page shows an IP address,
 the user name `m1`, and a password. Xcode comes installed, and you need no Apple ID or Apple developer
-account for simulators. Keep the password private; you need it in step 6.
+account for simulators. Keep the password private; you need it in D.
 
 With automatic deletion, the Mac is gone after 24 hours. To test again another day, rent a new one and
-repeat steps 3 and 6, and the iOS part of step 9. Running `tapdance connect … --name mac` with the new
+repeat A and D. Running `tapdance connect … --name mac` with the new
 Mac's address replaces the old one on your laptop. Turn automatic deletion off if you want to keep the
 Mac longer: it keeps billing about EUR 3 a day.
 
-## 4. Start the Android machine on Google Cloud
+### By hand B. Start the Android machine on Google Cloud
 
 While the Mac installs, create the machine that runs the Android phones. It needs
 [nested virtualization](https://cloud.google.com/compute/docs/instances/nested-virtualization/overview), which lets an emulator run inside a cloud machine:
@@ -229,7 +595,7 @@ gcloud compute firewall-rules delete default-allow-ssh
 
 The full details are in the [Google Cloud guide](../deployment/google-cloud-n2.md).
 
-## 5. Set up the Android machine
+### By hand C. Set up the Android machine
 
 Open a shell on it from your laptop:
 
@@ -281,7 +647,7 @@ on the agent machine:  tapdance connect https://tapdance-n2.tail1234.ts.net:4720
 **Copy the `on the agent machine` line** into a text file on your laptop. You need it in a minute.
 
 The machine switches itself off after 30 minutes without use, to save money. While you wait for the Mac,
-it will probably do that. Step 7 shows how to start it again.
+it will probably do that. `gcloud compute instances start tapdance-n2 --zone=us-central1-a` starts it again.
 
 Type `exit` to go back to your laptop. There, copy the token file and connect, using the line you
 copied and adding `--name android`:
@@ -298,7 +664,7 @@ The token file is a key to the phones. Keep it out of chats and repositories, an
 **You should see:** `connect` checks the machine, shows Android phones as available, and prints the
 lines to add Tapdance to Claude Code, Codex or Cursor.
 
-## 6. Set up the Mac
+### By hand D. Set up the Mac
 
 Wait until Scaleway shows the Mac as ready. Then, from your laptop, have the Mac download one script
 and run it, using the IP address from the Scaleway page:
@@ -329,7 +695,7 @@ bash host-setup.sh --ios-only --with-gh --allow-admin-account --label my-laptop
 What the options mean:
 
 - `--ios-only`: iPhones only on this Mac; Android runs on Google Cloud.
-- `--with-gh`: installs the GitHub tool, so the Mac can fetch your app from GitHub in step 9.
+- `--with-gh`: installs the GitHub tool, so the Mac can fetch your app from GitHub.
 - `--allow-admin-account`: the rented Mac's only user is an administrator. That is fine on a Mac that
   holds nothing of yours.
 - **Kotlin Multiplatform app?** Add `--android-build-sdk` too. Its iOS build also configures the
@@ -367,192 +733,19 @@ to `android` and iPhones go to `mac`.
 More about the Mac, including what to do after a restart: the
 [Scaleway guide](../ios/scaleway-mac.md).
 
-## 7. Try both phones yourself
+### By hand: stop paying
 
-Before handing it to your agent, borrow each phone once by hand. Run this in your app's project folder,
-so the screenshots land there:
-
-```bash
-cd ~/<your-app>
-tapdance devices
-tapdance device lease --platform android
-tapdance screenshot
-tapdance device release
-tapdance device lease --platform ios
-tapdance screenshot
-tapdance device release
-```
-
-The last three lines are iOS only.
-
-**You should see:** `devices` lists both machines. Each lease prints the phone it got, and each
-screenshot is saved under `./tapdance-artifacts/`. The first iPhone takes about two minutes to start
-on the small Mac mini; later ones are faster.
-
-**If Android is unreachable**, the Google Cloud machine has probably switched itself off after 30
-minutes without use, or after 8 hours. Your agent then reports that it cannot reach `android`. Start the
-machine again and wait about a minute. You can also tell your agent it may run this command itself:
-
-```bash
-gcloud compute instances start tapdance-n2 --zone=us-central1-a
-```
-
-## 8. Connect your agent
-
-`connect` already printed the lines for your agent. For Claude Code, from your app's project folder:
-
-```bash
-claude mcp add tapdance -- "$(command -v node)" "$(command -v tapdance)" mcp
-```
-
-The full paths matter because Node.js came from nvm. Claude Code started from a desktop launcher or an
-IDE may not see nvm's `PATH`, and then a plain `tapdance mcp` would not start.
-
-Start Claude Code in that folder and run `/mcp`.
-
-**You should see:** a server called `tapdance`, connected, with tools such as `lease_device` and
-`take_screenshot`. Codex and Cursor are in [connect your agent](../agents.md).
-
-## 9. Ask it to test your app
-
-**Android: build on your laptop.** Build a debug APK as you normally would, for example:
-
-- a native Android app: `./gradlew assembleDebug`, which writes `app/build/outputs/apk/debug/app-debug.apk`;
-- a Kotlin Multiplatform app: `./gradlew :composeApp:assembleDebug`, which writes
-  `composeApp/build/outputs/apk/debug/composeApp-debug.apk`;
-- a Flutter app: `flutter build apk --debug`, which writes `build/app/outputs/flutter-apk/app-debug.apk`;
-- a React Native app: `cd android && ./gradlew assembleRelease`, which writes
-  `android/app/build/outputs/apk/release/app-release.apk`. Use a release build: a debug build loads its
-  JavaScript from Metro on your laptop, which the cloud machine cannot reach.
-
-The agent uploads the APK to the Android machine itself.
-
-**iOS: let the Mac build it from GitHub.** Do this once.
-
-1. **If the repository is private, make a GitHub token.** On GitHub, open **Settings > Developer
-   settings > Personal access tokens > Fine-grained tokens > Generate new token**. Pick only your app's
-   repository, and give it **Contents: Read-only**. Copy the token.
-2. **Log the Mac in to GitHub with it.** On your laptop, run this and paste the token when it asks. It
-   is not shown on screen:
-
-   ```bash
-   ssh -t m1@<mac-ip> 'tapdance host gh-login'
-   ```
-
-   The prompt form has not been tried on a rented Mac yet. The form that has been tried passes the token
-   over ssh's input, without writing it to a file:
-
-   ```bash
-   read -rs TOKEN
-   printf '%s' "$TOKEN" | ssh m1@<mac-ip> 'tapdance host gh-login'
-   unset TOKEN
-   ```
-
-   `read -rs` waits for you to paste the token and press Enter, without showing it.
-
-3. **Allow builds of your repository** on the Mac:
-
-   ```bash
-   ssh m1@<mac-ip> 'tapdance host builds enable --repo https://github.com/<you>/<your-app> --git-auth gh --allow-admin-account'
-   ```
-
-   It checks that the Mac can read the repository and warns if not.
-
-4. **Files kept out of git?** If the iOS build needs files your repository does not contain, such as
-   `google-services.json`, `GoogleService-Info.plist` or `local.properties`, give the Mac a copy once.
-   For example, from your app's folder on the laptop:
-
-   ```bash
-   ssh m1@<mac-ip> 'tapdance host builds files add --repo https://github.com/<you>/<your-app> iosApp/iosApp/GoogleService-Info.plist' < iosApp/iosApp/GoogleService-Info.plist
-   ```
-
-   The second path is where the file belongs in the repository. The Mac copies it in before each build.
-
-The agent can then build any branch of that repository on the Mac and install it on the iPhone. The Mac
-builds what is on GitHub, so **push your branch first**: changes only on your laptop are not tested. If the
-Xcode project sits in a subfolder, as `iosApp/iosApp.xcodeproj` does in a Kotlin Multiplatform app, it
-is found as long as there is only one, up to two folders deep. The [host builds guide](host-builds.md) has the other options.
-
-**Flutter or React Native?** Building them on the Mac has not been tried. Let your CI build a simulator
-app instead and have the Mac install it: see [build in CI](ci-builds.md). Installing an iOS app from CI
-is unit-tested only so far.
-
-Then ask your agent, for example:
-
-```text
-Lease an Android phone, install composeApp/build/outputs/apk/debug/composeApp-debug.apk,
-open the app, sign in with the test account from TESTING.md, and take a screenshot of each
-screen. Release the phone. Then lease an iPhone, build the iOS app from our main branch on
-the Mac, install it and do the same. Tell me what looked wrong, and release the iPhone at the end.
-```
-
-An agent session holds one phone at a time, so the agent releases the Android phone before it leases
-the iPhone.
-
-**You should see:** the agent leases a phone, installs and opens the app, taps through it, and saves
-screenshots under `./tapdance-artifacts/`.
-
-You can watch the phone live in your browser while the agent works. Ask the agent for its session id:
-the `get_device_status` tool reports it, and in Claude Code it starts with `claude-code:`. Then run:
-
-```bash
-tapdance --session claude-code:<id> view
-```
-
-Open the link it prints. Touching the phone in the browser takes over; **Hand back** returns it to the
-agent.
-
-## 10. Stop paying
-
-Do this when you are done.
-
-1. **Release any phone** still borrowed: `tapdance device release`.
-2. **Delete the Mac mini** on the Scaleway page. Scaleway allows it only after the first 24 hours; with
-   automatic deletion on, it goes by itself. Switching it off does not stop billing.
-3. **Delete the Google Cloud machine and its firewall rule:**
+1. **Delete the Mac mini** on the Scaleway page, after its first 24 hours, or let automatic deletion do
+   it. Switching it off does not stop billing.
+2. **Delete the Google Cloud machine and its firewall rule:**
 
    ```bash
    gcloud compute instances delete tapdance-n2 --zone=us-central1-a
    gcloud compute firewall-rules delete tapdance-host-ssh-iap
    ```
 
-   Or delete the whole `tapdance-test` project in the console, which removes everything in it. A
-   stopped machine still bills for its disk, so delete it rather than stop it.
-4. **Forget the machines on your laptop:**
-
-   ```bash
-   tapdance disconnect android
-   tapdance disconnect mac
-   ```
-
-5. **Log gcloud out** on your laptop, if you do not use Google Cloud for anything else. Its login can
-   reach your whole Google Cloud account:
-
-   ```bash
-   gcloud auth revoke --all
-   ```
-
-6. **Remove the two machines** from the Tailscale admin console, and delete the GitHub token if you made
-   one.
-
-To check that nothing on Google Cloud still bills, the
-[Google Cloud guide](../deployment/google-cloud-n2.md#tear-down) has a script that lists leftovers.
-
-## If something goes wrong
-
-- **gcloud says nested virtualization is not allowed:** your Google account belongs to an organization
-  that forbids it. Use a personal Google account and a new project.
-- **The Android self-test is slow:** the first boot on a cloud machine can take several minutes. Wait.
-- **Android is unreachable later:** the machine switched itself off. Start it again (step 7).
-- **iPhone leases fail with "Internal error":** the small Mac ran out of memory. Run the `host warm`
-  line in step 6 again.
-- **The agent's calls fail after the Mac restarted:** automatic login is not set. Run the script at the
-  start of step 6 again.
-- **The first command on a new iPhone times out:** run it again. The first one starts a helper on the
-  phone and can be slow.
-- **The iOS build fails with "SDK location not found":** it is a Kotlin Multiplatform app and the Mac
-  has no Android SDK. Run the setup command in step 6 again with `--android-build-sdk`; steps already
-  done are skipped.
-
-Everything else: [troubleshooting](../troubleshooting.md). The words used here are explained in the
-[glossary](../glossary.md).
+   A stopped machine still bills for its disk, so delete it rather than stop it.
+3. **Forget the machines on your laptop:** `tapdance disconnect android` and `tapdance disconnect mac`.
+4. **Remove the two machines** from the Tailscale admin console.
+5. Check with the read-only leftovers scripts: `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>`
+   and `infrastructure/scripts/scaleway-leftovers.sh` ([Google Cloud tear-down](../deployment/google-cloud-n2.md#tear-down)).

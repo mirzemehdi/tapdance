@@ -524,7 +524,7 @@ The script (`set -euo pipefail`):
      it skips the emulator and the system image, installs Tapdance, and stops: that machine can only be
      the agent's machine (this branch is not yet run).
    - **Emulator libraries:** Ubuntu's cloud image lacks some libraries the emulator loads. The script
-     checks the packages themselves (`libpulse0 libxkbfile1 libxi6 libsm6 libice6` with apt; dnf and
+     checks the packages themselves (`libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3` with apt; dnf and
      pacman equivalents elsewhere) and installs them in the same step as git and unzip. Once the
      emulator is installed, `emulator -version` is the check; if it still fails for a library, the
      script names the packages and asks again before using `sudo`.

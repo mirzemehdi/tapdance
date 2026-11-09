@@ -21,7 +21,7 @@ fits.
 
 | Page | What it gives you |
 | --- | --- |
-| [Start without a Mac](guides/start-without-a-mac.md) | From zero to your agent testing on Android (Google Cloud) and iOS (a rented Scaleway Mac), and how to stop paying. |
+| [Start without a Mac](guides/start-without-a-mac.md) | From zero to your agent testing on Android (Google Cloud) and iOS (a rented Scaleway Mac) in your own accounts, with `tapdance machine create`, and how to stop paying. |
 | [Host devices for a remote agent](deployment/one-command-host.md) | Your own Mac, Mac mini or Linux machine as a host, with `host up` and `connect`. Proven. |
 | [Linux host with KVM](deployment/dedicated-linux-server.md) | A dedicated Linux server or another cloud VM for Android. Not run on bare metal. |
 | [Google Cloud N2](deployment/google-cloud-n2.md) | Android emulators on a VM in your Google Cloud project. Proven. Terraform: [module README](../infrastructure/terraform/google-cloud-n2/README.md). |

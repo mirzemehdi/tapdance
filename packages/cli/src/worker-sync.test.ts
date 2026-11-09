@@ -46,3 +46,21 @@ describe("gateway setup and gateway token", () => {
     expect(withLocalGateway({})).toEqual({ provider: "self-hosted", endpoint: "http://127.0.0.1:4700" });
   });
 });
+
+describe("worker restart --force ends running leases first (#163; MOCKED simlock runner)", () => {
+  it("releases each lease in Simlock and reports what it ended; a refusal only warns", async () => {
+    const { endLeasesBeforeRestart } = await import("./commands-worker.js");
+    const calls: string[][] = [];
+    const warnings: string[] = [];
+    const out = { progress: () => undefined, warn: (m: string) => warnings.push(m) };
+    const run = async (args: string[]) => {
+      calls.push(args);
+      if (args.includes("bad-lease")) throw new Error("LEASE_NOT_FOUND\nmore");
+      return "";
+    };
+    const ended = await endLeasesBeforeRestart(["lease-aaaaaaaaaaaa", "bad-lease"], out, run);
+    expect(calls).toEqual([["--local", "release", "lease-aaaaaaaaaaaa", "--yes"], ["--local", "release", "bad-lease", "--yes"]]);
+    expect(ended).toEqual(["lease-aaaaaaaaaaaa"]);
+    expect(warnings[0]).toMatch(/Could not end lease bad-lease before the restart: LEASE_NOT_FOUND$/);
+  });
+});

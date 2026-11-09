@@ -9,6 +9,13 @@
 #   infrastructure/scripts/macos-auto-login.sh [account]      # default: the current user
 #   infrastructure/scripts/macos-auto-login.sh --off
 #   infrastructure/scripts/macos-auto-login.sh --status
+#   infrastructure/scripts/macos-auto-login.sh --password-stdin [account]
+#
+# --password-stdin reads the login password from standard input (one line) instead of the terminal, for
+# a caller that has it already, such as `tapdance machine create --cloud scaleway`, which reads the rented
+# Mac's password from Scaleway's API and sends it over ssh. It is never put on a command line. When sudo
+# needs a password here it is also checked as the current user's sudo password; under a NOPASSWD rule
+# it cannot be checked, and the reboot is the check.
 #
 # Apple's `sudo sysadminctl -autologin set -userName <account> -password -` is the first thing to try. On
 # macOS 27.2 over ssh it failed on a Scaleway Mac mini with "SACSetAutoLoginPassword error:22" although
@@ -27,6 +34,8 @@ die() { printf 'macos-auto-login: %s\n' "$*" >&2; exit 1; }
 [[ ${EUID:-$(id -u)} -ne 0 ]] || die "run it as an administrator user (it uses sudo), not as root."
 
 PREFS=/Library/Preferences/com.apple.loginwindow
+PW_STDIN=0
+if [[ "${1:-}" == --password-stdin ]]; then PW_STDIN=1; shift; fi
 case "${1:-}" in
   --status)
     user="$(defaults read "$PREFS" autoLoginUser 2>/dev/null || true)"
@@ -43,13 +52,22 @@ esac
 user="${1:-$(id -un)}"
 dscl . -read "/Users/$user" UniqueID >/dev/null 2>&1 || die "no local account named $user"
 if fdesetup isactive >/dev/null 2>&1; then die "FileVault is on: automatic login cannot work (macOS needs the password at boot)."; fi
-[[ -r /dev/tty ]] || die "run it in an interactive terminal (ssh -t)"
+(( PW_STDIN )) || [[ -r /dev/tty ]] || die "run it in an interactive terminal (ssh -t), or pass the password with --password-stdin"
 
 # python3 does the XOR below. Check it runs before asking for anything, so a missing python3 (no
 # Command Line Tools) never leaves an empty or half-written /etc/kcpassword behind.
 /usr/bin/python3 -c 'import sys' < /dev/null >/dev/null 2>&1 || die "/usr/bin/python3 does not run here (install Apple's Command Line Tools: xcode-select --install), then run this again"
 
+if (( PW_STDIN )); then
+  IFS= read -r pw || true
+  exec </dev/null
+  [[ -n "$pw" ]] || die "--password-stdin: no password on standard input"
+  if ! sudo -n true 2>/dev/null; then
+    printf '%s\n' "$pw" | sudo -S -p '' -v 2>/dev/null || { unset pw; die "that is not $(id -un)'s sudo password"; }
+  fi
+else
 sudo -v
+fi
 read_pw() { # prompt; sets pw
   printf '%s (not shown): ' "$1" > /dev/tty
   IFS= read -rs pw < /dev/tty
@@ -67,7 +85,9 @@ read_pw_twice() {
 # current user, sudo checks it (read from stdin, never on a command line or in the environment), unless
 # sudo needs no password here (NOPASSWD): then sudo accepts anything, and like another account's
 # password it is asked twice and the reboot is the check.
-if [[ "$user" == "$(id -un)" ]]; then
+if (( PW_STDIN )); then
+  : # read above
+elif [[ "$user" == "$(id -un)" ]]; then
   sudo -k
   if sudo -n true 2>/dev/null; then
     echo "note: sudo needs no password on this account (NOPASSWD), so it cannot check the login password; the reboot will show whether it is right" > /dev/tty

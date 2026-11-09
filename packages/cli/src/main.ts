@@ -12,6 +12,7 @@ import { registerReportCommand } from "./commands-report.js";
 import { registerToolCommands } from "./commands-tools.js";
 import { registerRunCommand } from "./commands-run.js";
 import { registerHostCommands } from "./commands-host.js";
+import { defaultMachineIo, machineAutoOption, registerMachineCommands, runHousekeeping } from "./commands-machine.js";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
 
@@ -36,6 +37,7 @@ export function buildProgram(): Command {
   registerRunCommand(program, globals);
   registerWorkerCommands(program, globals);
   registerHostCommands(program, globals);
+  registerMachineCommands(program, globals);
   registerViewerCommand(program, globals);
   registerReportCommand(program, globals);
   registerToolCommands(program, globals);
@@ -48,9 +50,12 @@ export function buildProgram(): Command {
     .option("--port <port>", "HTTP: port", "4711")
     .action(async (o: { http?: boolean; host: string; port: string }) => {
       const g = globals();
+      const machineAuto = await machineAutoOption(output({ ...g, quiet: false })).catch(() => undefined);
+      if (machineAuto) void runHousekeeping(defaultMachineIo(output(g))).then((m) => m.forEach((x) => process.stderr.write(`${x}\n`)));
       const base = {
         ...(g.config ? { configPath: g.config } : {}),
         ...(g.session ? { session: { id: sanitizeSessionId(g.session), source: "--session" } } : {}),
+        ...(machineAuto ? { machineAuto } : {}),
       };
       try {
         if (o.http) {

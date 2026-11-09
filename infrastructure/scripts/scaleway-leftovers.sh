@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lists everything in a Scaleway account that can still cost money after a rented Mac mini (Apple
-# silicon) is released: Apple silicon servers in every zone, in any state (a powered-off Mac mini bills
+# silicon) is released: Apple silicon servers in every Mac zone (fr-par-1 and fr-par-3, each asked by name), in any state (a powered-off Mac mini bills
 # until it is deleted), and Private Networks (an Apple silicon server with Private Networks enabled
 # bills that option by the hour).
 #
@@ -56,6 +56,9 @@ fi
 
 scope=()
 [[ -n "$project" ]] && scope=("project-id=$project")
+# The zones Scaleway rents Mac minis in. `zone=all` is not used: for Apple silicon it returned nothing
+# while a Mac ran in fr-par-1 (2026-11-09), so each zone is asked by name. Override with MAC_ZONES.
+read -r -a zones <<<"${MAC_ZONES:-fr-par-1 fr-par-3}"
 
 found=0
 unknown=0
@@ -72,6 +75,16 @@ list() {
     return 1
   fi
   printf '%s' "${out:-[]}"
+}
+
+# list_zones <scw args...>: the same list call in every Mac zone, merged into one JSON array.
+list_zones() {
+  local z out merged="[]"
+  for z in "${zones[@]}"; do
+    out=$(list "$@" "zone=$z") || return 1
+    merged=$(jq -s 'add' <(printf '%s' "$merged") <(printf '%s' "${out:-[]}")) || return 1
+  done
+  printf '%s' "$merged"
 }
 
 # report <kind> <cost hint> <rows>
@@ -95,12 +108,12 @@ echo
 # Apple silicon servers. Only the fields below are printed: the API also returns vnc_url (with the
 # VNC password in it) and sudo_password.
 servers_json=""
-if ! servers_json=$(list apple-silicon server list zone=all); then
+if ! servers_json=$(list_zones apple-silicon server list); then
   printf '%-22s UNKNOWN (see the error above)\n' "Mac mini servers"
   unknown=$((unknown + 1))
 else
   # A jq failure is UNKNOWN, never "none": printing nothing would read as nothing left.
-  if ! rows=$(jq -r '.[]? | "\(.name) id=\(.id) type=\(.type) status=\(.status) zone=\(.zone) created=\(.created_at // "?") deletable_at=\(.deletable_at // "?") scheduled_deletion=\(.deletion_scheduled // .schedule_deletion // "?")"' <<<"$servers_json" 2>/dev/null); then
+  if ! rows=$(jq -r '.[]? | "\(.name) id=\(.id) type=\(.type) status=\(.status) zone=\(.zone) created=\(.created_at // "?") deletable_at=\(.deletable_at // "?") scheduled_deletion=\(if .deletion_scheduled != null then .deletion_scheduled elif .schedule_deletion != null then .schedule_deletion else "?" end)"' <<<"$servers_json" 2>/dev/null); then
     printf '%-22s UNKNOWN (unexpected output from scw)\n' "Mac mini servers"
     unknown=$((unknown + 1))
   else
@@ -113,7 +126,7 @@ fi
 # Private Networks attached to Apple silicon servers (zone-scoped), then VPC Private Networks in every
 # region (an empty Private Network is free; the Apple silicon option on a server is what bills).
 pn_rows=""
-if ! pn_json=$(list apple-silicon private-network list zone=all); then
+if ! pn_json=$(list_zones apple-silicon private-network list); then
   printf '%-22s UNKNOWN (see the error above)\n' "Mac mini private nets"
   unknown=$((unknown + 1))
 else

@@ -8,6 +8,57 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
+## [Unreleased]
+
+### Added
+
+- `tapdance machine create / list / stop / start / destroy` (stage 5.1, "bring your own cloud,
+  self-run"): from the agent's machine, one command creates an Android host on a Google Cloud N2 VM
+  (`--cloud gcp`) or an iOS host on a Scaleway Mac mini (`--cloud scaleway`) in your own account, with
+  your own logged-in `gcloud` or `scw`, sets it up with `host-setup.sh` → `host up`, joins it to your
+  tailnet and runs `tapdance connect`; one command removes it with everything made for it and checks
+  that nothing billable is left. Resumable create steps, idle stop for Google Cloud by default,
+  Scaleway's 24-hour minimum confirmed before renting and automatic deletion at the 24-hour mark
+  (`--keep` turns it off), cost estimates in `list`. Tapdance never asks for, reads, prints or stores
+  cloud credentials. `--cloud gcp` ran for real, and `--cloud scaleway --server-id` on a Mac the owner
+  had rented (docs/testing/evidence/2026-11-09-byoc-self-run.md); renting a Mac with `create` is
+  unit-tested only.
+- `examples/ios-compat-demo`: a UIKit app on the legacy compatibility screen with an 80-level view tree,
+  for the agent-device checks in #153.
+- `machine create --cloud scaleway --server-id <id|name>` sets up a Mac mini you rented yourself. Without
+  it, `create` first looks for a Mac already in your project and asks to use it (in a script it stops
+  and names it); `--new` rents another anyway. Auto mode never rents a Mac while the project has one of
+  yours. When it does rent, it picks the cheapest Mac mini in stock in any Mac zone unless `--type`/`--zone`
+  say otherwise.
+- `tapdance machine auto on|off` (auto mode): a lease (CLI or MCP) that finds no host for the platform
+  starts the stopped machine, or creates one in the background and answers with a retryable error that
+  carries the Tailscale approval link; `--delete-after-days` destroys a long-stopped Android machine;
+  Macs only with `--accept-mac-day`. The SDK gains a generic `machineAuto` option for it
+  (`TapdanceOptions`); it holds no cloud code. Ran for real on Google Cloud (create on a lease, idle
+  stop, start on a lease).
+- `machine create` checks that billing is on for the Google Cloud project, and connects with
+  `--platform`, so leases route to the right machine.
+- `host-setup.sh --tapdance-version X.Y.Z` installs `tapdance-cli` from npm instead of building from
+  source; `machine create` passes its own version (`--setup-ref` builds a git ref instead).
+- `host-setup.sh --tailscale-auth-key-stdin` (a pre-approved Tailscale auth key on stdin, handed to
+  `tailscale up` through a mode-600 file deleted right after) and `--tailscale-hostname`.
+- `macos-auto-login.sh --password-stdin`.
+- The npm package carries `host-setup.sh` and `macos-auto-login.sh` in `dist/assets`, so `machine
+  create` copies the scripts that match the CLI.
+
+### Fixed
+
+- Scaleway: `scw ... list zone=all` does not list Macs in `fr-par-1`, so `scaleway-leftovers.sh` and
+  `machine destroy`'s check could report nothing left while a Mac there billed. Every Mac zone is now
+  asked by name; the script also prints `scheduled_deletion=false` instead of `?`.
+- `worker restart --force` ends running leases in Simlock first, so `device status` no longer says Ready for
+  a lease the restart took away (#163).
+- `host warm` reads back the spares it set ("android 1, ios 0") instead of Simlock's held-back slots.
+- `host-setup.sh` on Ubuntu 24.04's cloud image (found by `machine create` on Google Cloud): the
+  emulator needs `libnss3` (also named by `doctor`); the systemd user manager is restarted after the
+  user joins `kvm` when `setfacl` is missing, so the worker can open `/dev/kvm`; and `host up` runs under
+  `sg kvm` when the setup's own login predates the group.
+
 ## [0.2.1] - 2026-11-09
 
 A fix for the worker guard; update every host (`npm install -g tapdance-cli@latest`, then `tapdance

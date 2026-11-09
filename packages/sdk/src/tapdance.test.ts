@@ -624,3 +624,53 @@ describe("lease loss and TTL caps (#27)", () => {
     await expect(t.inspect()).resolves.toBeDefined();
   });
 });
+
+// Auto mode (`tapdance machine auto`): the SDK's generic hook, with FakeProvider (MOCKED provider).
+describe("machineAuto lease hook (FakeProvider, mocked)", () => {
+  async function withHook(failFirst: boolean, handles = true) {
+    const cwd = await mkdtemp(join(tmpdir(), "td-auto-"));
+    const provider = new FakeProvider();
+    const lease = provider.lease.bind(provider);
+    let calls = 0;
+    provider.lease = async (...args: Parameters<FakeProvider["lease"]>) => {
+      calls++;
+      if (failFirst && calls === 1) throw new TapdanceError("PROVIDER_UNREACHABLE", "Cannot lease android: target android does not answer");
+      return lease(...args);
+    };
+    const ensured: string[] = [];
+    const t = await Tapdance.create({
+      cwd,
+      env: { TAPDANCE_HOME: cwd },
+      session: { id: "auto", source: "test" },
+      provider,
+      machineAuto: {
+        handles: () => handles,
+        ensure: async ({ reason }) => {
+          ensured.push(reason);
+          return { notice: "Started machine android for this lease in 58 s" };
+        },
+      },
+    });
+    return { t, ensured, calls: () => calls };
+  }
+
+  it("asks the hook first when no connect target serves the platform, and passes its notice on", async () => {
+    const { t, ensured } = await withHook(false);
+    const r = await t.lease({ platform: "android" });
+    expect(ensured).toEqual(["no-target"]);
+    expect(r.notices).toContain("Started machine android for this lease in 58 s");
+  });
+
+  it("retries once after an unreachable host when the hook brought it up", async () => {
+    const { t, ensured, calls } = await withHook(true);
+    await t.lease({ platform: "android" });
+    expect(ensured).toEqual(["no-target", "unreachable"]);
+    expect(calls()).toBe(2);
+  });
+
+  it("leaves leases alone when auto mode is off for the platform", async () => {
+    const { t, ensured } = await withHook(true, false);
+    await expect(t.lease({ platform: "android" })).rejects.toMatchObject({ code: "PROVIDER_UNREACHABLE" });
+    expect(ensured).toEqual([]);
+  });
+});

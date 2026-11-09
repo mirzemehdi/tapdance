@@ -80,7 +80,7 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The computer your agent runs on** (a Mac, or Linux with KVM), with [Android Studio](https://developer.android.com/studio) | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another computer you own:** a Mac, a Mac mini, or a Linux PC or server with KVM | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A rented Google Cloud machine** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)) | About USD 0.20 an hour, plus its disk until you delete it | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 30 minutes |
+| **A Google Cloud machine in your own account** ([N2](https://cloud.google.com/compute/docs/general-purpose-machines#n2_machines)), made with one command | Roughly USD 0.20 an hour while it runs (it switches itself off when idle), plus about USD 7 a month for its disk until you delete it, paid to Google. [Current N2 prices](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types) | [Start without a Mac](docs/guides/start-without-a-mac.md), Android part, about 10 minutes (6 of them work in the measured run, plus one approval click) |
 
 **iPhones** run only on a Mac, with [Xcode](https://developer.apple.com/xcode/):
 
@@ -88,7 +88,28 @@ each platform you test. One machine can serve both, and your agent can use sever
 | --- | --- | --- |
 | **The Mac your agent runs on** | Free | [Test on this computer](docs/quick-start.md), about 15 minutes |
 | **Another Mac or Mac mini you own** | Free | [Run the phones on another machine](docs/deployment/one-command-host.md), about 30 minutes |
-| **A rented Mac mini** from [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) | About EUR 3 a day, 24 hours minimum | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour |
+| **A Mac mini rented in your own [Scaleway](https://www.scaleway.com/en/pricing/apple-silicon/) account**, with one command | Roughly EUR 3-6 a day before VAT (the cheapest Mac mini in stock), 24 hours minimum, paid to Scaleway. [Current Mac mini prices](https://www.scaleway.com/en/pricing/apple-silicon/) | [Start without a Mac](docs/guides/start-without-a-mac.md), iOS part, about an hour (most of it Scaleway installing macOS) |
+
+With no Mac of your own, two commands make the machines in your own accounts and connect them, after a
+short setup: once
+[Tailscale](https://tailscale.com), [gcloud](https://cloud.google.com/sdk/docs/install) and
+[scw](https://www.scaleway.com/en/docs/scaleway-cli/quickstart/) are logged in on your computer:
+
+```bash
+tapdance machine create --cloud gcp        # Android phones in your Google Cloud project
+tapdance machine create --cloud scaleway   # iPhones on a Mac mini in your Scaleway account
+tapdance machine destroy android           # when you are done (and: tapdance machine destroy ios)
+```
+
+Prices above are approximate, read on 2026-11-09: Google and Scaleway change them, so check their
+pricing pages ([Google Cloud N2](https://cloud.google.com/compute/vm-instance-pricing#n2_machine_types), [Scaleway Mac mini](https://www.scaleway.com/en/pricing/apple-silicon/)). `machine create` shows the estimate
+it uses before it creates anything, and you pay the cloud directly.
+
+`tapdance machine auto on --platform android` goes one step further: your agent's first lease creates
+or starts the machine by itself. These commands are new. Both ran for real: Android on a Google Cloud
+account, and iPhones on a Scaleway Mac mini the owner had rented (`--server-id`)
+([evidence](docs/testing/evidence/2026-11-09-byoc-self-run.md)). Renting the Mac with `create` itself
+has not run on a real account yet.
 
 **Coming later: Tapdance Cloud.** No machine of your own: sign up and your agent gets Android phones
 and iPhones on machines we run, one customer per machine, paid per hour or per Mac day. Not available
@@ -121,25 +142,31 @@ what they print and tells you what it needs from you.
   the key file's contents.
   ```
 
-- **Phones on rented machines** (Google Cloud for Android, Scaleway for iPhones):
+- **Phones on machines in your own cloud accounts** (Google Cloud for Android, Scaleway for iPhones):
 
   ```text
-  Walk me through https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md
-  one step at a time. Run the commands meant for this computer yourself, tell me exactly what to
-  click in the Google Cloud, Scaleway and Tailscale websites, and wait for me where it says to. Ask
-  before anything that costs money, and never print token files or passwords.
+  Set up Tapdance so you can test my app on an Android emulator in my Google Cloud project and an
+  iPhone simulator on a Mac mini in my Scaleway account, following
+  https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md ("Set it up once").
+  Check that gcloud, scw and Tailscale are logged in and tell me how if not, then run
+  `tapdance machine create` for each. Show me the cost and ask me before each create, give me the
+  Tailscale link to approve, add the Tapdance MCP server at the end, and never print token files or
+  passwords.
   ```
 
 When the setup is done, ask your agent something from the table above.
 
 ## Project status
 
-Tapdance is an early release, 0.1.x on npm. What has run for real:
+Tapdance is an early release, 0.2.x on npm. What has run for real:
 
 - The whole test loop on a Mac, with iPhone simulators and Android emulators.
 - An agent on one machine testing a real app on phones on another machine: the owner's Mac, Google
   Cloud for Android, and a rented Scaleway Mac mini for iOS.
 - One agent using an Android machine and an iOS machine in the same session.
+- `tapdance machine`: one command made an Android machine in a Google Cloud account and set up an iPhone
+  machine on a Scaleway Mac mini, each connected in under 10 minutes; Android's auto mode started and
+  stopped its machine by itself. Version 0.2.x (Simlock 0.6.0) passed the Android and iOS checklists there.
 
 Not yet: a recorded run with Claude Code, Codex or Cursor itself calling the tools. The same tools have
 been driven on real phones by a scripted MCP client. Some newer features are unit-tested only. [STATUS.md](STATUS.md) lists every feature and

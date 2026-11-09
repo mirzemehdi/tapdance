@@ -2,6 +2,13 @@
 
 ## What you get
 
+> **One command instead:** `tapdance machine create --cloud scaleway` rents the cheapest Mac mini in
+> stock with your logged-in `scw` (or, with `--server-id <id>`, takes one you rented in the console), sets
+> it up as below and connects the agent's machine; `tapdance machine destroy ios` removes it. Set up for
+> real on a Mac mini **M2-L** in `fr-par-1` in 8 min 37 s ([evidence](../testing/evidence/2026-11-09-byoc-self-run.md))
+> ([`tapdance machine`](../cli-reference.md#machine), [start without a Mac](../guides/start-without-a-mac.md)).
+> This page is the same path by hand.
+
 You have no spare Mac. You rent a Mac mini from Scaleway and make it an iOS **host** with one script.
 Your agent (on your laptop, a Linux VPS, anywhere in your tailnet) leases iOS simulators on it through
 the **guard**, in [device-only mode](../security/device-only-mode.md): `host-setup.sh` → `host up` on the
@@ -49,12 +56,16 @@ Scaleway's Apple silicon offers, read on 2026-11-06 (excluding VAT; [pricing](ht
 | --- | --- | --- | --- | --- |
 | **M1-M** | M1, 8 GB, 256 GB | EUR 0.11 | EUR 2.64 | Works, **one simulator at a time** (see [8 GB](#8-gb-one-simulator-at-a-time)) |
 | M2-M | M2, 16 GB, 256 GB | EUR 0.17 | EUR 4.08 | Recommended for a warm spare or builds next to a simulator (not run) |
-| M2-L | M2 Pro, 16 GB, 512 GB | EUR 0.21 | EUR 5.04 | Room for more runtimes (not run) |
+| M2-L | M2 Pro, 16 GB, 512 GB | EUR 0.21 | EUR 5.04 | Works with the default warm spare: set up with `tapdance machine create --server-id` in `fr-par-1`, iOS checklists passed ([evidence](../testing/evidence/2026-11-09-byoc-self-run.md)) |
 | M4-S / M4-SP | M4, 16 GB, 256/512 GB | EUR 0.22 / 0.24 | EUR 5.28 / 5.76 | Faster builds (not run) |
 | M4-M | M4, 32 GB, 1 TB | EUR 0.29 | EUR 6.96 | Several simulators at once (not run) |
 | M4-XL | M4 Pro, 64 GB, 2 TB | EUR 0.49 | EUR 11.76 | More than a test needs |
 | **M2-L-ASAHI** | | | | **Not usable:** Asahi Linux only, no macOS, no Xcode |
 
+- **Zones.** Scaleway rents Mac minis in `fr-par-1` and `fr-par-3`, and stock differs per zone and offer
+  (on 2026-11-09 the M1-M was out of stock in both). `scw apple-silicon server-type list zone=<zone>`
+  shows it. `scw apple-silicon server list zone=all` does **not** list Macs in `fr-par-1`: ask each zone,
+  as `scaleway-leftovers.sh` and `tapdance machine` do.
 - **The 24-hour minimum.** Scaleway refuses to delete a Mac mini running macOS until 24 hours after it
   was created (Apple's licence), and bills it **until it is deleted, also while it is powered off**.
   There is no idle stop: `host up --idle-stop` is refused on macOS, and powering off would not stop

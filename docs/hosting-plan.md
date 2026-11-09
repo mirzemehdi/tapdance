@@ -232,7 +232,7 @@ small steps, each one useful on its own, and each a business only if the one bef
 | Step | What the customer gets | Who pays whom | State |
 | --- | --- | --- | --- |
 | 5.0 | Plan: architecture, prices, decisions written down | – | ⬜ |
-| 5.1 | **Bring your own cloud, self-run.** One command creates a host in *their* Google Cloud or Scaleway account, sets it up and connects their agent. One command removes it. Then an auto mode: the CLI creates the machine on the first lease and stops it when idle, by itself | Customer pays their cloud. Tapdance is free | ⬜ |
+| 5.1 | **Bring your own cloud, self-run.** One command creates a host in *their* Google Cloud or Scaleway account, sets it up and connects their agent. One command removes it. Then an auto mode: the CLI creates the machine on the first lease and stops it when idle, by itself | Customer pays their cloud. Tapdance is free | 🟡 Google Cloud run with auto mode, and a Scaleway Mac set up with `--server-id` ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)); renting a Mac with `create` not run |
 | 5.2 | **Tapdance account** (in the KAppMaker AI app). Sign up, log in from the CLI with an API key we issue, see usage and invoices. Ships together with 5.3: an account on its own sells nothing | Free tier, paid plan ready | ⬜ |
 | 5.3 | **Our fleet, dedicated per customer.** No cloud account needed. We create a machine for them in our own Google Cloud or Scaleway account, bill per hour (Android) or per Mac day (iOS), stop it when idle and destroy it after | Customer pays us cost plus margin | ⬜ |
 | 5.4 | **Console and operations.** Web console (live view, take-over, recordings, logs, usage), status page, terms, privacy, support | – | ⬜ |
@@ -311,8 +311,9 @@ Ask me the decisions you need; commit only the docs, with my identity and no AI 
 run on the agent's machine (not on the host, so not under `tapdance host`). A create command with
 `--cloud gcp` (Android) or `--cloud scaleway` (iOS) creates the machine in the customer's own
 account with their own logged-in cloud CLI, sets it up, runs `host up`, and connects this machine's
-agent. A destroy command removes everything and checks that nothing billable is left. The 5.1
-session proposes the command names.
+agent. A destroy command removes everything and checks that nothing billable is left. The commands are
+`tapdance machine create --cloud gcp|scaleway`, `machine list`, `machine stop|start`, `machine destroy`,
+and for auto mode `machine auto on|off`.
 
 **Then, auto mode.** The same code runs on demand: when the agent asks for a phone and no machine
 for that platform is up, the CLI creates or starts one; after a set idle time it stops or deletes

@@ -74,6 +74,18 @@
 #   --android-build-sdk  with --ios-only: also the Android command-line tools and platform-tools (and the
 #                        SDK licences), no emulator or image. Kotlin Multiplatform apps with Android
 #                        modules need an SDK to build even their iOS app on the host (tapdance app build)
+#   --tailscale-auth-key-stdin
+#                        join the tailnet with a Tailscale auth key read from standard input (one line;
+#                        prompted with echo off when stdin is a terminal) instead of printing a login
+#                        link. The key is kept in memory, handed to `tailscale up` as a mode-600 file
+#                        that is deleted right after, and never printed. `tapdance machine create` uses
+#                        it with --tailscale-key
+#   --tapdance-version X.Y.Z
+#                        install Tapdance from npm (tapdance-cli@X.Y.Z) instead of building it from source,
+#                        when the `tapdance` command is missing. `tapdance machine create` passes its own
+#                        version
+#   --tailscale-hostname NAME
+#                        the machine's name in the tailnet (`tailscale up --hostname`), e.g. tapdance-android
 #
 # Settings: TAPDANCE_REPO (git URL; an SSH URL works for a private repository), TAPDANCE_REF (main),
 # TAPDANCE_SOURCE_DIR (~/tapdance), ANDROID_API (34), ANDROID_TAG (google_apis; --play-store sets
@@ -99,6 +111,7 @@ die() { printf 'host-setup: %s\n' "$*" >&2; exit 1; }
 say() { printf 'host-setup: %s\n' "$*" >&2; }
 
 YES=0; CHECK=0; SKIP_PREREQ=0; ONLY_PREREQ=0; NO_IMAGE=0; WITH_GH=0; IOS_ONLY=0; BUILD_SDK=0; EXTRA_SDK=(); PASS=()
+TS_KEY_STDIN=0; TS_KEY=""; TS_HOSTNAME=""; TD_VERSION=""
 add_sdk_packages() {
   local p; local IFS=', '
   for p in $1; do
@@ -119,6 +132,9 @@ while (( $# )); do
     --with-gh) WITH_GH=1 ;;
     --ios-only) IOS_ONLY=1 ;;
     --android-build-sdk) BUILD_SDK=1 ;;
+    --tailscale-auth-key-stdin) TS_KEY_STDIN=1 ;;
+    --tailscale-hostname) [[ $# -ge 2 ]] || die "--tailscale-hostname needs a name"; TS_HOSTNAME="$2"; shift ;;
+    --tapdance-version) [[ $# -ge 2 ]] || die "--tapdance-version needs a version, e.g. 0.2.1"; TD_VERSION="$2"; shift ;;
     --sdk-packages=*) add_sdk_packages "${1#--sdk-packages=}" ;;
     --sdk-packages) [[ $# -ge 2 ]] || die "--sdk-packages needs a list, e.g. --sdk-packages \"cmake;3.31.6\""; add_sdk_packages "$2"; shift ;;
     *) PASS+=("$1") ;;
@@ -132,6 +148,20 @@ case "$OS" in
   *) die "this script runs on macOS or Linux. On Windows run scripts/host-setup.ps1 for your options." ;;
 esac
 [[ ${EUID:-$(id -u)} -ne 0 ]] || die "run it as the user that will own the worker, not as root."
+[[ -z "$TD_VERSION" || "$TD_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || die "--tapdance-version: \"$TD_VERSION\" is not a version like 0.2.1"
+[[ -z "$TS_HOSTNAME" || "$TS_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || die "--tailscale-hostname: \"$TS_HOSTNAME\" is not a host name (letters, digits and -)"
+# The auth key is read first, before anything else uses standard input, and kept only in memory.
+if (( TS_KEY_STDIN )); then
+  if [[ -t 0 ]]; then
+    printf 'Tailscale auth key (input hidden): ' >&2; IFS= read -rs TS_KEY || true; printf '\n' >&2
+  else
+    IFS= read -r TS_KEY || true
+  fi
+  TS_KEY="${TS_KEY//[$'\r\n\t ']/}"
+  [[ "$TS_KEY" =~ ^tskey-[A-Za-z0-9_-]+$ ]] || die "--tailscale-auth-key-stdin: standard input did not hold a Tailscale auth key (tskey-...)"
+  # Standard input is used up; prompts read /dev/tty, and without one --yes must answer them.
+  exec </dev/null
+fi
 (( ! IOS_ONLY )) || [[ "$OS" == Darwin ]] || die "--ios-only is for macOS: iOS simulators need a Mac with Xcode."
 (( ! IOS_ONLY || BUILD_SDK || ${#EXTRA_SDK[@]} == 0 )) || die "--sdk-packages with --ios-only needs --android-build-sdk (the Android SDK the packages go into)"
 case "$(uname -m)" in
@@ -174,9 +204,9 @@ image_ok() { [[ -d "$SDK/system-images/android-$API/$TAG/$ABI" ]]; }
 # The emulator's QEMU loads system libraries that minimal cloud images (Ubuntu on Google Cloud) lack.
 # A fixed list per package manager (the same as `tapdance doctor`'s hint), checked by package, so on a
 # fresh machine the list is known before the emulator is installed and goes into the one question.
-EMULATOR_LIBS_APT=(libpulse0 libxkbfile1 libxi6 libsm6 libice6)
-EMULATOR_LIBS_DNF=(pulseaudio-libs libxkbfile libXi libSM libICE)
-EMULATOR_LIBS_PACMAN=(libpulse libxkbfile libxi libsm libice)
+EMULATOR_LIBS_APT=(libpulse0 libxkbfile1 libxi6 libsm6 libice6 libnss3)
+EMULATOR_LIBS_DNF=(pulseaudio-libs libxkbfile libXi libSM libICE nss)
+EMULATOR_LIBS_PACMAN=(libpulse libxkbfile libxi libsm libice nss)
 # The emulator libraries this machine's package manager lacks, one per line (Linux only).
 missing_emulator_libs() {
   [[ "$OS" == Linux ]] || return 0
@@ -558,9 +588,20 @@ tailscale_login() {
     return 0
   fi
   local me; me="$(id -un)"
+  local up=(up --operator="$me")
+  [[ -n "$TS_HOSTNAME" ]] && up+=(--hostname="$TS_HOSTNAME")
   if ! "$ts" status >/dev/null 2>&1; then
-    if ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
-      sudo "$ts" up --operator="$me"
+    if [[ -n "$TS_KEY" ]]; then
+      # Handed over as a file (never on a command line, where `ps` would show it), deleted right after.
+      local keyfile="$TMP/tailscale-auth-key"
+      ( umask 077; printf '%s\n' "$TS_KEY" > "$keyfile" )
+      say "joining the tailnet with the auth key from standard input"
+      local rc=0
+      sudo "$ts" "${up[@]}" --auth-key="file:$keyfile" || rc=$?
+      rm -f "$keyfile"; TS_KEY=""
+      (( rc == 0 )) || die "tailscale up with the auth key failed (exit $rc): check that the key is valid, not expired and not used up, then run this again"
+    elif ask "Log this machine into your tailnet now? (sudo tailscale up; it prints a link to open in a browser)"; then
+      sudo "$ts" "${up[@]}"
     else
       say "note: Tailscale: run \`sudo tailscale up --operator=$me\` and open the link, then run this script again to expose the guard"
     fi
@@ -655,8 +696,15 @@ if (( ! SKIP_PREREQ )); then
           sudo usermod -aG kvm "$(id -un)"
           # The group applies to new logins only; an ACL lets this login and its running systemd user
           # manager (which starts the worker) use /dev/kvm now. A reboot drops the ACL; the group remains.
+          # Without setfacl (Ubuntu's cloud image has no acl package), restart the systemd user manager so it
+          # and the services it starts (the worker, the guard) pick up the new group; this login does not
+          # need it. Seen on a Google Cloud N2 VM made by `tapdance machine create`, 2026-11-09.
           if ! { command -v setfacl >/dev/null 2>&1 && sudo setfacl -m "u:$(id -un):rw" /dev/kvm; }; then
-            INSTALL_NOTES+=("log out and back in so the kvm group applies, then run this script again")
+            if systemctl is-active --quiet "user@$(id -u).service" 2>/dev/null && sudo systemctl restart "user@$(id -u).service"; then
+              say "restarted your systemd user manager so the worker it starts gets the kvm group"
+            else
+              INSTALL_NOTES+=("log out and back in so the kvm group applies, then run this script again")
+            fi
           fi ;;
         poweroff-rule) install_poweroff_rule ;;
       esac
@@ -701,6 +749,17 @@ if (( CHECK )); then (( ! XCODE_MISSING )) || exit 1; exit 0; fi
 TAPDANCE=()
 if command -v tapdance >/dev/null 2>&1 && tapdance host --help >/dev/null 2>&1; then
   TAPDANCE=(tapdance)
+elif [[ -n "$TD_VERSION" ]]; then
+  node_ok || die "Node.js 22.13 or later is required (https://nodejs.org)."
+  command -v npm >/dev/null 2>&1 || die "npm is required to install tapdance-cli@$TD_VERSION (it comes with Node.js)."
+  say "installing tapdance-cli@$TD_VERSION from npm into $SHARE/npm"
+  npm install -g --prefix "$SHARE/npm" --no-audit --no-fund "tapdance-cli@$TD_VERSION"
+  [[ -x "$SHARE/npm/bin/tapdance" ]] || die "npm did not install the tapdance command into $SHARE/npm/bin"
+  mkdir -p "$BIN_DIR"
+  ln -sf "$SHARE/npm/bin/tapdance" "$BIN_DIR/tapdance"
+  hash -r
+  say "linked $BIN_DIR/tapdance -> $SHARE/npm/bin/tapdance ($("$SHARE/npm/bin/tapdance" --version))"
+  TAPDANCE=("$SHARE/npm/bin/tapdance")
 else
   node_ok || die "Node.js 22.13 or later is required (https://nodejs.org)."
   command -v git >/dev/null 2>&1 || die "git is required (macOS: xcode-select --install; Linux: your package manager)."
@@ -786,7 +845,18 @@ linux_user_manager
 
 # exec replaces this shell, so the EXIT trap never runs: remove the scratch folder first.
 rm -rf "$TMP"; trap - EXIT
+# Linux: a kvm group added above applies to new logins only. When this user is in it but this shell is
+# not (this login started before), run host up under `sg kvm`, so its /dev/kvm check and self-test pass
+# without logging out. Seen on a fresh Google Cloud VM made by `tapdance machine create`, 2026-11-09.
+RUN_HOST_UP=("${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}")
+if [[ "$OS" == Linux ]] && command -v sg >/dev/null 2>&1; then
+  in_db=" $(id -nG "$(id -un)" 2>/dev/null) "; in_shell=" $(id -nG 2>/dev/null) "
+  if [[ "$in_db" == *" kvm "* && "$in_shell" != *" kvm "* ]]; then
+    say "running host up with the kvm group (sg kvm): this login started before the group was added"
+    RUN_HOST_UP=(sg kvm -c "$(printf '%q ' "${RUN_HOST_UP[@]}")")
+  fi
+fi
 # Piped through curl, stdin is this script: give host up the terminal so it can ask to approve pairing.
-if [[ ! -t 0 ]] && have_tty; then exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}" < /dev/tty; fi
-exec "${TAPDANCE[@]}" host up "${PASS[@]+"${PASS[@]}"}"
+if [[ ! -t 0 ]] && have_tty; then exec "${RUN_HOST_UP[@]}" < /dev/tty; fi
+exec "${RUN_HOST_UP[@]}"
 }

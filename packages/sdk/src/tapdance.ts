@@ -65,7 +65,27 @@ export interface TapdanceOptions {
   owner?: LeaseOwner["kind"];
   /** Load the operator token (fleet views such as `workers list`). Off for agents by default. */
   fleet?: boolean;
+  /**
+   * Brings up a host for a platform when a lease finds none (`tapdance machine auto`). The SDK knows
+   * nothing about clouds: the CLI supplies this. It is asked before a lease when no connect target
+   * serves the platform, and after a lease failed because the platform's host did not answer.
+   */
+  machineAuto?: MachineAutoHook;
 }
+
+export interface MachineAutoHook {
+  /** True when auto mode is on for this platform. */
+  handles(platform: Platform): boolean;
+  /**
+   * Makes a host for the platform reachable (starts a stopped machine, waits for it). Returns a notice
+   * for the lease. Throws a retryable TapdanceError when the host is not ready yet (a machine being
+   * created), with what the person must do, if anything.
+   */
+  ensure(input: { platform: Platform; reason: "no-target" | "unreachable"; error?: TapdanceError }, progress: (message: string) => void): Promise<{ notice?: string }>;
+}
+
+/** Lease errors after which auto mode may bring a host up and retry once. */
+const AUTO_RETRY_CODES: ReadonlySet<string> = new Set(["PROVIDER_UNREACHABLE", "DEVICE_UNAVAILABLE", "WORKER_OFFLINE"]);
 
 /** The longest `waitFor` (10 minutes): an audio preview, a slow sync. */
 export const MAX_WAIT_MS = 600_000;
@@ -216,11 +236,14 @@ export class Tapdance {
   /** Device calls and lease tools this instance is running now. */
   private inUse = 0;
 
+  private resolvedConfig: ResolvedConfig;
+
   private constructor(
-    readonly resolved: ResolvedConfig,
+    resolved: ResolvedConfig,
     readonly session: SessionIdentity,
     private readonly options: TapdanceOptions,
   ) {
+    this.resolvedConfig = resolved;
     this.store = new SessionStore(resolved.home);
     this.artifacts = new LocalArtifactStore(resolved.artifactsDir);
     if (options.provider) this.providerPromise = Promise.resolve(options.provider);
@@ -236,8 +259,28 @@ export class Tapdance {
     return new Tapdance(resolved, session, options);
   }
 
+  get resolved(): ResolvedConfig {
+    return this.resolvedConfig;
+  }
+
   get sessionId(): string {
     return this.session.id;
+  }
+
+  /**
+   * Reads the configuration again and drops the provider, so connect targets added since (by
+   * `tapdance machine` in another process) are used. Keeps an injected provider.
+   */
+  async reloadTargets(): Promise<void> {
+    const o = this.options;
+    this.resolvedConfig = await loadConfig({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.env ? { env: o.env } : {}), ...(o.configPath ? { configPath: o.configPath } : {}) });
+    if (!o.provider) this.providerPromise = undefined;
+  }
+
+  private targetServes(platform: Platform): boolean {
+    const r = this.resolvedConfig;
+    if (r.targets.length === 0) return r.config.provider !== "self-hosted" ? false : Boolean(r.config.endpoint);
+    return r.targets.some((t) => !t.platforms || t.platforms.includes(platform));
   }
 
   provider(): Promise<DeviceProvider> {
@@ -450,7 +493,14 @@ export class Tapdance {
     if (!config.platforms[options.platform].enabled) {
       throw new TapdanceError("USAGE", `${options.platform} is disabled in the configuration`, { hint: `Set platforms.${options.platform}.enabled to true.` });
     }
-    const provider = options.profile ? this.profileProvider() : await this.provider();
+    const auto = !options.profile && options.target === undefined && this.options.machineAuto?.handles(options.platform) ? this.options.machineAuto : undefined;
+    const autoNotices: string[] = [];
+    if (auto && !this.targetServes(options.platform)) {
+      const r = await auto.ensure({ platform: options.platform, reason: "no-target" }, (m) => this.progress(m));
+      if (r.notice) autoNotices.push(r.notice);
+      await this.reloadTargets();
+    }
+    let provider = options.profile ? this.profileProvider() : await this.provider();
     if (options.target !== undefined && !(provider instanceof RoutingProvider)) {
       throw new TapdanceError("USAGE", options.profile ? "A device profile runs on this machine: it takes no target" : `No connect targets are configured, so there is no target "${options.target}"`, {
         hint: "Add hosts with `tapdance connect <endpoint>` (one per host), or lease without a target.",
@@ -490,7 +540,7 @@ export class Tapdance {
       const ttlMinutes = options.ttlMinutes ?? config.session.defaultTtlMinutes;
       const waitSeconds = options.waitSeconds ?? config.session.leaseWaitSeconds;
       const settleSeconds = options.settleSeconds ?? config.session.settleSeconds;
-      const { notices, ...handle } = await provider.lease(
+      const leaseOnce = (p: DeviceProvider) => p.lease(
         this.session.id,
         {
           platform: options.platform,
@@ -506,6 +556,20 @@ export class Tapdance {
         },
         { onProgress: (m) => this.progress(m), ...(options.onNotice ? { onNotice: options.onNotice } : {}) },
       );
+      let leased: Awaited<ReturnType<DeviceProvider["lease"]>>;
+      try {
+        leased = await leaseOnce(provider);
+      } catch (error) {
+        const e = error instanceof TapdanceError ? error : undefined;
+        if (!auto || !e || !AUTO_RETRY_CODES.has(e.code)) throw error;
+        const r = await auto.ensure({ platform: options.platform, reason: "unreachable", error: e }, (m) => this.progress(m));
+        if (r.notice) autoNotices.push(r.notice);
+        await this.reloadTargets();
+        provider = await this.provider();
+        leased = await leaseOnce(provider);
+      }
+      const { notices: leaseNotices, ...handle } = leased;
+      const notices = [...autoNotices, ...(leaseNotices ?? [])];
       const now = new Date().toISOString();
       const record = await this.store.put({
         sessionId: this.session.id,
