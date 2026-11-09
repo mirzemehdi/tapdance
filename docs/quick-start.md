@@ -1,17 +1,19 @@
-# Test your app on your Mac
+# Test your app on this computer
 
-Your agent and the phones run on the same Mac. Tapdance starts clean iPhone simulators and Android
+Your agent and the phones run on the same computer: a Mac for iPhones and Android, or a Linux
+machine with KVM for Android. Tapdance starts clean iPhone simulators and Android
 emulators for your agent, and gives them back wiped when it is done. Free, about 15 minutes if Xcode
 is already installed.
 
 ## What you need
 
-- A Mac. For iPhones, [Xcode](https://developer.apple.com/xcode/) with an iOS simulator installed.
-  For Android, [Android Studio](https://developer.android.com/studio) with its command-line tools.
+- For iPhones: a Mac with [Xcode](https://developer.apple.com/xcode/) and an iOS simulator installed.
+- For Android: a Mac, or a Linux machine with KVM, with
+  [Android Studio](https://developer.android.com/studio) or the Android command-line tools.
 - [Node.js](https://nodejs.org) 22.13 or newer.
 - An agent: Claude Code here. Codex and Cursor work too ([connect your agent](agents.md)).
 
-An 8 GB Mac runs one phone at a time; 16 GB or more runs several.
+An 8 GB machine runs one phone at a time; 16 GB or more runs several.
 
 ## Set it up once
 
@@ -22,7 +24,7 @@ An 8 GB Mac runs one phone at a time; 16 GB or more runs several.
    ```
 
 2. **Only testing iPhones?** Turn Android off, so the check in step 4 does not ask for the Android
-   tools. (Only Android? Use `platforms.ios.enabled false` instead.)
+   tools. (Only Android, or on Linux? Use `platforms.ios.enabled false` instead.)
 
    ```bash
    tapdance config set --global platforms.android.enabled false
