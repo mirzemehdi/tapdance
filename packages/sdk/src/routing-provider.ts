@@ -327,6 +327,19 @@ export class RoutingProvider implements DeviceProvider {
       return this.stamp(await chosen.provider.lease(sessionId, rest, options), chosen);
     }
 
+    // Hosts that answered, serve the platform and refused the request itself (no such model or OS
+    // version): that definite answer is what the caller needs, not the silence of another host (#168).
+    // It stays retryable only when a host that is down was set to serve this very platform.
+    const refusals = skipped.filter((s) => !unserved.some((name) => s.startsWith(`${name} `)) && !/ has no \S+ capacity$/.test(s));
+    if (down.length > 0 && refusals.length > 0) {
+      const downNames = down.map((d) => d.target.name);
+      const mayServe = down.some((d) => d.target.platforms?.includes(request.platform) === true);
+      throw new TapdanceError("DEVICE_UNAVAILABLE", `No connect target that answered can lease ${request.platform}${request.device ? ` "${request.device}"` : ""}${request.osVersion ? ` ${request.osVersion}` : ""}: ${refusals.join("; ")}`, {
+        hint: `Not asked, because ${downNames.length > 1 ? "they do" : "it does"} not answer: ${downNames.join(", ")}. \`tapdance devices\` lists what each target serves.`,
+        retryable: mayServe,
+        details: { platform: request.platform, skipped, unserved, down: downNames },
+      });
+    }
     if (down.length > 0) {
       const others = this.targets.filter((t) => !down.some((d) => d.target === t));
       const answers = await this.probeAll(others);

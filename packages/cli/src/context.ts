@@ -40,17 +40,21 @@ async function autoOption(out: Output): Promise<{ machineAuto?: import("@tapdanc
  * 2d). Notices the provider did not hand over early are printed when the lease returns. Used by
  * `device lease` and `host up`'s self-test.
  */
-export async function leaseWithNotices(t: Pick<Tapdance, "lease">, options: Omit<LeaseOptions, "onNotice">, out: Pick<Output, "warn">): ReturnType<Tapdance["lease"]> {
+/** Auto mode's notices say what it did for the lease ("Started machine android …"): information, not a warning (#169). */
+const INFO_NOTICE = /^(Started machine |Waited \d+ s for machine )/;
+
+export async function leaseWithNotices(t: Pick<Tapdance, "lease">, options: Omit<LeaseOptions, "onNotice">, out: Pick<Output, "warn" | "progress">): ReturnType<Tapdance["lease"]> {
   const printed = new Set<string>();
+  const say = (notice: string) => (INFO_NOTICE.test(notice) ? out.progress(notice) : out.warn(notice));
   const result = await t.lease({
     ...options,
     onNotice: (notice) => {
       if (printed.has(notice)) return;
       printed.add(notice);
-      out.warn(notice);
+      say(notice);
     },
   });
-  for (const notice of result.notices ?? []) if (!printed.has(notice)) out.warn(notice);
+  for (const notice of result.notices ?? []) if (!printed.has(notice)) say(notice);
   return result;
 }
 

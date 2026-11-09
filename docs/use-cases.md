@@ -7,7 +7,7 @@ You don't need the terminal commands to use Tapdance with an agent. They are her
 checking a result yourself, and for when you are curious what the agent did.
 
 **Before you start.** Tapdance is installed and connected to your agent, and a machine runs the phones.
-The [README](../README.md#get-started-in-3-steps) shows the three steps.
+The [README](../README.md#set-it-up-with-your-agent) has a prompt that lets your agent do the setup, and the [three steps by hand](../README.md#or-set-it-up-by-hand).
 
 **Where results land.** Screenshots, videos and logs are saved on the computer your agent runs on, in
 `tapdance-artifacts/<session>/` inside the folder where the agent was started. Each session folder has

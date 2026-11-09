@@ -12,12 +12,58 @@ did.**
 
 <!-- Demo GIF goes here: docs/assets/demo.gif (an agent signing in on an iPhone simulator). -->
 
+- [Set it up with your agent](#set-it-up-with-your-agent)
 - [What you can ask your agent](#what-you-can-ask-your-agent)
-- [Get started in 3 steps](#get-started-in-3-steps)
+- [Or set it up by hand](#or-set-it-up-by-hand)
 - [Project status](#project-status)
 - [Keep your machines safe](#keep-your-machines-safe)
 - [Learn more](#learn-more)
 - [Credits and license](#credits-and-license)
+
+## Set it up with your agent
+
+The quickest way: open [Claude Code](https://code.claude.com) in your app's project folder and paste
+the prompt that matches where the phones should run. Your agent installs Tapdance, connects itself to
+it, runs the setup and tells you when it needs you (an approval, a cost to confirm). Costs and
+details for each option are in [set it up by hand](#or-set-it-up-by-hand).
+
+- **Phones on the computer Claude Code runs on** (a Mac, or Linux with KVM for Android):
+
+  ```text
+  Set up Tapdance on this computer so you can test my app on iPhone simulators and Android emulators,
+  following https://github.com/mirzemehdi/tapdance/blob/main/docs/quick-start.md ("Set it up once").
+  Install it with npm, start the phone service, run `tapdance doctor` and fix what it reports, then
+  add the Tapdance MCP server for this project. Stop and ask me before installing Xcode or Android
+  Studio, or changing anything outside Tapdance.
+  ```
+
+- **Phones on another computer you own** (a Mac, a Mac mini, or Linux with KVM):
+
+  ```text
+  Help me run my app's test phones on my Mac mini (or Linux machine) while you stay on this
+  computer, following https://github.com/mirzemehdi/tapdance/blob/main/docs/deployment/one-command-host.md
+  ("Set it up once"). Tell me the one command to run on that machine, wait for me to copy its key
+  file here, then install Tapdance here, connect to it and add the Tapdance MCP server. Never print
+  the key file's contents.
+  ```
+
+- **Phones on machines in your own cloud accounts** (Google Cloud for Android, Scaleway for iPhones):
+
+  ```text
+  Set up Tapdance so you can test my app on an Android emulator in my Google Cloud project and an
+  iPhone simulator on a Mac mini in my Scaleway account, following
+  https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md ("Set it up once").
+  Install tapdance-cli 0.3.0 or newer with npm. Check that gcloud, scw and Tailscale are logged in
+  and tell me how if not. For each machine, run `tapdance machine create` once without `--yes` to
+  show me the cost, and after I agree run it again with `--yes` in the background (Android takes
+  about 10 minutes, the Mac about an hour or more).
+  Watch its output and give me the Tailscale link as soon as it appears. If it stops, run the same
+  command again: it continues. Add the Tapdance MCP server at the end, and never print token files or
+  passwords.
+  ```
+
+When your agent says it is done, restart Claude Code (or reconnect `tapdance` under `/mcp`) so it
+loads the Tapdance tools, then ask it something from the next section.
 
 ## What you can ask your agent
 
@@ -43,7 +89,9 @@ Each row links to a page that shows what the agent does behind the scenes, how t
 and where the files land. Rows marked ◐ work in part: for example, iPhone simulators report memory but
 not frame health. The linked page says what has not run on a real phone yet.
 
-## Get started in 3 steps
+## Or set it up by hand
+
+The same setup in three steps, if you prefer to type the commands yourself.
 
 ### 1. Install Tapdance
 
@@ -121,44 +169,7 @@ A machine other than the one your agent runs on is reached through [Tailscale](h
 a free private network between your own machines. Your agent can run on Windows, but Windows cannot
 run the phones.
 
-**Or let your agent do the setup.** Paste one of these into Claude Code. It runs the commands, reads
-what they print and tells you what it needs from you.
-
-- **Phones on the computer Claude Code runs on** (a Mac, or Linux with KVM for Android):
-
-  ```text
-  Set up Tapdance on this computer so you can test my app on iPhone simulators and Android emulators,
-  following https://github.com/mirzemehdi/tapdance/blob/main/docs/quick-start.md ("Set it up once").
-  Install it with npm, start the phone service, run `tapdance doctor` and fix what it reports, then
-  add the Tapdance MCP server for this project. Stop and ask me before installing Xcode or Android
-  Studio, or changing anything outside Tapdance.
-  ```
-
-- **Phones on another computer you own** (a Mac, a Mac mini, or Linux with KVM):
-
-  ```text
-  Help me run my app's test phones on my Mac mini (or Linux machine) while you stay on this
-  computer, following https://github.com/mirzemehdi/tapdance/blob/main/docs/deployment/one-command-host.md
-  ("Set it up once"). Tell me the one command to run on that machine, wait for me to copy its key
-  file here, then install Tapdance here, connect to it and add the Tapdance MCP server. Never print
-  the key file's contents.
-  ```
-
-- **Phones on machines in your own cloud accounts** (Google Cloud for Android, Scaleway for iPhones):
-
-  ```text
-  Set up Tapdance so you can test my app on an Android emulator in my Google Cloud project and an
-  iPhone simulator on a Mac mini in my Scaleway account, following
-  https://github.com/mirzemehdi/tapdance/blob/main/docs/guides/start-without-a-mac.md ("Set it up once").
-  Check that gcloud, scw and Tailscale are logged in and tell me how if not. For each machine, run
-  `tapdance machine create` once without `--yes` to show me the cost, and after I agree run it again
-  with `--yes` in the background (Android takes about 10 minutes, the Mac about an hour or more).
-  Watch its output and give me the Tailscale link as soon as it appears. If it stops, run the same
-  command again: it continues. Add the Tapdance MCP server at the end, and never print token files or
-  passwords.
-  ```
-
-When the setup is done, ask your agent something from the table above.
+When the setup is done, ask your agent something from [the table above](#what-you-can-ask-your-agent).
 
 ## Project status
 

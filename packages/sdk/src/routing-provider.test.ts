@@ -139,6 +139,21 @@ describe("RoutingProvider (mocked hosts)", () => {
     await expect(router.status(stray).catch(() => "caught")).resolves.toBe("caught");
   });
 
+  // #168: a host that answered and has no such model wins over a host that did not answer.
+  it("reports the refusal of a host that answered, not the silence of another, for a model nobody has", async () => {
+    const old = target("old-mac", MAC, ["android", "ios"], { down: true });
+    const n2 = target("android", N2, ["android"], { platforms: ["android"] });
+    const error = await new RoutingProvider([old, n2]).lease("s1", lease("android", { device: "Pixel 99 Ultra" })).catch((e: unknown) => e as TapdanceError);
+    expect(error).toMatchObject({ code: "DEVICE_UNAVAILABLE", retryable: false });
+    expect(error.message).toMatch(/No connect target that answered can lease android "Pixel 99 Ultra": android /);
+    expect(error.hint).toContain("old-mac");
+    expect(error.details).toMatchObject({ down: ["old-mac"] });
+    // A host that is down but set to serve this very platform may have the model: retry later.
+    const other = target("n2-b", "https://n2-b.example.com", ["android"], { down: true, platforms: ["android"] });
+    const again = await new RoutingProvider([other, n2]).lease("s2", lease("android", { device: "Pixel 99 Ultra" })).catch((e: unknown) => e as TapdanceError);
+    expect(again).toMatchObject({ code: "DEVICE_UNAVAILABLE", retryable: true });
+  });
+
   it("fails fast and names the host when the platform's only host is down, and the other still leases", async () => {
     const n2 = target("n2", N2, ["android"]);
     const mac = target("mac", MAC, ["ios"], { down: true });
@@ -152,6 +167,18 @@ describe("RoutingProvider (mocked hosts)", () => {
     // Never another platform instead.
     expect(n2.fake.calls.some((c) => c.method === "lease")).toBe(false);
     expect((await router.lease("s2", lease("android"))).location.target).toBe("n2");
+  });
+
+  // #168 (2026-11-09 VPS run): an unknown model with the android host up and an old Mac target (no
+  // platform list) offline came back as PROVIDER_UNREACHABLE naming the Mac, with "Up: ..., android
+  // (android)" in the fix line; the answer from the host that is up was lost. Fixed in #170.
+  it("#168: reports the refusal of the host that answered, not a down host, for an unknown model", async () => {
+    const oldMac = target("old-mac", "https://old-mac.tail1.ts.net", ["ios"], { down: true });
+    const n2 = target("android", N2, ["android"], { platforms: ["android"] });
+    const error = await new RoutingProvider([oldMac, n2]).lease("s1", lease("android", { device: "Pixel 99 Ultra" })).catch((e: unknown) => e as TapdanceError);
+    expect(error).toBeInstanceOf(TapdanceError);
+    expect(error.code).not.toBe("PROVIDER_UNREACHABLE");
+    expect(error.message).toContain("Pixel 99 Ultra");
   });
 
   it("skips a down host for another host of the same platform", async () => {

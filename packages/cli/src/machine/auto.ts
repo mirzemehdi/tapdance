@@ -214,7 +214,12 @@ export function autoDecision(input: MachineAutoInput, own: string | undefined): 
   if (input.reason === "no-target") return input.localWorker ? "rethrow" : "provision";
   const e = input.error;
   const down = e !== undefined && HOST_DOWN.has(e.code);
-  if (own !== undefined && input.failedTarget === own) return down ? "provision" : "rethrow";
+  // Auto mode's own machine does not answer: start it or wait for it. That rents nothing new, so other
+  // hosts (an old Mac that is offline, say) do not hold it back (#167).
+  const downList = e?.details?.["down"];
+  const ownDown = own !== undefined && down && (input.failedTarget === own || (Array.isArray(downList) && downList.includes(own)));
+  if (ownDown) return "provision";
+  if (own !== undefined && input.failedTarget === own) return "rethrow";
   const unservedList = e?.details?.["unserved"];
   const unserved = new Set(Array.isArray(unservedList) ? unservedList.filter((x): x is string => typeof x === "string") : []);
   const serves = (t: MachineAutoInput["targets"][number]) => (!t.platforms || t.platforms.includes(input.platform)) && !unserved.has(t.name);
@@ -302,6 +307,7 @@ export async function ensureMachine(io: MachineIo, input: MachineAutoInput, prog
 export function machineAutoHook(io: MachineIo, config: AutoConfig): MachineAutoHook {
   return {
     handles: (platform) => config[platform] !== undefined,
+    ownsTarget: (platform, target) => config[platform]?.name === target,
     ensure: (input, progress) => ensureMachine(io, input, progress),
   };
 }
