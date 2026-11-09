@@ -8,7 +8,14 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-09
+
+**New: `tapdance machine`** makes the machines that run the phones in your own Google Cloud (Android)
+or Scaleway (iOS) account, with your own logged-in `gcloud` or `scw`, and removes them again; auto
+mode brings one up when your agent needs a phone. Simlock (0.6.0) and agent-device (0.21.36) are
+unchanged, so hosts on 0.2.x keep working with it. Google Cloud and a Scaleway Mac set up with
+`--server-id` ran for real; renting a Mac with `create` has not. The review fixes listed under
+Changed are unit-tested only.
 
 ### Changed
 
