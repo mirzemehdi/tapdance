@@ -1,6 +1,6 @@
 {
   "name": "@tapdance/mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Tapdance MCP server: mobile device tools for AI coding agents.",
   "license": "AGPL-3.0-only",
   "type": "module",

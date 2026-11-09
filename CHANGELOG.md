@@ -8,7 +8,11 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
-## [Unreleased]
+## [0.3.1] - 2026-11-09
+
+Fixes from the first field check of 0.3.0's auto mode (#167-#169), and a README that starts with the
+prompts that let your agent do the setup. Simlock and agent-device are unchanged. The fixes are
+unit-tested, including the field run's own reproduction tests; the field check of 0.3.1 is still to run.
 
 ### Fixed
 
