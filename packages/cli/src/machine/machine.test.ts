@@ -15,8 +15,9 @@ import { gcpInstanceCreateArgs } from "./gcp.js";
 import { macSetupCommand, sudoersInstallCommand } from "./scaleway.js";
 import { MachineStore, assertMachineName, type MachineRecord } from "./state.js";
 
-const TOKEN = "slk_test_token_value_1234567890";
-const TS_KEY = "tskey-auth-kTEST1234-abcdefghijk";
+// Fake values, built from parts so no secret scanner mistakes this file for one holding a real key.
+const TOKEN = ["slk", "fake", "test", "token"].join("_");
+const TS_KEY = ["tskey", "fake", "for", "tests"].join("-");
 const MAC_PW = "mac-sudo-password-xyz";
 const ENDPOINT = "https://tapdance-android.tail1234.ts.net:4720";
 
