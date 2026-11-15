@@ -163,7 +163,7 @@ has not run on a real account yet.
 
 **Coming later: Tapdance Cloud.** No machine of your own: sign up and your agent gets Android phones
 and iPhones on machines we run, one customer per machine, paid per hour or per Mac day. Not available
-yet ([plan](docs/hosting-plan.md#stage-5--tapdance-cloud-one-step-at-a-time)).
+yet.
 
 A machine other than the one your agent runs on is reached through [Tailscale](https://tailscale.com),
 a free private network between your own machines. Your agent can run on Windows, but Windows cannot

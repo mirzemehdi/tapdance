@@ -144,6 +144,13 @@ Change them **in the same change** as the code:
 - Credit upstream projects with links when you describe or follow their behaviour, and update
   `NOTICE.md` when you add a dependency or external tool.
 
+## Business material stays out of git
+
+This repository is public. Business plans, pricing, costs and margins, market research, marketing
+drafts and the forward product roadmap belong under `private/` (git-ignored, like `marketing/`), never
+in a tracked file, an issue or a pull request. Public files say what is built and its state. Never
+`git add -f` anything from `private/` or `marketing/`.
+
 ## Commits and pull requests
 
 - No AI attribution anywhere: no `Co-Authored-By` lines for an AI, no "Generated with …" footers, no
