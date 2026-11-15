@@ -32,6 +32,14 @@ repository, and they apply to Claude Code in full.
   `docs/testing/field-test-cloud-android.md`, record each resource you create, and never end a session
   leaving billable resources. Tear down, run `infrastructure/scripts/gcp-leftovers.sh <PROJECT_ID>` until
   it exits 0, and tell the owner the final state and cost. See AGENTS.md, "Cloud resources for tests".
+- **Business material stays out of git.** This repository is public. Business plans, pricing, costs
+  and margins, revenue and go-to-market notes, market and competitor research, marketing drafts, and
+  the forward product roadmap (where the product goes next, in what order, and why) go under
+  `private/` (git-ignored, like `marketing/`). Never write them into `docs/`, `README.md`,
+  `ROADMAP.md`, `PRODUCT.md` or any other tracked file, and never `git add -f` anything from
+  `private/` or `marketing/`. Public files say what is built and its state; a planned feature enters
+  them only when work on it starts, as the feature alone. Before planning new work, read
+  `private/product-roadmap.md` and `private/business-plan.md` if they exist on this machine.
 - **Never print or commit tokens.** Simlock secrets start with `slk_`, worker-guard tokens with `tdg_`. Do not echo
   `~/.tapdance/credentials.json`, Simlock token output or `asc` credentials into the conversation or
   into files.

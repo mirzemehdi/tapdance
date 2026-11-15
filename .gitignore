@@ -16,3 +16,7 @@ examples/*/build/
 tapdance.plan
 *.tfplan
 dist-npm/
+
+# Private notes and marketing material: never published
+/private/
+/marketing/

@@ -1,7 +1,7 @@
-# Hosting plan: from your own Mac to Tapdance Cloud
+# Hosting plan: from your own Mac to your own cloud
 
-The order in which Tapdance is proven on real infrastructure, one stage at a time, ending in a hosted
-service. Each stage has a goal, what "done" means, and the prompt that starts its working session.
+The order in which Tapdance is proven on real infrastructure, one stage at a time. Each stage has a
+goal, what "done" means, and the prompt that starts its working session.
 [ROADMAP.md](../ROADMAP.md) lists features; this file is about **where devices run**. Stage numbers are
 not ROADMAP phase numbers.
 
@@ -15,7 +15,7 @@ the next stage's prompt is below.
 | 2 | Google Cloud N2 VM (Android) | This Mac, acting as the agent's machine; repeated from a Linux VPS | ✅ ([evidence](testing/evidence/2026-11-03-gcp-n2-android.md)); from a Linux VPS ✅ ([evidence](testing/evidence/2026-11-03-vps-n2-android.md), [rerun](testing/evidence/2026-11-04-vps-n2-android-rerun.md)); to repeat it: [field-test runbook](testing/field-test-cloud-android.md) |
 | 3 | A rented Mac (iOS) | This Mac, acting as the agent's machine; repeated from a Linux VPS | ✅ ([evidence](testing/evidence/2026-11-06-rented-mac-ios.md), Scaleway M1-M); from a Linux VPS ✅ ([evidence](testing/evidence/2026-11-07-vps-rented-mac-ios.md)); to repeat it: [field-test runbook](testing/field-test-rented-mac-ios.md) |
 | 4 | Both at once: Linux host for Android, Mac host for iOS | One agent, one connection | ✅ ([evidence](testing/evidence/2026-11-07-two-hosts-android-ios.md), Linux VPS agent, N2 + rented Mac, several connect targets; [guide](guides/android-and-ios.md)). Gateway pool across machines not run (owner's choice, STATUS Q-06) |
-| 5 | Tapdance Cloud in steps: the customer's own cloud first, then our machines, one customer per machine | The user's agent | ⬜ |
+| 5 | Machines in your own cloud account, created with one command (`tapdance machine`) | The user's agent | 🟡 Google Cloud and a Scaleway Mac with `--server-id` run ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)); renting a Mac with `create` not run |
 
 Rules for every stage: the repository's CLAUDE.md and AGENTS.md apply. In particular, ask before
 creating or starting anything that costs money; keep this Mac's live host untouched (scratch
@@ -197,119 +197,34 @@ store my cloud credentials, and ask before anything that costs money or starts s
 
 ---
 
-## Stage 5 · Tapdance Cloud, one step at a time
+## Stage 5 · Machines in your own cloud, one command
 
-**Goal.** Make it easy to test Android and iOS without owning the hardware, and charge for it only
-where we add work. The open-source core stays free and self-hostable (stages 1–4). Stage 5 grows in
-small steps, each one useful on its own, and each a business only if the one before it found users.
+**Goal.** Make it easy to test Android and iOS without owning the hardware. The open-source core stays
+free and self-hostable (stages 1–4). This stage removes the manual steps of stages 2–4 for someone
+with their own Google Cloud or Scaleway account.
 
-**Direction (owner's decisions, 2026-11-09):**
-- **One customer per machine.** A customer's phones run on machines that only they use. We create
-  those machines when needed and destroy them afterwards. No customer shares a Mac with another
-  customer, so the macOS licence question about shared simulator minutes does not arise, and wiping
-  a device means deleting the machine.
-- **Bring your own cloud first.** The first versions run on the customer's own Google Cloud and
-  Scaleway accounts, or their own Mac or Mac mini. Their cloud bill goes straight to them. Our
-  fleet comes last, once people want it.
-- **Thin cost-plus pricing.** Where we resell machines, the price is our cost plus a small margin:
-  10–20 % net, after tax, before VAT. No markup on what the customer pays their cloud directly.
-- **We never hold a customer's cloud keys.** Machines in a customer's own Google Cloud or Scaleway
-  account are created only from their own computer, with their own logged-in `gcloud` or `scw`
-  (5.1). Our servers never receive, store or use keys to a customer's cloud account: a leak of our
-  database must not open anyone's cloud account. A "our server manages machines in your cloud" plan
-  is therefore not planned. Bring your own cloud stays part of the offer: the convenience of a
-  managed service (machines created on the first lease, stopped when idle) comes from the Tapdance
-  CLI on the customer's side, where their own login already is, not from our servers.
-- **Accounts and billing live in the KAppMaker AI web app.** It is a private Laravel (TALL, SaaSykit)
-  app that already has sign-up, API tokens (Sanctum), subscriptions, metered billing (Stripe and
-  others), invoices, an admin panel, and one machine per customer created on subscription and
-  destroyed on cancel, with the same rule of never storing customer secrets. Tapdance Cloud reuses
-  it, with its own landing page; whether that is a page of the KAppMaker site or its own domain is
-  still open. The open-source Tapdance core (AGPL) stays separate and talks to it over the network.
+**Rules:**
+- **Your account, your bill.** Machines are created in your own cloud account, and its bill goes
+  straight to you. Tapdance is free.
+- **Tapdance never holds cloud keys.** Machines are created only from your own computer, with your own
+  logged-in `gcloud` or `scw`. No Tapdance server receives, stores or uses keys to a cloud account.
+  The convenience of a managed service (machines created on the first lease, stopped when idle) comes
+  from the CLI on your side, where your login already is.
 
-**Steps:**
-
-| Step | What the customer gets | Who pays whom | State |
-| --- | --- | --- | --- |
-| 5.0 | Plan: architecture, prices, decisions written down | – | ⬜ |
-| 5.1 | **Bring your own cloud, self-run.** One command creates a host in *their* Google Cloud or Scaleway account, sets it up and connects their agent. One command removes it. Then an auto mode: the CLI creates the machine on the first lease and stops it when idle, by itself | Customer pays their cloud. Tapdance is free | 🟡 Google Cloud run with auto mode, and a Scaleway Mac set up with `--server-id` ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)); renting a Mac with `create` not run |
-| 5.2 | **Tapdance account** (in the KAppMaker AI app). Sign up, log in from the CLI with an API key we issue, see usage and invoices. Ships together with 5.3: an account on its own sells nothing | Free tier, paid plan ready | ⬜ |
-| 5.3 | **Our fleet, dedicated per customer.** No cloud account needed. We create a machine for them in our own Google Cloud or Scaleway account, bill per hour (Android) or per Mac day (iOS), stop it when idle and destroy it after | Customer pays us cost plus margin | ⬜ |
-| 5.4 | **Console and operations.** Web console (live view, take-over, recordings, logs, usage), status page, terms, privacy, support | – | ⬜ |
-
-### Pricing model (draft, not final)
-
-**Formula.** With net margin *m* after tax, price = cost × (1 − t) / (1 − t − m), where *t* is the
-tax rate on profit. At t = 30 %, that is cost ÷ 0.86 for m = 10 % and cost ÷ 0.71 for m = 20 %.
-Payment fees (Stripe) count as cost. VAT is added on top of the price and passed through. If tax is
-charged on revenue rather than profit, the price has to be about 1.7–2× cost instead; check this
-before publishing prices.
-
-| What | Our cost (approx.) | Price at 10–20 % net (indicative) |
+| Step | What you get | State |
 | --- | --- | --- |
-| Own machines and bring your own cloud, self-run (5.1) | ~0 | Free |
-| Android, our Google Cloud N2 (5.3) | ~$0.19–0.21 / hour | ~$0.25–0.35 / hour; Spot ~$0.10 |
-| iOS, our Scaleway M1-M, 24-hour minimum (5.3) | €2.64 / day | ~€3.10–3.70 / day |
-| iOS, our Scaleway M2-M (5.3) | €4.08 / day | ~€4.75–5.75 / day |
-| iOS, a Mac kept for a month (5.3) | ~€80 / month | ~€92–112 / month |
+| 5.1 | **Bring your own cloud, self-run.** One command creates a host in your Google Cloud or Scaleway account, sets it up and connects your agent. One command removes it. Then an auto mode: the CLI creates the machine on the first lease and stops it when idle, by itself | 🟡 Google Cloud run with auto mode, and a Scaleway Mac set up with `--server-id` ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)); renting a Mac with `create` not run |
 
-The 24-hour Mac minimum is passed on honestly: an iOS customer pays for at least one Mac day.
-
-### What stays the same
-
-The CLI, MCP tools and SDK do not change. A customer's agent still runs `tapdance connect`, and
-leases still go through the worker guard on a host. Stages 5.1–5.3 only change **who creates the
-host** (the customer by hand → the customer with one command → our control plane, in our own
-account) and **who pays**. `provider: "cloud"` (refused today with NOT_SUPPORTED) is added in 5.2 or
-5.3, when there is an account to connect to.
-
-**Done when (whole stage):**
-- A stranger with only a laptop and a card signs up, connects their agent, and tests an Android
-  and an iOS app.
-- They see their usage, they are billed correctly, and a spend cap stops machines before it is
-  passed.
-- After they finish, no machine of theirs is left running, in their account or ours.
-- No customer cloud key ever reaches our servers.
-- STATUS and evidence entries cover each claim.
-
-### 5.0 · Plan
-
-```text
-Do step 5.0 of docs/hosting-plan.md: plan Tapdance Cloud as the steps 5.1–5.4 that stage 5
-describes. Read that file, CLAUDE.md, AGENTS.md, PRODUCT.md, STATUS.md, ROADMAP.md,
-docs/architecture-decision.md and the stage 2–4 evidence first. Build nothing yet.
-Follow the owner's direction in stage 5: one customer per machine, bring your own cloud first,
-thin cost-plus pricing, never hold a customer's cloud keys, accounts and billing in the KAppMaker AI
-app (read its CLAUDE.MD, KAPPMAKER_AI_PRD.md and app/Services/Servers to see what it already has).
-1. Write docs/cloud/architecture.md, one section per step:
-   - 5.1: provisioning a host in the customer's own Google Cloud or Scaleway account from the CLI,
-     using their own logged-in gcloud / scw, building on infrastructure/terraform/google-cloud-n2,
-     scripts/host-setup.sh and `host up`; teardown and idle auto-stop; their credentials never
-     leave their machine;
-   - 5.2: accounts in the KAppMaker AI app, Sanctum API keys, a CLI login command, how `tapdance
-     connect` and `provider: "cloud"` reach the account;
-   - 5.3: our fleet with one customer per machine, as new ServerProvider drivers in the KAppMaker AI
-     app (Google Cloud N2 for Android, Scaleway Mac for iOS, honouring its 24-hour minimum),
-     metering with its PlanMeter / reportUsage, spend caps, idle stop, abuse handling (card
-     required, egress limits, the guard's allow-list), and how the guard token reaches the agent
-     without the web app storing it;
-   - 5.4: console and operations.
-   For each: what existing pieces (Tapdance's guard, connect targets, Simlock, terraform; the
-   KAppMaker AI app's accounts, billing and server jobs) cover and what is new.
-2. Write docs/cloud/pricing.md: our cost per item from current list prices, the formula from stage
-   5, and the price table at 10 % and 20 % net. Include Stripe fees and a free tier proposal.
-3. List the decisions that remain, with options and your recommendation: contributor licence
-   agreement; a page of the KAppMaker site or Tapdance's own domain; Google Cloud vs bare-metal KVM for our Android fleet; whether tax is on profit or revenue (ask me,
-   don't guess).
-4. Write a prompt for each of 5.2–5.4 into docs/hosting-plan.md under its heading.
-Ask me the decisions you need; commit only the docs, with my identity and no AI attribution; open a PR.
-```
+A hosted Tapdance Cloud ([PRODUCT.md](../PRODUCT.md) M-04) is future work and is not planned in this
+file. The CLI, MCP tools and SDK do not change for it: an agent still runs `tapdance connect`, and
+leases still go through the worker guard on a host. `provider: "cloud"` is refused today with
+NOT_SUPPORTED.
 
 ### 5.1 · Bring your own cloud, self-run
 
 **Goal.** Today's stage 2–4 guides take a dozen manual steps. Make them one command each way,
 run on the agent's machine (not on the host, so not under `tapdance host`). A create command with
-`--cloud gcp` (Android) or `--cloud scaleway` (iOS) creates the machine in the customer's own
+`--cloud gcp` (Android) or `--cloud scaleway` (iOS) creates the machine in the user's own
 account with their own logged-in cloud CLI, sets it up, runs `host up`, and connects this machine's
 agent. A destroy command removes everything and checks that nothing billable is left. The commands are
 `tapdance machine create --cloud gcp|scaleway`, `machine list`, `machine stop|start`, `machine destroy`,
@@ -317,7 +232,7 @@ and for auto mode `machine auto on|off`.
 
 **Then, auto mode.** The same code runs on demand: when the agent asks for a phone and no machine
 for that platform is up, the CLI creates or starts one; after a set idle time it stops or deletes
-it. Everything happens on the customer's side with their own login, so no key reaches our servers.
+it. Everything happens on the customer's side with their own login, so no key reaches any Tapdance server.
 The Scaleway 24-hour minimum makes auto mode keep a Mac for its paid day rather than delete it early.
 
 **Done when:** a stranger with a Google Cloud and a Scaleway account goes from nothing to their
@@ -325,16 +240,6 @@ agent testing both platforms with three commands or fewer and under 30 minutes o
 the leftovers scripts find nothing. Auto mode: the first lease brings a machine up, and an idle
 machine stops by itself. Evidence file from a real run.
 
-**Prompt:** written by step 5.0.
-
-### 5.2 · Tapdance account
-
-**Prompt:** written by step 5.0.
-
-### 5.3 · Our fleet, dedicated per customer
-
-**Prompt:** written by step 5.0.
-
-### 5.4 · Console and operations
-
-**Prompt:** written by step 5.0.
+**State.** Run for real on 2026-11-09: Google Cloud create, stop, start, destroy and auto mode, and a
+Scaleway Mac set up with `--server-id` ([evidence](testing/evidence/2026-11-09-byoc-self-run.md)).
+Not run yet: renting a Mac with `create`, and Scaleway's `destroy` (STATUS M-07).
