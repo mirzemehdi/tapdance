@@ -81,7 +81,7 @@ fastlane is ⏸ for iOS: `asc` already covers App Store Connect.
 | Rented Mac for iOS (Scaleway first) | 🟡 run twice on a Scaleway M1-M (8 GB), from a Mac and from a Linux VPS ([evidence](docs/testing/evidence/2026-11-07-vps-rented-mac-ios.md), [hosting plan](docs/hosting-plan.md) stage 3); MacStadium, AWS EC2 Mac and 16 GB offers not run | G-05, G-06 |
 | One agent across a Linux and a Mac host | ✅ several connect targets ([evidence](docs/testing/evidence/2026-11-07-two-hosts-android-ios.md), [hosting plan](docs/hosting-plan.md) stage 4); a gateway pool across machines not run | M-06, Y-17 |
 | Browser console (many sessions) | ⬜ | V-* |
-| Tapdance Cloud: hosted fleet, accounts, metered billing (open-source core under AGPL-3.0) | ⬜ | M-04, P-04 |
+| Tapdance Cloud: hosted fleet, accounts, metered billing (open-source core under the MIT License) | ⬜ | M-04, P-04 |
 | Usage metering | ⬜ | P-04 |
 
 ## Not planned for now

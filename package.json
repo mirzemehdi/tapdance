@@ -2,7 +2,7 @@
   "name": "tapdance-monorepo",
   "private": true,
   "description": "Let your agent put your app through its paces.",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.20.0",
   "engines": {
