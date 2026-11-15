@@ -224,6 +224,5 @@ Tapdance builds on other people's work:
 
 [NOTICE.md](NOTICE.md) lists every project with its license.
 
-Tapdance is free and open source under the [GNU AGPL-3.0](LICENSE). You may use, change and self-host
-it. If you offer a changed Tapdance to others as a network service, the AGPL asks you to share your
-changes.
+Tapdance is free and open source under the [MIT License](LICENSE). You may use it, change it,
+self-host it and build on it.

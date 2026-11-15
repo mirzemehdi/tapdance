@@ -1,8 +1,9 @@
 # Notices
 
-Tapdance is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only),
-Copyright (C) 2026 mirzemehdi. Versions up to and including commit b3ec7e3 were published under the MIT
-license, and copies obtained under it keep those terms.
+Tapdance is licensed under the [MIT License](LICENSE), Copyright (c) 2026 Tapdance contributors.
+The npm versions 0.1.0 to 0.3.1 were published under the GNU Affero General Public License v3.0 only
+(AGPL-3.0-only), and copies obtained under it keep those terms. Versions up to and including commit
+b3ec7e3, and everything after 0.3.1, are under the MIT License.
 
 Tapdance copies no source code from the projects below. It depends on some of them as npm packages,
 runs others as separate executables, and follows the published formats or designs of a few. Two of

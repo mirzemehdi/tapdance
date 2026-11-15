@@ -204,4 +204,4 @@ it in [NOTICE.md](NOTICE.md) and propose the change upstream.
 - Report security problems privately, as described in [SECURITY.md](SECURITY.md).
 
 By contributing, you agree that your contributions are licensed under the
-[GNU AGPL-3.0-only](LICENSE), the licence of this repository.
+[MIT License](LICENSE), the licence of this repository.

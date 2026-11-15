@@ -8,6 +8,14 @@ config keys and MCP tool inputs.
 What has been proven on real devices is tracked in [STATUS.md](STATUS.md), not here. An entry in this
 file means the code exists, not that it has been tested on every platform.
 
+## [Unreleased]
+
+### Licence
+
+- Changed: Tapdance is licensed under the MIT License again (was GNU AGPL-3.0-only). The npm versions
+  0.1.0 to 0.3.1 were published under AGPL-3.0-only, and copies obtained under it keep those terms.
+  Every dependency Tapdance ships with is under MIT, ISC or a BSD licence.
+
 ## [0.3.1] - 2026-11-09
 
 Fixes from the first field check of 0.3.0's auto mode (#167-#169), and a README that starts with the
